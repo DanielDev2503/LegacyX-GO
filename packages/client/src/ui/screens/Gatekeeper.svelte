@@ -32,6 +32,13 @@
     }
   }
 
+  function handleModeToggle(e: Event) {
+    const input = e.target as HTMLInputElement | null;
+    if (input) {
+      toggleMode(input.checked);
+    }
+  }
+
   function handlePlayClick() {
     soundFX.ensureContext();
     soundFX.playUIClick();
@@ -89,7 +96,7 @@
               <input
                 type="checkbox"
                 checked={gameUI.avatarMode === 'emoji'}
-                onchange={(e) => toggleMode((e.target as HTMLInputElement).checked)}
+                onchange={handleModeToggle}
               />
               <span class="slider"></span>
             </label>
