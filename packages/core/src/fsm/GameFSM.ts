@@ -94,10 +94,18 @@ export class GameFSM {
     }
   }
 
+  public pause(): void {
+    this.pauseMatch();
+  }
+
   public resumeMatch(): void {
     if (this.currentState === MatchPhase.PAUSE) {
       this.transitionTo(MatchPhase.PLAYING);
     }
+  }
+
+  public resume(): void {
+    this.resumeMatch();
   }
 
   public togglePause(): void {

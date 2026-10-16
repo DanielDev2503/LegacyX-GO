@@ -30,9 +30,9 @@ export const INPUT_FLAG_MAGNUS_RIGHT = 1 << 8;
 export const INPUT_FLAG_TYPING = 1 << 9;
 
 export interface PlayerInput {
-  sequence: number;
+  sequence?: number;
   inputMask: number;
-  clientTimestamp: number;
+  clientTimestamp?: number;
   dirX?: number;
   dirY?: number;
   kick?: boolean;
@@ -82,15 +82,23 @@ export class BinaryProtocol {
     const view = new DataView(buf);
 
     let mask = input.inputMask || 0;
+    if (input.dirX !== undefined) {
+      if (input.dirX < -0.3) mask |= INPUT_FLAG_LEFT;
+      if (input.dirX > 0.3) mask |= INPUT_FLAG_RIGHT;
+    }
+    if (input.dirY !== undefined) {
+      if (input.dirY < -0.3) mask |= INPUT_FLAG_UP;
+      if (input.dirY > 0.3) mask |= INPUT_FLAG_DOWN;
+    }
     if (input.kick) mask |= INPUT_FLAG_KICK;
     if (input.dash) mask |= INPUT_FLAG_DASH;
     if (input.magnusLeft) mask |= INPUT_FLAG_MAGNUS_LEFT;
     if (input.magnusRight) mask |= INPUT_FLAG_MAGNUS_RIGHT;
 
     view.setUint8(0, OP_INPUT);
-    view.setUint32(1, input.sequence, false);
+    view.setUint32(1, input.sequence ?? 0, false);
     view.setUint16(5, mask, false);
-    view.setUint16(7, input.clientTimestamp & 0xffff, false);
+    view.setUint16(7, (input.clientTimestamp ?? 0) & 0xffff, false);
 
     return buf;
   }
@@ -105,10 +113,25 @@ export class BinaryProtocol {
     const inputMask = view.getUint16(5, false);
     const clientTimestamp = view.getUint16(7, false);
 
+    let dirX = 0;
+    let dirY = 0;
+    if (inputMask & INPUT_FLAG_LEFT) dirX -= 1;
+    if (inputMask & INPUT_FLAG_RIGHT) dirX += 1;
+    if (inputMask & INPUT_FLAG_UP) dirY -= 1;
+    if (inputMask & INPUT_FLAG_DOWN) dirY += 1;
+
+    const len = Math.hypot(dirX, dirY);
+    if (len > 1.0) {
+      dirX /= len;
+      dirY /= len;
+    }
+
     return {
       sequence,
       inputMask,
       clientTimestamp,
+      dirX,
+      dirY,
       kick: (inputMask & INPUT_FLAG_KICK) !== 0,
       dash: (inputMask & INPUT_FLAG_DASH) !== 0,
       magnusLeft: (inputMask & INPUT_FLAG_MAGNUS_LEFT) !== 0,

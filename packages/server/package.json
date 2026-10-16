@@ -8,6 +8,7 @@
     "check": "tsc --noEmit"
   },
   "dependencies": {
+    "@legacyx/core": "*",
     "ws": "^8.16.0"
   },
   "devDependencies": {

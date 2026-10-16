@@ -61,6 +61,9 @@ import {
   DEFAULT_GAME_CONFIG
 } from './game/GameConfig';
 
+export type * from './protocol/Signaling';
+export { JitterBuffer, type BufferedSnapshot } from './protocol/JitterBuffer';
+
 export const CORE_TICK_RATE = 60;
 export const CORE_DT = 1 / 60;
 
