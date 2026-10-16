@@ -1,0 +1,14 @@
+{
+  "globals": {
+    "$state": "readonly",
+    "$derived": "readonly",
+    "$effect": "readonly",
+    "$props": "readonly",
+    "$bindable": "readonly",
+    "$inspect": "readonly",
+    "state": "readonly",
+    "derived": "readonly",
+    "effect": "readonly",
+    "props": "readonly"
+  }
+}
