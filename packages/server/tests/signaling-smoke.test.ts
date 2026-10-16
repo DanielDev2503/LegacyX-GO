@@ -118,7 +118,7 @@ describe('Signaling Server - Shift-Left Smoke Test', () => {
     await Promise.all([guestJoinedPromise, hostPeerJoinedPromise]);
 
     // 5. Intercambio de Oferta SDP ficticia entre Guest y Host
-    const sdpPayload = { type: 'offer', sdp: 'v=0\r\no=legacyx 12345 2 IN IP4 127.0.0.1' };
+    const sdpPayload = { sdp: { type: 'offer', sdp: 'v=0\r\no=legacyx 12345 2 IN IP4 127.0.0.1' } };
     const offerReceivedPromise = new Promise<void>((resolve) => {
       const handler = (data: any) => {
         const msg = JSON.parse(data.toString()) as ServerSignalMessage;

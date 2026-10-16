@@ -29,7 +29,7 @@ describe('DedicatedHost - Headless VPS Smoke Test', () => {
 
     // 3. Encolar inputs simulados para los jugadores
     host.receiveInput('peer-alpha', {
-      seq: 1,
+      sequence: 1,
       dirX: 1,
       dirY: 0,
       kick: false,
@@ -37,7 +37,7 @@ describe('DedicatedHost - Headless VPS Smoke Test', () => {
     });
 
     host.receiveInput('peer-bravo', {
-      seq: 1,
+      sequence: 1,
       dirX: -1,
       dirY: 0,
       kick: false,
