@@ -11,6 +11,7 @@ export interface Room {
   hasPassword: boolean;
   passwordHash: string | null; // "salt:hash" (scrypt), nunca la contraseña en claro
   isLocked: boolean;
+  isDedicated?: boolean;
   createdAt: number;
   guests: Set<string>;
 }
@@ -36,7 +37,7 @@ export class RoomRegistry {
   private rooms = new Map<string, Room>();
   private peerToRoom = new Map<string, string>();
 
-  public createRoom(hostPeerId: string, opts: { name: string; stadiumId: string; maxPlayers: number; password?: string }): Room {
+  public createRoom(hostPeerId: string, opts: { name: string; stadiumId: string; maxPlayers: number; password?: string; isDedicated?: boolean }): Room {
     this.leaveRoom(hostPeerId);
     const room: Room = {
       id: randomUUID().slice(0, 6).toUpperCase(),
@@ -48,6 +49,7 @@ export class RoomRegistry {
       hasPassword: Boolean(opts.password),
       passwordHash: opts.password ? hashPassword(opts.password) : null,
       isLocked: false,
+      isDedicated: Boolean(opts.isDedicated),
       createdAt: Date.now(),
       guests: new Set()
     };
@@ -105,8 +107,8 @@ export class RoomRegistry {
   public getPublicRooms(): RoomSummary[] {
     return [...this.rooms.values()]
       .filter((r) => !r.isLocked)
-      .map(({ id, name, stadiumId, maxPlayers, currentPlayers, hasPassword, isLocked, createdAt }) => ({
-        id, name, stadiumId, maxPlayers, currentPlayers, hasPassword, isLocked, createdAt
+      .map(({ id, name, stadiumId, maxPlayers, currentPlayers, hasPassword, isLocked, isDedicated, createdAt }) => ({
+        id, name, stadiumId, maxPlayers, currentPlayers, hasPassword, isLocked, isDedicated, createdAt
       }));
   }
 }

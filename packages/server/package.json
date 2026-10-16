@@ -5,7 +5,9 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsc -b",
-    "check": "tsc --noEmit"
+    "check": "tsc --noEmit",
+    "test": "node ../core/node_modules/vitest/vitest.mjs run",
+    "host:dedicated": "tsx src/headless/DedicatedHost.ts --config ./room.config.json"
   },
   "dependencies": {
     "@legacyx/core": "*",

@@ -36,12 +36,13 @@ export interface RoomSummary {
   hasPassword: boolean;
   isLocked: boolean;
   createdAt: number;
+  isDedicated?: boolean;
 }
 
 export type SignalType = 'SIGNAL_OFFER' | 'SIGNAL_ANSWER' | 'SIGNAL_ICE_CANDIDATE';
 
 export type ClientSignalMessage =
-  | { type: 'ROOM_CREATE'; name: string; stadiumId: string; maxPlayers: number; password?: string }
+  | { type: 'ROOM_CREATE'; name: string; stadiumId: string; maxPlayers: number; password?: string; isDedicated?: boolean }
   | { type: 'ROOM_LIST' }
   | { type: 'ROOM_JOIN'; roomId: string; password?: string; nickname?: string }
   | { type: 'ROOM_LEAVE' }

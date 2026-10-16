@@ -139,9 +139,10 @@ export function startSignalingServer(port: number = PORT): WebSocketServer {
             name: msg.name,
             stadiumId: msg.stadiumId,
             maxPlayers: msg.maxPlayers,
-            password: msg.password
+            password: msg.password,
+            isDedicated: msg.isDedicated
           });
-          console.log(`[SignalingServer] Sala creada: ${room.id} (${room.name}) por Host ${peerId}`);
+          console.log(`[SignalingServer] Sala creada: ${room.id} (${room.name}) por Host ${peerId} (Dedicada: ${room.isDedicated ?? false})`);
           send(socket, { type: 'ROOM_CREATED', roomId: room.id });
           broadcastRoomList(wss);
           break;
@@ -247,5 +248,14 @@ export function startSignalingServer(port: number = PORT): WebSocketServer {
   return wss;
 }
 
-// Inicialización directa
-startSignalingServer();
+export { registry };
+
+// Inicialización directa si se ejecuta como script principal
+const isDirectExecution = process.argv[1] && (
+  process.argv[1].endsWith('index.ts') ||
+  process.argv[1].endsWith('index.js')
+);
+
+if (isDirectExecution) {
+  startSignalingServer();
+}

@@ -1,0 +1,18 @@
+{
+  "name": "@legacyx/desktop",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "dist/main.js",
+  "scripts": {
+    "build": "tsc -b",
+    "check": "tsc --noEmit",
+    "start": "electron dist/main.js"
+  },
+  "dependencies": {
+    "@legacyx/core": "*"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "typescript": "^5.4.0"
+  }
+}

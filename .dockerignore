@@ -1,0 +1,10 @@
+node_modules
+dist
+_raw_export
+.git
+.agents
+.gemini
+*.log
+.DS_Store
+coverage
+packages/client/dist

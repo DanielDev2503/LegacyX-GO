@@ -1,0 +1,29 @@
+{
+  "roomName": "LegacyX 24/7 Community VPS (Official)",
+  "stadiumId": "AF 3v3",
+  "maxPlayers": 6,
+  "password": "",
+  "autoBalance": true,
+  "autoRestartDelayMs": 5000,
+  "modifiers": {
+    "gravity": 0.0,
+    "pitchFriction": 0.990,
+    "wallBounciness": 0.80,
+    "postBounciness": 0.85,
+    "baseKickStrength": 450.0,
+    "dashPower": 280.0,
+    "dashCooldown": 1.5,
+    "playerMass": 1.0,
+    "playerRadius": 15.0,
+    "ballMass": 0.20,
+    "ballRadius": 10.0,
+    "magnusCoefficient": 0.0025,
+    "netElasticity": 0.45,
+    "netDamping": 0.12,
+    "goalCelebrationDuration": 3.0,
+    "goalLimit": 3,
+    "matchTimeMinutes": 3.0,
+    "goldenGoalOvertime": true,
+    "airDensity": 1.0
+  }
+}
