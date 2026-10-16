@@ -31,7 +31,7 @@ export const INPUT_FLAG_TYPING = 1 << 9;
 
 export interface PlayerInput {
   sequence?: number;
-  inputMask: number;
+  inputMask?: number;
   clientTimestamp?: number;
   dirX?: number;
   dirY?: number;

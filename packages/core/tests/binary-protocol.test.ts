@@ -28,16 +28,17 @@ describe('BinaryProtocol Serialization & Quantization', () => {
     expect(buffer.byteLength).toBe(BinaryProtocol.INPUT_SIZE); // 9 bytes: opcode (1) + seq (4) + mask (2) + timestamp (2)
 
     const view = new DataView(buffer);
-    const decoded = BinaryProtocol.decodeInput(view, 0);
+    const decoded = BinaryProtocol.decodeInput(view);
+    expect(decoded).not.toBeNull();
 
-    expect(decoded.kick).toBe(true);
-    expect(decoded.magnusLeft).toBe(true);
-    expect(decoded.dash).toBe(false);
-    expect(decoded.magnusRight).toBe(false);
+    expect(decoded!.kick).toBe(true);
+    expect(decoded!.magnusLeft).toBe(true);
+    expect(decoded!.dash).toBe(false);
+    expect(decoded!.magnusRight).toBe(false);
 
     // Precisión de dirección cuantizada en int8 (-127 a 127)
-    expect(decoded.dirX).toBeCloseTo(0.7071, 1);
-    expect(decoded.dirY).toBeCloseTo(-0.7071, 1);
+    expect(decoded!.dirX).toBeCloseTo(0.7071, 1);
+    expect(decoded!.dirY).toBeCloseTo(-0.7071, 1);
   });
 
   it('preserva máscaras binarias de input directo con todas las combinaciones de botones', () => {
@@ -45,11 +46,12 @@ describe('BinaryProtocol Serialization & Quantization', () => {
     const input: PlayerInput = { inputMask: mask };
 
     const buffer = BinaryProtocol.encodeInput(input);
-    const decoded = BinaryProtocol.decodeInput(new DataView(buffer), 0);
+    const decoded = BinaryProtocol.decodeInput(new DataView(buffer));
+    expect(decoded).not.toBeNull();
 
-    expect(decoded.inputMask).toBe(mask);
-    expect(decoded.kick).toBe(true);
-    expect(decoded.magnusLeft).toBe(true);
+    expect(decoded!.inputMask).toBe(mask);
+    expect(decoded!.kick).toBe(true);
+    expect(decoded!.magnusLeft).toBe(true);
   });
 
   it('serializa y deserializa GameStateSnapshot sin truncar coordenadas del estadio AF', () => {
@@ -96,19 +98,20 @@ describe('BinaryProtocol Serialization & Quantization', () => {
     expect(encoded).toBeInstanceOf(ArrayBuffer);
 
     const decoded = BinaryProtocol.decodeSnapshot(encoded);
+    expect(decoded).not.toBeNull();
 
-    expect(decoded.tick).toBe(originalSnapshot.tick);
-    expect(decoded.phase).toBe(originalSnapshot.phase);
-    expect(decoded.matchTimer).toBe(originalSnapshot.matchTimer);
-    expect(decoded.redScore).toBe(originalSnapshot.redScore);
-    expect(decoded.blueScore).toBe(originalSnapshot.blueScore);
-    expect(decoded.soundMask).toBe(originalSnapshot.soundMask);
-    expect(decoded.discs.length).toBe(3);
+    expect(decoded!.tick).toBe(originalSnapshot.tick);
+    expect(decoded!.phase).toBe(originalSnapshot.phase);
+    expect(decoded!.matchTimer).toBe(originalSnapshot.matchTimer);
+    expect(decoded!.redScore).toBe(originalSnapshot.redScore);
+    expect(decoded!.blueScore).toBe(originalSnapshot.blueScore);
+    expect(decoded!.soundMask).toBe(originalSnapshot.soundMask);
+    expect(decoded!.discs.length).toBe(3);
 
     // Verificación de coordenadas con tolerancia de cuantización fija (< 0.1 px)
     for (let i = 0; i < originalSnapshot.discs.length; i++) {
       const orig = originalSnapshot.discs[i];
-      const dec = decoded.discs[i];
+      const dec = decoded!.discs[i];
 
       expect(dec.id).toBe(orig.id);
       expect(dec.team).toBe(orig.team);
