@@ -9,7 +9,8 @@
     "dev:client": "npm run dev -w @legacyx/client",
     "dev:server": "npm run dev -w @legacyx/server",
     "build": "npm run build --workspaces --if-present",
-    "check": "npm run check --workspaces --if-present"
+    "check": "npm run check --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present"
   },
   "devDependencies": {
     "typescript": "^5.4.0"

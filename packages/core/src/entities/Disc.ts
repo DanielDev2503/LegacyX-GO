@@ -1,0 +1,131 @@
+import { Vec2 } from '../math/Vec2';
+
+export const COLLISION_GROUP_BALL = 1 << 0;
+export const COLLISION_GROUP_RED = 1 << 1;
+export const COLLISION_GROUP_BLUE = 1 << 2;
+export const COLLISION_GROUP_WALL = 1 << 3;
+export const COLLISION_GROUP_RED_GOAL = 1 << 4;
+export const COLLISION_GROUP_BLUE_GOAL = 1 << 5;
+export const COLLISION_GROUP_ALL = 0xFFFFFFFF;
+
+export const POWER_SHOT_SPEED_THRESHOLD = 950;
+
+export interface DiscOptions {
+  id: number;
+  x?: number;
+  y?: number;
+  radius?: number;
+  mass?: number;
+  damping?: number;
+  bounciness?: number;
+  cGroup?: number;
+  cMask?: number;
+  isBall?: boolean;
+  isPost?: boolean;
+  color?: string;
+}
+
+export class Disc {
+  public id: number;
+  public pos: Vec2;
+  public prevPos: Vec2;
+  public vel: Vec2;
+  public radius: number;
+  public mass: number;
+  public invMass: number;
+  public damping: number;
+  public bounciness: number;
+  public cGroup: number;
+  public cMask: number;
+  public isBall: boolean;
+  public isPost: boolean = false;
+  public color: string;
+  public kicking: boolean = false;
+
+  // Mecánicas de Efecto Magnus y Spin
+  public isCurving: boolean = false;
+  public isCurvingAllowed: boolean = false;
+  public curvePerp: number = 0;
+  public spin: number = 0; // Rotación angular Magnus (rad/s acumulados)
+  public lastKickerId: string | null = null;
+  public lastKickerDiscId: number = -1;
+  public isPowerShot: boolean = false;
+
+  // Mecánicas cinemáticas de jugador
+  public stamina: number = 100;
+  public isDashing: boolean = false;
+  public isTurbo: boolean = false;
+  public isTyping: boolean = false;
+
+  constructor(options: DiscOptions) {
+    this.id = options.id;
+    this.pos = new Vec2(options.x ?? 0, options.y ?? 0);
+    this.prevPos = new Vec2(this.pos.x, this.pos.y);
+    this.vel = new Vec2(0, 0);
+    this.radius = options.radius ?? 15;
+    this.mass = options.mass ?? 1;
+    this.invMass = this.mass === 0 ? 0 : 1 / this.mass;
+    this.damping = options.damping ?? 0.99;
+    this.bounciness = options.bounciness ?? 0.5;
+    this.cGroup = options.cGroup ?? COLLISION_GROUP_ALL;
+    this.cMask = options.cMask ?? COLLISION_GROUP_ALL;
+    this.isBall = options.isBall ?? false;
+    this.isPost = options.isPost ?? false;
+    this.color = options.color ?? (this.isBall ? '#ffffff' : '#e74c3c');
+  }
+
+  public setMass(mass: number): void {
+    this.mass = mass;
+    this.invMass = mass === 0 ? 0 : 1 / mass;
+  }
+
+  public applyImpulse(ix: number, iy: number): void {
+    if (this.invMass === 0) return;
+    this.vel.x += ix * this.invMass;
+    this.vel.y += iy * this.invMass;
+  }
+
+  public canCollideWith(other: Disc): boolean {
+    return (this.cGroup & other.cMask) !== 0 && (other.cGroup & this.cMask) !== 0;
+  }
+
+  public resetCurve(): void {
+    this.isCurving = false;
+    this.isCurvingAllowed = false;
+    this.curvePerp = 0;
+    this.spin = 0;
+    this.lastKickerId = null;
+    this.lastKickerDiscId = -1;
+    this.isPowerShot = false;
+  }
+
+  /**
+   * Aplica aceleración de comba Magnus lateral continua sobre el balón:
+   * a_Magnus = C_M * spin * (-vy, vx)
+   */
+  public applyMagnusCurve(curveLeft: boolean, curveRight: boolean, kMagnus: number = 1.05): void {
+    if (!this.isBall || !this.isCurvingAllowed) return;
+    const speed = Math.hypot(this.vel.x, this.vel.y);
+    if (speed <= 0.05) return;
+
+    const ux = this.vel.x / speed;
+    const uy = this.vel.y / speed;
+
+    if (curveLeft && !curveRight) {
+      this.vel.x += uy * kMagnus;
+      this.vel.y += -ux * kMagnus;
+      this.isCurving = true;
+      this.curvePerp = -1;
+      this.spin = -kMagnus;
+    } else if (curveRight && !curveLeft) {
+      this.vel.x += -uy * kMagnus;
+      this.vel.y += ux * kMagnus;
+      this.isCurving = true;
+      this.curvePerp = 1;
+      this.spin = kMagnus;
+    } else {
+      this.isCurving = false;
+      this.curvePerp = 0;
+    }
+  }
+}

@@ -6,4 +6,5 @@ dist/
 !.env.example
 _raw_export/
 *.log
+*.tsbuildinfo
 .DS_Store
