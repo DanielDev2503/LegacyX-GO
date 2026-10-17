@@ -55,14 +55,17 @@ function send(ws: WebSocket, message: ServerSignalMessage): void {
 }
 
 function broadcastRoomList(wss: WebSocketServer): void {
-  const rooms = registry.getPublicRooms();
+  const activePeerIds = new Set(peerSockets.keys());
+  const rooms = registry.getPublicRooms(activePeerIds);
   const payload: ServerSignalMessage = { type: 'ROOM_LIST', rooms };
   const raw = JSON.stringify(payload);
+  const rawAlt = JSON.stringify({ type: 'room_list', rooms, onlineCount: wss.clients.size });
 
   for (const client of wss.clients) {
     if (client.readyState === WebSocket.OPEN) {
       try {
         client.send(raw);
+        client.send(rawAlt);
       } catch {
         // Ignorar sockets en proceso de cierre
       }
@@ -120,7 +123,7 @@ export function startSignalingServer(port: number = PORT): WebSocketServer {
 
     sock.on('message', (data: Buffer | string) => {
       sock.isAlive = true;
-      let msg: ClientSignalMessage;
+      let msg: any;
       try {
         msg = JSON.parse(data.toString());
       } catch {
@@ -128,40 +131,76 @@ export function startSignalingServer(port: number = PORT): WebSocketServer {
         return;
       }
 
-      switch (msg.type) {
-        case 'PING': {
-          send(socket, { type: 'PONG' });
+      if (msg.peerId && typeof msg.peerId === 'string') {
+        peerSockets.set(msg.peerId, socket);
+        socketToPeerId.set(socket, msg.peerId);
+        sock.peerId = msg.peerId;
+      }
+      const effectivePeerId = sock.peerId ?? peerId;
+      const normType = String(msg.type || '').toUpperCase();
+
+      switch (normType) {
+        case 'PING':
+        case 'HEARTBEAT': {
+          send(socket, { type: 'PONG', ...(msg.timestamp ? { timestamp: msg.timestamp } : {}) } as any);
+          if (socket.readyState === WebSocket.OPEN) {
+            try {
+              socket.send(JSON.stringify({ type: 'pong', timestamp: msg.timestamp, onlineCount: wss.clients.size }));
+            } catch {}
+          }
           break;
         }
 
-        case 'ROOM_CREATE': {
-          const room = registry.createRoom(peerId, {
-            name: msg.name,
-            stadiumId: msg.stadiumId,
-            maxPlayers: msg.maxPlayers,
-            password: msg.password,
-            isDedicated: msg.isDedicated
+        case 'ROOM_CREATE':
+        case 'CREATE_ROOM': {
+          const config = msg.config || {};
+          const room = registry.createRoom(effectivePeerId, {
+            name: msg.name || config.name || `Room #${effectivePeerId}`,
+            stadiumId: msg.stadiumId || config.stadiumId || 'Classic',
+            maxPlayers: msg.maxPlayers ?? config.maxPlayers ?? 12,
+            password: msg.password || config.password,
+            isDedicated: Boolean(msg.isDedicated ?? config.isDedicated)
           });
-          console.log(`[SignalingServer] Sala creada: ${room.id} (${room.name}) por Host ${peerId} (Dedicada: ${room.isDedicated ?? false})`);
+          console.log(`[SignalingServer] Sala creada: ${room.id} (${room.name}) por Host ${effectivePeerId} (Dedicada: ${room.isDedicated ?? false})`);
           send(socket, { type: 'ROOM_CREATED', roomId: room.id });
+          if (socket.readyState === WebSocket.OPEN) {
+            try {
+              socket.send(JSON.stringify({ type: 'room_created', roomId: room.id, roomName: room.name, config: room }));
+            } catch {}
+          }
           broadcastRoomList(wss);
           break;
         }
 
-        case 'ROOM_LIST': {
-          send(socket, { type: 'ROOM_LIST', rooms: registry.getPublicRooms() });
+        case 'ROOM_LIST':
+        case 'LIST_ROOMS':
+        case 'GET_ROOMS': {
+          const activePeerIds = new Set(peerSockets.keys());
+          const publicRooms = registry.getPublicRooms(activePeerIds);
+          send(socket, { type: 'ROOM_LIST', rooms: publicRooms });
+          if (socket.readyState === WebSocket.OPEN) {
+            try {
+              socket.send(JSON.stringify({ type: 'room_list', rooms: publicRooms, onlineCount: wss.clients.size }));
+            } catch {}
+          }
           break;
         }
 
-        case 'ROOM_JOIN': {
-          const result = registry.joinRoom(peerId, msg.roomId, msg.password);
+        case 'ROOM_JOIN':
+        case 'JOIN_ROOM': {
+          const result = registry.joinRoom(effectivePeerId, msg.roomId, msg.password);
           if (!result.ok) {
             send(socket, { type: 'ERROR', code: result.code, message: `Error al unirse a la sala: ${result.code}` });
+            if (socket.readyState === WebSocket.OPEN) {
+              try {
+                socket.send(JSON.stringify({ type: 'error', code: result.code, message: `Error al unirse a la sala: ${result.code}` }));
+              } catch {}
+            }
             return;
           }
 
           const room = result.room;
-          console.log(`[SignalingServer] Peer ${peerId} ("${msg.nickname ?? 'Guest'}") se unió a sala ${room.id}`);
+          console.log(`[SignalingServer] Peer ${effectivePeerId} ("${msg.nickname ?? 'Guest'}") se unió a sala ${room.id}`);
 
           // Notificar al invitado que se unió con éxito
           send(socket, {
@@ -170,28 +209,47 @@ export function startSignalingServer(port: number = PORT): WebSocketServer {
             hostPeerId: room.hostPeerId,
             stadiumId: room.stadiumId
           });
+          if (socket.readyState === WebSocket.OPEN) {
+            try {
+              socket.send(JSON.stringify({ type: 'room_joined', roomId: room.id, hostId: room.hostPeerId, roomName: room.name }));
+            } catch {}
+          }
 
           // Notificar al anfitrión (Host) para que inicie la negociación WebRTC (crear Offer)
           const hostSocket = peerSockets.get(room.hostPeerId);
           if (hostSocket) {
             send(hostSocket, {
               type: 'PEER_JOINED',
-              peerId,
+              peerId: effectivePeerId,
               nickname: msg.nickname ?? 'Guest'
             });
+            if (hostSocket.readyState === WebSocket.OPEN) {
+              try {
+                hostSocket.send(JSON.stringify({ type: 'peer_joined', peerId: effectivePeerId, nickname: msg.nickname ?? 'Guest' }));
+              } catch {}
+            }
           }
 
           broadcastRoomList(wss);
           break;
         }
 
-        case 'ROOM_LEAVE': {
-          const left = registry.leaveRoom(peerId);
+        case 'ROOM_LEAVE':
+        case 'LEAVE_ROOM': {
+          const left = registry.leaveRoom(effectivePeerId);
           if (left) {
             for (const notifyPeerId of left.notify) {
               const targetSock = peerSockets.get(notifyPeerId);
               if (targetSock) {
-                send(targetSock, { type: 'PEER_DISCONNECT', peerId });
+                send(targetSock, { type: 'PEER_DISCONNECT', peerId: effectivePeerId });
+                if (left.destroyed) {
+                  send(targetSock, { type: 'HOST_DISCONNECT', roomId: left.room.id } as any);
+                  if (targetSock.readyState === WebSocket.OPEN) {
+                    try {
+                      targetSock.send(JSON.stringify({ type: 'host_left', roomId: left.room.id }));
+                    } catch {}
+                  }
+                }
               }
             }
             broadcastRoomList(wss);
@@ -206,7 +264,7 @@ export function startSignalingServer(port: number = PORT): WebSocketServer {
           if (targetSocket) {
             const forwarded: ServerSignalMessage = {
               type: msg.type as SignalType,
-              fromId: peerId,
+              fromId: effectivePeerId,
               data: msg.data
             };
             send(targetSocket, forwarded);
@@ -221,7 +279,7 @@ export function startSignalingServer(port: number = PORT): WebSocketServer {
         }
 
         default:
-          console.warn(`[SignalingServer] Mensaje desconocido de ${peerId}:`, msg);
+          console.warn(`[SignalingServer] Mensaje desconocido de ${effectivePeerId}:`, msg);
       }
     });
 
@@ -230,6 +288,7 @@ export function startSignalingServer(port: number = PORT): WebSocketServer {
       console.log(`[SignalingServer] Peer desconectado: ${closingPeerId}`);
 
       peerSockets.delete(closingPeerId);
+      if (sock.peerId) peerSockets.delete(sock.peerId);
       socketToPeerId.delete(socket);
 
       const left = registry.leaveRoom(closingPeerId);
@@ -238,10 +297,20 @@ export function startSignalingServer(port: number = PORT): WebSocketServer {
           const targetSock = peerSockets.get(notifyPeerId);
           if (targetSock) {
             send(targetSock, { type: 'PEER_DISCONNECT', peerId: closingPeerId });
+            if (left.destroyed) {
+              send(targetSock, { type: 'HOST_DISCONNECT', roomId: left.room.id } as any);
+              if (targetSock.readyState === WebSocket.OPEN) {
+                try {
+                  targetSock.send(JSON.stringify({ type: 'host_left', roomId: left.room.id }));
+                } catch {}
+              }
+            }
           }
         }
-        broadcastRoomList(wss);
       }
+
+      registry.purgeInactiveRooms(new Set(peerSockets.keys()));
+      broadcastRoomList(wss);
     });
   });
 

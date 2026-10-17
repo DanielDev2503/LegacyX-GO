@@ -19,6 +19,10 @@
     }, 600);
   }
 
+  $effect(() => {
+    gameUI.refreshRooms();
+  });
+
   function handleJoinRoom(room: RoomInfo) {
     if (room.isPrivate) {
       gameUI.pendingPasswordRoom = room;
@@ -111,15 +115,10 @@
                 <span class="lock-indicator" title="Sala con contraseña">🔒</span>
               {/if}
               <span class="room-name">{room.name}</span>
-              <span class="stadium-tag">{room.stadium}</span>
             </div>
 
             <div class="room-meta">
               <span class="capacity-badge">{room.playersCount} / {room.maxPlayers}</span>
-              <div class="ping-indicator">
-                <span class="ping-dot"></span>
-                <span>{room.ping} ms</span>
-              </div>
               <button
                 type="button"
                 class="join-room-btn"
@@ -127,7 +126,10 @@
                 onmouseenter={() => soundFX.playUIHover()}
                 onclick={() => handleJoinRoom(room)}
               >
-                ENTRAR
+                {#if room.isPrivate}
+                  <span class="btn-lock">🔒</span>
+                {/if}
+                <span>ENTRAR</span>
               </button>
             </div>
           </div>
@@ -178,12 +180,6 @@
         </div>
         <div class="player-details">
           <span class="player-nick">{gameUI.nickname}</span>
-          <div class="player-telemetry">
-            <span class="telemetry-green-dot"></span>
-            <span class="telemetry-ping">{gameUI.realPing !== null ? `${gameUI.realPing} ms` : 'Calculando...'}</span>
-            <span class="telemetry-sep">•</span>
-            <span class="telemetry-region">{gameUI.realRegion}</span>
-          </div>
         </div>
       </div>
 
@@ -521,16 +517,6 @@
     max-width: 260px;
   }
 
-  .stadium-tag {
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 10px;
-    color: #8fa0b5;
-    background: #0e141e;
-    padding: 2px 6px;
-    border-radius: 4px;
-    border: 1px solid rgba(255, 255, 255, 0.08);
-  }
-
   .room-meta {
     display: flex;
     align-items: center;
@@ -547,21 +533,9 @@
     border-radius: 4px;
   }
 
-  .ping-indicator {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    font-family: 'JetBrains Mono', monospace;
+  .btn-lock {
     font-size: 11px;
-    color: #2ecc71;
-    width: 60px;
-  }
-
-  .ping-dot {
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
-    background: #2ecc71;
+    margin-right: 4px;
   }
 
   .join-room-btn {
@@ -748,38 +722,6 @@
     font-size: 15px;
     font-weight: 700;
     color: #ffffff;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  .player-telemetry {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 10px;
-    margin-top: 2px;
-  }
-
-  .telemetry-green-dot {
-    width: 5px;
-    height: 5px;
-    border-radius: 50%;
-    background: #2ecc71;
-  }
-
-  .telemetry-ping {
-    color: #2ecc71;
-    font-weight: 600;
-  }
-
-  .telemetry-sep {
-    color: #8fa0b5;
-  }
-
-  .telemetry-region {
-    color: #8fa0b5;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;

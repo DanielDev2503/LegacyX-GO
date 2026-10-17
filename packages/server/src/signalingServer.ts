@@ -106,6 +106,11 @@ export function setupSignalingServer(wss: WebSocketServer) {
   }
 
   function getRoomList() {
+    for (const [id, r] of rooms.entries()) {
+      if (!r.hostWs || r.hostWs.readyState !== WebSocket.OPEN) {
+        destroyRoom(id);
+      }
+    }
     return Array.from(rooms.values()).map((r) => ({
       id: r.id,
       name: r.config.name,

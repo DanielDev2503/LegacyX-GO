@@ -41,10 +41,10 @@ export class RoomRegistry {
     this.leaveRoom(hostPeerId);
     const room: Room = {
       id: randomUUID().slice(0, 6).toUpperCase(),
-      name: opts.name.slice(0, 40) || 'LegacyX Room',
+      name: opts.name.slice(0, 50) || 'LegacyX Room',
       stadiumId: opts.stadiumId,
       hostPeerId,
-      maxPlayers: Math.max(2, Math.min(16, Math.floor(opts.maxPlayers) || 6)),
+      maxPlayers: Math.max(2, Math.min(20, Math.floor(opts.maxPlayers) || 6)),
       currentPlayers: 1,
       hasPassword: Boolean(opts.password),
       passwordHash: opts.password ? hashPassword(opts.password) : null,
@@ -74,7 +74,7 @@ export class RoomRegistry {
   }
 
   /**
-   * Saca a un peer de su sala. Si era el host, la sala se destruye.
+   * Saca a un peer de su sala. Si era el host, la sala se destruye de inmediato.
    * Devuelve la sala afectada y los peers a notificar.
    */
   public leaveRoom(peerId: string): { room: Room; notify: string[]; destroyed: boolean } | null {
@@ -95,6 +95,25 @@ export class RoomRegistry {
     return { room, notify: [room.hostPeerId], destroyed: false };
   }
 
+  public deleteRoom(roomId: string): Room | undefined {
+    const room = this.rooms.get(roomId);
+    if (!room) return undefined;
+    this.rooms.delete(roomId);
+    this.peerToRoom.delete(room.hostPeerId);
+    for (const g of room.guests) {
+      this.peerToRoom.delete(g);
+    }
+    return room;
+  }
+
+  public purgeInactiveRooms(activePeerIds: Set<string>): void {
+    for (const [roomId, room] of this.rooms.entries()) {
+      if (!activePeerIds.has(room.hostPeerId)) {
+        this.deleteRoom(roomId);
+      }
+    }
+  }
+
   public getRoomById(roomId: string): Room | undefined {
     return this.rooms.get(roomId);
   }
@@ -104,7 +123,10 @@ export class RoomRegistry {
     return id ? this.rooms.get(id) : undefined;
   }
 
-  public getPublicRooms(): RoomSummary[] {
+  public getPublicRooms(activePeerIds?: Set<string>): RoomSummary[] {
+    if (activePeerIds) {
+      this.purgeInactiveRooms(activePeerIds);
+    }
     return [...this.rooms.values()]
       .filter((r) => !r.isLocked)
       .map(({ id, name, stadiumId, maxPlayers, currentPlayers, hasPassword, isLocked, isDedicated, createdAt }) => ({

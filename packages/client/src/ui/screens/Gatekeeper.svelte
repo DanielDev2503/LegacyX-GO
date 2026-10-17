@@ -2,10 +2,7 @@
   import { gameUI } from '../state/gameUI.svelte.js';
   import { soundFX } from '../../audio/SoundFX.js';
 
-  let showEmojiPicker = $state(false);
-  let emojiInputRef = $state<HTMLInputElement | null>(null);
-
-  const emojiList = ['⚽', '🔥', '⚡', '👑', '💀', '🎯', '🤖', '😎'];
+  const emojiList = ['⚽', '🔥', '⚡', '👑', '💀', '🎯', '🤖', '😎', '🚀', '🏆', '💎', '🦁'];
 
   function handleNicknameChange(e: Event) {
     const val = (e.target as HTMLInputElement).value;
@@ -17,24 +14,9 @@
     gameUI.avatarValue = val;
   }
 
-  function handleEmojiInput(e: Event) {
-    const val = (e.target as HTMLInputElement).value;
-    if (!val) return;
-    let char = '';
-    if (typeof Intl !== 'undefined' && (Intl as any).Segmenter) {
-      const segmenter = new (Intl as any).Segmenter('es', { granularity: 'grapheme' });
-      const iterator = segmenter.segment(val)[Symbol.iterator]();
-      char = iterator.next().value?.segment || val.slice(0, 2);
-    } else {
-      char = Array.from(val)[0] || val.slice(0, 2);
-    }
-    gameUI.avatarValue = char;
-  }
-
   function selectEmoji(emoji: string) {
     soundFX.playUIClick();
     gameUI.avatarValue = emoji;
-    showEmojiPicker = false;
   }
 
   function toggleMode(isEmoji: boolean) {
@@ -122,15 +104,14 @@
           </div>
         </div>
 
-        <div class="avatar-controls-row">
-          <!-- Preview del Disco -->
-          <div class="avatar-disc-preview" title="Renderizado en cancha">
-            <span class="avatar-disc-text">{gameUI.avatarValue || 'YA'}</span>
-            <div class="status-dot-active" title="Jugador activo"></div>
-          </div>
+        {#if gameUI.avatarMode === 'letters'}
+          <div class="avatar-controls-row">
+            <!-- Preview del Disco -->
+            <div class="avatar-disc-preview" title="Renderizado en cancha">
+              <span class="avatar-disc-text">{gameUI.avatarValue || 'YA'}</span>
+              <div class="status-dot-active" title="Jugador activo"></div>
+            </div>
 
-          <!-- Modo Letras vs Emoji con soporte nativo de sistema -->
-          {#if gameUI.avatarMode === 'letters'}
             <input
               id="avatar-input"
               class="avatar-text-input"
@@ -140,56 +121,30 @@
               value={gameUI.avatarValue}
               oninput={handleAvatarTextChange}
             />
-          {:else}
-            <div class="emoji-picker-container">
-              <div class="emoji-input-wrapper">
-                <input
-                  id="avatar-input"
-                  bind:this={emojiInputRef}
-                  class="avatar-emoji-input"
-                  type="text"
-                  placeholder="😀"
-                  value={gameUI.avatarValue}
-                  oninput={handleEmojiInput}
-                  title="Escribe cualquier emoji o presiona Win + . para el selector del sistema"
-                />
+          </div>
+        {:else}
+          <div class="avatar-emoji-block">
+            <!-- Preview del Disco -->
+            <div class="avatar-disc-preview" title="Renderizado en cancha">
+              <span class="avatar-disc-text">{gameUI.avatarValue || '⚽'}</span>
+              <div class="status-dot-active" title="Jugador activo"></div>
+            </div>
+
+            <!-- Catálogo cerrado de 12 emojis predeterminados -->
+            <div class="emoji-grid-catalog">
+              {#each emojiList as emoji}
                 <button
                   type="button"
-                  class="emoji-toggle-dropdown-btn"
-                  onclick={() => { soundFX.playUIClick(); showEmojiPicker = !showEmojiPicker; }}
-                  title="Ver sugerencias rápidas de emojis"
+                  class="emoji-choice-btn"
+                  class:selected={gameUI.avatarValue === emoji}
+                  onclick={() => selectEmoji(emoji)}
                 >
-                  ▾
+                  {emoji}
                 </button>
-              </div>
-
-              {#if showEmojiPicker}
-                <div class="emoji-dropdown">
-                  {#each emojiList as emoji}
-                    <button
-                      type="button"
-                      class="emoji-choice-btn"
-                      onclick={() => selectEmoji(emoji)}
-                    >
-                      {emoji}
-                    </button>
-                  {/each}
-                </div>
-              {/if}
+              {/each}
             </div>
-          {/if}
-        </div>
-      </div>
-
-      <!-- Fila de Telemetría Pre-Partida (Región y Ping reales) -->
-      <div class="telemetry-row">
-        <div class="region-badge">
-          <span class="green-dot"></span>
-          <span>Región: <strong>{gameUI.realRegion}</strong></span>
-        </div>
-        <div class="ping-badge">
-          Ping: {gameUI.realPing !== null ? `${gameUI.realPing} ms` : 'Calculando...'}
-        </div>
+          </div>
+        {/if}
       </div>
 
       <!-- Botón Principal "JUGAR" -->
@@ -480,129 +435,44 @@
     box-shadow: 0 0 10px rgba(0, 229, 255, 0.4);
   }
 
-  .emoji-picker-container {
-    position: relative;
-    flex: 1;
-  }
-
-  .emoji-input-wrapper {
+  .avatar-emoji-block {
     display: flex;
     align-items: center;
-    width: 100%;
-    height: 44px;
-    background: #080d16;
-    border: 1px solid rgba(0, 229, 255, 0.35);
-    border-radius: 8px;
-    box-sizing: border-box;
-    transition: border-color 0.15s, box-shadow 0.15s;
+    gap: 12px;
   }
 
-  .emoji-input-wrapper:focus-within {
-    border-color: #00e5ff;
-    box-shadow: 0 0 10px rgba(0, 229, 255, 0.4);
-  }
-
-  .avatar-emoji-input {
-    flex: 1;
-    height: 100%;
-    background: transparent;
-    border: none;
-    color: #ffffff;
-    text-align: center;
-    font-size: 20px;
-    outline: none;
-    padding: 0 8px;
-    box-sizing: border-box;
-  }
-
-  .emoji-toggle-dropdown-btn {
-    width: 32px;
-    height: 100%;
-    background: transparent;
-    border: none;
-    border-left: 1px solid rgba(0, 229, 255, 0.2);
-    color: #8fa0b5;
-    font-size: 14px;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    transition: color 0.15s, background-color 0.15s;
-  }
-
-  .emoji-toggle-dropdown-btn:hover {
-    color: #00e5ff;
-    background: rgba(0, 229, 255, 0.1);
-  }
-
-  .emoji-dropdown {
-    position: absolute;
-    bottom: 52px;
-    left: 0;
-    right: 0;
-    background: #0a101a;
-    border: 1px solid #00e5ff;
-    border-radius: 8px;
-    box-shadow: 0 0 18px rgba(0, 229, 255, 0.3);
-    padding: 8px;
+  .emoji-grid-catalog {
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(6, 1fr);
     gap: 6px;
-    z-index: 50;
+    flex: 1;
   }
 
   .emoji-choice-btn {
-    background: #0e1726;
-    border: 1px solid rgba(0, 229, 255, 0.2);
+    height: 38px;
+    background: #080d16;
+    border: 1px solid rgba(0, 229, 255, 0.25);
     border-radius: 6px;
-    font-size: 20px;
-    padding: 6px;
+    font-size: 18px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
     cursor: pointer;
-    transition: transform 0.1s, background-color 0.15s;
+    transition: transform 0.1s, border-color 0.15s, background-color 0.15s, box-shadow 0.15s;
+    user-select: none;
   }
 
   .emoji-choice-btn:hover {
+    background: rgba(0, 229, 255, 0.15);
+    border-color: #00e5ff;
+    transform: scale(1.08);
+  }
+
+  .emoji-choice-btn.selected {
     background: rgba(0, 229, 255, 0.25);
-    transform: scale(1.1);
-  }
-
-  .telemetry-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 11px;
-    padding: 0 4px;
-  }
-
-  .region-badge {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    color: #8fa0b5;
-  }
-
-  .region-badge strong {
-    color: #ffffff;
-  }
-
-  .green-dot {
-    width: 7px;
-    height: 7px;
-    border-radius: 50%;
-    background: #2ecc71;
-    box-shadow: 0 0 6px #2ecc71;
-    animation: pulse 2s infinite;
-  }
-
-  @keyframes pulse {
-    0%, 100% { opacity: 1; transform: scale(1); }
-    50% { opacity: 0.5; transform: scale(0.9); }
-  }
-
-  .ping-badge {
-    color: #00e5ff;
-    font-weight: 600;
+    border-color: #00e5ff;
+    box-shadow: 0 0 10px rgba(0, 229, 255, 0.45);
+    transform: scale(1.08);
   }
 
   .play-btn {

@@ -203,6 +203,11 @@ export class SignalingClient {
               this.onMessage(msg);
             }
             this.emit(msg.type, msg);
+            if (msg.type === 'ROOM_LIST') {
+              this.emit('room_list', msg);
+            } else if (msg.type === 'room_list') {
+              this.emit('ROOM_LIST', msg);
+            }
           } catch (err) {
             console.error('Invalid signaling message:', err);
           }
