@@ -186,10 +186,10 @@
     position: relative;
     z-index: 20;
     width: min(92vw, 440px);
-    background: rgba(10, 16, 26, 0.96);
+    background: rgba(10, 16, 26, 0.95);
     border: 1px solid #00e5ff;
-    border-radius: 14px;
-    box-shadow: 0 0 24px rgba(0, 229, 255, 0.25);
+    border-radius: 0.5rem;
+    box-shadow: 0 0 24px rgba(0, 229, 255, 0.35), inset 0 0 12px rgba(0, 229, 255, 0.15);
     padding: 24px;
     padding-top: 0;
     box-sizing: border-box;

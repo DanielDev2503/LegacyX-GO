@@ -93,16 +93,17 @@
   .chat-dock {
     width: min(440px, 55vw);
     min-height: 64px;
-    background: rgba(10, 16, 26, 0.84);
-    backdrop-filter: blur(10px);
-    border: 1px solid rgba(0, 229, 255, 0.22);
-    border-radius: 12px;
+    background: rgba(10, 16, 26, 0.92);
+    border: 1px solid rgba(0, 229, 255, 0.28);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4), 0 0 10px rgba(0, 229, 255, 0.12);
+    border-radius: 8px;
     padding: 0.55rem 0.65rem;
     display: flex;
     flex-direction: column;
     gap: 0.4rem;
     pointer-events: auto;
     box-sizing: border-box;
+    font-family: 'Chivo', system-ui, sans-serif;
   }
 
   .chat-history {

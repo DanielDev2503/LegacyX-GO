@@ -72,10 +72,12 @@
     align-items: center;
     gap: 0.65rem;
     padding: 0.35rem 0.65rem;
-    border-radius: 10px;
-    background: rgba(10, 16, 26, 0.82);
-    border: 1px solid rgba(0, 229, 255, 0.22);
-    font-family: monospace;
+    border-radius: 8px;
+    background: rgba(10, 16, 26, 0.92);
+    border: 1px solid rgba(0, 229, 255, 0.3);
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.5), 0 0 10px rgba(0, 229, 255, 0.15);
+    font-family: 'JetBrains Mono', monospace;
+    font-variant-numeric: tabular-nums;
     font-size: 0.72rem;
     color: #cbd5e1;
     pointer-events: none;

@@ -844,7 +844,7 @@
   .modal-backdrop {
     position: fixed;
     inset: 0;
-    background: rgba(5, 8, 17, 0.85);
+    background: rgba(5, 8, 14, 0.85);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -854,10 +854,10 @@
 
   .password-modal-card {
     width: min(90vw, 400px);
-    background: rgba(10, 16, 26, 0.98);
+    background: rgba(10, 16, 26, 0.95);
     border: 1px solid #00e5ff;
-    border-radius: 12px;
-    box-shadow: 0 0 24px rgba(0, 229, 255, 0.35);
+    border-radius: 0.5rem;
+    box-shadow: 0 0 24px rgba(0, 229, 255, 0.35), inset 0 0 12px rgba(0, 229, 255, 0.15);
     padding: 24px;
     display: flex;
     flex-direction: column;

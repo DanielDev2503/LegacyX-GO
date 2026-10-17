@@ -274,6 +274,7 @@
 
   .score-number {
     font-family: 'JetBrains Mono', monospace;
+    font-variant-numeric: tabular-nums;
     font-size: 18px;
     font-weight: 800;
   }
@@ -295,6 +296,7 @@
     align-items: center;
     gap: 4px;
     font-family: 'JetBrains Mono', monospace;
+    font-variant-numeric: tabular-nums;
     font-size: 13px;
     font-weight: 700;
     color: #ffe16d;

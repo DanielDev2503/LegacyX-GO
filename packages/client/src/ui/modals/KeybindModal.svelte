@@ -108,25 +108,27 @@
   .modal-backdrop {
     position: fixed;
     inset: 0;
-    background: rgba(5, 8, 17, 0.78);
-    backdrop-filter: blur(8px);
+    background: rgba(5, 8, 14, 0.85);
     display: flex;
     align-items: center;
     justify-content: center;
     z-index: 140;
     padding: 1rem;
+    pointer-events: auto;
   }
 
   .keybind-modal-card {
     width: min(520px, 95vw);
-    background: rgba(10, 16, 26, 0.98);
-    border: 1px solid rgba(0, 229, 255, 0.3);
-    border-radius: 18px;
+    background: rgba(10, 16, 26, 0.95);
+    border: 1px solid rgba(0, 229, 255, 0.6);
+    border-radius: 0.5rem;
+    box-shadow: 0 0 24px rgba(0, 229, 255, 0.35), inset 0 0 12px rgba(0, 229, 255, 0.15);
     padding: 1.4rem;
     color: #f0f8ff;
     display: flex;
     flex-direction: column;
     gap: 1rem;
+    font-family: 'Chivo', system-ui, sans-serif;
   }
 
   .modal-header {
@@ -136,6 +138,7 @@
   }
 
   .kicker {
+    font-family: 'Space Grotesk', system-ui, sans-serif;
     font-size: 0.68rem;
     font-weight: 800;
     letter-spacing: 0.12em;
@@ -143,6 +146,7 @@
   }
 
   h2 {
+    font-family: 'Space Grotesk', system-ui, sans-serif;
     margin: 0.15rem 0 0;
     font-size: 1.25rem;
   }
@@ -193,7 +197,8 @@
     background: #0f172a;
     border: 1px solid rgba(0, 229, 255, 0.35);
     color: #38bdf8;
-    font-family: monospace;
+    font-family: 'JetBrains Mono', monospace;
+    font-variant-numeric: tabular-nums;
     font-size: 0.8rem;
     font-weight: 700;
     cursor: pointer;

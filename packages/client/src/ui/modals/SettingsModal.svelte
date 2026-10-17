@@ -1626,14 +1626,14 @@
     align-items: center;
     gap: 0.5rem;
     padding: 0.6rem 1.1rem;
-    background: rgba(13, 21, 38, 0.85);
+    background: rgba(10, 16, 26, 0.95);
     border: 1px solid rgba(0, 229, 255, 0.35);
     border-radius: 9999px;
     color: #e2e8f0;
+    font-family: 'Chivo', system-ui, sans-serif;
     font-size: 0.9rem;
     font-weight: 600;
     letter-spacing: 0.03em;
-    backdrop-filter: blur(12px);
     cursor: pointer;
     box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4), 0 0 12px rgba(0, 229, 255, 0.15);
     transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
@@ -1660,8 +1660,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    background: rgba(0, 0, 0, 0.65);
-    backdrop-filter: blur(12px);
+    background: rgba(5, 8, 14, 0.85);
     padding: 1.5rem;
     box-sizing: border-box;
     pointer-events: auto;
@@ -1674,13 +1673,13 @@
     max-width: 960px;
     height: 680px;
     max-height: 85vh;
-    background: #0d1526;
-    border: 1px solid rgba(0, 229, 255, 0.25);
-    border-radius: 1rem;
+    background: rgba(10, 16, 26, 0.95);
+    border: 1px solid rgba(0, 229, 255, 0.6);
+    border-radius: 0.5rem;
     display: flex;
     flex-direction: row;
     overflow: hidden;
-    box-shadow: 0 20px 50px rgba(0, 0, 0, 0.7), 0 0 30px rgba(0, 229, 255, 0.08);
+    box-shadow: 0 0 24px rgba(0, 229, 255, 0.35), inset 0 0 12px rgba(0, 229, 255, 0.15);
     pointer-events: auto;
   }
 

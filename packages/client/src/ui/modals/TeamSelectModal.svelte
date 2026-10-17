@@ -345,27 +345,28 @@
   .modal-backdrop {
     position: fixed;
     inset: 0;
-    background: rgba(5, 8, 17, 0.72);
-    backdrop-filter: blur(8px);
+    background: rgba(5, 8, 14, 0.85);
     display: flex;
     align-items: center;
     justify-content: center;
     z-index: 120;
     padding: 1rem;
+    pointer-events: auto;
   }
 
   .team-modal-card {
     width: min(920px, 96vw);
     max-height: calc(100vh - 190px);
-    background: rgba(10, 16, 26, 0.96);
-    border: 1px solid rgba(0, 229, 255, 0.28);
-    border-radius: 18px;
+    background: rgba(10, 16, 26, 0.95);
+    border: 1px solid rgba(0, 229, 255, 0.6);
+    border-radius: 0.5rem;
     padding: 1.25rem 1.5rem;
     display: flex;
     flex-direction: column;
     gap: 1rem;
     color: #f0f8ff;
-    box-shadow: 0 24px 60px rgba(0, 0, 0, 0.65);
+    box-shadow: 0 0 24px rgba(0, 229, 255, 0.35), inset 0 0 12px rgba(0, 229, 255, 0.15);
+    font-family: 'Chivo', system-ui, sans-serif;
   }
 
   .modal-header {
@@ -395,6 +396,7 @@
   }
 
   h2 {
+    font-family: 'Space Grotesk', system-ui, sans-serif;
     margin: 0;
     font-size: 1.25rem;
     font-weight: 800;
@@ -545,6 +547,8 @@
   }
 
   .count-pill {
+    font-family: 'JetBrains Mono', monospace;
+    font-variant-numeric: tabular-nums;
     font-size: 0.7rem;
     background: rgba(148, 163, 184, 0.16);
     padding: 0.1rem 0.45rem;

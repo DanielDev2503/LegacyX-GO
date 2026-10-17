@@ -364,10 +364,10 @@
     width: min(94vw, 780px);
     max-height: 90vh;
     overflow-y: auto;
-    background: rgba(10, 16, 26, 0.96);
+    background: rgba(10, 16, 26, 0.95);
     border: 1px solid #00e5ff;
-    border-radius: 12px;
-    box-shadow: 0 0 24px rgba(0, 229, 255, 0.25);
+    border-radius: 0.5rem;
+    box-shadow: 0 0 24px rgba(0, 229, 255, 0.35), inset 0 0 12px rgba(0, 229, 255, 0.15);
     padding: 22px;
     margin: auto;
     display: flex;
@@ -829,11 +829,10 @@
     align-items: center;
     justify-content: center;
     gap: 4px;
-    background: rgba(10, 16, 26, 0.88);
+    background: rgba(10, 16, 26, 0.95);
     border: 1px solid rgba(0, 229, 255, 0.4);
     padding: 8px 16px;
     border-radius: 8px;
-    backdrop-filter: blur(4px);
     pointer-events: none;
     box-shadow: 0 0 14px rgba(0, 0, 0, 0.6);
   }

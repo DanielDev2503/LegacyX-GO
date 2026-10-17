@@ -6,6 +6,33 @@
 
 :root {
   /* Variables y Tokens del Tema (Cyber-Pitch Dark) */
+  --color-primary: #00e5ff;
+  --color-secondary: #ffd700;
+  --color-team-blue: #3498db;
+  --color-team-red: #e74c3c;
+  --color-surface-base: rgba(10, 16, 26, 0.95);
+  --color-surface-modal: rgba(5, 8, 14, 0.85);
+  --color-border-subtle: rgba(0, 229, 255, 0.2);
+  --color-border-active: #00e5ff;
+
+  --font-display: 'Space Grotesk', system-ui, -apple-system, sans-serif;
+  --font-body: 'Chivo', system-ui, -apple-system, sans-serif;
+  --font-mono: 'JetBrains Mono', monospace;
+
+  /* Niveles de Elevación (Sin Blur) */
+  --elevation-1-bg: rgba(10, 16, 26, 0.95);
+  --elevation-1-border: 1px solid rgba(0, 229, 255, 0.2);
+
+  --elevation-2-bg: rgba(10, 16, 26, 0.95);
+  --elevation-2-border: 1px solid rgba(0, 229, 255, 0.5);
+  --elevation-2-shadow: 0 0 12px rgba(0, 229, 255, 0.15);
+
+  --elevation-3-bg: rgba(5, 8, 14, 0.85);
+  --elevation-3-border: 1px solid rgba(0, 229, 255, 0.6);
+  --elevation-3-shadow: 0 0 24px rgba(0, 229, 255, 0.35), inset 0 0 12px rgba(0, 229, 255, 0.15);
+
+  --radius-technical: 0.5rem;
+
   --bg-scene: #050811;
   --bg-card: rgba(10, 16, 26, 0.96);
   --bg-subpanel: rgba(18, 26, 41, 0.85);
@@ -18,7 +45,6 @@
   --team-blue: #3498db;
   --text-primary: #f0f8ff;
   --text-secondary: #8fa0b5;
-  --font-mono: 'JetBrains Mono', 'Consolas', monospace;
 }
 
 :root, [data-theme="light"] {
