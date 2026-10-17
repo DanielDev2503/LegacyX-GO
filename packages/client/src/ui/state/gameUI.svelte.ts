@@ -70,6 +70,8 @@ export interface EmoteTrigger {
 
 export const SETTINGS_STORAGE_KEY = 'haxball_settings_v1';
 export const KEYBINDS_STORAGE_KEY = 'haxball_keybinds_v1';
+export const SETTINGS_VERSION_KEY = 'haxball_settings_version';
+export const SETTINGS_VERSION = 2;
 export const NICKNAME_STORAGE_KEY = 'haxball_nickname';
 export const AVATAR_STORAGE_KEY = 'haxball_avatar';
 
@@ -608,6 +610,8 @@ class GameUIStore {
       if (savedAvatar) {
         this.avatarValue = savedAvatar.slice(0, 2);
       }
+      const currentVersion = Number(localStorage.getItem(SETTINGS_VERSION_KEY) || 0);
+
       const rawSettings = localStorage.getItem(SETTINGS_STORAGE_KEY);
       if (rawSettings) {
         const parsed = JSON.parse(rawSettings) as Partial<SettingsConfig>;
@@ -624,7 +628,10 @@ class GameUIStore {
         this.masterVolume = this.settings.masterVolume;
       }
       const rawKeybinds = localStorage.getItem(KEYBINDS_STORAGE_KEY);
-      if (rawKeybinds) {
+      if (currentVersion < SETTINGS_VERSION || !rawKeybinds) {
+        this.resetKeybinds();
+        localStorage.setItem(SETTINGS_VERSION_KEY, String(SETTINGS_VERSION));
+      } else {
         const parsedKeys = JSON.parse(rawKeybinds) as Partial<KeybindConfig>;
         this.keybinds = { ...DEFAULT_KEYBINDS, ...parsedKeys };
       }

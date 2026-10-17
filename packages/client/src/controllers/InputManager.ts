@@ -76,6 +76,13 @@ export class InputManager {
       return JSON.parse(JSON.stringify(DEFAULT_KEYBINDS));
     }
     try {
+      const version = Number(localStorage.getItem('haxball_settings_version') || 0);
+      if (version < 2) {
+        localStorage.setItem('haxball_settings_version', '2');
+        const defs: KeyBinds = JSON.parse(JSON.stringify(DEFAULT_KEYBINDS));
+        this.saveKeyBinds(defs);
+        return defs;
+      }
       const saved = localStorage.getItem(KEYBIND_STORAGE_KEY);
       if (saved) {
         const parsed = JSON.parse(saved);

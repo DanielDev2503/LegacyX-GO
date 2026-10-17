@@ -56,6 +56,10 @@
     if (rebindingAction) {
       e.preventDefault();
       e.stopPropagation();
+      if (e.key === 'Escape') {
+        rebindingAction = null;
+        return;
+      }
       gameUI.remapKey(rebindingAction as any, e.code);
       rebindingAction = null;
       return;
@@ -93,12 +97,6 @@
     soundFX.playUIClick();
     gameUI.resetGraphicsSettings();
   }
-
-  // Reactive auto-save for settings changes
-  $effect(() => {
-    // Accessing reactive properties triggers auto-save immediately
-    gameUI.saveSettings();
-  });
 
   // Avatar updates sync to gameUI
   function setAvatarMode(mode: 'letters' | 'emoji') {
@@ -178,26 +176,9 @@
   role="presentation"
   onclick={handleBackdropClick}
 >
-  <div class="settings-modal-card" role="dialog" aria-modal="true" aria-labelledby="settings-dialog-title">
-    <!-- Header Ribbon Limpio -->
-    <header class="modal-header">
-      <div class="header-left">
-        <div class="settings-icon-box" aria-hidden="true">
-          <svg viewBox="0 0 24 24" class="header-gear-icon" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <circle cx="12" cy="12" r="3"></circle>
-            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
-          </svg>
-        </div>
-        <div class="title-meta">
-          <h2 id="settings-dialog-title" class="dialog-title">Ajustes generales</h2>
-        </div>
-      </div>
-    </header>
-
-    <!-- Modal Body: 2 Columnas Fijas (Sidebar de navegación + Contenido dinámico con scroll) -->
-    <div class="settings-body">
-      <!-- Panel Izquierdo: Lista vertical de 5 Pestañas -->
-      <nav class="tabs-sidebar" aria-label="Pestañas de ajustes">
+  <div class="settings-modal-card" role="dialog" aria-modal="true" aria-label="Ajustes generales">
+    <!-- Panel Izquierdo: Lista vertical de 5 Pestañas -->
+    <nav class="tabs-sidebar" aria-label="Pestañas de ajustes">
         <button
           type="button"
           class="tab-btn"
@@ -1633,7 +1614,6 @@
       </div>
     </div>
   </div>
-</div>
 
 <style>
   /* Floating back button outside the modal card (top-left) */
@@ -1684,81 +1664,38 @@
     backdrop-filter: blur(12px);
     padding: 1.5rem;
     box-sizing: border-box;
+    pointer-events: auto;
   }
 
-  /* Modal Main Card */
+  /* Modal Main Card (Starts directly in 2 columns from the top) */
   .settings-modal-card {
     position: relative;
     width: 100%;
     max-width: 960px;
-    height: 640px;
-    max-height: 90vh;
+    height: 680px;
+    max-height: 85vh;
     background: #0d1526;
     border: 1px solid rgba(0, 229, 255, 0.25);
     border-radius: 1rem;
     display: flex;
-    flex-direction: column;
+    flex-direction: row;
     overflow: hidden;
     box-shadow: 0 20px 50px rgba(0, 0, 0, 0.7), 0 0 30px rgba(0, 229, 255, 0.08);
-  }
-
-  /* Modal Header */
-  .modal-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 1rem 1.5rem;
-    background: rgba(11, 17, 30, 0.95);
-    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-  }
-
-  .header-left {
-    display: flex;
-    align-items: center;
-    gap: 0.85rem;
-  }
-
-  .settings-icon-box {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 2.25rem;
-    height: 2.25rem;
-    background: rgba(0, 229, 255, 0.1);
-    border: 1px solid rgba(0, 229, 255, 0.3);
-    border-radius: 0.5rem;
-    color: #00e5ff;
-  }
-
-  .header-gear-icon {
-    width: 1.35rem;
-    height: 1.35rem;
-  }
-
-  .dialog-title {
-    margin: 0;
-    font-size: 1.25rem;
-    font-weight: 700;
-    color: #f8fafc;
-    letter-spacing: -0.01em;
-  }
-
-  /* Modal Body: 2 Columns */
-  .settings-body {
-    display: flex;
-    flex: 1;
-    overflow: hidden;
+    pointer-events: auto;
   }
 
   /* Left Sidebar */
   .tabs-sidebar {
     width: 220px;
-    background: rgba(11, 17, 30, 0.6);
+    height: 100%;
+    background: rgba(11, 17, 30, 0.75);
     border-right: 1px solid rgba(255, 255, 255, 0.08);
     display: flex;
     flex-direction: column;
-    padding: 1rem 0.75rem;
-    gap: 0.35rem;
+    padding: 1.25rem 0.75rem;
+    gap: 0.4rem;
+    box-sizing: border-box;
+    flex-shrink: 0;
   }
 
   .tab-btn {
@@ -1801,10 +1738,13 @@
   /* Right Tab Content Container with independent scroll */
   .tab-content {
     flex: 1;
+    height: 100%;
     display: flex;
     flex-direction: column;
     overflow-y: auto;
     background: #0d1526;
+    box-sizing: border-box;
+    pointer-events: auto;
   }
 
   .tab-pane {
@@ -3071,7 +3011,7 @@
 
   /* Responsive Adjustments */
   @media (max-width: 768px) {
-    .settings-body {
+    .settings-modal-card {
       flex-direction: column;
     }
     .tabs-sidebar {
