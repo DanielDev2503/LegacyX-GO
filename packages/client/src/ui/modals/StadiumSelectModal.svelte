@@ -1,6 +1,7 @@
 <script lang="ts">
   import { gameUI, type StadiumPresetKey } from '../state/gameUI.svelte.js';
   import { soundFX } from '../../audio/SoundFX.js';
+  import { $roomConfig as roomConfigStore } from '../../controllers/stores/gameStore.js';
 
   let {
     onSelectStadium = (_id: StadiumPresetKey) => {}
@@ -20,12 +21,10 @@
     canonicalId: StadiumPresetKey;
     name: string;
     author: string;
-    subtext: string;
-    format: string;
-    dimensions: string;
-    nets: string;
-    bounce: string;
-    badge: string;
+    recommendedMode: string;
+    fieldSize: string;
+    goalWidth: string;
+    measuresText: string;
     colorHue: string;
     spawnRed: ArenaSpawn[];
     spawnBlue: ArenaSpawn[];
@@ -33,16 +32,50 @@
 
   const ARENA_CATALOG: ArenaOption[] = [
     {
-      id: 'af3v3',
-      canonicalId: 'AF 3v3 Official',
-      name: 'AF 3v3 Official',
-      author: 'Vitão (LegacyX Tier-1)',
-      subtext: 'Estándar Competitivo',
-      format: '3v3 y 4v4 competitivo oficial',
-      dimensions: '840 × 400 px | Apertura de Porterías: 130 px',
-      nets: 'Modelo elástico de baja amortiguación con postes cilíndricos de 8 px',
-      bounce: '0.80 (Rebote dinámico estándar)',
-      badge: 'OFICIAL TORNEO',
+      id: 'individual',
+      canonicalId: 'individual',
+      name: 'Individual',
+      author: 'Yami',
+      recommendedMode: '1v1',
+      fieldSize: '800 x 380 px',
+      goalWidth: '120 px',
+      measuresText: '800 x 380 px | Arcos: 120 px',
+      colorHue: '#0d1d1a',
+      spawnRed: [
+        { label: 'R1', x: 170, y: 125, role: 'SOLO' }
+      ],
+      spawnBlue: [
+        { label: 'B1', x: 410, y: 125, role: 'SOLO' }
+      ]
+    },
+    {
+      id: 'small',
+      canonicalId: 'small',
+      name: 'Pequeño',
+      author: 'Yami',
+      recommendedMode: '2v2',
+      fieldSize: '1000 x 460 px',
+      goalWidth: '130 px',
+      measuresText: '1000 x 460 px | Arcos: 130 px',
+      colorHue: '#0a1926',
+      spawnRed: [
+        { label: 'R1', x: 140, y: 100, role: 'GK' },
+        { label: 'R2', x: 200, y: 150, role: 'FWD' }
+      ],
+      spawnBlue: [
+        { label: 'B1', x: 440, y: 100, role: 'GK' },
+        { label: 'B2', x: 380, y: 150, role: 'FWD' }
+      ]
+    },
+    {
+      id: 'classic',
+      canonicalId: 'classic',
+      name: 'Mediano',
+      author: 'Yami',
+      recommendedMode: '3v3',
+      fieldSize: '1200 x 540 px',
+      goalWidth: '140 px',
+      measuresText: '1200 x 540 px | Arcos: 140 px',
       colorHue: '#081d14',
       spawnRed: [
         { label: 'R1', x: 130, y: 125, role: 'GK' },
@@ -56,37 +89,14 @@
       ]
     },
     {
-      id: 'classic',
-      canonicalId: 'Classic',
-      name: 'Classic Field',
-      author: 'Basro Community Core',
-      subtext: 'Haxball Clásico 2v2 / 3v3',
-      format: '2v2 y 3v3 casual / rank',
-      dimensions: '740 × 360 px | Apertura de Porterías: 120 px',
-      nets: 'Red rígida estándar Haxball v1.2',
-      bounce: '0.75 (Fricción equilibrada)',
-      badge: 'CLÁSICO RETRO',
-      colorHue: '#0a1926',
-      spawnRed: [
-        { label: 'R1', x: 140, y: 100, role: 'GK' },
-        { label: 'R2', x: 200, y: 150, role: 'FWD' }
-      ],
-      spawnBlue: [
-        { label: 'B1', x: 440, y: 100, role: 'GK' },
-        { label: 'B2', x: 380, y: 150, role: 'FWD' }
-      ]
-    },
-    {
-      id: 'bigstadium',
-      canonicalId: 'Big',
-      name: 'Big Stadium',
-      author: 'LegacyX Map Guild',
-      subtext: 'Cancha Grande 4v4 / 5v5',
-      format: '4v4 y 5v5 escuadras completas',
-      dimensions: '1120 × 520 px | Apertura de Porterías: 160 px',
-      nets: 'Red profunda de amortiguación gradual',
-      bounce: '0.85 (Aceleración alta)',
-      badge: 'ESPACIO AMPLIO',
+      id: 'big',
+      canonicalId: 'big',
+      name: 'Grande',
+      author: 'Yami',
+      recommendedMode: '4v4',
+      fieldSize: '1600 x 720 px',
+      goalWidth: '160 px',
+      measuresText: '1600 x 720 px | Arcos: 160 px',
       colorHue: '#061816',
       spawnRed: [
         { label: 'R1', x: 110, y: 125, role: 'GK' },
@@ -100,94 +110,44 @@
         { label: 'B3', x: 410, y: 185, role: 'MID' },
         { label: 'B4', x: 360, y: 125, role: 'FWD' }
       ]
-    },
-    {
-      id: 'smallarena',
-      canonicalId: 'Small',
-      name: 'Small Arena',
-      author: 'SpeedDuel Systems',
-      subtext: 'Espacio Reducido 1v1 / 2v2',
-      format: '1v1 Duelos puros y práctica 2v2',
-      dimensions: '600 × 300 px | Apertura de Porterías: 100 px',
-      nets: 'Poste metálico sólido directo',
-      bounce: '0.92 (Rebote ultra-rápido)',
-      badge: 'DUELOS 1V1',
-      colorHue: '#141724',
-      spawnRed: [
-        { label: 'R1', x: 170, y: 125, role: 'SOLO' }
-      ],
-      spawnBlue: [
-        { label: 'B1', x: 410, y: 125, role: 'SOLO' }
-      ]
-    },
-    {
-      id: 'futsal',
-      canonicalId: 'Medium',
-      name: 'Futsal Pro Court',
-      author: 'Futsal Federation Pro',
-      subtext: 'Paredes Rígidas Rebote Rápido',
-      format: '3v3 sin fuera de banda (pared perimetral)',
-      dimensions: '800 × 380 px | Apertura de Porterías: 110 px',
-      nets: 'Cajón compacto con absorción 0.3',
-      bounce: '0.98 (Pared perimetral de madera técnica)',
-      badge: 'FUTSAL RULES',
-      colorHue: '#1c140c',
-      spawnRed: [
-        { label: 'R1', x: 130, y: 125, role: 'GK' },
-        { label: 'R2', x: 195, y: 80, role: 'DEF' },
-        { label: 'R3', x: 215, y: 170, role: 'PIVOT' }
-      ],
-      spawnBlue: [
-        { label: 'B1', x: 450, y: 125, role: 'GK' },
-        { label: 'B2', x: 385, y: 80, role: 'DEF' },
-        { label: 'B3', x: 365, y: 170, role: 'PIVOT' }
-      ]
-    },
-    {
-      id: 'hockey',
-      canonicalId: 'Medium',
-      name: 'Hockey Rink Arena',
-      author: 'Zero-G Labs',
-      subtext: 'Superficie de Baja Fricción',
-      format: '3v3 y 4v4 Puck/Ball deslizante',
-      dimensions: '860 × 420 px | Apertura de Porterías: 140 px',
-      nets: 'Tubos curvados de hockey sobre hielo',
-      bounce: '0.95 (Hielo sintético sin deceleración)',
-      badge: 'BAJA FRICCIÓN',
-      colorHue: '#0a192f',
-      spawnRed: [
-        { label: 'R1', x: 130, y: 125, role: 'GK' },
-        { label: 'R2', x: 200, y: 75, role: 'DEF' },
-        { label: 'R3', x: 200, y: 175, role: 'WING' }
-      ],
-      spawnBlue: [
-        { label: 'B1', x: 450, y: 125, role: 'GK' },
-        { label: 'B2', x: 380, y: 75, role: 'DEF' },
-        { label: 'B3', x: 380, y: 175, role: 'WING' }
-      ]
     }
   ];
 
   function matchCurrentArenaId(): string {
     const curr = (gameUI.selectedStadiumId || 'classic').toLowerCase();
-    if (curr.includes('af') || curr.includes('3v3')) return 'af3v3';
-    if (curr.includes('big')) return 'bigstadium';
-    if (curr.includes('small')) return 'smallarena';
-    if (curr.includes('futsal')) return 'futsal';
-    if (curr.includes('hockey')) return 'hockey';
+    if (curr.includes('indiv') || curr.includes('1v1')) return 'individual';
+    if (curr.includes('small') || curr.includes('peque') || curr.includes('2v2')) return 'small';
+    if (curr.includes('big') || curr.includes('grand') || curr.includes('4v4')) return 'big';
     return 'classic';
   }
 
-  let selectedId = $state<string>(matchCurrentArenaId());
-  let showConfirmationToast = $state(false);
+  // Estado del estadio confirmado/activo
+  let activeConfirmedId = $state<string>(matchCurrentArenaId());
 
-  let activeArena = $derived(
-    ARENA_CATALOG.find((a) => a.id === selectedId) ?? ARENA_CATALOG[0]!
+  // Estado del estadio actualmente inspeccionado en el panel de detalle
+  let inspectedId = $state<string>(matchCurrentArenaId());
+
+  let showConfirmationToast = $state(false);
+  let isSelecting = $state(false);
+
+  let inspectedArena = $derived(
+    ARENA_CATALOG.find((a) => a.id === inspectedId) ?? ARENA_CATALOG[2]!
   );
 
-  function handleSelectArena(arenaId: string) {
+  // Regla B.2: Bloqueo Justificado
+  // En ROOM_CREATOR o LOBBY: NUNCA se bloquea
+  // En IN_GAME: Solo se bloquea si el partido está en juego activo (matchPhase !== 0 y fsmPhase !== 'STOPPED')
+  let isMatchLocked = $derived(
+    gameUI.currentScreen === 'IN_GAME' && gameUI.matchPhase !== 0 && gameUI.fsmPhase !== 'STOPPED'
+  );
+
+  let canSelect = $derived(
+    (gameUI.currentScreen === 'ROOM_CREATOR' || gameUI.isHost || gameUI.isAdmin) && !isMatchLocked
+  );
+
+  function handleInspectArena(arenaId: string) {
     soundFX.playUIClick();
-    selectedId = arenaId;
+    inspectedId = arenaId;
   }
 
   function handleClose() {
@@ -201,19 +161,25 @@
     }
   }
 
-  function handleConfirm() {
-    if (gameUI.isMatchActive) return;
-    if (!gameUI.isHost && !gameUI.isAdmin) return;
+  function handleConfirmSelection() {
+    if (!canSelect || isSelecting) return;
 
     soundFX.playUIClick();
-    gameUI.selectStadium(activeArena.canonicalId, activeArena.name);
-    onSelectStadium(activeArena.canonicalId);
+    isSelecting = true;
+    activeConfirmedId = inspectedId;
+
+    gameUI.selectStadium(inspectedArena.canonicalId, inspectedArena.name);
+    onSelectStadium(inspectedArena.canonicalId);
+    roomConfigStore.set({ ...roomConfigStore.get(), stadiumId: inspectedArena.id });
 
     showConfirmationToast = true;
+
+    // Pausa deliberada de 1000 ms para retroalimentación visual al usuario
     setTimeout(() => {
       showConfirmationToast = false;
+      isSelecting = false;
       gameUI.closeOverlay();
-    }, 600);
+    }, 1000);
   }
 
   function handleKeyDown(e: KeyboardEvent) {
@@ -226,99 +192,108 @@
 
 <svelte:window onkeydown={handleKeyDown} />
 
+<!-- Botón flotante exterior minimalista (Top-Left) -->
+<button
+  type="button"
+  class="floating-back-btn"
+  onclick={handleClose}
+  aria-label="Volver a la pantalla anterior"
+  title="Volver [Esc]"
+>
+  ← Volver
+</button>
+
 <!-- OVERLAY BACKDROP (Condición #) -->
 <div
   class="modal-backdrop"
   role="presentation"
   onclick={handleBackdropClick}
 >
-  <!-- MODAL CONTAINER (Exact Stitch Specs: min(94vw, 920px), h: 620px) -->
+  <!-- MODAL CONTAINER -->
   <div class="stadium-modal-card" role="dialog" aria-modal="true" aria-labelledby="stadium-dialog-title">
-    <!-- Top Ribbon & Header -->
+    <!-- Top Ribbon & Header Limpio (Sin etiquetas mock) -->
     <header class="modal-header-ribbon">
       <div class="header-left">
-        <div class="stadium-icon-box">
-          <svg class="w-5 h-5 fill-current" viewBox="0 0 24 24">
-            <path d="M7 5h10v2H7V5zm-4 6h18v2H3v-2zm2 6h14v2H5v-2zM4 3a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2H4z" />
+        <!-- Glifo reglamentario de cancha / estadio de fútbol -->
+        <div class="stadium-icon-box" aria-hidden="true">
+          <svg viewBox="0 0 24 24" class="stadium-pitch-glyph" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="2" y="4" width="20" height="16" rx="2" />
+            <line x1="12" y1="4" x2="12" y2="20" />
+            <circle cx="12" cy="12" r="3.5" />
+            <path d="M2 9h3v6H2" />
+            <path d="M22 9h-3v6h3" />
           </svg>
         </div>
         <div class="title-meta">
-          <div class="protocol-row">
-            <span class="protocol-tag">[MA] LOBBY PROTOCOL</span>
-            <span class="protocol-dot"></span>
-          </div>
           <h1 id="stadium-dialog-title" class="dialog-title">Elegir Estadio</h1>
+          <span class="dialog-subtitle">Canchas y dimensiones oficiales reglamentarias</span>
         </div>
       </div>
 
       <div class="header-right">
-        <div class="active-badge" id="header-active-map-badge">
-          MAPA ACTIVO: {activeArena.name.toUpperCase()}
-        </div>
-        <button
-          type="button"
-          class="close-x-btn"
-          onclick={handleClose}
-          aria-label="Cerrar modal"
-          title="Cerrar [Esc]"
-        >
-          ✕
-        </button>
+        {#if isMatchLocked}
+          <span class="warning-pill">⚠️ PARTIDO EN CURSO (BLOQUEADO)</span>
+        {/if}
       </div>
     </header>
 
-    <!-- Subtitle Description Band -->
+    <!-- Subtitle Bar -->
     <div class="subtitle-bar">
       <div class="subtitle-content">
         <span class="info-icon">ℹ</span>
-        <span>Selecciona el terreno de juego para la partida. Nuevos mapas se añadirán dinámicamente a la lista oficial.</span>
+        <span>Haz clic para inspeccionar cualquier cancha y confirma tu selección con el botón principal.</span>
       </div>
-      {#if gameUI.isMatchActive}
-        <span class="warning-pill">⚠️ PARTIDO EN CURSO (BLOQUEADO)</span>
-      {/if}
     </div>
 
-    <!-- CENTRAL LAYOUT (2 Columns: List 260px + Preview & Specs) -->
+    <!-- CENTRAL LAYOUT (2 Columnas: Lista de 4 Estadios + Previsualización e Información) -->
     <div class="stadium-content-grid">
-      <!-- LEFT COLUMN: Vertical Stadium Carousel (Width: 260px) -->
+      <!-- LEFT COLUMN: Carrusel Vertical de los 4 Estadios Oficiales -->
       <aside class="stadium-sidebar">
         <div class="sidebar-header-row">
-          <span>MAPAS DISPONIBLES</span>
-          <span class="arenas-count">6 ARENAS</span>
+          <span>CATÁLOGO OFICIAL</span>
+          <span class="arenas-count">4 ESTADIOS</span>
         </div>
 
         <div class="stadium-scroll-list">
           {#each ARENA_CATALOG as arena (arena.id)}
+            {@const isConfirmed = activeConfirmedId === arena.id}
+            {@const isInspected = inspectedId === arena.id}
             <button
               type="button"
               class="arena-card"
-              class:selected={selectedId === arena.id}
-              onclick={() => handleSelectArena(arena.id)}
+              class:inspected={isInspected}
+              class:confirmed={isConfirmed}
+              onclick={() => handleInspectArena(arena.id)}
             >
-              <div class="accent-bar" class:visible={selectedId === arena.id}></div>
+              <!-- Checkbox visual de confirmación: Solo marcado en el estadio activo -->
+              <div class="checkbox-container">
+                <span class="custom-checkbox" class:checked={isConfirmed}>
+                  {#if isConfirmed}
+                    <svg viewBox="0 0 16 16" class="check-icon" fill="currentColor">
+                      <path d="M13.854 3.646a.5.5 0 0 1 0 .708l-7 7a.5.5 0 0 1-.708 0l-3.5-3.5a.5.5 0 1 1 .708-.708L6.5 10.293l6.646-6.647a.5.5 0 0 1 .708 0z"/>
+                    </svg>
+                  {/if}
+                </span>
+              </div>
+
               <div class="card-text">
                 <div class="card-title-row">
                   <span class="arena-name">{arena.name}</span>
+                  <span class="format-badge">{arena.recommendedMode}</span>
                 </div>
-                <span class="arena-subtext">{arena.subtext}</span>
-                <span class="arena-author">Autor: {arena.author}</span>
-              </div>
-              <div class="check-box" class:checked={selectedId === arena.id}>
-                {#if selectedId === arena.id}
-                  <span>✓</span>
-                {/if}
+                <span class="card-measures">{arena.measuresText}</span>
               </div>
             </button>
           {/each}
         </div>
       </aside>
 
-      <!-- RIGHT COLUMN: 2D Pitch Panorama + Technical Specs Fiche -->
-      <main class="stadium-preview-area">
-        <!-- Superior: 2D Pitch Vector Surface -->
+      <!-- RIGHT COLUMN: Vista Previa Táctica e Información del Mapa -->
+      <section class="stadium-detail-panel">
+        <!-- Tactical Pitch Preview -->
         <div
           class="tactical-pitch-surface"
-          style="background-color: {activeArena.colorHue};"
+          style="background-color: {inspectedArena.colorHue};"
         >
           <div class="pitch-turf-overlay"></div>
 
@@ -343,25 +318,21 @@
             <!-- LEFT GOAL (RED TEAM) -->
             <rect x="20" y="85" width="30" height="80" rx="4" fill="url(#stadium-red-net)" stroke="#e74c3c" stroke-opacity="0.7" stroke-width="1.2" />
             <line x1="50" y1="85" x2="50" y2="165" stroke="#ffffff" stroke-dasharray="3 3" stroke-opacity="0.5" stroke-width="2" />
-            <!-- Cylindrical Posts -->
             <circle cx="50" cy="85" r="4.5" fill="#ffffff" stroke="#e74c3c" stroke-width="2" />
             <circle cx="50" cy="165" r="4.5" fill="#ffffff" stroke="#e74c3c" stroke-width="2" />
-            <!-- Penalty Box Left -->
             <path d="M 50 60 H 105 V 190 H 50" stroke="#00e5ff" stroke-opacity="0.6" stroke-width="1.2" />
             <circle cx="88" cy="125" r="2.5" fill="#00e5ff" opacity="0.8" />
 
             <!-- RIGHT GOAL (BLUE TEAM) -->
             <rect x="530" y="85" width="30" height="80" rx="4" fill="url(#stadium-blue-net)" stroke="#3498db" stroke-opacity="0.7" stroke-width="1.2" />
             <line x1="530" y1="85" x2="530" y2="165" stroke="#ffffff" stroke-dasharray="3 3" stroke-opacity="0.5" stroke-width="2" />
-            <!-- Cylindrical Posts -->
             <circle cx="530" cy="85" r="4.5" fill="#ffffff" stroke="#3498db" stroke-width="2" />
             <circle cx="530" cy="165" r="4.5" fill="#ffffff" stroke="#3498db" stroke-width="2" />
-            <!-- Penalty Box Right -->
             <path d="M 530 60 H 475 V 190 H 530" stroke="#00e5ff" stroke-opacity="0.6" stroke-width="1.2" />
             <circle cx="492" cy="125" r="2.5" fill="#00e5ff" opacity="0.8" />
 
-            <!-- DYNAMIC TACTICAL SPAWN NODES (Red & Blue) -->
-            {#each activeArena.spawnRed as s}
+            <!-- Spawns (Red & Blue) -->
+            {#each inspectedArena.spawnRed as s}
               <g transform="translate({s.x}, {s.y})">
                 <circle r="12" fill="#e74c3c" fill-opacity="0.25" stroke="#ff4d4d" stroke-width="1.5" />
                 <circle r="8" fill="#e74c3c" />
@@ -369,7 +340,7 @@
               </g>
             {/each}
 
-            {#each activeArena.spawnBlue as s}
+            {#each inspectedArena.spawnBlue as s}
               <g transform="translate({s.x}, {s.y})">
                 <circle r="12" fill="#3498db" fill-opacity="0.25" stroke="#00e5ff" stroke-width="1.5" />
                 <circle r="8" fill="#3498db" />
@@ -377,7 +348,7 @@
               </g>
             {/each}
 
-            <!-- Central Ball Disc with Glow -->
+            <!-- Central Ball -->
             <g transform="translate(290, 125)">
               <circle r="11" fill="#ffe16d" fill-opacity="0.2" />
               <circle r="6.5" fill="#ffffff" stroke="#e9c400" stroke-width="1.8" />
@@ -386,57 +357,58 @@
           </svg>
         </div>
 
-        <!-- Technical Specs Fiche -->
+        <!-- Panel Formal: Información del mapa -->
         <div class="technical-specs-panel">
           <div class="specs-header">
-            <span class="terminal-icon">⚡</span>
-            <span class="specs-title">TELEMETRÍA TÉCNICA DEL MAPA</span>
+            <span class="terminal-icon">🏟</span>
+            <span class="specs-title">Información del mapa</span>
           </div>
 
           <ul class="specs-list">
             <li>
               <span class="bullet">•</span>
-              <span class="label">Estadio:</span>
-              <strong class="highlight">{activeArena.name} by {activeArena.author}</strong>
+              <span class="label">Nombre del mapa:</span>
+              <strong class="highlight">{inspectedArena.name}</strong>
             </li>
             <li>
               <span class="bullet">•</span>
-              <span class="label">Formato Recomendado:</span>
-              <span>{activeArena.format}</span>
+              <span class="label">Autor:</span>
+              <strong class="highlight author-tag">{inspectedArena.author}</strong>
             </li>
             <li>
               <span class="bullet">•</span>
-              <span class="label">Dimensiones del Terreno:</span>
-              <span>{activeArena.dimensions}</span>
+              <span class="label">Modo recomendado:</span>
+              <span class="badge-mode">{inspectedArena.recommendedMode}</span>
             </li>
             <li>
               <span class="bullet">•</span>
-              <span class="label">Arquitectura de Redes:</span>
-              <span>{activeArena.nets}</span>
-            </li>
-            <li>
-              <span class="bullet">•</span>
-              <span class="label">Coeficiente de Rebote:</span>
-              <span class="rebound-val">{activeArena.bounce}</span>
+              <span class="label">Medidas:</span>
+              <span class="measures-val">{inspectedArena.measuresText}</span>
             </li>
           </ul>
         </div>
-      </main>
+      </section>
     </div>
 
-    <!-- BOTTOM MODULE: Full Width CTA Button -->
+    <!-- MODAL FOOTER: Botón principal "Seleccionar estadio" -->
     <footer class="modal-footer">
       <button
         type="button"
-        class="btn-cta-green"
-        disabled={gameUI.isMatchActive || (!gameUI.isHost && !gameUI.isAdmin)}
-        onclick={handleConfirm}
+        class="confirm-selection-btn"
+        disabled={!canSelect || isSelecting}
+        onclick={handleConfirmSelection}
       >
-        <span class="cta-check">✓</span>
-        <span>SELECCIONAR ESTADIO</span>
+        {#if isSelecting}
+          <span class="spinner"></span>
+          <span>Aplicando estadio...</span>
+        {:else if showConfirmationToast}
+          <span>✓ ¡Estadio Seleccionado!</span>
+        {:else}
+          <span>Seleccionar estadio</span>
+        {/if}
       </button>
 
-      {#if !gameUI.isHost && !gameUI.isAdmin}
+      {#if !canSelect && !isMatchLocked}
         <p class="guest-notice">⚠️ Solo el anfitrión de la sala tiene permisos para cambiar el estadio.</p>
       {/if}
     </footer>
@@ -444,13 +416,51 @@
     {#if showConfirmationToast}
       <div class="toast-notification">
         <span>✓</span>
-        <span>Estadio {activeArena.name} seleccionado correctamente</span>
+        <span>Estadio {inspectedArena.name} configurado correctamente</span>
       </div>
     {/if}
   </div>
 </div>
 
 <style>
+  /* Floating back button outside modal card (top-left) */
+  .floating-back-btn {
+    position: fixed;
+    top: 1.5rem;
+    left: 1.5rem;
+    z-index: 60;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.6rem 1.15rem;
+    background: rgba(13, 21, 38, 0.9);
+    border: 1px solid rgba(0, 229, 255, 0.4);
+    border-radius: 9999px;
+    color: #00e5ff;
+    font-size: 0.875rem;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    cursor: pointer;
+    backdrop-filter: blur(12px);
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5), 0 0 15px rgba(0, 229, 255, 0.15);
+    transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+    user-select: none;
+    pointer-events: auto;
+  }
+
+  .floating-back-btn:hover {
+    background: rgba(0, 229, 255, 0.15);
+    border-color: #00e5ff;
+    color: #ffffff;
+    box-shadow: 0 6px 24px rgba(0, 0, 0, 0.6), 0 0 25px rgba(0, 229, 255, 0.35);
+    transform: translateY(-1px);
+  }
+
+  .floating-back-btn:active {
+    transform: translateY(0);
+  }
+
+  /* Modal Backdrop Overlay */
   .modal-backdrop {
     position: fixed;
     inset: 0;
@@ -458,33 +468,36 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    background: rgba(0, 0, 0, 0.65);
+    background: rgba(5, 8, 17, 0.78);
     backdrop-filter: blur(12px);
+    padding: 1.5rem;
+    box-sizing: border-box;
     pointer-events: auto;
     user-select: none;
-    padding: 1rem;
-    box-sizing: border-box;
+    font-family: 'Space Grotesk', system-ui, -apple-system, sans-serif;
   }
 
+  /* Main Modal Card */
   .stadium-modal-card {
     position: relative;
     width: min(94vw, 920px);
-    height: 620px;
+    height: 640px;
     background: #0a101a;
     border: 1px solid rgba(0, 229, 255, 0.3);
-    border-radius: 14px;
-    box-shadow: 0 0 40px rgba(0, 0, 0, 0.85), 0 0 20px rgba(0, 229, 255, 0.2);
+    border-radius: 1rem;
+    box-shadow: 0 20px 50px rgba(0, 0, 0, 0.85), 0 0 30px rgba(0, 229, 255, 0.12);
     display: flex;
     flex-direction: column;
     overflow: hidden;
     color: #dde2f1;
-    font-family: 'Space Grotesk', system-ui, sans-serif;
+    pointer-events: auto;
   }
 
+  /* Header Ribbon */
   .modal-header-ribbon {
     width: 100%;
     background: #080e18;
-    padding: 12px 18px;
+    padding: 1rem 1.25rem;
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -495,13 +508,13 @@
   .header-left {
     display: flex;
     align-items: center;
-    gap: 12px;
+    gap: 0.85rem;
   }
 
   .stadium-icon-box {
-    width: 38px;
-    height: 38px;
-    border-radius: 8px;
+    width: 2.35rem;
+    height: 2.35rem;
+    border-radius: 0.5rem;
     background: rgba(0, 229, 255, 0.12);
     border: 1px solid rgba(0, 229, 255, 0.35);
     color: #00e5ff;
@@ -511,455 +524,429 @@
     box-shadow: 0 0 10px rgba(0, 229, 255, 0.2);
   }
 
-  .protocol-row {
+  .stadium-pitch-glyph {
+    width: 1.35rem;
+    height: 1.35rem;
+  }
+
+  .title-meta {
     display: flex;
-    align-items: center;
-    gap: 6px;
-  }
-
-  .protocol-tag {
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 10px;
-    letter-spacing: 0.12em;
-    color: #00e5ff;
-    font-weight: 700;
-  }
-
-  .protocol-dot {
-    width: 5px;
-    height: 5px;
-    border-radius: 50%;
-    background: #00e5ff;
-    box-shadow: 0 0 6px #00e5ff;
+    flex-direction: column;
+    gap: 0.15rem;
   }
 
   .dialog-title {
-    margin: 2px 0 0 0;
-    font-size: 18px;
+    margin: 0;
+    font-size: 1.15rem;
     font-weight: 800;
     color: #ffffff;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
+    letter-spacing: -0.01em;
   }
 
-  .header-right {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-  }
-
-  .active-badge {
-    background: #161c26;
-    border: 1px solid rgba(0, 229, 255, 0.3);
-    color: #00e5ff;
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 11px;
-    font-weight: 700;
-    letter-spacing: 0.06em;
-    padding: 5px 10px;
-    border-radius: 6px;
-  }
-
-  .close-x-btn {
-    width: 32px;
-    height: 32px;
-    border-radius: 6px;
-    background: #161c26;
-    border: 1px solid rgba(148, 163, 184, 0.2);
+  .dialog-subtitle {
+    font-size: 0.72rem;
     color: #94a3b8;
-    font-size: 14px;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    transition: background 0.15s, color 0.15s, border-color 0.15s;
   }
 
-  .close-x-btn:hover {
-    background: rgba(255, 71, 87, 0.2);
-    border-color: #ff4757;
-    color: #ff4757;
+  .warning-pill {
+    padding: 0.35rem 0.75rem;
+    background: rgba(245, 158, 11, 0.15);
+    border: 1px solid rgba(245, 158, 11, 0.4);
+    border-radius: 0.4rem;
+    color: #fbbf24;
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.03em;
   }
 
+  /* Subtitle Bar */
   .subtitle-bar {
-    width: 100%;
-    background: #080d16;
-    padding: 6px 18px;
+    padding: 0.5rem 1.25rem;
+    background: rgba(14, 21, 37, 0.9);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
     display: flex;
     align-items: center;
     justify-content: space-between;
-    border-bottom: 1px solid rgba(148, 163, 184, 0.1);
-    box-sizing: border-box;
+    font-size: 0.75rem;
+    color: #94a3b8;
   }
 
   .subtitle-content {
     display: flex;
     align-items: center;
-    gap: 6px;
-    font-size: 11px;
-    color: #94a3b8;
+    gap: 0.5rem;
   }
 
   .info-icon {
     color: #00e5ff;
-    font-weight: bold;
   }
 
-  .warning-pill {
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 10px;
-    color: #f1c40f;
-    background: rgba(241, 196, 15, 0.15);
-    border: 1px solid rgba(241, 196, 15, 0.4);
-    padding: 2px 8px;
-    border-radius: 4px;
-  }
-
+  /* Content Grid: 2 Columns */
   .stadium-content-grid {
     flex: 1;
     display: flex;
-    padding: 12px 16px;
-    gap: 14px;
     overflow: hidden;
-    box-sizing: border-box;
   }
 
+  /* Left Sidebar: 4 Arenas List */
   .stadium-sidebar {
-    width: 260px;
-    flex-shrink: 0;
+    width: 270px;
+    background: #090f1b;
+    border-right: 1px solid rgba(0, 229, 255, 0.15);
     display: flex;
     flex-direction: column;
-    background: rgba(8, 14, 24, 0.8);
-    border-radius: 8px;
-    padding: 8px;
+    padding: 1rem 0.85rem;
     box-sizing: border-box;
-    overflow: hidden;
+    flex-shrink: 0;
   }
 
   .sidebar-header-row {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 11px;
-    color: #94a3b8;
-    padding: 4px 6px 8px;
+    font-size: 0.72rem;
+    font-weight: 800;
+    color: #00e5ff;
     letter-spacing: 0.05em;
+    padding-bottom: 0.75rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    margin-bottom: 0.75rem;
   }
 
   .arenas-count {
+    background: rgba(0, 229, 255, 0.12);
+    padding: 0.15rem 0.45rem;
+    border-radius: 0.25rem;
     color: #00e5ff;
-    font-weight: 800;
+    font-size: 0.68rem;
   }
 
   .stadium-scroll-list {
-    flex: 1;
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: 0.6rem;
     overflow-y: auto;
-    padding-right: 4px;
   }
 
-  .stadium-scroll-list::-webkit-scrollbar {
-    width: 4px;
-  }
-
-  .stadium-scroll-list::-webkit-scrollbar-thumb {
-    background: #00e5ff;
-    border-radius: 2px;
-  }
-
+  /* Arena Card */
   .arena-card {
-    position: relative;
-    width: 100%;
-    min-height: 62px;
-    background: #121a29;
-    border: 1px solid rgba(0, 229, 255, 0.15);
-    border-radius: 6px;
-    padding: 8px 10px;
     display: flex;
     align-items: center;
-    justify-content: space-between;
+    gap: 0.75rem;
+    padding: 0.85rem 0.95rem;
+    background: rgba(18, 28, 48, 0.65);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 0.65rem;
     cursor: pointer;
     text-align: left;
-    transition: background 0.15s, border-color 0.15s, box-shadow 0.15s;
-    box-sizing: border-box;
+    transition: all 0.15s ease;
   }
 
   .arena-card:hover {
-    background: #1a2538;
-    border-color: rgba(0, 229, 255, 0.35);
+    background: rgba(18, 28, 48, 0.95);
+    border-color: rgba(0, 229, 255, 0.3);
   }
 
-  .arena-card.selected {
-    background: rgba(0, 229, 255, 0.16);
+  .arena-card.inspected {
+    border-color: rgba(0, 229, 255, 0.7);
+    background: rgba(0, 229, 255, 0.08);
+    box-shadow: 0 0 15px rgba(0, 229, 255, 0.12);
+  }
+
+  .arena-card.confirmed {
     border-color: #00e5ff;
-    box-shadow: 0 0 12px rgba(0, 229, 255, 0.25);
   }
 
-  .accent-bar {
-    position: absolute;
-    left: 0;
-    top: 0;
-    bottom: 0;
-    width: 3px;
+  /* Custom Checkbox */
+  .checkbox-container {
+    flex-shrink: 0;
+  }
+
+  .custom-checkbox {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.25rem;
+    height: 1.25rem;
+    border-radius: 0.35rem;
+    border: 1.5px solid rgba(255, 255, 255, 0.25);
+    background: rgba(11, 17, 30, 0.8);
+    transition: all 0.15s ease;
+  }
+
+  .custom-checkbox.checked {
     background: #00e5ff;
-    border-radius: 3px 0 0 3px;
-    opacity: 0;
-    transition: opacity 0.15s;
+    border-color: #00e5ff;
+    box-shadow: 0 0 8px rgba(0, 229, 255, 0.5);
   }
 
-  .accent-bar.visible {
-    opacity: 1;
+  .check-icon {
+    width: 0.9rem;
+    height: 0.9rem;
+    color: #0a101a;
   }
 
   .card-text {
     display: flex;
     flex-direction: column;
-    min-width: 0;
-    padding-left: 4px;
+    gap: 0.25rem;
+    overflow: hidden;
+    flex: 1;
+  }
+
+  .card-title-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
   }
 
   .arena-name {
-    font-size: 13px;
+    font-size: 0.88rem;
     font-weight: 700;
-    color: #ffffff;
-    text-transform: uppercase;
-    letter-spacing: 0.02em;
+    color: #f8fafc;
   }
 
-  .arena-subtext {
-    font-size: 11px;
-    color: #00e5ff;
-    margin-top: 1px;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  .arena-author {
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 9px;
-    color: #8fa0b5;
-    margin-top: 2px;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  .check-box {
-    width: 22px;
-    height: 22px;
-    border-radius: 4px;
-    background: rgba(0, 229, 255, 0.1);
-    border: 1px solid rgba(0, 229, 255, 0.25);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    color: #00e5ff;
-    font-size: 13px;
+  .format-badge {
+    font-size: 0.68rem;
     font-weight: 800;
-    flex-shrink: 0;
+    color: #00e5ff;
+    background: rgba(0, 229, 255, 0.12);
+    padding: 0.15rem 0.4rem;
+    border-radius: 0.25rem;
   }
 
-  .check-box.checked {
-    background: #00e5ff;
-    color: #050811;
-    box-shadow: 0 0 8px #00e5ff;
+  .card-measures {
+    font-size: 0.68rem;
+    color: #94a3b8;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
-  .stadium-preview-area {
+  /* Right Detail Panel */
+  .stadium-detail-panel {
     flex: 1;
     display: flex;
     flex-direction: column;
-    gap: 10px;
-    overflow: hidden;
+    background: #080e18;
+    overflow-y: auto;
+    padding: 1.25rem;
+    box-sizing: border-box;
+    gap: 1rem;
   }
 
   .tactical-pitch-surface {
     position: relative;
     width: 100%;
-    height: 230px;
-    min-height: 230px;
-    border-radius: 8px;
-    border: 1px solid rgba(0, 229, 255, 0.25);
-    box-shadow: inset 0 0 30px rgba(0, 0, 0, 0.65);
+    height: 250px;
+    border-radius: 0.75rem;
     overflow: hidden;
+    border: 1px solid rgba(0, 229, 255, 0.25);
+    box-shadow: inset 0 0 40px rgba(0, 0, 0, 0.7);
     display: flex;
     align-items: center;
     justify-content: center;
-    transition: background-color 0.25s;
   }
 
   .pitch-turf-overlay {
     position: absolute;
     inset: 0;
-    opacity: 0.12;
-    background-image: repeating-linear-gradient(90deg, transparent, transparent 38px, rgba(0, 229, 255, 0.4) 38px, rgba(0, 229, 255, 0.4) 40px);
+    background: radial-gradient(circle at center, transparent 30%, rgba(0, 0, 0, 0.4) 100%);
     pointer-events: none;
   }
 
   .tactical-pitch-svg {
     width: 100%;
     height: 100%;
-    padding: 10px;
-    box-sizing: border-box;
+    max-height: 240px;
+    z-index: 1;
   }
 
+  /* Information Panel */
   .technical-specs-panel {
-    flex: 1;
-    background: rgba(18, 26, 41, 0.75);
+    background: rgba(13, 21, 38, 0.85);
     border: 1px solid rgba(0, 229, 255, 0.2);
-    border-radius: 8px;
-    padding: 10px 14px;
-    display: flex;
-    flex-direction: column;
-    justify-content: space-between;
-    overflow: hidden;
-    box-sizing: border-box;
+    border-radius: 0.75rem;
+    padding: 1rem 1.25rem;
   }
 
   .specs-header {
     display: flex;
     align-items: center;
-    gap: 6px;
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 11px;
+    gap: 0.5rem;
+    margin-bottom: 0.85rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  }
+
+  .terminal-icon {
+    font-size: 1.1rem;
+    color: #00e5ff;
+  }
+
+  .specs-title {
+    font-size: 0.85rem;
     font-weight: 800;
     color: #00e5ff;
-    letter-spacing: 0.06em;
-    padding-bottom: 4px;
-    border-bottom: 1px solid rgba(0, 229, 255, 0.15);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
   }
 
   .specs-list {
-    margin: 6px 0 0 0;
-    padding: 0;
     list-style: none;
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 11px;
-    color: #dde2f1;
+    padding: 0;
+    margin: 0;
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 0.75rem 1.25rem;
   }
 
   .specs-list li {
     display: flex;
     align-items: center;
-    gap: 6px;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    gap: 0.5rem;
+    font-size: 0.8rem;
+    color: #94a3b8;
   }
 
   .bullet {
     color: #00e5ff;
-    font-weight: bold;
   }
 
   .label {
-    color: #8fa0b5;
+    color: #94a3b8;
+    font-weight: 500;
   }
 
   .highlight {
+    color: #f1f5f9;
+    font-weight: 700;
+  }
+
+  .author-tag {
+    color: #38bdf8;
+  }
+
+  .badge-mode {
+    background: rgba(0, 229, 255, 0.12);
     color: #00e5ff;
-    font-weight: 700;
+    padding: 0.15rem 0.5rem;
+    border-radius: 0.25rem;
+    font-weight: 800;
   }
 
-  .rebound-val {
-    color: #ffd700;
-    font-weight: 700;
+  .measures-val {
+    color: #f1f5f9;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.75rem;
   }
 
+  /* Modal Footer */
   .modal-footer {
+    padding: 0.9rem 1.25rem;
     background: #080e18;
-    padding: 12px 18px;
     border-top: 1px solid rgba(0, 229, 255, 0.15);
     display: flex;
-    flex-direction: column;
-    gap: 4px;
-    box-sizing: border-box;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
   }
 
-  .btn-cta-green {
-    width: 100%;
-    height: 44px;
-    background: #2ecc71;
-    color: #05150c;
-    border: none;
-    border-radius: 6px;
-    font-family: 'Space Grotesk', system-ui, sans-serif;
-    font-size: 14px;
-    font-weight: 800;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    display: flex;
+  .confirm-selection-btn {
+    display: inline-flex;
     align-items: center;
     justify-content: center;
-    gap: 8px;
+    gap: 0.6rem;
+    padding: 0.75rem 1.75rem;
+    background: linear-gradient(135deg, #00e5ff 0%, #00b4d8 100%);
+    border: none;
+    border-radius: 0.5rem;
+    color: #070d18;
+    font-size: 0.875rem;
+    font-weight: 800;
+    letter-spacing: 0.02em;
     cursor: pointer;
-    box-shadow: 0 0 16px rgba(46, 204, 113, 0.35);
-    transition: background 0.15s, box-shadow 0.15s, transform 0.1s;
+    box-shadow: 0 0 20px rgba(0, 229, 255, 0.4);
+    transition: all 0.2s ease;
   }
 
-  .btn-cta-green:hover:not(:disabled) {
-    background: #34e27f;
-    box-shadow: 0 0 24px rgba(46, 204, 113, 0.6);
+  .confirm-selection-btn:hover:not(:disabled) {
+    box-shadow: 0 0 30px rgba(0, 229, 255, 0.7);
+    transform: translateY(-1px);
+    color: #000000;
   }
 
-  .btn-cta-green:active:not(:disabled) {
-    transform: scale(0.99);
+  .confirm-selection-btn:active:not(:disabled) {
+    transform: translateY(0);
   }
 
-  .btn-cta-green:disabled {
+  .confirm-selection-btn:disabled {
     opacity: 0.45;
     cursor: not-allowed;
     box-shadow: none;
   }
 
-  .cta-check {
-    font-size: 16px;
-    font-weight: 900;
+  .spinner {
+    width: 14px;
+    height: 14px;
+    border: 2px solid rgba(0, 0, 0, 0.3);
+    border-top-color: #000000;
+    border-radius: 50%;
+    animation: spin 0.6s linear infinite;
+  }
+
+  @keyframes spin {
+    to { transform: rotate(360deg); }
   }
 
   .guest-notice {
-    margin: 2px 0 0 0;
-    text-align: center;
-    font-size: 11px;
-    color: #f1c40f;
+    margin: 0;
+    font-size: 0.75rem;
+    color: #fbbf24;
   }
 
   .toast-notification {
     position: absolute;
-    bottom: 70px;
-    left: 50%;
-    transform: translateX(-50%);
-    background: rgba(14, 20, 30, 0.95);
-    border: 1px solid #00e5ff;
-    box-shadow: 0 0 20px rgba(0, 229, 255, 0.45);
-    color: #00e5ff;
-    padding: 8px 18px;
-    border-radius: 20px;
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 12px;
+    bottom: 4.5rem;
+    right: 1.5rem;
+    background: #059669;
+    color: #ffffff;
+    padding: 0.65rem 1.15rem;
+    border-radius: 0.5rem;
+    font-size: 0.8rem;
     font-weight: 700;
     display: flex;
     align-items: center;
-    gap: 8px;
-    z-index: 50;
-    animation: fadeIn 0.2s ease-out;
+    gap: 0.5rem;
+    box-shadow: 0 10px 25px rgba(0, 0, 0, 0.6);
+    animation: slideUp 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+    z-index: 10;
   }
 
-  @keyframes fadeIn {
+  @keyframes slideUp {
     from {
       opacity: 0;
-      transform: translate(-50%, 10px);
+      transform: translateY(10px);
     }
     to {
       opacity: 1;
-      transform: translate(-50%, 0);
+      transform: translateY(0);
+    }
+  }
+
+  /* Responsive */
+  @media (max-width: 768px) {
+    .stadium-content-grid {
+      flex-direction: column;
+    }
+    .stadium-sidebar {
+      width: 100%;
+      border-right: none;
+      border-bottom: 1px solid rgba(0, 229, 255, 0.15);
+    }
+    .specs-list {
+      grid-template-columns: 1fr;
     }
   }
 </style>

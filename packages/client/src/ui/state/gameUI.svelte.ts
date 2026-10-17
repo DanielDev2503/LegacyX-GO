@@ -5,6 +5,8 @@
 
 import { soundFX } from '../../audio/SoundFX.js';
 import { sharedSignaling, type SignalingClient } from '../../net/SignalingClient.js';
+import { type GameplayConfig, DEFAULT_GAMEPLAY_CONFIG } from '@legacyx/core';
+import { $gameConfig as gameConfigStore } from '../../controllers/stores/gameStore.js';
 
 export type ScreenType = 'GATEKEEPER' | 'LOBBY' | 'ROOM_CREATOR' | 'IN_GAME';
 export type ModalType =
@@ -25,11 +27,24 @@ export type ModalType =
 
 export type BallSkinType = 'classic' | 'retro' | 'neon';
 export type StadiumPresetKey =
+  | 'individual'
   | 'small'
   | 'medium'
-  | 'big'
-  | 'af_3v3'
   | 'classic'
+  | 'big'
+  | '1v1'
+  | '2v2'
+  | '3v3'
+  | '4v4'
+  | 'Individual'
+  | 'Pequeño'
+  | 'Mediano'
+  | 'Grande'
+  | 'Individual (1v1)'
+  | 'Pequeño (2v2)'
+  | 'Mediano (3v3)'
+  | 'Grande (4v4)'
+  | 'af_3v3'
   | 'AF 3v3 Official'
   | 'Classic Field'
   | 'Big Stadium'
@@ -529,8 +544,9 @@ class GameUIStore {
     { nickname: 'leo', points: 210, goals: 0, assists: 0, passes: 11, shots: 1 }
   ]);
 
-  // Physical Modifiers
+  // Physical Modifiers and Gameplay Config
   public modifiers = $state<PhysicsModifiers>({ ...DEFAULT_PHYSICS_MODIFIERS });
+  public gameplayConfig = $state<GameplayConfig>({ ...DEFAULT_GAMEPLAY_CONFIG });
   public activeModifiersTab = $state<'player' | 'ball' | 'mechanics'>('player');
 
   // Audio convenience getters/state
@@ -930,6 +946,10 @@ class GameUIStore {
     );
   }
 
+  public get matchPhase(): number {
+    return this.fsmPhase === 'STOPPED' ? 0 : 1;
+  }
+
   public navigateTo(screen: ScreenType): void {
     soundFX.playUIClick();
     this.currentScreen = screen;
@@ -983,6 +1003,28 @@ class GameUIStore {
     }
   }
 
+  public updateGameplayConfig<K extends keyof GameplayConfig>(key: K, value: GameplayConfig[K]): void {
+    (this.gameplayConfig as any)[key] = value;
+    gameConfigStore.set({ ...this.gameplayConfig });
+    // Synchronize corresponding fields to modifiers
+    if (key === 'playerRadius') this.modifiers.playerRadius = value as number;
+    if (key === 'playerMass') this.modifiers.playerMass = value as number;
+    if (key === 'ballRadius') this.modifiers.ballRadius = value as number;
+    if (key === 'ballMass') this.modifiers.ballMass = value as number;
+    if (key === 'ballFriction') this.modifiers.pitchFriction = value as number;
+    if (key === 'kickStrength') this.modifiers.baseKickStrength = value as number;
+    if (key === 'dashDistance') this.modifiers.dashPower = (value as number) * 8;
+    if (key === 'magnusCurveStrength') this.modifiers.magnusCoefficient = (value as number) * 0.0025;
+    this.onModifiersChanged?.({ ...this.modifiers });
+  }
+
+  public resetGameplayConfigToDefault(): void {
+    soundFX.playUIClick();
+    this.gameplayConfig = { ...DEFAULT_GAMEPLAY_CONFIG };
+    gameConfigStore.set({ ...this.gameplayConfig });
+    this.resetModifiersToDefault();
+  }
+
   public resetModifiersToDefault(): void {
     soundFX.playUIClick();
     this.modifiers = { ...DEFAULT_PHYSICS_MODIFIERS };
@@ -992,39 +1034,53 @@ class GameUIStore {
   }
 
   public selectStadium(stadiumId: StadiumPresetKey, displayName?: string): boolean {
-    if (this.isMatchActive && this.currentScreen === 'IN_GAME') {
+    if (this.currentScreen === 'IN_GAME' && this.isMatchActive && this.fsmPhase !== 'STOPPED' && this.matchPhase !== 0) {
       return false;
     }
-    const idMap: Record<string, 'small' | 'medium' | 'big' | 'af_3v3' | 'classic'> = {
+    const idMap: Record<string, 'individual' | 'small' | 'medium' | 'big' | 'classic' | 'af_3v3'> = {
+      individual: 'individual',
+      '1v1': 'individual',
+      'Individual (1v1)': 'individual',
+      Individual: 'individual',
       small: 'small',
       Small: 'small',
+      '2v2': 'small',
+      'Pequeño (2v2)': 'small',
+      Pequeño: 'small',
       smallarena: 'small',
       'Small Arena': 'small',
       medium: 'medium',
       Medium: 'medium',
+      '3v3': 'medium',
+      'Mediano (3v3)': 'medium',
+      Mediano: 'medium',
+      classic: 'classic',
+      Classic: 'classic',
+      'Classic Field': 'classic',
       futsal: 'medium',
       'Futsal Pro Court': 'medium',
       hockey: 'medium',
       'Hockey Rink Arena': 'medium',
       big: 'big',
       Big: 'big',
+      '4v4': 'big',
+      'Grande (4v4)': 'big',
+      Grande: 'big',
       bigstadium: 'big',
       'Big Stadium': 'big',
       af_3v3: 'af_3v3',
       af3v3: 'af_3v3',
-      'AF 3v3 Official': 'af_3v3',
-      classic: 'classic',
-      Classic: 'classic',
-      'Classic Field': 'classic'
+      'AF 3v3 Official': 'af_3v3'
     };
     const defaultNames: Record<string, string> = {
-      small: 'Small Arena',
-      medium: 'Medium',
-      big: 'Big Stadium',
-      af_3v3: 'AF 3v3 Official',
-      classic: 'Classic Field'
+      individual: 'Individual (1v1)',
+      small: 'Pequeño (2v2)',
+      medium: 'Mediano (3v3)',
+      classic: 'Mediano (3v3)',
+      big: 'Grande (4v4)',
+      af_3v3: 'AF 3v3 Official'
     };
-    const canonical = idMap[stadiumId] ?? 'classic';
+    const canonical = (idMap[stadiumId] ?? 'classic') as any;
     this.selectedStadiumId = canonical;
     this.activeStadiumName = displayName ?? defaultNames[canonical] ?? stadiumId;
     this.onStadiumChanged?.(canonical);

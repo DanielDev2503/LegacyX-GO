@@ -13,17 +13,17 @@ describe('Mission Engineering Suite: Continuous Vector Dash, Stadiums, Camera & 
       expect(StadiumRegistry.small).toBeDefined();
       expect(StadiumRegistry.small.width).toBe(1000);
       expect(StadiumRegistry.small.height).toBe(460);
-      expect(StadiumRegistry.small.goalWidth).toBe(140);
+      expect(StadiumRegistry.small.goalWidth).toBe(130);
 
       expect(StadiumRegistry.classic).toBeDefined();
       expect(StadiumRegistry.classic.width).toBe(1200);
       expect(StadiumRegistry.classic.height).toBe(540);
-      expect(StadiumRegistry.classic.goalWidth).toBe(170);
+      expect(StadiumRegistry.classic.goalWidth).toBe(140);
 
       expect(StadiumRegistry.big).toBeDefined();
       expect(StadiumRegistry.big.width).toBe(1600);
       expect(StadiumRegistry.big.height).toBe(720);
-      expect(StadiumRegistry.big.goalWidth).toBe(200);
+      expect(StadiumRegistry.big.goalWidth).toBe(160);
     });
 
     it('creates stadium with dual boundary (pitch lines for ball vs run-off 45px for players)', () => {
