@@ -121,11 +121,11 @@
       // Atajo canónico para Modificadores [#] o cerrar modales [Escape]
       if (e.code === 'Escape') {
         if (gameUI.activeModal !== 'NONE') {
-          gameUI.closeModal();
+          gameUI.closeOverlay();
           e.preventDefault();
           return;
         } else if (gameUI.currentScreen === 'IN_GAME') {
-          gameUI.openModal('TEAM_MANAGEMENT');
+          gameUI.openOverlay('TEAM_MANAGEMENT');
           e.preventDefault();
           return;
         }
@@ -133,7 +133,19 @@
 
       // No capturar controles de movimiento si el usuario está escribiendo en un input
       const activeEl = document.activeElement;
-      if (activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA')) {
+      const isTyping = activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA');
+      if (isTyping) {
+        return;
+      }
+
+      // Atajo canónico para Modificadores [#]
+      if (e.key === '#') {
+        if (gameUI.activeModal === 'PHYSICS_MODIFIERS' || gameUI.activeModal === 'MODIFIERS') {
+          gameUI.closeOverlay();
+        } else {
+          gameUI.openOverlay('PHYSICS_MODIFIERS');
+        }
+        e.preventDefault();
         return;
       }
 
@@ -260,11 +272,11 @@
     {/if}
 
     <!-- Modales canónicos -->
-    {#if gameUI.activeModal === 'PHYSICS_MODIFIERS' || gameUI.activeModal === 'physics'}
+    {#if gameUI.activeModal === 'PHYSICS_MODIFIERS' || gameUI.activeModal === 'physics' || gameUI.activeModal === 'MODIFIERS'}
       <PhysicsModal />
     {:else if gameUI.activeModal === 'TEAM_MANAGEMENT' || gameUI.activeModal === 'teamSelect'}
       <TeamSelectModal />
-    {:else if gameUI.activeModal === 'STADIUM_SELECTOR' || gameUI.activeModal === 'stadiumSelect'}
+    {:else if gameUI.activeModal === 'STADIUM_SELECTOR' || gameUI.activeModal === 'stadiumSelect' || gameUI.activeModal === 'STADIUM_SELECT'}
       <StadiumSelectModal />
     {:else if gameUI.activeModal === 'SETTINGS' || gameUI.activeModal === 'settings'}
       <SettingsModal />

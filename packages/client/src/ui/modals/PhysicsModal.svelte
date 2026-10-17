@@ -8,6 +8,7 @@
   }
 
   function handleSliderChange(key: keyof PhysicsModifiers, e: Event) {
+    if (!gameUI.isHost && !gameUI.isAdmin) return;
     const target = e.target as HTMLInputElement;
     const val = target.type === 'checkbox' ? target.checked : parseFloat(target.value);
     gameUI.updateModifier(key, val as any);
@@ -15,23 +16,48 @@
 
   function handleClose() {
     soundFX.playUIClick();
-    gameUI.closeModal();
+    gameUI.closeOverlay();
   }
 
   function handleReset() {
+    if (!gameUI.isHost && !gameUI.isAdmin) return;
     soundFX.playUIClick();
     gameUI.resetModifiersToDefault();
   }
+
+  function handleBackdropClick(e: MouseEvent) {
+    if (e.target === e.currentTarget) {
+      handleClose();
+    }
+  }
+
+  function handleKeyDown(e: KeyboardEvent) {
+    if (e.key === 'Escape') {
+      handleClose();
+      e.stopPropagation();
+    }
+  }
 </script>
 
+<svelte:window onkeydown={handleKeyDown} />
+
+<!-- OVERLAY BACKDROP (Condición #) -->
 <div
   class="modal-backdrop"
   role="presentation"
-  onclick={(e) => { if (e.target === e.currentTarget) handleClose(); }}
+  onclick={handleBackdropClick}
 >
-  <main class="modal-card">
+  <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="modifiers-dialog-title">
     <!-- Close Button -->
-    <button type="button" class="close-x-btn" onclick={handleClose} title="Cerrar [Esc]">✕</button>
+    <button
+      type="button"
+      class="close-x-btn"
+      onclick={handleClose}
+      aria-label="Cerrar modal"
+      title="Cerrar [Esc]"
+    >
+      ✕
+    </button>
 
     <!-- LEFT SIDEBAR (230px) -->
     <aside class="sidebar">
@@ -41,12 +67,18 @@
           <span class="lightning-box">⚡</span>
           <div>
             <span class="sub-header">MOTOR FÍSICO</span>
-            <h2 class="main-header">MODIFICADORES [#]</h2>
+            <h2 id="modifiers-dialog-title" class="main-header">MODIFICADORES [#]</h2>
           </div>
         </div>
 
+        <!-- Host Authority Status Indicator -->
+        <div class="authority-badge" class:is-guest={!gameUI.isHost && !gameUI.isAdmin}>
+          <span class="status-dot"></span>
+          <span>{gameUI.isHost || gameUI.isAdmin ? 'HOST CON AUTORIDAD' : 'MODO INVITADO (READ-ONLY)'}</span>
+        </div>
+
         <!-- 3 Vertical Navigation Tabs -->
-        <nav class="nav-tabs">
+        <nav class="nav-tabs" aria-label="Categorías de modificadores">
           <button
             type="button"
             class="tab-btn"
@@ -81,7 +113,13 @@
 
       <!-- Sidebar Footer: Reset Default -->
       <div class="sidebar-footer">
-        <button type="button" class="reset-btn" onclick={handleReset}>
+        <button
+          type="button"
+          class="reset-btn"
+          disabled={!gameUI.isHost && !gameUI.isAdmin}
+          onclick={handleReset}
+          title={gameUI.isHost || gameUI.isAdmin ? 'Restablecer constantes de fábrica' : 'Solo anfitriones pueden reiniciar modificadores'}
+        >
           <span>↺</span>
           <span>Restablecer por Defecto</span>
         </button>
@@ -116,6 +154,12 @@
             Controla gravedad, elasticidad de redes, postes, gol de oro y duración reglamentaria.
           {/if}
         </p>
+
+        {#if !gameUI.isHost && !gameUI.isAdmin}
+          <div class="guest-warning-banner">
+            ⚠️ Modo invitado: Solo el anfitrión de la sala puede alterar las variables físicas de la simulación.
+          </div>
+        {/if}
       </div>
 
       <!-- Scrollable Modifiers List -->
@@ -134,6 +178,7 @@
                 min="0.5"
                 max="3.0"
                 step="0.05"
+                disabled={!gameUI.isHost && !gameUI.isAdmin}
                 value={gameUI.modifiers.playerMass}
                 oninput={(e) => handleSliderChange('playerMass', e)}
               />
@@ -151,6 +196,7 @@
                 min="10.0"
                 max="25.0"
                 step="0.5"
+                disabled={!gameUI.isHost && !gameUI.isAdmin}
                 value={gameUI.modifiers.playerRadius}
                 oninput={(e) => handleSliderChange('playerRadius', e)}
               />
@@ -168,6 +214,7 @@
                 min="200"
                 max="900"
                 step="10"
+                disabled={!gameUI.isHost && !gameUI.isAdmin}
                 value={gameUI.modifiers.baseKickStrength}
                 oninput={(e) => handleSliderChange('baseKickStrength', e)}
               />
@@ -185,6 +232,7 @@
                 min="100"
                 max="600"
                 step="10"
+                disabled={!gameUI.isHost && !gameUI.isAdmin}
                 value={gameUI.modifiers.dashPower}
                 oninput={(e) => handleSliderChange('dashPower', e)}
               />
@@ -202,6 +250,7 @@
                 min="0.2"
                 max="5.0"
                 step="0.1"
+                disabled={!gameUI.isHost && !gameUI.isAdmin}
                 value={gameUI.modifiers.dashCooldown}
                 oninput={(e) => handleSliderChange('dashCooldown', e)}
               />
@@ -224,10 +273,11 @@
                 min="6.0"
                 max="20.0"
                 step="0.5"
+                disabled={!gameUI.isHost && !gameUI.isAdmin}
                 value={gameUI.modifiers.ballRadius}
                 oninput={(e) => handleSliderChange('ballRadius', e)}
               />
-              <span class="control-range">Rango: 6.0 .. 20.0 px (Estándar: 10.0)</span>
+              <span class="control-range">Rango: 6.0 .. 20.0 px (Estándar: 5.8)</span>
             </div>
 
             <!-- 7. Masa del Balón -->
@@ -241,6 +291,7 @@
                 min="0.05"
                 max="1.00"
                 step="0.01"
+                disabled={!gameUI.isHost && !gameUI.isAdmin}
                 value={gameUI.modifiers.ballMass}
                 oninput={(e) => handleSliderChange('ballMass', e)}
               />
@@ -258,6 +309,7 @@
                 min="0.900"
                 max="0.999"
                 step="0.001"
+                disabled={!gameUI.isHost && !gameUI.isAdmin}
                 value={gameUI.modifiers.pitchFriction}
                 oninput={(e) => handleSliderChange('pitchFriction', e)}
               />
@@ -275,6 +327,7 @@
                 min="0.0"
                 max="3.0"
                 step="0.1"
+                disabled={!gameUI.isHost && !gameUI.isAdmin}
                 value={gameUI.modifiers.airDensity}
                 oninput={(e) => handleSliderChange('airDensity', e)}
               />
@@ -292,6 +345,7 @@
                 min="0.0000"
                 max="0.0100"
                 step="0.0005"
+                disabled={!gameUI.isHost && !gameUI.isAdmin}
                 value={gameUI.modifiers.magnusCoefficient}
                 oninput={(e) => handleSliderChange('magnusCoefficient', e)}
               />
@@ -314,6 +368,7 @@
                 min="-50.0"
                 max="50.0"
                 step="1.0"
+                disabled={!gameUI.isHost && !gameUI.isAdmin}
                 value={gameUI.modifiers.gravity}
                 oninput={(e) => handleSliderChange('gravity', e)}
               />
@@ -331,6 +386,7 @@
                 min="0.10"
                 max="1.20"
                 step="0.05"
+                disabled={!gameUI.isHost && !gameUI.isAdmin}
                 value={gameUI.modifiers.wallBounciness}
                 oninput={(e) => handleSliderChange('wallBounciness', e)}
               />
@@ -348,6 +404,7 @@
                 min="0.20"
                 max="1.30"
                 step="0.05"
+                disabled={!gameUI.isHost && !gameUI.isAdmin}
                 value={gameUI.modifiers.postBounciness}
                 oninput={(e) => handleSliderChange('postBounciness', e)}
               />
@@ -365,6 +422,7 @@
                 min="0.10"
                 max="0.90"
                 step="0.05"
+                disabled={!gameUI.isHost && !gameUI.isAdmin}
                 value={gameUI.modifiers.netElasticity}
                 oninput={(e) => handleSliderChange('netElasticity', e)}
               />
@@ -382,6 +440,7 @@
                 min="0.02"
                 max="0.50"
                 step="0.02"
+                disabled={!gameUI.isHost && !gameUI.isAdmin}
                 value={gameUI.modifiers.netDamping}
                 oninput={(e) => handleSliderChange('netDamping', e)}
               />
@@ -399,6 +458,7 @@
                 min="1.0"
                 max="6.0"
                 step="0.5"
+                disabled={!gameUI.isHost && !gameUI.isAdmin}
                 value={gameUI.modifiers.goalCelebrationDuration}
                 oninput={(e) => handleSliderChange('goalCelebrationDuration', e)}
               />
@@ -416,6 +476,7 @@
                 min="1"
                 max="15"
                 step="1"
+                disabled={!gameUI.isHost && !gameUI.isAdmin}
                 value={gameUI.modifiers.goalLimit}
                 oninput={(e) => handleSliderChange('goalLimit', e)}
               />
@@ -433,6 +494,7 @@
                 min="1.0"
                 max="15.0"
                 step="1.0"
+                disabled={!gameUI.isHost && !gameUI.isAdmin}
                 value={gameUI.modifiers.matchTimeMinutes}
                 oninput={(e) => handleSliderChange('matchTimeMinutes', e)}
               />
@@ -449,6 +511,7 @@
                 <label class="switch">
                   <input
                     type="checkbox"
+                    disabled={!gameUI.isHost && !gameUI.isAdmin}
                     checked={gameUI.modifiers.goldenGoalOvertime}
                     onchange={(e) => handleSliderChange('goldenGoalOvertime', e)}
                   />
@@ -460,32 +523,37 @@
         {/if}
       </div>
     </section>
-  </main>
+  </div>
 </div>
 
 <style>
   .modal-backdrop {
     position: fixed;
     inset: 0;
-    background: rgba(5, 8, 17, 0.85);
+    z-index: 50;
     display: flex;
     align-items: center;
     justify-content: center;
-    z-index: 100;
+    background: rgba(0, 0, 0, 0.65);
+    backdrop-filter: blur(12px);
     pointer-events: auto;
     user-select: none;
+    padding: 1rem;
+    box-sizing: border-box;
   }
 
   .modal-card {
     position: relative;
     width: min(94vw, 940px);
     height: 620px;
-    background: rgba(10, 16, 26, 0.98);
-    border: 1px solid #00e5ff;
+    background: #0a101a;
+    border: 1px solid rgba(0, 229, 255, 0.35);
     border-radius: 12px;
-    box-shadow: 0 0 28px rgba(0, 229, 255, 0.28);
+    box-shadow: 0 0 40px rgba(0, 0, 0, 0.85), 0 0 28px rgba(0, 229, 255, 0.25);
     display: flex;
     overflow: hidden;
+    color: #dde2f1;
+    font-family: 'Space Grotesk', system-ui, sans-serif;
   }
 
   .close-x-btn {
@@ -494,7 +562,7 @@
     right: 16px;
     width: 32px;
     height: 32px;
-    border-radius: 50%;
+    border-radius: 6px;
     background: #161c26;
     border: 1px solid rgba(0, 229, 255, 0.3);
     color: #00e5ff;
@@ -504,7 +572,7 @@
     align-items: center;
     justify-content: center;
     z-index: 20;
-    transition: background 0.15s;
+    transition: background 0.15s, color 0.15s;
   }
 
   .close-x-btn:hover {
@@ -529,9 +597,9 @@
     display: flex;
     align-items: center;
     gap: 10px;
-    padding-bottom: 16px;
+    padding-bottom: 12px;
     border-bottom: 1px solid rgba(0, 229, 255, 0.2);
-    margin-bottom: 12px;
+    margin-bottom: 10px;
   }
 
   .lightning-box {
@@ -555,12 +623,41 @@
   }
 
   .main-header {
-    font-family: 'Space Grotesk', system-ui, sans-serif;
     font-size: 13px;
     font-weight: 800;
     color: #ffffff;
     margin: 0;
     letter-spacing: 0.04em;
+  }
+
+  .authority-badge {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    background: rgba(46, 204, 113, 0.12);
+    border: 1px solid rgba(46, 204, 113, 0.35);
+    color: #2ecc71;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 9px;
+    font-weight: 700;
+    padding: 4px 8px;
+    border-radius: 4px;
+    margin-bottom: 12px;
+    letter-spacing: 0.04em;
+  }
+
+  .authority-badge.is-guest {
+    background: rgba(241, 196, 15, 0.12);
+    border-color: rgba(241, 196, 15, 0.35);
+    color: #f1c40f;
+  }
+
+  .status-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: currentColor;
+    box-shadow: 0 0 6px currentColor;
   }
 
   .nav-tabs {
@@ -571,7 +668,7 @@
 
   .tab-btn {
     width: 100%;
-    height: 44px;
+    height: 42px;
     padding: 0 12px;
     border-radius: 6px;
     background: transparent;
@@ -628,9 +725,14 @@
     transition: background 0.15s, border-color 0.15s;
   }
 
-  .reset-btn:hover {
+  .reset-btn:hover:not(:disabled) {
     background: rgba(241, 196, 15, 0.15);
     border-color: #f1c40f;
+  }
+
+  .reset-btn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
   }
 
   .content-panel {
@@ -669,7 +771,6 @@
   }
 
   .panel-title {
-    font-family: 'Space Grotesk', system-ui, sans-serif;
     font-size: 15px;
     font-weight: 800;
     color: #ffffff;
@@ -688,16 +789,35 @@
   }
 
   .panel-desc {
-    font-family: 'Chivo', system-ui, sans-serif;
     font-size: 11px;
     color: #8fa0b5;
     margin: 4px 0 0 0;
+  }
+
+  .guest-warning-banner {
+    margin-top: 8px;
+    padding: 6px 10px;
+    background: rgba(241, 196, 15, 0.12);
+    border: 1px solid rgba(241, 196, 15, 0.3);
+    border-radius: 6px;
+    color: #f1c40f;
+    font-size: 11px;
+    font-weight: 600;
   }
 
   .sliders-container {
     flex: 1;
     overflow-y: auto;
     padding-right: 6px;
+  }
+
+  .sliders-container::-webkit-scrollbar {
+    width: 4px;
+  }
+
+  .sliders-container::-webkit-scrollbar-thumb {
+    background: #00e5ff;
+    border-radius: 2px;
   }
 
   .grid-2col {
@@ -762,6 +882,11 @@
     border: 1px solid rgba(0, 229, 255, 0.2);
   }
 
+  input[type=range]:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+
   input[type=range]::-webkit-slider-thumb {
     -webkit-appearance: none;
     appearance: none;
@@ -785,7 +910,6 @@
   }
 
   .toggle-desc {
-    font-family: 'Chivo', system-ui, sans-serif;
     font-size: 11px;
     color: #8fa0b5;
     margin: 2px 0 0 0;

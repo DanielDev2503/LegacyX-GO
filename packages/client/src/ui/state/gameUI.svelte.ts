@@ -15,6 +15,8 @@ export type ModalType =
   | 'TEAM_MANAGEMENT'
   | 'PASSWORD_PROMPT'
   | 'STADIUM_SELECTOR'
+  | 'MODIFIERS'
+  | 'STADIUM_SELECT'
   | 'settings'
   | 'keybinds'
   | 'physics'
@@ -29,11 +31,27 @@ export type StadiumPresetKey =
   | 'af_3v3'
   | 'classic'
   | 'AF 3v3 Official'
+  | 'Classic Field'
+  | 'Big Stadium'
+  | 'Small Arena'
+  | 'Futsal Pro Court'
+  | 'Hockey Rink Arena'
   | 'Small'
   | 'Medium'
   | 'Classic'
-  | 'Big';
+  | 'Big'
+  | 'af3v3'
+  | 'smallarena'
+  | 'bigstadium'
+  | 'futsal'
+  | 'hockey';
 export type TeamSlot = 'red' | 'blue' | 'spectator';
+
+export interface KitConfig {
+  primaryColor: string;
+  secondaryColor: string;
+  pattern: 'solid' | 'vertical' | 'hoop' | 'halves';
+}
 
 export const SETTINGS_STORAGE_KEY = 'haxball_settings_v1';
 export const KEYBINDS_STORAGE_KEY = 'haxball_keybinds_v1';
@@ -289,7 +307,7 @@ class GameUIStore {
   public currentScreen = $state<ScreenType>('GATEKEEPER');
   public activeModal = $state<ModalType>('NONE');
 
-  // Player identity
+  // Player identity & Club
   public nickname = $state('yami');
   public avatarMode = $state<'letters' | 'emoji'>('letters');
   public avatarValue = $state('YA');
@@ -298,6 +316,18 @@ class GameUIStore {
   public realRegion = $state<string>(detectUserRegion());
   public localPlayerId = $state(1);
   public isHost = $state(true);
+  public clubName = $state('LegacyX Clan');
+  public clubTag = $state('LEG');
+  public redKit = $state<KitConfig>({
+    primaryColor: '#e74c3c',
+    secondaryColor: '#ffffff',
+    pattern: 'solid'
+  });
+  public blueKit = $state<KitConfig>({
+    primaryColor: '#3498db',
+    secondaryColor: '#00e5ff',
+    pattern: 'solid'
+  });
 
   // Live Signaling & Telemetry
   public realPing = $state<number | null>(null);
@@ -307,7 +337,7 @@ class GameUIStore {
 
   // Settings & Keybinds
   public settings = $state<SettingsConfig>({ ...DEFAULT_SETTINGS });
-  public activeSettingsTab = $state<'audio' | 'graphics' | 'minimap' | 'controls'>('audio');
+  public activeSettingsTab = $state<'controls' | 'audio' | 'video' | 'kits' | 'club'>('controls');
   public keybinds = $state<KeybindConfig>({
     up: [...DEFAULT_KEYBINDS.up],
     down: [...DEFAULT_KEYBINDS.down],
@@ -740,10 +770,20 @@ class GameUIStore {
       settings: 'SETTINGS',
       keybinds: 'KEYBINDS',
       physics: 'PHYSICS_MODIFIERS',
+      MODIFIERS: 'PHYSICS_MODIFIERS',
       teamSelect: 'TEAM_MANAGEMENT',
-      stadiumSelect: 'STADIUM_SELECTOR'
+      stadiumSelect: 'STADIUM_SELECTOR',
+      STADIUM_SELECT: 'STADIUM_SELECTOR'
     };
     this.activeModal = map[modal] ?? modal;
+  }
+
+  public openOverlay(modal: ModalType): void {
+    this.openModal(modal);
+  }
+
+  public closeOverlay(): void {
+    this.closeModal();
   }
 
   public closeModal(): void {
@@ -787,21 +827,31 @@ class GameUIStore {
     const idMap: Record<string, 'small' | 'medium' | 'big' | 'af_3v3' | 'classic'> = {
       small: 'small',
       Small: 'small',
+      smallarena: 'small',
+      'Small Arena': 'small',
       medium: 'medium',
       Medium: 'medium',
+      futsal: 'medium',
+      'Futsal Pro Court': 'medium',
+      hockey: 'medium',
+      'Hockey Rink Arena': 'medium',
       big: 'big',
       Big: 'big',
+      bigstadium: 'big',
+      'Big Stadium': 'big',
       af_3v3: 'af_3v3',
+      af3v3: 'af_3v3',
       'AF 3v3 Official': 'af_3v3',
       classic: 'classic',
-      Classic: 'classic'
+      Classic: 'classic',
+      'Classic Field': 'classic'
     };
     const defaultNames: Record<string, string> = {
-      small: 'Small',
+      small: 'Small Arena',
       medium: 'Medium',
-      big: 'Big Pitch',
-      af_3v3: 'AF 3v3',
-      classic: 'Classic'
+      big: 'Big Stadium',
+      af_3v3: 'AF 3v3 Official',
+      classic: 'Classic Field'
     };
     const canonical = idMap[stadiumId] ?? 'classic';
     this.selectedStadiumId = canonical;
