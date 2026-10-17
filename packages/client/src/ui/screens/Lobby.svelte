@@ -55,8 +55,9 @@
       class="nav-pill-btn"
       onmouseenter={() => soundFX.playUIHover()}
       onclick={() => gameUI.navigateTo('GATEKEEPER')}
+      title="Volver al Inicio"
     >
-      <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+      <svg class="back-arrow-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
         <line x1="19" y1="12" x2="5" y2="12"></line>
         <polyline points="12 19 5 12 12 5"></polyline>
       </svg>
@@ -285,31 +286,38 @@
   .nav-pill-btn {
     display: inline-flex;
     align-items: center;
-    gap: 8px;
-    height: 36px;
-    padding: 0 16px;
-    border-radius: 9999px;
-    background: rgba(26, 32, 42, 0.9);
+    gap: 0.5rem;
+    padding: 0.6rem 1.15rem;
+    background: rgba(10, 16, 26, 0.9);
     border: 1px solid rgba(0, 229, 255, 0.3);
-    color: #00e5ff;
+    border-radius: 9999px;
+    color: #67e8f9;
     font-family: 'Chivo', system-ui, sans-serif;
-    font-size: 12px;
+    font-size: 0.875rem;
     font-weight: 700;
-    letter-spacing: 0.08em;
+    letter-spacing: 0.02em;
     cursor: pointer;
-    box-shadow: 0 0 12px rgba(0, 229, 255, 0.2);
-    transition: background 0.15s, box-shadow 0.15s, transform 0.1s;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5), 0 0 12px rgba(0, 229, 255, 0.15);
+    transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+    user-select: none;
   }
 
   .nav-pill-btn:hover {
-    background: rgba(0, 229, 255, 0.2);
-    box-shadow: 0 0 16px rgba(0, 229, 255, 0.45);
+    background: rgba(0, 229, 255, 0.15);
+    border-color: #00e5ff;
+    color: #ffffff;
+    box-shadow: 0 0 16px rgba(0, 229, 255, 0.45), 0 6px 24px rgba(0, 0, 0, 0.6);
     transform: translateY(-1px);
   }
 
-  .nav-icon {
-    width: 16px;
-    height: 16px;
+  .nav-pill-btn:active {
+    transform: scale(0.95);
+  }
+
+  .back-arrow-svg {
+    width: 1.1rem;
+    height: 1.1rem;
+    flex-shrink: 0;
   }
 
   .content-container {

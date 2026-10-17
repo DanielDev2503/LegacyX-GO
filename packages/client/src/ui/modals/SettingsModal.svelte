@@ -1,6 +1,7 @@
 <script lang="ts">
   import { gameUI, type BallSkinType, type PatternType } from '../state/gameUI.svelte.js';
   import { soundFX } from '../../audio/SoundFX.js';
+  import { EMOJI_CATALOG } from '../utils/constants.js';
 
   type SettingsTab = 'controls' | 'audio' | 'video' | 'kits' | 'avatar';
   let activeTab = $state<SettingsTab>(
@@ -26,9 +27,9 @@
 
   // New trigger draft inputs
   let newTriggerWord = $state('');
-  let newTriggerEmoji = $state('⚡');
+  let newTriggerEmoji = $state<string>(EMOJI_CATALOG[0]);
 
-  const EMOJI_PALETTE = ['⚽', '⚡', '👑', '🎯', '🚀', '🏆', '💎', '🦁', '🔥', '🎩', '🛡️', '🌟'];
+  const EMOJI_PALETTE = EMOJI_CATALOG;
 
   function switchTab(tab: SettingsTab) {
     soundFX.playUIClick();
@@ -176,9 +177,18 @@
   role="presentation"
   onclick={handleBackdropClick}
 >
-  <div class="settings-modal-card" role="dialog" aria-modal="true" aria-label="Ajustes generales">
-    <!-- Panel Izquierdo: Lista vertical de 5 Pestañas -->
-    <nav class="tabs-sidebar" aria-label="Pestañas de ajustes">
+  <div class="settings-modal-card" role="dialog" aria-modal="true" aria-labelledby="settings-dialog-title">
+    <!-- Panel Izquierdo: Encabezado y Lista vertical de 5 Pestañas -->
+    <aside class="tabs-sidebar">
+      <div class="sidebar-header">
+        <span class="settings-icon-box">⚙️</span>
+        <div>
+          <h2 id="settings-dialog-title" class="main-header">Ajustes generales</h2>
+          <span class="sub-header">SISTEMA Y JUGABILIDAD</span>
+        </div>
+      </div>
+
+      <nav class="nav-tabs" aria-label="Pestañas de ajustes">
         <button
           type="button"
           class="tab-btn"
@@ -229,6 +239,7 @@
           <span class="tab-label">Avatar y emotes</span>
         </button>
       </nav>
+    </aside>
 
       <!-- Panel Derecho: Scroll independiente para la sección activa -->
       <div class="tab-content" role="region" aria-label="Contenido de la sección seleccionada">
@@ -1546,16 +1557,20 @@
                             </div>
                           </td>
                           <td class="emoji-picker-td">
-                            <input
-                              type="text"
-                              class="inline-emoji-edit"
-                              maxlength="2"
+                            <select
+                              class="inline-emoji-select"
                               value={item.emoji}
                               onchange={(e) => {
-                                item.emoji = (e.currentTarget as HTMLInputElement).value.trim() || '⚽';
+                                item.emoji = (e.currentTarget as HTMLSelectElement).value;
+                                soundFX.playUIClick();
                                 gameUI.saveSettings();
                               }}
-                            />
+                              aria-label="Seleccionar emoji"
+                            >
+                              {#each EMOJI_CATALOG as emoji}
+                                <option value={emoji}>{emoji}</option>
+                              {/each}
+                            </select>
                           </td>
                           <td class="delete-td">
                             <button
@@ -1589,13 +1604,16 @@
 
                   <div class="input-field emoji-field">
                     <label for="new-trigger-emoji">Emoji:</label>
-                    <input
+                    <select
                       id="new-trigger-emoji"
-                      type="text"
+                      class="trigger-emoji-select"
                       bind:value={newTriggerEmoji}
-                      maxlength="2"
-                      placeholder="🔥"
-                    />
+                      onchange={() => soundFX.playUIClick()}
+                    >
+                      {#each EMOJI_CATALOG as emoji}
+                        <option value={emoji}>{emoji}</option>
+                      {/each}
+                    </select>
                   </div>
 
                   <button
@@ -1625,31 +1643,38 @@
     display: inline-flex;
     align-items: center;
     gap: 0.5rem;
-    padding: 0.6rem 1.1rem;
-    background: rgba(10, 16, 26, 0.95);
-    border: 1px solid rgba(0, 229, 255, 0.35);
+    padding: 0.6rem 1.15rem;
+    background: rgba(10, 16, 26, 0.9);
+    border: 1px solid rgba(0, 229, 255, 0.3);
     border-radius: 9999px;
-    color: #e2e8f0;
+    color: #67e8f9;
     font-family: 'Chivo', system-ui, sans-serif;
-    font-size: 0.9rem;
-    font-weight: 600;
-    letter-spacing: 0.03em;
+    font-size: 0.875rem;
+    font-weight: 700;
+    letter-spacing: 0.02em;
     cursor: pointer;
-    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4), 0 0 12px rgba(0, 229, 255, 0.15);
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5), 0 0 12px rgba(0, 229, 255, 0.15);
     transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+    user-select: none;
+    pointer-events: auto;
   }
 
   .floating-back-btn:hover {
     background: rgba(0, 229, 255, 0.15);
     border-color: #00e5ff;
-    color: #00e5ff;
+    color: #ffffff;
+    box-shadow: 0 0 16px rgba(0, 229, 255, 0.45), 0 6px 24px rgba(0, 0, 0, 0.6);
     transform: translateY(-1px);
-    box-shadow: 0 6px 20px rgba(0, 229, 255, 0.3);
+  }
+
+  .floating-back-btn:active {
+    transform: scale(0.95);
   }
 
   .back-arrow-svg {
     width: 1.1rem;
     height: 1.1rem;
+    flex-shrink: 0;
   }
 
   /* Overlay Backdrop Condition # */
@@ -1685,16 +1710,60 @@
 
   /* Left Sidebar */
   .tabs-sidebar {
-    width: 220px;
+    width: 240px;
     height: 100%;
-    background: rgba(11, 17, 30, 0.75);
+    background: rgba(11, 17, 30, 0.85);
     border-right: 1px solid rgba(255, 255, 255, 0.08);
     display: flex;
     flex-direction: column;
-    padding: 1.25rem 0.75rem;
-    gap: 0.4rem;
+    padding: 1.25rem 0.85rem;
     box-sizing: border-box;
     flex-shrink: 0;
+  }
+
+  .sidebar-header {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin-bottom: 1.5rem;
+    padding: 0.25rem 0.5rem;
+  }
+
+  .settings-icon-box {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 2.25rem;
+    height: 2.25rem;
+    background: rgba(0, 229, 255, 0.1);
+    border: 1px solid rgba(0, 229, 255, 0.35);
+    border-radius: 0.5rem;
+    font-size: 1.15rem;
+    color: #00e5ff;
+    box-shadow: 0 0 10px rgba(0, 229, 255, 0.2);
+  }
+
+  .main-header {
+    font-family: 'Space Grotesk', system-ui, sans-serif;
+    margin: 0;
+    font-size: 0.95rem;
+    font-weight: 800;
+    color: #f8fafc;
+    letter-spacing: -0.01em;
+  }
+
+  .sub-header {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.72rem;
+    color: #00e5ff;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  .nav-tabs {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
   }
 
   .tab-btn {
@@ -2915,14 +2984,29 @@
     width: 110px;
   }
 
-  .inline-emoji-edit {
-    padding: 0.25rem 0.5rem;
+  .inline-emoji-select {
+    padding: 0.25rem 0.35rem;
     background: #0b111e;
-    border: 1px solid rgba(255, 255, 255, 0.1);
+    border: 1px solid rgba(0, 229, 255, 0.3);
     border-radius: 0.25rem;
     font-size: 1.1rem;
-    width: 48px;
+    color: #f1f5f9;
+    cursor: pointer;
     text-align: center;
+    outline: none;
+    transition: border-color 0.15s, box-shadow 0.15s;
+  }
+
+  .inline-emoji-select:focus {
+    border-color: #00e5ff;
+    box-shadow: 0 0 8px rgba(0, 229, 255, 0.35);
+  }
+
+  .inline-emoji-select option,
+  .trigger-emoji-select option {
+    background: #0b111e;
+    color: #f1f5f9;
+    font-size: 1.1rem;
   }
 
   .delete-td {
@@ -2974,12 +3058,25 @@
   }
 
   .emoji-field {
-    width: 60px;
+    width: 72px;
   }
 
-  .emoji-field input {
-    text-align: center;
+  .trigger-emoji-select {
+    padding: 0.35rem 0.4rem;
+    background: #0b111e;
+    border: 1px solid rgba(0, 229, 255, 0.3);
+    border-radius: 0.375rem;
     font-size: 1.1rem;
+    color: #f1f5f9;
+    cursor: pointer;
+    text-align: center;
+    outline: none;
+    transition: border-color 0.15s, box-shadow 0.15s;
+  }
+
+  .trigger-emoji-select:focus {
+    border-color: #00e5ff;
+    box-shadow: 0 0 8px rgba(0, 229, 255, 0.35);
   }
 
   .btn-add-trigger {

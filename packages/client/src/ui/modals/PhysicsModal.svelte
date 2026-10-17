@@ -267,7 +267,11 @@
   aria-label="Volver a la pantalla anterior"
   title="Volver [Esc]"
 >
-  ← Volver
+  <svg class="back-arrow-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+    <line x1="19" y1="12" x2="5" y2="12"></line>
+    <polyline points="12 19 5 12 12 5"></polyline>
+  </svg>
+  <span>Volver</span>
 </button>
 
 <!-- OVERLAY BACKDROP (Condición #) -->
@@ -691,16 +695,16 @@
     align-items: center;
     gap: 0.5rem;
     padding: 0.6rem 1.15rem;
-    background: rgba(10, 16, 26, 0.95);
-    border: 1px solid rgba(0, 229, 255, 0.4);
+    background: rgba(10, 16, 26, 0.9);
+    border: 1px solid rgba(0, 229, 255, 0.3);
     border-radius: 9999px;
-    color: #00e5ff;
+    color: #67e8f9;
     font-family: 'Chivo', system-ui, sans-serif;
     font-size: 0.875rem;
     font-weight: 700;
     letter-spacing: 0.02em;
     cursor: pointer;
-    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5), 0 0 15px rgba(0, 229, 255, 0.15);
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5), 0 0 12px rgba(0, 229, 255, 0.15);
     transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
     user-select: none;
     pointer-events: auto;
@@ -710,12 +714,18 @@
     background: rgba(0, 229, 255, 0.15);
     border-color: #00e5ff;
     color: #ffffff;
-    box-shadow: 0 6px 24px rgba(0, 0, 0, 0.6), 0 0 25px rgba(0, 229, 255, 0.35);
+    box-shadow: 0 0 16px rgba(0, 229, 255, 0.45), 0 6px 24px rgba(0, 0, 0, 0.6);
     transform: translateY(-1px);
   }
 
   .floating-back-btn:active {
-    transform: translateY(0);
+    transform: scale(0.95);
+  }
+
+  .back-arrow-svg {
+    width: 1.1rem;
+    height: 1.1rem;
+    flex-shrink: 0;
   }
 
   /* Backdrop Overlay */

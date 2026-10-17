@@ -1,8 +1,9 @@
 <script lang="ts">
   import { gameUI } from '../state/gameUI.svelte.js';
   import { soundFX } from '../../audio/SoundFX.js';
+  import { EMOJI_CATALOG } from '../utils/constants.js';
 
-  const emojiList = ['⚽', '🔥', '⚡', '👑', '💀', '🎯', '🤖', '😎', '🚀', '🏆', '💎', '🦁'];
+  const emojiList: readonly string[] = EMOJI_CATALOG;
 
   function handleNicknameChange(e: Event) {
     const val = (e.target as HTMLInputElement).value;
