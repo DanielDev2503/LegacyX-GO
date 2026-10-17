@@ -61,7 +61,7 @@
         <line x1="19" y1="12" x2="5" y2="12"></line>
         <polyline points="12 19 5 12 12 5"></polyline>
       </svg>
-      <span>Inicio</span>
+      <span>Volver</span>
     </button>
   </header>
 
@@ -85,7 +85,10 @@
       <!-- Filter / Search Row -->
       <div class="filter-row">
         <div class="search-input-wrapper">
-          <span class="search-icon">🔍</span>
+          <svg class="search-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle cx="11" cy="11" r="8"></circle>
+            <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+          </svg>
           <input
             type="text"
             class="search-input"
@@ -110,6 +113,7 @@
       <!-- Scrollable Room List -->
       <div class="room-list">
         {#each gameUI.filteredRooms as room (room.id)}
+          {@const ratio = room.maxPlayers > 0 ? room.playersCount / room.maxPlayers : 0}
           <div class="room-row">
             <div class="room-info">
               {#if room.isPrivate}
@@ -119,7 +123,14 @@
             </div>
 
             <div class="room-meta">
-              <span class="capacity-badge">{room.playersCount} / {room.maxPlayers}</span>
+              <span
+                class="capacity-badge"
+                class:occ-free={ratio < 0.75}
+                class:occ-warn={ratio >= 0.75 && ratio < 1}
+                class:occ-full={ratio >= 1}
+              >
+                {room.playersCount} / {room.maxPlayers}
+              </span>
               <button
                 type="button"
                 class="join-room-btn"
@@ -130,7 +141,7 @@
                 {#if room.isPrivate}
                   <span class="btn-lock">🔒</span>
                 {/if}
-                <span>ENTRAR</span>
+                <span>UNIRSE</span>
               </button>
             </div>
           </div>
@@ -336,7 +347,7 @@
     max-width: 680px;
     background: rgba(8, 14, 24, 0.96);
     border: 1px solid rgba(0, 229, 255, 0.35);
-    border-radius: 12px;
+    border-radius: 0.5rem;
     box-shadow: 0 0 24px rgba(0, 229, 255, 0.18);
     padding: 22px;
     display: flex;
@@ -400,6 +411,7 @@
 
   .online-text {
     font-family: 'JetBrains Mono', monospace;
+    font-variant-numeric: tabular-nums;
     font-size: 11px;
     color: #c3f5ff;
     font-weight: 600;
@@ -415,13 +427,16 @@
     flex: 1;
   }
 
-  .search-icon {
+  .search-icon-svg {
     position: absolute;
     left: 12px;
     top: 50%;
     transform: translateY(-50%);
-    font-size: 13px;
-    opacity: 0.6;
+    width: 15px;
+    height: 15px;
+    color: #00e5ff;
+    opacity: 0.7;
+    pointer-events: none;
   }
 
   .search-input {
@@ -431,7 +446,7 @@
     padding-right: 14px;
     background: #121a29;
     border: 1px solid rgba(0, 229, 255, 0.25);
-    border-radius: 6px;
+    border-radius: 0.5rem;
     color: #ffffff;
     font-family: 'Chivo', system-ui, sans-serif;
     font-size: 13px;
@@ -448,7 +463,7 @@
   .refresh-btn {
     width: 40px;
     height: 40px;
-    border-radius: 6px;
+    border-radius: 0.5rem;
     background: #121a29;
     border: 1px solid rgba(0, 229, 255, 0.25);
     color: #00e5ff;
@@ -466,10 +481,14 @@
     box-shadow: 0 0 10px rgba(0, 229, 255, 0.3);
   }
 
+  .refresh-btn:hover:not(.spinning) .refresh-icon {
+    transform: rotate(90deg);
+  }
+
   .refresh-icon {
     width: 18px;
     height: 18px;
-    transition: transform 0.4s ease;
+    transition: transform 0.35s ease;
   }
 
   .refresh-btn.spinning .refresh-icon {
@@ -484,6 +503,26 @@
     max-height: 320px;
     overflow-y: auto;
     padding-right: 4px;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(0, 229, 255, 0.35) rgba(8, 14, 24, 0.6);
+  }
+
+  .room-list::-webkit-scrollbar {
+    width: 4px;
+  }
+
+  .room-list::-webkit-scrollbar-track {
+    background: rgba(8, 14, 24, 0.6);
+    border-radius: 4px;
+  }
+
+  .room-list::-webkit-scrollbar-thumb {
+    background: rgba(0, 229, 255, 0.35);
+    border-radius: 4px;
+  }
+
+  .room-list::-webkit-scrollbar-thumb:hover {
+    background: #00e5ff;
   }
 
   .room-row {
@@ -494,7 +533,7 @@
     padding: 0 14px;
     background: rgba(22, 28, 38, 0.8);
     border: 1px solid rgba(0, 229, 255, 0.12);
-    border-radius: 6px;
+    border-radius: 0.5rem;
     transition: background 0.15s, border-color 0.15s;
   }
 
@@ -534,11 +573,32 @@
 
   .capacity-badge {
     font-family: 'JetBrains Mono', monospace;
+    font-variant-numeric: tabular-nums;
     font-size: 11px;
+    font-weight: 700;
     color: #dfeeff;
     background: #1a202a;
+    border: 1px solid rgba(255, 255, 255, 0.1);
     padding: 3px 8px;
     border-radius: 4px;
+  }
+
+  .capacity-badge.occ-free {
+    color: #2ecc71;
+    border-color: rgba(46, 204, 113, 0.35);
+    background: rgba(46, 204, 113, 0.1);
+  }
+
+  .capacity-badge.occ-warn {
+    color: #ffd700;
+    border-color: rgba(255, 215, 0, 0.35);
+    background: rgba(255, 215, 0, 0.1);
+  }
+
+  .capacity-badge.occ-full {
+    color: #ff4757;
+    border-color: rgba(255, 71, 87, 0.4);
+    background: rgba(255, 71, 87, 0.12);
   }
 
   .btn-lock {
@@ -548,22 +608,23 @@
 
   .join-room-btn {
     padding: 6px 14px;
-    border-radius: 5px;
-    background: #2ecc71;
+    border-radius: 6px;
+    background: #00e5ff;
     border: none;
-    color: #05150c;
+    color: #080e18;
     font-family: 'Chivo', system-ui, sans-serif;
     font-weight: 700;
     font-size: 11px;
     letter-spacing: 0.08em;
     cursor: pointer;
-    box-shadow: 0 0 10px rgba(46, 204, 113, 0.3);
-    transition: background 0.15s, box-shadow 0.15s;
+    box-shadow: 0 0 12px rgba(0, 229, 255, 0.35);
+    transition: filter 0.15s, box-shadow 0.15s, transform 0.1s;
   }
 
   .join-room-btn:hover {
-    background: #27ae60;
-    box-shadow: 0 0 14px rgba(46, 204, 113, 0.55);
+    filter: brightness(1.12);
+    box-shadow: 0 0 16px rgba(0, 229, 255, 0.6);
+    transform: translateY(-1px);
   }
 
   .join-room-btn.private {

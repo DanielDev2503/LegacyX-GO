@@ -623,6 +623,8 @@
   }
 
   .arenas-count {
+    font-family: 'JetBrains Mono', monospace;
+    font-variant-numeric: tabular-nums;
     background: rgba(0, 229, 255, 0.12);
     padding: 0.15rem 0.45rem;
     border-radius: 0.25rem;
@@ -635,6 +637,25 @@
     flex-direction: column;
     gap: 0.6rem;
     overflow-y: auto;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(0, 229, 255, 0.35) rgba(8, 14, 24, 0.6);
+  }
+
+  .stadium-scroll-list::-webkit-scrollbar,
+  .stadium-detail-panel::-webkit-scrollbar {
+    width: 4px;
+  }
+
+  .stadium-scroll-list::-webkit-scrollbar-track,
+  .stadium-detail-panel::-webkit-scrollbar-track {
+    background: rgba(8, 14, 24, 0.6);
+    border-radius: 4px;
+  }
+
+  .stadium-scroll-list::-webkit-scrollbar-thumb,
+  .stadium-detail-panel::-webkit-scrollbar-thumb {
+    background: rgba(0, 229, 255, 0.35);
+    border-radius: 4px;
   }
 
   /* Arena Card */
@@ -645,7 +666,7 @@
     padding: 0.85rem 0.95rem;
     background: rgba(18, 28, 48, 0.65);
     border: 1px solid rgba(255, 255, 255, 0.08);
-    border-radius: 0.65rem;
+    border-radius: 0.5rem;
     cursor: pointer;
     text-align: left;
     transition: all 0.15s ease;
@@ -653,13 +674,13 @@
 
   .arena-card:hover {
     background: rgba(18, 28, 48, 0.95);
-    border-color: rgba(0, 229, 255, 0.3);
+    border-color: rgba(0, 229, 255, 0.35);
   }
 
   .arena-card.inspected {
-    border-color: rgba(0, 229, 255, 0.7);
-    background: rgba(0, 229, 255, 0.08);
-    box-shadow: 0 0 15px rgba(0, 229, 255, 0.12);
+    border-color: #00e5ff;
+    background: rgba(0, 229, 255, 0.1);
+    box-shadow: 0 0 16px rgba(0, 229, 255, 0.22);
   }
 
   .arena-card.confirmed {
@@ -711,12 +732,15 @@
   }
 
   .arena-name {
+    font-family: 'Space Grotesk', system-ui, sans-serif;
     font-size: 0.88rem;
     font-weight: 700;
     color: #f8fafc;
   }
 
   .format-badge {
+    font-family: 'JetBrains Mono', monospace;
+    font-variant-numeric: tabular-nums;
     font-size: 0.68rem;
     font-weight: 800;
     color: #00e5ff;
@@ -726,6 +750,8 @@
   }
 
   .card-measures {
+    font-family: 'JetBrains Mono', monospace;
+    font-variant-numeric: tabular-nums;
     font-size: 0.68rem;
     color: #94a3b8;
     white-space: nowrap;
@@ -743,13 +769,15 @@
     padding: 1.25rem;
     box-sizing: border-box;
     gap: 1rem;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(0, 229, 255, 0.35) rgba(8, 14, 24, 0.6);
   }
 
   .tactical-pitch-surface {
     position: relative;
     width: 100%;
     height: 250px;
-    border-radius: 0.75rem;
+    border-radius: 0.5rem;
     overflow: hidden;
     border: 1px solid rgba(0, 229, 255, 0.25);
     box-shadow: inset 0 0 40px rgba(0, 0, 0, 0.7);
@@ -776,7 +804,7 @@
   .technical-specs-panel {
     background: rgba(13, 21, 38, 0.85);
     border: 1px solid rgba(0, 229, 255, 0.2);
-    border-radius: 0.75rem;
+    border-radius: 0.5rem;
     padding: 1rem 1.25rem;
   }
 
@@ -795,6 +823,7 @@
   }
 
   .specs-title {
+    font-family: 'Space Grotesk', system-ui, sans-serif;
     font-size: 0.85rem;
     font-weight: 800;
     color: #00e5ff;
@@ -815,6 +844,7 @@
     display: flex;
     align-items: center;
     gap: 0.5rem;
+    font-family: 'Chivo', system-ui, sans-serif;
     font-size: 0.8rem;
     color: #94a3b8;
   }
@@ -835,9 +865,12 @@
 
   .author-tag {
     color: #38bdf8;
+    font-family: 'JetBrains Mono', monospace;
   }
 
   .badge-mode {
+    font-family: 'JetBrains Mono', monospace;
+    font-variant-numeric: tabular-nums;
     background: rgba(0, 229, 255, 0.12);
     color: #00e5ff;
     padding: 0.15rem 0.5rem;
@@ -848,6 +881,7 @@
   .measures-val {
     color: #f1f5f9;
     font-family: 'JetBrains Mono', monospace;
+    font-variant-numeric: tabular-nums;
     font-size: 0.75rem;
   }
 

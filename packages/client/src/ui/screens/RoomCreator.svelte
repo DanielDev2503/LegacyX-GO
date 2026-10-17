@@ -107,7 +107,7 @@
           <div class="input-block">
             <div class="block-header">
               <label class="block-label" for="room-name">NOMBRE DE LA SALA</label>
-              <span class="block-hint">MAX 50 CHARS</span>
+              <span class="block-hint">({roomName.length}/50)</span>
             </div>
             <input
               id="room-name"
@@ -298,7 +298,7 @@
         onmouseenter={() => soundFX.playUIHover()}
         onclick={handleCreateRoom}
       >
-        <span>CREAR SALA Y ENTRAR AL JUEGO</span>
+        <span>CREAR SALA</span>
       </button>
     </div>
   </main>
@@ -382,6 +382,25 @@
     flex-direction: column;
     gap: 16px;
     box-sizing: border-box;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(0, 229, 255, 0.35) rgba(8, 14, 24, 0.6);
+  }
+
+  .creator-card::-webkit-scrollbar,
+  .right-panel-scroll::-webkit-scrollbar {
+    width: 4px;
+  }
+
+  .creator-card::-webkit-scrollbar-track,
+  .right-panel-scroll::-webkit-scrollbar-track {
+    background: rgba(8, 14, 24, 0.6);
+    border-radius: 4px;
+  }
+
+  .creator-card::-webkit-scrollbar-thumb,
+  .right-panel-scroll::-webkit-scrollbar-thumb {
+    background: rgba(0, 229, 255, 0.35);
+    border-radius: 4px;
   }
 
   .card-header {
@@ -437,7 +456,7 @@
   .config-column {
     background: rgba(18, 26, 41, 0.75);
     border: 1px solid rgba(0, 229, 255, 0.18);
-    border-radius: 8px;
+    border-radius: 0.5rem;
     padding: 14px;
     display: flex;
     flex-direction: column;
@@ -449,11 +468,12 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding-bottom: 2px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    padding-bottom: 8px;
   }
 
   .column-title {
-    font-family: 'Chivo', system-ui, sans-serif;
+    font-family: 'Space Grotesk', system-ui, sans-serif;
     font-size: 11px;
     font-weight: 700;
     letter-spacing: 0.08em;
@@ -496,8 +516,9 @@
 
   .block-hint {
     font-family: 'JetBrains Mono', monospace;
+    font-variant-numeric: tabular-nums;
     font-size: 10px;
-    color: #8fa0b5;
+    color: rgba(0, 229, 255, 0.65);
   }
 
   .styled-input {
@@ -506,9 +527,9 @@
     padding: 0 14px;
     background: #121a29;
     border: 1px solid rgba(0, 229, 255, 0.3);
-    border-radius: 6px;
+    border-radius: 0.5rem;
     color: #00e5ff;
-    font-family: 'Space Grotesk', system-ui, sans-serif;
+    font-family: 'Chivo', system-ui, sans-serif;
     font-size: 14px;
     font-weight: 700;
     outline: none;
@@ -547,7 +568,7 @@
     justify-content: space-between;
     background: #080e18;
     border: 1px solid rgba(0, 229, 255, 0.25);
-    border-radius: 6px;
+    border-radius: 0.5rem;
     padding: 4px 8px;
   }
 
@@ -581,6 +602,7 @@
 
   .stepper-num {
     font-family: 'JetBrains Mono', monospace;
+    font-variant-numeric: tabular-nums;
     font-size: 18px;
     font-weight: 800;
     color: #00e5ff;
@@ -659,7 +681,7 @@
     padding: 0 12px;
     background: #080e18;
     border: 1px solid rgba(0, 229, 255, 0.35);
-    border-radius: 6px;
+    border-radius: 0.5rem;
     color: #00e5ff;
     font-family: 'JetBrains Mono', monospace;
     font-size: 13px;
@@ -684,6 +706,8 @@
   .right-panel-scroll {
     overflow-y: auto;
     max-height: 480px;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(0, 229, 255, 0.35) rgba(8, 14, 24, 0.6);
   }
 
   .rules-grid {
@@ -697,7 +721,7 @@
     height: 36px;
     background: #121a29;
     border: 1px solid rgba(0, 229, 255, 0.25);
-    border-radius: 5px;
+    border-radius: 0.5rem;
     display: flex;
     align-items: center;
     padding: 0 8px;
@@ -722,6 +746,7 @@
     border: none;
     color: #c3f5ff;
     font-family: 'JetBrains Mono', monospace;
+    font-variant-numeric: tabular-nums;
     font-size: 11px;
     font-weight: 600;
     outline: none;
@@ -745,7 +770,7 @@
   .rule-btn {
     height: 36px;
     padding: 0 10px;
-    border-radius: 5px;
+    border-radius: 0.5rem;
     background: #121a29;
     border: 1px solid rgba(0, 229, 255, 0.25);
     color: #c3f5ff;
@@ -804,7 +829,7 @@
     aspect-ratio: 2 / 1;
     min-height: 120px;
     max-height: 150px;
-    border-radius: 8px;
+    border-radius: 0.5rem;
     overflow: hidden;
     background: #07170e;
     border: 1px solid rgba(0, 229, 255, 0.35);
@@ -836,11 +861,11 @@
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: 4px;
+    gap: 6px;
     background: rgba(10, 16, 26, 0.95);
     border: 1px solid rgba(0, 229, 255, 0.4);
     padding: 8px 16px;
-    border-radius: 8px;
+    border-radius: 0.5rem;
     pointer-events: none;
     box-shadow: 0 0 14px rgba(0, 0, 0, 0.6);
   }
@@ -859,6 +884,10 @@
     font-size: 11px;
     font-weight: 600;
     color: #00e5ff;
+    background: rgba(0, 229, 255, 0.15);
+    border: 1px solid rgba(0, 229, 255, 0.35);
+    padding: 3px 10px;
+    border-radius: 4px;
   }
 
   .footer-cta {
@@ -868,26 +897,27 @@
   .launch-btn {
     width: 100%;
     height: 46px;
-    border-radius: 8px;
-    background: #2ecc71;
+    border-radius: 0.5rem;
+    background: #00e5ff;
     border: none;
-    color: #05150c;
+    color: #0a101a;
     font-family: 'Space Grotesk', system-ui, sans-serif;
     font-weight: 800;
     font-size: 14px;
+    text-transform: uppercase;
     letter-spacing: 0.08em;
     cursor: pointer;
-    box-shadow: 0 0 16px rgba(46, 204, 113, 0.45);
-    transition: transform 0.1s, box-shadow 0.15s, background 0.15s;
+    box-shadow: 0 0 20px rgba(0, 229, 255, 0.45);
+    transition: transform 0.1s, box-shadow 0.15s, filter 0.15s;
   }
 
   .launch-btn:hover {
-    background: #27ae60;
-    box-shadow: 0 0 22px rgba(46, 204, 113, 0.65);
+    filter: brightness(1.12);
+    box-shadow: 0 0 26px rgba(0, 229, 255, 0.75);
     transform: translateY(-1px);
   }
 
   .launch-btn:active {
-    transform: translateY(0);
+    transform: scale(0.98);
   }
 </style>

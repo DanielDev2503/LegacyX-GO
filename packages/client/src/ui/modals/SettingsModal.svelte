@@ -184,7 +184,7 @@
         <span class="settings-icon-box">⚙️</span>
         <div>
           <h2 id="settings-dialog-title" class="main-header">Ajustes generales</h2>
-          <span class="sub-header">SISTEMA Y JUGABILIDAD</span>
+          <span class="sub-header">CONFIGURACIÓN</span>
         </div>
       </div>
 
@@ -1775,6 +1775,7 @@
     border: 1px solid transparent;
     border-radius: 0.5rem;
     color: #94a3b8;
+    font-family: 'Chivo', system-ui, sans-serif;
     font-size: 0.875rem;
     font-weight: 600;
     text-align: left;
@@ -1790,6 +1791,7 @@
   .tab-btn.active {
     background: rgba(0, 229, 255, 0.12);
     border-color: rgba(0, 229, 255, 0.4);
+    border-left: 3px solid #00e5ff;
     color: #00e5ff;
     box-shadow: 0 0 12px rgba(0, 229, 255, 0.1);
   }
@@ -1813,6 +1815,26 @@
     background: #0d1526;
     box-sizing: border-box;
     pointer-events: auto;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(0, 229, 255, 0.35) rgba(8, 14, 24, 0.6);
+  }
+
+  .tab-content::-webkit-scrollbar {
+    width: 4px;
+  }
+
+  .tab-content::-webkit-scrollbar-track {
+    background: rgba(8, 14, 24, 0.6);
+    border-radius: 4px;
+  }
+
+  .tab-content::-webkit-scrollbar-thumb {
+    background: rgba(0, 229, 255, 0.35);
+    border-radius: 4px;
+  }
+
+  .tab-content::-webkit-scrollbar-thumb:hover {
+    background: #00e5ff;
   }
 
   .tab-pane {
@@ -1830,6 +1852,7 @@
   }
 
   .section-heading {
+    font-family: 'Space Grotesk', system-ui, sans-serif;
     margin: 0;
     font-size: 1.15rem;
     font-weight: 700;
@@ -1865,11 +1888,12 @@
   .emotes-toggle-card {
     background: rgba(18, 27, 46, 0.7);
     border: 1px solid rgba(255, 255, 255, 0.07);
-    border-radius: 0.75rem;
+    border-radius: 0.5rem;
     padding: 1.15rem;
   }
 
   .card-title {
+    font-family: 'Space Grotesk', system-ui, sans-serif;
     margin: 0 0 0.85rem 0;
     font-size: 0.95rem;
     font-weight: 700;
@@ -1895,6 +1919,7 @@
   }
 
   .bind-name {
+    font-family: 'Chivo', system-ui, sans-serif;
     font-size: 0.875rem;
     font-weight: 600;
     color: #f1f5f9;
@@ -1902,32 +1927,38 @@
 
   .bind-hint {
     display: block;
+    font-family: 'Chivo', system-ui, sans-serif;
     font-size: 0.75rem;
     color: #64748b;
   }
 
   .key-badge {
+    min-width: 78px;
     padding: 0.35rem 0.75rem;
-    background: #1e293b;
-    border: 1px solid rgba(255, 255, 255, 0.15);
+    background: #161c26;
+    border: 1px solid rgba(0, 229, 255, 0.3);
     border-radius: 0.375rem;
     color: #00e5ff;
-    font-family: monospace;
-    font-size: 0.825rem;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.8rem;
     font-weight: 700;
     cursor: pointer;
+    box-shadow: inset 0 -2px 0 rgba(0, 0, 0, 0.5), 0 0 8px rgba(0, 229, 255, 0.12);
     transition: all 0.15s ease;
   }
 
   .key-badge:hover {
-    background: #334155;
+    background: rgba(0, 229, 255, 0.15);
     border-color: #00e5ff;
+    color: #ffffff;
+    box-shadow: inset 0 -2px 0 rgba(0, 0, 0, 0.5), 0 0 12px rgba(0, 229, 255, 0.4);
   }
 
   .key-badge.rebinding {
     background: #00e5ff;
+    border-color: #00e5ff;
     color: #0b111e;
-    box-shadow: 0 0 10px #00e5ff;
+    box-shadow: 0 0 14px #00e5ff;
   }
 
   /* Pane Footer */
@@ -1944,6 +1975,7 @@
     border: 1px solid rgba(255, 255, 255, 0.15);
     border-radius: 0.5rem;
     color: #94a3b8;
+    font-family: 'Chivo', system-ui, sans-serif;
     font-size: 0.825rem;
     font-weight: 600;
     cursor: pointer;
@@ -2046,7 +2078,7 @@
     padding: 1rem 1.25rem;
     background: rgba(239, 68, 68, 0.1);
     border: 1px solid rgba(239, 68, 68, 0.3);
-    border-radius: 0.75rem;
+    border-radius: 0.5rem;
   }
 
   .mute-title {
@@ -2090,7 +2122,8 @@
   }
 
   .channel-val {
-    font-family: monospace;
+    font-family: 'JetBrains Mono', monospace;
+    font-variant-numeric: tabular-nums;
     font-weight: 700;
     color: #00e5ff;
     font-size: 0.875rem;
@@ -2148,7 +2181,8 @@
 
   .param-val {
     color: #00e5ff;
-    font-family: monospace;
+    font-family: 'JetBrains Mono', monospace;
+    font-variant-numeric: tabular-nums;
   }
 
   .toggles-grid {
@@ -2375,7 +2409,8 @@
     border: 1px solid rgba(255, 255, 255, 0.15);
     border-radius: 0.375rem;
     color: #00e5ff;
-    font-family: monospace;
+    font-family: 'JetBrains Mono', monospace;
+    font-variant-numeric: tabular-nums;
     font-size: 0.85rem;
   }
 
@@ -2487,7 +2522,7 @@
     border: 1px solid rgba(0, 229, 255, 0.3);
     border-radius: 0.375rem;
     color: #00e5ff;
-    font-family: monospace;
+    font-family: 'JetBrains Mono', monospace;
     font-size: 0.8rem;
     font-weight: 700;
   }
@@ -2514,7 +2549,8 @@
     border: 1px solid rgba(255, 255, 255, 0.1);
     border-radius: 0.375rem;
     color: #e2e8f0;
-    font-family: monospace;
+    font-family: 'JetBrains Mono', monospace;
+    font-variant-numeric: tabular-nums;
     font-size: 0.8rem;
   }
 
@@ -2596,7 +2632,7 @@
     padding: 1rem;
     background: rgba(18, 27, 46, 0.6);
     border: 1px solid rgba(255, 255, 255, 0.08);
-    border-radius: 0.75rem;
+    border-radius: 0.5rem;
   }
 
   .preview-title {
@@ -2678,7 +2714,7 @@
   .captain-badge {
     position: relative;
     z-index: 2;
-    font-family: monospace;
+    font-family: 'JetBrains Mono', monospace;
     font-size: 1.35rem;
     font-weight: 900;
     color: #ffffff;
@@ -2724,7 +2760,7 @@
     padding: 1.15rem;
     background: rgba(18, 27, 46, 0.8);
     border: 1px solid rgba(0, 229, 255, 0.2);
-    border-radius: 0.75rem;
+    border-radius: 0.5rem;
   }
 
   .hero-disc-circle {
@@ -2742,7 +2778,7 @@
   }
 
   .hero-disc-text {
-    font-family: monospace;
+    font-family: 'JetBrains Mono', monospace;
     font-size: 1.6rem;
     font-weight: 900;
     color: #08111e;
@@ -2820,7 +2856,7 @@
     border: 1px solid rgba(0, 229, 255, 0.3);
     border-radius: 0.375rem;
     color: #00e5ff;
-    font-family: monospace;
+    font-family: 'JetBrains Mono', monospace;
     font-size: 1.25rem;
     font-weight: 800;
     text-align: center;
@@ -2839,7 +2875,7 @@
 
   .emoji-grid-12 {
     display: grid;
-    grid-template-columns: repeat(6, 1fr);
+    grid-template-columns: repeat(5, 1fr);
     gap: 0.5rem;
   }
 

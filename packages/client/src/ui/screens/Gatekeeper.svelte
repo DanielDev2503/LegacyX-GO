@@ -30,13 +30,6 @@
     }
   }
 
-  function handleModeToggle(e: Event) {
-    const input = e.target as HTMLInputElement | null;
-    if (input) {
-      toggleMode(input.checked);
-    }
-  }
-
   function handlePlayClick() {
     soundFX.ensureContext();
     soundFX.playUIClick();
@@ -84,7 +77,7 @@
             value={gameUI.nickname}
             oninput={handleNicknameChange}
           />
-          <span class="char-count">{gameUI.nickname.length}/25</span>
+          <span class="char-count">({gameUI.nickname.length}/25)</span>
         </div>
       </div>
 
@@ -92,16 +85,27 @@
       <div class="input-group">
         <div class="avatar-header">
           <label class="group-label" for="avatar-input">AVATAR EN CANCHA</label>
-          <div class="mode-toggle-pill">
-            <span class="mode-text">MODO: <strong>{gameUI.avatarMode === 'emoji' ? 'EMOJI' : 'LETRAS'}</strong></span>
-            <label class="switch">
-              <input
-                type="checkbox"
-                checked={gameUI.avatarMode === 'emoji'}
-                onchange={handleModeToggle}
-              />
-              <span class="slider"></span>
-            </label>
+          <div class="avatar-mode-tabs" role="tablist" aria-label="Modo de avatar">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={gameUI.avatarMode === 'letters'}
+              class="mode-tab-btn"
+              class:active={gameUI.avatarMode === 'letters'}
+              onclick={() => toggleMode(false)}
+            >
+              Letras / Números
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={gameUI.avatarMode === 'emoji'}
+              class="mode-tab-btn"
+              class:active={gameUI.avatarMode === 'emoji'}
+              onclick={() => toggleMode(true)}
+            >
+              Emojis
+            </button>
           </div>
         </div>
 
@@ -131,7 +135,7 @@
               <div class="status-dot-active" title="Jugador activo"></div>
             </div>
 
-            <!-- Catálogo cerrado de 12 emojis predeterminados -->
+            <!-- Catálogo cerrado de 10 emojis predeterminados (2x5) -->
             <div class="emoji-grid-catalog">
               {#each emojiList as emoji}
                 <button
@@ -148,14 +152,14 @@
         {/if}
       </div>
 
-      <!-- Botón Principal "JUGAR" -->
+      <!-- Botón Principal "ENTRAR AL LOBBY" -->
       <button
         type="button"
         class="play-btn"
         onmouseenter={() => soundFX.playUIHover()}
         onclick={handlePlayClick}
       >
-        <span>JUGAR</span>
+        <span>ENTRAR AL LOBBY</span>
         <svg class="play-icon" viewBox="0 0 20 20" fill="currentColor">
           <path fill-rule="evenodd" d="M10.293 3.293a1 1 0 011.414 0l6 6a1 1 0 010 1.414l-6 6a1 1 0 01-1.414-1.414L14.586 11H3a1 1 0 110-2h11.586l-4.293-4.293a1 1 0 010-1.414z" clip-rule="evenodd" />
         </svg>
@@ -172,8 +176,8 @@
     width: 100%;
     height: 100%;
     overflow-y: auto;
-    background-color: #0b111e;
-    background: radial-gradient(circle at 50% 30%, #111a2e 0%, #070b14 100%);
+    background-color: #0e141e;
+    background: radial-gradient(circle at 50% 30%, #161c26 0%, #0e141e 100%);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -208,12 +212,12 @@
     width: 90px;
     height: 90px;
     border-radius: 50%;
-    border: 2px solid #00e5ff;
+    border: 1.5px solid rgba(0, 229, 255, 0.45);
     background: #0a101a;
     display: flex;
     align-items: center;
     justify-content: center;
-    box-shadow: 0 0 18px rgba(0, 229, 255, 0.55);
+    box-shadow: 0 0 20px rgba(0, 229, 255, 0.2);
     overflow: hidden;
     aspect-ratio: 1;
     flex-shrink: 0;
@@ -279,12 +283,12 @@
     width: 100%;
     height: 44px;
     padding: 0 14px;
-    padding-right: 50px;
+    padding-right: 60px;
     background: #080d16;
     border: 1px solid rgba(0, 229, 255, 0.35);
-    border-radius: 8px;
+    border-radius: 0.5rem;
     color: #ffffff;
-    font-family: 'Space Grotesk', system-ui, sans-serif;
+    font-family: 'Chivo', system-ui, sans-serif;
     font-size: 14px;
     font-weight: 600;
     outline: none;
@@ -303,80 +307,53 @@
     top: 50%;
     transform: translateY(-50%);
     font-family: 'JetBrains Mono', monospace;
+    font-variant-numeric: tabular-nums;
     font-size: 11px;
-    color: rgba(0, 229, 255, 0.5);
+    color: rgba(0, 229, 255, 0.65);
   }
 
   .avatar-header {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    margin-bottom: 6px;
+    margin-bottom: 8px;
+    gap: 8px;
   }
 
   .avatar-header .group-label {
     margin-bottom: 0;
   }
 
-  .mode-toggle-pill {
-    display: flex;
-    align-items: center;
-    gap: 8px;
+  .avatar-mode-tabs {
+    display: inline-flex;
+    background: #080d16;
+    border: 1px solid rgba(0, 229, 255, 0.3);
+    border-radius: 0.5rem;
+    padding: 2px;
+    gap: 2px;
   }
 
-  .mode-text {
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 10px;
+  .mode-tab-btn {
+    padding: 4px 10px;
+    background: transparent;
+    border: none;
+    border-radius: 6px;
+    font-family: 'Chivo', system-ui, sans-serif;
+    font-size: 11px;
+    font-weight: 700;
     color: #8fa0b5;
-  }
-
-  .mode-text strong {
-    color: #00e5ff;
-  }
-
-  .switch {
-    position: relative;
-    display: inline-block;
-    width: 34px;
-    height: 18px;
-  }
-
-  .switch input {
-    opacity: 0;
-    width: 0;
-    height: 0;
-  }
-
-  .slider {
-    position: absolute;
     cursor: pointer;
-    inset: 0;
-    background-color: #0e1726;
-    border: 1px solid rgba(0, 229, 255, 0.4);
-    border-radius: 20px;
-    transition: 0.2s;
+    transition: background-color 0.18s ease, color 0.18s ease, box-shadow 0.18s ease;
   }
 
-  .slider:before {
-    position: absolute;
-    content: "";
-    height: 12px;
-    width: 12px;
-    left: 2px;
-    bottom: 2px;
-    background-color: #00e5ff;
-    border-radius: 50%;
-    transition: 0.2s;
+  .mode-tab-btn:hover {
+    color: #dde2f1;
   }
 
-  input:checked + .slider {
-    background-color: rgba(0, 229, 255, 0.25);
-    border-color: #00e5ff;
-  }
-
-  input:checked + .slider:before {
-    transform: translateX(16px);
-    box-shadow: 0 0 8px #00e5ff;
+  .mode-tab-btn.active {
+    background: rgba(0, 229, 255, 0.2);
+    color: #00e5ff;
+    box-shadow: 0 0 10px rgba(0, 229, 255, 0.25);
   }
 
   .avatar-controls-row {
@@ -419,7 +396,7 @@
     height: 44px;
     background: #080d16;
     border: 1px solid rgba(0, 229, 255, 0.35);
-    border-radius: 8px;
+    border-radius: 0.5rem;
     color: #ffffff;
     text-align: center;
     font-family: 'JetBrains Mono', monospace;
@@ -428,7 +405,7 @@
     letter-spacing: 0.15em;
     outline: none;
     box-sizing: border-box;
-    transition: border-color 0.15s;
+    transition: border-color 0.15s, box-shadow 0.15s;
   }
 
   .avatar-text-input:focus {
@@ -444,7 +421,7 @@
 
   .emoji-grid-catalog {
     display: grid;
-    grid-template-columns: repeat(6, 1fr);
+    grid-template-columns: repeat(5, 1fr);
     gap: 6px;
     flex: 1;
   }
@@ -453,7 +430,7 @@
     height: 38px;
     background: #080d16;
     border: 1px solid rgba(0, 229, 255, 0.25);
-    border-radius: 6px;
+    border-radius: 0.5rem;
     font-size: 18px;
     display: flex;
     align-items: center;
@@ -466,44 +443,46 @@
   .emoji-choice-btn:hover {
     background: rgba(0, 229, 255, 0.15);
     border-color: #00e5ff;
-    transform: scale(1.08);
+    box-shadow: 0 0 10px rgba(0, 229, 255, 0.35);
+    transform: scale(1.06);
   }
 
   .emoji-choice-btn.selected {
     background: rgba(0, 229, 255, 0.25);
     border-color: #00e5ff;
-    box-shadow: 0 0 10px rgba(0, 229, 255, 0.45);
-    transform: scale(1.08);
+    box-shadow: 0 0 12px rgba(0, 229, 255, 0.5);
+    transform: scale(1.06);
   }
 
   .play-btn {
     width: 100%;
     height: 48px;
-    background: #2ecc71;
+    background: #00e5ff;
     border: none;
-    border-radius: 8px;
-    color: #07170e;
+    border-radius: 0.5rem;
+    color: #0a101a;
     font-family: 'Space Grotesk', system-ui, sans-serif;
     font-weight: 800;
     font-size: 15px;
+    text-transform: uppercase;
     letter-spacing: 0.08em;
     cursor: pointer;
     display: flex;
     align-items: center;
     justify-content: center;
     gap: 8px;
-    box-shadow: 0 0 16px rgba(46, 204, 113, 0.45);
-    transition: transform 0.1s, box-shadow 0.15s, background-color 0.15s;
+    box-shadow: 0 0 20px rgba(0, 229, 255, 0.45);
+    transition: transform 0.1s, box-shadow 0.15s, filter 0.15s;
   }
 
   .play-btn:hover {
-    background: #27ae60;
-    box-shadow: 0 0 22px rgba(46, 204, 113, 0.7);
+    filter: brightness(1.12);
+    box-shadow: 0 0 26px rgba(0, 229, 255, 0.75);
     transform: translateY(-1px);
   }
 
   .play-btn:active {
-    transform: translateY(0);
+    transform: scale(0.98);
   }
 
   .play-icon {

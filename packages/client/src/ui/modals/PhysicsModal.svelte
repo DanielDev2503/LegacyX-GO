@@ -550,7 +550,7 @@
                 <!-- Toggle 1: Turbo -->
                 <label class="toggle-item" class:disabled={!gameUI.isHost && !gameUI.isAdmin}>
                   <div class="toggle-text">
-                    <span class="toggle-name">Habilitar Turbo</span>
+                    <span class="toggle-name">🔥 Habilitar Turbo</span>
                     <span class="toggle-sub">Sprint continuo con consumo de estamina</span>
                   </div>
                   <input
@@ -568,7 +568,7 @@
                 <!-- Toggle 2: Dash -->
                 <label class="toggle-item" class:disabled={!gameUI.isHost && !gameUI.isAdmin}>
                   <div class="toggle-text">
-                    <span class="toggle-name">Habilitar Dash</span>
+                    <span class="toggle-name">⚡ Habilitar Dash</span>
                     <span class="toggle-sub">Impulso instantáneo direccional</span>
                   </div>
                   <input
@@ -586,7 +586,7 @@
                 <!-- Toggle 3: Magnus -->
                 <label class="toggle-item" class:disabled={!gameUI.isHost && !gameUI.isAdmin}>
                   <div class="toggle-text">
-                    <span class="toggle-name">Efecto Magnus</span>
+                    <span class="toggle-name">🌀 Efecto Magnus</span>
                     <span class="toggle-sub">Comba y curvatura balística en vuelo</span>
                   </div>
                   <input
@@ -806,8 +806,9 @@
   }
 
   .sub-header {
+    font-family: 'JetBrains Mono', monospace;
     font-size: 0.72rem;
-    color: #94a3b8;
+    color: #00e5ff;
     text-transform: uppercase;
     letter-spacing: 0.05em;
   }
@@ -826,8 +827,9 @@
     padding: 0.75rem 0.9rem;
     background: transparent;
     border: 1px solid transparent;
-    border-radius: 0.6rem;
+    border-radius: 0.5rem;
     color: #94a3b8;
+    font-family: 'Chivo', system-ui, sans-serif;
     font-size: 0.825rem;
     font-weight: 600;
     cursor: pointer;
@@ -843,6 +845,7 @@
   .tab-btn.active {
     background: rgba(0, 229, 255, 0.12);
     border-color: rgba(0, 229, 255, 0.35);
+    border-left: 3px solid #00e5ff;
     color: #00e5ff;
     box-shadow: 0 0 15px rgba(0, 229, 255, 0.1);
   }
@@ -867,6 +870,7 @@
     border: 1px solid rgba(239, 68, 68, 0.3);
     border-radius: 0.5rem;
     color: #f87171;
+    font-family: 'Chivo', system-ui, sans-serif;
     font-size: 0.78rem;
     font-weight: 700;
     cursor: pointer;
@@ -895,6 +899,25 @@
     background: #0d1526;
     box-sizing: border-box;
     pointer-events: auto;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(0, 229, 255, 0.35) rgba(8, 14, 24, 0.6);
+  }
+
+  .content-panel::-webkit-scrollbar,
+  .sliders-container::-webkit-scrollbar {
+    width: 4px;
+  }
+
+  .content-panel::-webkit-scrollbar-track,
+  .sliders-container::-webkit-scrollbar-track {
+    background: rgba(8, 14, 24, 0.6);
+    border-radius: 4px;
+  }
+
+  .content-panel::-webkit-scrollbar-thumb,
+  .sliders-container::-webkit-scrollbar-thumb {
+    background: rgba(0, 229, 255, 0.35);
+    border-radius: 4px;
   }
 
   .panel-header {
@@ -934,6 +957,7 @@
 
   .panel-desc {
     margin: 0;
+    font-family: 'Chivo', system-ui, sans-serif;
     font-size: 0.8rem;
     color: #94a3b8;
     line-height: 1.4;
@@ -955,6 +979,8 @@
     flex-direction: column;
     gap: 1rem;
     overflow-y: auto;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(0, 229, 255, 0.35) rgba(8, 14, 24, 0.6);
   }
 
   .grid-controls {
@@ -967,7 +993,7 @@
   .control-card {
     background: rgba(18, 28, 48, 0.75);
     border: 1px solid rgba(255, 255, 255, 0.06);
-    border-radius: 0.65rem;
+    border-radius: 0.5rem;
     padding: 0.9rem 1.1rem;
     transition: border-color 0.15s ease, background 0.15s ease;
   }
@@ -992,12 +1018,14 @@
   }
 
   .control-label {
+    font-family: 'Chivo', system-ui, sans-serif;
     font-size: 0.85rem;
     font-weight: 700;
     color: #f1f5f9;
   }
 
   .control-sublabel {
+    font-family: 'Chivo', system-ui, sans-serif;
     font-size: 0.72rem;
     color: #64748b;
   }
@@ -1015,6 +1043,7 @@
     font-size: 0.68rem;
     font-weight: 700;
     font-family: 'JetBrains Mono', monospace;
+    font-variant-numeric: tabular-nums;
   }
 
   .delta-chip.standard {
@@ -1053,6 +1082,7 @@
     font-size: 0.85rem;
     font-weight: 700;
     font-family: 'JetBrains Mono', monospace;
+    font-variant-numeric: tabular-nums;
     text-align: right;
     outline: none;
   }
@@ -1195,6 +1225,7 @@
     font-size: 0.68rem;
     color: #64748b;
     font-family: 'JetBrains Mono', monospace;
+    font-variant-numeric: tabular-nums;
   }
 
   .def-info {
@@ -1205,7 +1236,7 @@
   .toggles-panel-card {
     background: rgba(18, 28, 48, 0.85);
     border: 1px solid rgba(0, 229, 255, 0.2);
-    border-radius: 0.75rem;
+    border-radius: 0.5rem;
     padding: 1rem 1.25rem;
     margin-bottom: 0.5rem;
   }
