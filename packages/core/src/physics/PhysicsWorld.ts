@@ -33,9 +33,9 @@ export class PhysicsWorld {
 
   constructor(config: PhysicsWorldConfig = {}) {
     this.fixedDt = 1 / 60; // Invariable
-    this.maxSubsteps = config.maxSubsteps ?? 10;
+    this.maxSubsteps = config.maxSubsteps ?? 8;
     this.kickMargin = config.kickMargin ?? 4.0;
-    this.magnusCoefficient = config.magnusCoefficient ?? 0.0025;
+    this.magnusCoefficient = config.magnusCoefficient ?? 0;
   }
 
   public addDisc(disc: Disc): void {
@@ -74,7 +74,9 @@ export class PhysicsWorld {
    */
   public loadStadium(stadium: Stadium): void {
     this.clearSegments();
-    this.discs = this.discs.filter(d => !d.isPost);
+    if (this.discs.length > 0) {
+      this.discs = this.discs.filter(d => !d.isPost);
+    }
 
     let leftXPost = -stadium.halfWidth;
     let rightXPost = stadium.halfWidth;
@@ -105,14 +107,14 @@ export class PhysicsWorld {
       this.addSegment(seg);
     }
 
-    // Agregar postes
+    // Agregar postes físicos
     for (const post of stadium.posts) {
       post.isPost = true;
       this.addDisc(post);
     }
 
-    // Instanciar GoalNet en cada portería
-    const depth = stadium.goalDepth || 45;
+    // Instanciar GoalNet de caja con red elástica subamortiguada (N = 15 partículas, profundidad = 36 px)
+    const depth = 36;
     const leftNet = new GoalNet({
       side: 'left',
       mouthX: leftXPost,
@@ -148,6 +150,7 @@ export class PhysicsWorld {
    * Ejecuta el avance determinista del tick físico a 60 Hz.
    * Realiza Continuous Collision Detection (CCD) y substepping adaptativo
    * si la velocidad proyectada del balón supera su propio radio (evitando tunelización > 900 px/s).
+   * Cuando isReplay === true, omite la simulación de malla elástica GoalNet.
    */
   public step(dt: number = this.fixedDt, isReplay: boolean = false): void {
     const actualDt = this.fixedDt; // Garantía de invariabilidad temporal 60 Hz
@@ -182,8 +185,8 @@ export class PhysicsWorld {
     const maxSpeed = Math.sqrt(maxSpeedSq);
     const maxDisplacement = maxSpeed * actualDt;
 
-    // Umbral crítico: ningún desplazamiento de tick debe ser superior a 0.5 veces el radio menor (CCD)
-    const criticalThreshold = minRadius * 0.5;
+    // Umbral crítico: ningún desplazamiento de tick debe ser superior a 0.45 veces el radio menor (CCD)
+    const criticalThreshold = minRadius * 0.45;
     const neededSubsteps = Math.ceil(maxDisplacement / criticalThreshold);
     const minSubsteps = hasDashingDisc ? 4 : 1;
     const substeps = clamp(neededSubsteps, minSubsteps, Math.max(this.maxSubsteps, minSubsteps));
@@ -233,29 +236,28 @@ export class PhysicsWorld {
       }
     }
 
-    // 3. Aplicación de aceleración lateral continua por efecto Magnus sobre el balón
-    if (ball && ball.spin !== 0) {
+    // 3. Aplicación de aceleración lateral continua por efecto Magnus pasivo (para EngineInstance)
+    if (this.magnusCoefficient > 0 && ball && ball.spin !== 0 && !ball.isCurving) {
       const speed = ball.vel.len();
       if (speed > 1.0) {
-        // a_Magnus = C_M * spin * (-vy, vx)
         const ax = -ball.vel.y * ball.spin * this.magnusCoefficient;
         const ay = ball.vel.x * ball.spin * this.magnusCoefficient;
         ball.vel.x += ax * actualDt;
         ball.vel.y += ay * actualDt;
       }
-      // Disipación angular del spin
       ball.spin *= 0.985;
       if (Math.abs(ball.spin) < 0.01) ball.spin = 0;
     }
 
-    // 4. Resolución física de redes elásticas de porterías
+    // 4. Resolución física de redes elásticas de porterías (omitida si isReplay === true)
     if (!isReplay) {
-      for (let i = 0; i < this.goalNets.length; i++) {
-        const net = this.goalNets[i];
-        net.step(actualDt);
-        if (ball) {
-          net.checkBallCollision(ball);
-        }
+      if (this.goalNetLeft) {
+        this.goalNetLeft.step(actualDt);
+        if (ball) this.goalNetLeft.checkBallCollision(ball);
+      }
+      if (this.goalNetRight) {
+        this.goalNetRight.step(actualDt);
+        if (ball) this.goalNetRight.checkBallCollision(ball);
       }
     }
   }
@@ -280,67 +282,86 @@ export class PhysicsWorld {
   }
 
   public enforceMidfieldBarrier(disc: Disc, team: 'red' | 'blue'): void {
+    PhysicsWorld.enforceMidfieldBarrierStatic(disc.pos, disc.vel, disc.radius, team);
+  }
+
+  public enforceKickoffPossessionBarrier(disc: Disc, team: 'red' | 'blue', centerRadius: number): void {
+    PhysicsWorld.enforceKickoffPossessionBarrierStatic(disc.pos, disc.vel, disc.radius, team, centerRadius);
+  }
+
+  public static enforceMidfieldBarrierStatic(
+    pos: { x: number; y: number },
+    vel: { x: number; y: number },
+    r: number,
+    team: 'red' | 'blue'
+  ): void {
     if (team === 'red') {
-      if (disc.pos.x + disc.radius > 0) {
-        disc.pos.x = -disc.radius;
-        if (disc.vel.x > 0) disc.vel.x = 0;
+      if (pos.x + r > 0) {
+        pos.x = -r;
+        if (vel.x > 0) vel.x = 0;
       }
     } else if (team === 'blue') {
-      if (disc.pos.x - disc.radius < 0) {
-        disc.pos.x = disc.radius;
-        if (disc.vel.x < 0) disc.vel.x = 0;
+      if (pos.x - r < 0) {
+        pos.x = r;
+        if (vel.x < 0) vel.x = 0;
       }
     }
   }
 
-  public enforceKickoffPossessionBarrier(disc: Disc, team: 'red' | 'blue', centerRadius: number): void {
-    const rInner = centerRadius - disc.radius;
+  public static enforceKickoffPossessionBarrierStatic(
+    pos: { x: number; y: number },
+    vel: { x: number; y: number },
+    r: number,
+    team: 'red' | 'blue',
+    centerRadius: number
+  ): void {
+    const rInner = centerRadius - r;
     if (rInner <= 0) return;
-    const ySeam = Math.sqrt(Math.max(0, rInner * rInner - disc.radius * disc.radius));
-    const absY = Math.abs(disc.pos.y);
+    const ySeam = Math.sqrt(Math.max(0, rInner * rInner - r * r));
+    const absY = Math.abs(pos.y);
 
     if (team === 'red') {
       if (absY >= ySeam) {
-        if (disc.pos.x > -disc.radius) {
-          disc.pos.x = -disc.radius;
-          if (disc.vel.x > 0) disc.vel.x = 0;
+        if (pos.x > -r) {
+          pos.x = -r;
+          if (vel.x > 0) vel.x = 0;
         }
       } else {
-        if (disc.pos.x > -disc.radius) {
-          const dist = Math.hypot(disc.pos.x, disc.pos.y);
+        if (pos.x > -r) {
+          const dist = Math.hypot(pos.x, pos.y);
           if (dist > rInner) {
             const factor = rInner / dist;
-            disc.pos.x *= factor;
-            disc.pos.y *= factor;
-            const nx = disc.pos.x / rInner;
-            const ny = disc.pos.y / rInner;
-            const vDotN = disc.vel.x * nx + disc.vel.y * ny;
+            pos.x *= factor;
+            pos.y *= factor;
+            const nx = pos.x / rInner;
+            const ny = pos.y / rInner;
+            const vDotN = vel.x * nx + vel.y * ny;
             if (vDotN > 0) {
-              disc.vel.x -= vDotN * nx;
-              disc.vel.y -= vDotN * ny;
+              vel.x -= vDotN * nx;
+              vel.y -= vDotN * ny;
             }
           }
         }
       }
     } else if (team === 'blue') {
       if (absY >= ySeam) {
-        if (disc.pos.x < disc.radius) {
-          disc.pos.x = disc.radius;
-          if (disc.vel.x < 0) disc.vel.x = 0;
+        if (pos.x < r) {
+          pos.x = r;
+          if (vel.x < 0) vel.x = 0;
         }
       } else {
-        if (disc.pos.x < disc.radius) {
-          const dist = Math.hypot(disc.pos.x, disc.pos.y);
+        if (pos.x < r) {
+          const dist = Math.hypot(pos.x, pos.y);
           if (dist > rInner) {
             const factor = rInner / dist;
-            disc.pos.x *= factor;
-            disc.pos.y *= factor;
-            const nx = disc.pos.x / rInner;
-            const ny = disc.pos.y / rInner;
-            const vDotN = disc.vel.x * nx + disc.vel.y * ny;
+            pos.x *= factor;
+            pos.y *= factor;
+            const nx = pos.x / rInner;
+            const ny = pos.y / rInner;
+            const vDotN = vel.x * nx + vel.y * ny;
             if (vDotN > 0) {
-              disc.vel.x -= vDotN * nx;
-              disc.vel.y -= vDotN * ny;
+              vel.x -= vDotN * nx;
+              vel.y -= vDotN * ny;
             }
           }
         }

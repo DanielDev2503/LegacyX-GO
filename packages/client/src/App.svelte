@@ -23,6 +23,10 @@
   import RoomCreator from './ui/screens/RoomCreator.svelte';
   import InGameHUD from './ui/hud/InGameHUD.svelte';
   import PhysicsModal from './ui/modals/PhysicsModal.svelte';
+  import TeamSelectModal from './ui/modals/TeamSelectModal.svelte';
+  import StadiumSelectModal from './ui/modals/StadiumSelectModal.svelte';
+  import SettingsModal from './ui/modals/SettingsModal.svelte';
+  import KeybindModal from './ui/modals/KeybindModal.svelte';
   import PostMatchCarousel from './ui/hud/PostMatchCarousel.svelte';
 
   let canvasRef = $state<HTMLCanvasElement | null>(null);
@@ -44,7 +48,7 @@
   }
 
   $effect(() => {
-    if (!canvasRef) return;
+    if (gameUI.currentScreen !== 'IN_GAME' || !canvasRef) return;
 
     // 1. Inicializar motor matemático canónico a 60 Hz
     const engine = new EngineInstance();
@@ -121,7 +125,7 @@
           e.preventDefault();
           return;
         } else if (gameUI.currentScreen === 'IN_GAME') {
-          gameUI.openModal('PHYSICS_MODIFIERS');
+          gameUI.openModal('TEAM_MANAGEMENT');
           e.preventDefault();
           return;
         }
@@ -173,8 +177,8 @@
         if (keyState.get('ArrowRight') || keyState.get('KeyD')) mask |= INPUT_FLAG_RIGHT;
         if (keyState.get('Space') || keyState.get('KeyX')) mask |= INPUT_FLAG_KICK;
         if (keyState.get('ShiftLeft') || keyState.get('ShiftRight')) mask |= INPUT_FLAG_DASH;
-        if (keyState.get('KeyQ')) mask |= INPUT_FLAG_MAGNUS_LEFT;
-        if (keyState.get('KeyE')) mask |= INPUT_FLAG_MAGNUS_RIGHT;
+        if (keyState.get('KeyQ') || keyState.get('KeyZ')) mask |= INPUT_FLAG_MAGNUS_LEFT;
+        if (keyState.get('KeyE') || keyState.get('KeyC')) mask |= INPUT_FLAG_MAGNUS_RIGHT;
       }
 
       const inputs = new Map<number, PlayerInput>();
@@ -235,10 +239,12 @@
 </script>
 
 <main class="app-root">
-  <!-- Capa 3: Canvas 2D en z-index 0 con GameRenderer desacoplado -->
-  <div class="canvas-layer">
-    <canvas bind:this={canvasRef}></canvas>
-  </div>
+  <!-- Capa 3: Canvas 2D en z-index 0 con GameRenderer desacoplado (solo montado en partida) -->
+  {#if gameUI.currentScreen === 'IN_GAME'}
+    <div class="canvas-layer">
+      <canvas bind:this={canvasRef}></canvas>
+    </div>
+  {/if}
 
   <!-- Capa 1: Interfaz reactiva superpuesta en z-index 10 -->
   <div class="ui-layer">
@@ -254,19 +260,30 @@
     {/if}
 
     <!-- Modales canónicos -->
-    {#if gameUI.activeModal === 'PHYSICS_MODIFIERS'}
+    {#if gameUI.activeModal === 'PHYSICS_MODIFIERS' || gameUI.activeModal === 'physics'}
       <PhysicsModal />
+    {:else if gameUI.activeModal === 'TEAM_MANAGEMENT' || gameUI.activeModal === 'teamSelect'}
+      <TeamSelectModal />
+    {:else if gameUI.activeModal === 'STADIUM_SELECTOR' || gameUI.activeModal === 'stadiumSelect'}
+      <StadiumSelectModal />
+    {:else if gameUI.activeModal === 'SETTINGS' || gameUI.activeModal === 'settings'}
+      <SettingsModal />
+    {:else if gameUI.activeModal === 'KEYBINDS' || gameUI.activeModal === 'keybinds'}
+      <KeybindModal />
     {/if}
 
     <!-- Carrusel panorámico post-partido (100vw) -->
-    {#if gameUI.currentScreen === 'IN_GAME' && gameUI.fsmPhase === 'STATS'}
+    {#if gameUI.currentScreen === 'IN_GAME' && (gameUI.fsmPhase === 'STATS' || gameUI.showPostMatchCarousel)}
       <PostMatchCarousel />
     {/if}
   </div>
 </main>
 
 <style>
-  :global(body) {
+  .app-root {
+    position: relative;
+    width: 100vw;
+    height: 100vh;
     margin: 0;
     padding: 0;
     background-color: #050811;
@@ -274,13 +291,6 @@
     overflow: hidden;
     user-select: none;
     font-family: 'Space Grotesk', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-  }
-
-  .app-root {
-    position: relative;
-    width: 100vw;
-    height: 100vh;
-    overflow: hidden;
   }
 
   .canvas-layer {

@@ -7,6 +7,8 @@ import {
   COLLISION_GROUP_RED,
   COLLISION_GROUP_BLUE,
   COLLISION_GROUP_WALL,
+  COLLISION_GROUP_RED_GOAL,
+  COLLISION_GROUP_BLUE_GOAL,
   COLLISION_GROUP_ALL,
   POWER_SHOT_SPEED_THRESHOLD
 } from './entities/Disc';
@@ -19,28 +21,75 @@ import {
 import {
   resolveDiscDiscCollision,
   resolveDiscSegmentCollision,
+  resolveGoalAndPitchBoundaries,
+  resolvePredictivePlayerCollision,
+  resolvePredictiveBallCollision,
   sweptCircleCircle,
-  CollisionEvent
+  CollisionEvent,
+  KickoffPhysicsContext,
+  StadiumBoundariesConfig
 } from './physics/ContinuousCollision';
+import { PhysicsTicker } from './physics/PhysicsTicker';
 import { GoalNet, GoalNetOptions, NetBall } from './physics/GoalNet';
-import { Stadium, StadiumOptions, GoalDefinition } from './stadiums/Stadium';
+import { Stadium, StadiumOptions, GoalDefinition, StadiumBallPhysics, StadiumPlayerPhysics } from './stadiums/Stadium';
 import {
   StadiumId,
   StadiumPreset,
   STADIUM_PRESETS,
+  StadiumRegistry,
   DEFAULT_STADIUM_ID,
   createStadium
 } from './stadiums/StadiumRegistry';
 import { GameFSM, MatchPhase, MatchState } from './fsm/GameFSM';
 import {
+  GameFSM as GameMatchFSM,
+  MatchPhase as GameMatchPhase,
+  MatchState as GameMatchState,
+  toMatchPhase
+} from './game/GameFSM';
+import {
+  Player,
+  PlayerData,
+  TeamType,
+  getDashStaminaCost,
+  DASH_STAMINA_COST,
+  DASH_TICKS,
+  DEFAULT_DASH_DISTANCE,
+  INPUT_UP,
+  INPUT_DOWN,
+  INPUT_LEFT,
+  INPUT_RIGHT,
+  INPUT_KICK,
+  INPUT_TURBO,
+  INPUT_DASH,
+  INPUT_MAGNUS_LEFT,
+  INPUT_MAGNUS_RIGHT,
+  INPUT_TYPING
+} from './game/Player';
+import {
+  GameSnapshot,
+  DiscSnapshot,
+  TouchHistoryEntry,
+  PlayerMatchStats,
+  GoalInfo,
+  KickoffState,
+  MatchConfig
+} from './game/GameState';
+import { GameEngine } from './game/GameEngine';
+import {
   BinaryProtocol,
   PlayerInput,
   CompactDiscState,
   GameStateSnapshot,
+  EventType,
+  SoundEvent,
   OP_INPUT,
   OP_SNAPSHOT,
   OP_CHAT,
   OP_EVENT,
+  OP_PING,
+  OP_PONG,
+  OP_KEEPALIVE,
   SOUND_KICK,
   SOUND_POST_HIT,
   SOUND_GOAL,
@@ -52,20 +101,34 @@ import {
   INPUT_FLAG_TURBO,
   INPUT_FLAG_DASH,
   INPUT_FLAG_MAGNUS_LEFT,
-  INPUT_FLAG_MAGNUS_RIGHT
+  INPUT_FLAG_MAGNUS_RIGHT,
+  INPUT_FLAG_TYPING
 } from './protocol/BinaryProtocol';
+import { InputPacket, InputData } from './protocol/InputPacket';
+import { SnapshotPacket, ActiveRadiusConfig } from './protocol/SnapshotPacket';
 import {
   PhysicsModifiers,
   DEFAULT_PHYSICS_MODIFIERS,
   GameConfig,
-  DEFAULT_GAME_CONFIG
+  DEFAULT_GAME_CONFIG,
+  GameplayConfig,
+  DEFAULT_GAMEPLAY_CONFIG,
+  GAMEPLAY_CONFIG_LIMITS,
+  ConfigLimits,
+  sanitizeGameplayConfig,
+  defaultStadium
 } from './game/GameConfig';
 
 export type * from './protocol/Signaling';
-export { JitterBuffer, type BufferedSnapshot } from './protocol/JitterBuffer';
+export type * from './protocol/ControlMessages';
+export { JitterBuffer, hermite, type BufferedSnapshot, type AnySnapshot, type InterpolationMode } from './protocol/JitterBuffer';
 
 export const CORE_TICK_RATE = 60;
 export const CORE_DT = 1 / 60;
+
+export function createClassicStadium(): Stadium {
+  return createStadium('classic');
+}
 
 export function pingCore(): string {
   return "LegacyX Core Engine ready (60 Hz tick-rate)";
@@ -86,10 +149,14 @@ export class EngineInstance {
 
   private eventListeners: Map<string, Array<(payload: any) => void>> = new Map();
 
-  constructor(stadiumId?: string, config?: Partial<GameConfig>) {
+  constructor(stadiumIdOrStadium?: string | Stadium, config?: Partial<GameConfig>) {
     this.modifiers = { ...DEFAULT_PHYSICS_MODIFIERS, ...(config?.modifiers ?? {}) };
-    const selectedStadium = stadiumId ?? config?.stadiumId ?? DEFAULT_STADIUM_ID;
-    this.stadium = createStadium(selectedStadium);
+    if (typeof stadiumIdOrStadium === 'object' && stadiumIdOrStadium !== null) {
+      this.stadium = stadiumIdOrStadium;
+    } else {
+      const selectedStadium = stadiumIdOrStadium ?? config?.stadiumId ?? DEFAULT_STADIUM_ID;
+      this.stadium = createStadium(selectedStadium);
+    }
 
     this.world = new PhysicsWorld({
       fixedDt: CORE_DT,
@@ -105,7 +172,6 @@ export class EngineInstance {
       goldenGoal: this.modifiers.goldenGoalOvertime
     });
 
-    // Crear balón oficial según modificadores y GDD
     this.ball = new Disc({
       id: 0,
       x: 0,
@@ -123,7 +189,6 @@ export class EngineInstance {
     this.world.addDisc(this.ball);
     this.world.loadStadium(this.stadium);
 
-    // Eventos de colisión acústica
     this.world.onCollision = (e) => {
       if (e.type === 'disc-disc') {
         if (e.discA.isBall || e.discB?.isBall) {
@@ -225,14 +290,10 @@ export class EngineInstance {
     this.fsm.startMatch();
   }
 
-  /**
-   * Ejecuta un paso temporal fijo (60 Hz) consumiendo los inputs de los jugadores
-   */
-  public step(inputs: Map<number, PlayerInput>): void {
+  public step(inputs: Map<number, PlayerInput>, isReplay: boolean = false): void {
     this.soundMask = 0;
     const isGameActive = this.fsm.state === MatchPhase.PLAYING || this.fsm.state === MatchPhase.KICKOFF;
 
-    // 1. Integración de inputs y aceleraciones de jugadores
     if (isGameActive) {
       for (const [id, player] of this.players.entries()) {
         const input = inputs.get(id);
@@ -254,12 +315,10 @@ export class EngineInstance {
           iy /= inputLen;
         }
 
-        // Aceleración de movimiento
         const accel = 2.4;
         player.vel.x += ix * accel;
         player.vel.y += iy * accel;
 
-        // Dash mecánico
         const isDashRequested = Boolean(input.dash || (input.inputMask && (input.inputMask & INPUT_FLAG_DASH)));
         if (isDashRequested && player.stamina >= 25) {
           player.stamina -= 25;
@@ -272,12 +331,10 @@ export class EngineInstance {
           player.isDashing = false;
         }
 
-        // Recuperación de estamina
         if (player.stamina < 100) {
           player.stamina = Math.min(100, player.stamina + 0.35);
         }
 
-        // Manejo de pateo
         const isKickRequested = Boolean(input.kick || (input.inputMask && (input.inputMask & INPUT_FLAG_KICK)));
         if (isKickRequested && this.world.isWithinKickDistance(player, this.ball)) {
           const dx = this.ball.pos.x - player.pos.x;
@@ -291,7 +348,6 @@ export class EngineInstance {
           this.ball.lastKickerDiscId = player.id;
           this.ball.isCurvingAllowed = true;
 
-          // Efecto Magnus
           if (input.magnusLeft || (input.inputMask && (input.inputMask & INPUT_FLAG_MAGNUS_LEFT))) {
             this.ball.spin = -1.2;
           } else if (input.magnusRight || (input.inputMask && (input.inputMask & INPUT_FLAG_MAGNUS_RIGHT))) {
@@ -301,13 +357,11 @@ export class EngineInstance {
           this.soundMask |= SOUND_KICK;
           this.emit('kick', { player, ball: this.ball });
 
-          // Si estábamos en KICKOFF, el primer toque arranca PLAYING
           if (this.fsm.state === MatchPhase.KICKOFF) {
             this.fsm.startPlaying();
           }
         }
 
-        // Restricción de barrera de medio campo en saque
         if (this.fsm.state === MatchPhase.KICKOFF) {
           const team = this.playerTeams.get(id);
           if (team === 'red' || team === 'blue') {
@@ -316,10 +370,8 @@ export class EngineInstance {
         }
       }
 
-      // 2. Integración física del mundo con CCD y substepping
-      this.world.step(CORE_DT);
+      this.world.step(CORE_DT, isReplay);
 
-      // 3. Detección de Gol
       const hw = this.stadium.halfWidth;
       const gh = this.stadium.goalHalfHeight;
       const bx = this.ball.pos.x;
@@ -327,24 +379,45 @@ export class EngineInstance {
 
       if (Math.abs(by) <= gh) {
         if (bx < -hw - this.ball.radius) {
-          // Gol del equipo Azul
           this.fsm.registerGoal('blue');
         } else if (bx > hw + this.ball.radius) {
-          // Gol del equipo Rojo
           this.fsm.registerGoal('red');
         }
       }
     }
 
-    // 4. Actualización del ciclo de FSM
     this.fsm.updateTick();
     this.currentTick++;
+  }
+
+  public setState(snapshot: GameStateSnapshot): void {
+    this.currentTick = snapshot.tick;
+    this.fsm.currentState = snapshot.phase as MatchPhase;
+    this.fsm.redScore = snapshot.redScore;
+    this.fsm.blueScore = snapshot.blueScore;
+    this.soundMask = snapshot.soundMask;
+
+    for (let i = 0; i < snapshot.discs.length; i++) {
+      const d = snapshot.discs[i]!;
+      if (d.id === 0 || d.team === 0) {
+        this.ball.pos.set(d.x, d.y);
+        this.ball.vel.set(d.vx, d.vy);
+        if (d.spin !== undefined) this.ball.spin = d.spin;
+      } else {
+        let p = this.players.get(d.id);
+        if (!p) {
+          p = this.addPlayer(d.id, d.team === 1 ? 'red' : d.team === 2 ? 'blue' : 'spec');
+        }
+        p.pos.set(d.x, d.y);
+        p.vel.set(d.vx, d.vy);
+        if (d.stamina !== undefined) p.stamina = d.stamina;
+      }
+    }
   }
 
   public getState(): GameStateSnapshot {
     const discStates: CompactDiscState[] = [];
 
-    // Ball
     let ballFlags = 0;
     if (this.ball.isCurving || this.ball.spin !== 0) ballFlags |= 1 << 1;
     if (this.ball.isCurvingAllowed) ballFlags |= 1 << 2;
@@ -361,7 +434,6 @@ export class EngineInstance {
       spin: this.ball.spin
     });
 
-    // Players
     for (const [id, p] of this.players.entries()) {
       const team = this.playerTeams.get(id);
       let flags = 0;
@@ -374,7 +446,8 @@ export class EngineInstance {
         y: p.pos.y,
         vx: p.vel.x,
         vy: p.vel.y,
-        flags
+        flags,
+        stamina: p.stamina
       });
     }
 
@@ -412,7 +485,6 @@ export class EngineInstance {
   }
 }
 
-// Re-exports de valores (clases, funciones, constantes)
 export {
   Vec2,
   clamp,
@@ -426,26 +498,60 @@ export {
   COLLISION_GROUP_RED,
   COLLISION_GROUP_BLUE,
   COLLISION_GROUP_WALL,
+  COLLISION_GROUP_RED_GOAL,
+  COLLISION_GROUP_BLUE_GOAL,
   COLLISION_GROUP_ALL,
   POWER_SHOT_SPEED_THRESHOLD,
   Segment,
   Plane,
   PhysicsWorld,
+  PhysicsTicker,
   resolveDiscDiscCollision,
   resolveDiscSegmentCollision,
+  resolveGoalAndPitchBoundaries,
+  resolvePredictivePlayerCollision,
+  resolvePredictiveBallCollision,
   sweptCircleCircle,
   GoalNet,
   Stadium,
   STADIUM_PRESETS,
+  StadiumRegistry,
   DEFAULT_STADIUM_ID,
   createStadium,
   GameFSM,
   MatchPhase,
+  GameMatchFSM,
+  GameMatchPhase,
+  GameMatchState,
+  toMatchPhase,
+  Player,
+  getDashStaminaCost,
+  DASH_STAMINA_COST,
+  DASH_TICKS,
+  DEFAULT_DASH_DISTANCE,
+  INPUT_UP,
+  INPUT_DOWN,
+  INPUT_LEFT,
+  INPUT_RIGHT,
+  INPUT_KICK,
+  INPUT_TURBO,
+  INPUT_DASH,
+  INPUT_MAGNUS_LEFT,
+  INPUT_MAGNUS_RIGHT,
+  INPUT_TYPING,
+  GameEngine,
   BinaryProtocol,
+  EventType,
+  SoundEvent,
+  InputPacket,
+  SnapshotPacket,
   OP_INPUT,
   OP_SNAPSHOT,
   OP_CHAT,
   OP_EVENT,
+  OP_PING,
+  OP_PONG,
+  OP_KEEPALIVE,
   SOUND_KICK,
   SOUND_POST_HIT,
   SOUND_GOAL,
@@ -458,27 +564,48 @@ export {
   INPUT_FLAG_DASH,
   INPUT_FLAG_MAGNUS_LEFT,
   INPUT_FLAG_MAGNUS_RIGHT,
+  INPUT_FLAG_TYPING,
   DEFAULT_PHYSICS_MODIFIERS,
-  DEFAULT_GAME_CONFIG
+  DEFAULT_GAME_CONFIG,
+  DEFAULT_GAMEPLAY_CONFIG,
+  GAMEPLAY_CONFIG_LIMITS,
+  sanitizeGameplayConfig,
+  defaultStadium
 };
 
-// Re-exports de tipos e interfaces
 export type {
   DiscOptions,
   SegmentOptions,
   PlaneOptions,
   PhysicsWorldConfig,
   CollisionEvent,
+  KickoffPhysicsContext,
+  StadiumBoundariesConfig,
   GoalNetOptions,
   NetBall,
   StadiumOptions,
   GoalDefinition,
+  StadiumBallPhysics,
+  StadiumPlayerPhysics,
   StadiumId,
   StadiumPreset,
   MatchState,
+  PlayerData,
+  TeamType,
+  GameSnapshot,
+  DiscSnapshot,
+  TouchHistoryEntry,
+  PlayerMatchStats,
+  GoalInfo,
+  KickoffState,
+  MatchConfig,
   PlayerInput,
   CompactDiscState,
   GameStateSnapshot,
+  InputData,
+  ActiveRadiusConfig,
   PhysicsModifiers,
-  GameConfig
+  GameConfig,
+  GameplayConfig,
+  ConfigLimits
 };

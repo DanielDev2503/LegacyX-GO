@@ -1,1 +1,5 @@
-export * from '../physics/GoalNet';
+export {
+  GoalNet,
+  type GoalNetOptions,
+  type NetBall
+} from '../physics/GoalNet';

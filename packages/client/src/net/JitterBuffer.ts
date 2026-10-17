@@ -1,1 +1,6 @@
-export { JitterBuffer, type BufferedSnapshot } from '@legacyx/core';
+export {
+  JitterBuffer,
+  hermite,
+  type BufferedSnapshot,
+  type InterpolationMode
+} from '@legacyx/core';

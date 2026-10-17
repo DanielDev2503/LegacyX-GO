@@ -1,177 +1,204 @@
 import {
   EngineInstance,
-  CORE_TICK_RATE,
-  CORE_DT,
+  BinaryProtocol,
+  createClassicStadium,
+  createStadium,
   type PlayerInput,
-  type PhysicsModifiers,
-  type GameConfig,
-  MatchPhase,
-  BinaryProtocol
+  type GameStateSnapshot,
+  type PhysicsModifiers
 } from '@legacyx/core';
+import { ClientPredictionReconciler } from '../net/ClientPrediction';
 
-export type WorkerInMessage =
-  | { type: 'START_SIMULATION'; stadiumId?: string; config?: Partial<GameConfig> }
-  | { type: 'STOP_SIMULATION' }
-  | { type: 'PLAYER_INPUT'; playerId: number; input: PlayerInput | number }
-  | { type: 'APPLY_MODIFIERS'; modifiers: Partial<PhysicsModifiers> }
-  | { type: 'FSM_COMMAND'; command: 'START_MATCH' | 'PAUSE_MATCH' | 'RESUME_MATCH' | 'RESET_KICKOFF' }
-  | { type: 'ADD_PLAYER'; playerId: number; team: 'red' | 'blue' | 'spec' }
-  | { type: 'REMOVE_PLAYER'; playerId: number }
-  | { type: 'LOAD_STADIUM'; stadiumId: string };
+export type WorkerCommand =
+  | { type: 'INIT'; stadiumId?: string }
+  | { type: 'SET_STADIUM'; stadiumId: string }
+  | { type: 'ADD_PLAYER'; id: number; team: 'red' | 'blue' }
+  | { type: 'REMOVE_PLAYER'; id: number }
+  | { type: 'START_MATCH' }
+  | { type: 'STOP_MATCH' }
+  | { type: 'TOGGLE_PAUSE' }
+  | { type: 'INPUT'; id: number; inputMask: number; tick?: number }
+  | { type: 'APPLY_SNAPSHOT'; buffer: ArrayBuffer; localDiscId?: number }
+  | { type: 'SET_MODIFIERS'; modifiers: Partial<PhysicsModifiers> };
 
-export type WorkerOutMessage =
-  | { type: 'READY' }
-  | { type: 'SNAPSHOT'; snapshot: ArrayBuffer; tick: number; soundMask: number }
-  | { type: 'EVENT'; event: string; payload: unknown };
+export type WorkerEvent =
+  | {
+      type: 'SNAPSHOT';
+      buffer: ArrayBuffer;
+      tick: number;
+      visualOffsetX: number;
+      visualOffsetY: number;
+    }
+  | { type: 'ENGINE_EVENT'; event: string; payload: unknown };
 
-let engine: EngineInstance | null = null;
-let isRunning = false;
-let nextTickTime = 0;
-let loopTimer: ReturnType<typeof setTimeout> | null = null;
+const engine = new EngineInstance(createClassicStadium());
+const currentInputs = new Map<number, PlayerInput>();
+const reconciler = new ClientPredictionReconciler();
 
-const TICK_INTERVAL_MS = 1000 / CORE_TICK_RATE;
-const pendingInputs = new Map<number, PlayerInput>();
+const FIXED_DT_MS = 1000 / 60;
+const MAX_STEPS_PER_FRAME = 4;
+let lastTime = performance.now();
+let accumulator = 0;
+let intervalId: ReturnType<typeof setInterval> | null = null;
 
-function setupEngineEvents(eng: EngineInstance): void {
-  eng.on('goal', (payload) => {
-    self.postMessage({ type: 'EVENT', event: 'goal', payload });
-  });
+// Pre-allocated reusable ArrayBuffer for 60Hz worker -> main thread transfer
+let reusableSnapshotBuffer = new ArrayBuffer(1024);
 
-  eng.on('match_end', (payload) => {
-    self.postMessage({ type: 'EVENT', event: 'match_end', payload });
-  });
+// Forward engine events (goals, state changes, post hits, kicks) to UI thread
+engine.on('goal', (payload) => {
+  self.postMessage({ type: 'ENGINE_EVENT', event: 'goal', payload } satisfies WorkerEvent);
+});
 
-  eng.on('state_change', (payload) => {
-    self.postMessage({ type: 'EVENT', event: 'state_change', payload });
-  });
+engine.on('state_change', (payload) => {
+  self.postMessage({ type: 'ENGINE_EVENT', event: 'state_change', payload } satisfies WorkerEvent);
+});
 
-  eng.on('kick', (payload) => {
-    self.postMessage({ type: 'EVENT', event: 'kick', payload: { kickerId: payload.player?.id } });
-  });
+engine.on('post_hit', (payload) => {
+  self.postMessage({ type: 'ENGINE_EVENT', event: 'post_hit', payload } satisfies WorkerEvent);
+});
 
-  eng.on('post_hit', (payload) => {
-    self.postMessage({ type: 'EVENT', event: 'post_hit', payload });
-  });
-}
+engine.on('kick', (payload) => {
+  self.postMessage({ type: 'ENGINE_EVENT', event: 'kick', payload } satisfies WorkerEvent);
+});
 
-function runPhysicsTick(): void {
-  if (!isRunning || !engine) return;
+function broadcastSnapshot(): void {
+  const snapshot: GameStateSnapshot = engine.getState();
+  const requiredBytes = 18 + snapshot.discs.length * 16;
+  if (reusableSnapshotBuffer.byteLength < requiredBytes) {
+    reusableSnapshotBuffer = new ArrayBuffer(requiredBytes * 2);
+  }
+  const encoded = BinaryProtocol.encodeSnapshot(snapshot, reusableSnapshotBuffer);
+  // Copy slice for transferable postMessage while keeping internal reusable buffer intact
+  const transferBuffer = encoded.slice(0);
 
-  // 1. Ejecutar tick secuencial determinista a 60 Hz
-  engine.step(pendingInputs);
-
-  // 2. Extraer snapshot binario compacto
-  const snapshotBuffer = engine.getSnapshot();
-  const tickNumber = engine.currentTick;
-  const soundMask = engine.soundMask;
-
-  // 3. Transferencia de memoria Zero-Copy mediante Transferable Objects
-  (self as any).postMessage(
+  self.postMessage(
     {
       type: 'SNAPSHOT',
-      snapshot: snapshotBuffer,
-      tick: tickNumber,
-      soundMask
-    },
-    [snapshotBuffer]
+      buffer: transferBuffer,
+      tick: snapshot.tick,
+      visualOffsetX: reconciler.visualOffset.x,
+      visualOffsetY: reconciler.visualOffset.y
+    } satisfies WorkerEvent,
+    { transfer: [transferBuffer] }
   );
-
-  // 4. Programación de alta precisión con compensación de deriva temporal
-  nextTickTime += TICK_INTERVAL_MS;
-  const now = performance.now();
-  if (now - nextTickTime > 100) {
-    nextTickTime = now;
-  }
-  const delay = Math.max(0, nextTickTime - now);
-  loopTimer = setTimeout(runPhysicsTick, delay);
 }
 
 function startLoop(): void {
-  if (isRunning) return;
-  isRunning = true;
-  nextTickTime = performance.now();
-  runPhysicsTick();
+  if (intervalId !== null) return;
+  lastTime = performance.now();
+  accumulator = 0;
+
+  intervalId = setInterval(() => {
+    const now = performance.now();
+    const frameDelta = now - lastTime;
+    lastTime = now;
+    accumulator += frameDelta;
+
+    let stepped = false;
+    let steps = 0;
+
+    while (accumulator >= FIXED_DT_MS && steps < MAX_STEPS_PER_FRAME) {
+      engine.step(currentInputs, false);
+      reconciler.decayVisualOffset();
+      accumulator -= FIXED_DT_MS;
+      steps++;
+      stepped = true;
+    }
+
+    // Prevent spiral of death if tab was backgrounded
+    if (accumulator >= FIXED_DT_MS) {
+      accumulator = accumulator % FIXED_DT_MS;
+    }
+
+    if (stepped) {
+      broadcastSnapshot();
+    }
+  }, 4);
 }
 
 function stopLoop(): void {
-  isRunning = false;
-  if (loopTimer !== null) {
-    clearTimeout(loopTimer);
-    loopTimer = null;
+  if (intervalId !== null) {
+    clearInterval(intervalId);
+    intervalId = null;
   }
 }
 
-self.onmessage = (event: MessageEvent<WorkerInMessage>) => {
-  const msg = event.data;
-  if (!msg || !msg.type) return;
+self.onmessage = (e: MessageEvent<WorkerCommand>) => {
+  const cmd = e.data;
 
-  switch (msg.type) {
-    case 'START_SIMULATION': {
-      stopLoop();
-      engine = new EngineInstance(msg.stadiumId, msg.config);
-      setupEngineEvents(engine);
-      pendingInputs.clear();
+  switch (cmd.type) {
+    case 'INIT': {
+      if (cmd.stadiumId) {
+        engine.stadium = createStadium(cmd.stadiumId);
+      }
       startLoop();
-      self.postMessage({ type: 'READY' });
+      broadcastSnapshot();
       break;
     }
 
-    case 'STOP_SIMULATION': {
-      stopLoop();
-      break;
-    }
-
-    case 'PLAYER_INPUT': {
-      if (typeof msg.input === 'number') {
-        // Máscara compacta de 16 bits
-        pendingInputs.set(msg.playerId, { inputMask: msg.input });
-      } else {
-        pendingInputs.set(msg.playerId, msg.input);
-      }
-      break;
-    }
-
-    case 'APPLY_MODIFIERS': {
-      if (engine) {
-        engine.applyModifiers(msg.modifiers);
-      }
-      break;
-    }
-
-    case 'FSM_COMMAND': {
-      if (!engine) break;
-      if (msg.command === 'START_MATCH') {
-        engine.startMatch();
-      } else if (msg.command === 'PAUSE_MATCH') {
-        engine.fsm.pause();
-      } else if (msg.command === 'RESUME_MATCH') {
-        engine.fsm.resume();
-      } else if (msg.command === 'RESET_KICKOFF') {
-        engine.resetPositions();
-        engine.fsm.startMatch();
-      }
+    case 'SET_STADIUM': {
+      engine.stadium = createStadium(cmd.stadiumId);
+      broadcastSnapshot();
       break;
     }
 
     case 'ADD_PLAYER': {
-      if (engine) {
-        engine.addPlayer(msg.playerId, msg.team);
-      }
+      engine.addPlayer(cmd.id, cmd.team);
+      broadcastSnapshot();
       break;
     }
 
     case 'REMOVE_PLAYER': {
-      if (engine) {
-        engine.removePlayer(msg.playerId);
-        pendingInputs.delete(msg.playerId);
-      }
+      engine.removePlayer(cmd.id);
+      currentInputs.delete(cmd.id);
+      broadcastSnapshot();
       break;
     }
 
-    case 'LOAD_STADIUM': {
-      if (engine) {
-        engine.loadStadium(msg.stadiumId);
+    case 'START_MATCH': {
+      engine.startMatch();
+      startLoop();
+      broadcastSnapshot();
+      break;
+    }
+
+    case 'STOP_MATCH': {
+      stopLoop();
+      break;
+    }
+
+    case 'TOGGLE_PAUSE': {
+      engine.fsm.togglePause();
+      broadcastSnapshot();
+      break;
+    }
+
+    case 'INPUT': {
+      currentInputs.set(cmd.id, { inputMask: cmd.inputMask });
+      reconciler.recordInput({
+        tick: cmd.tick ?? engine.currentTick,
+        mask: cmd.inputMask,
+        curve: { x: 0, y: 0 },
+        isTurbo: (cmd.inputMask & (1 << 5)) !== 0,
+        triggerDash: (cmd.inputMask & (1 << 6)) !== 0
+      });
+      break;
+    }
+
+    case 'APPLY_SNAPSHOT': {
+      const snapshot = BinaryProtocol.decodeSnapshot(cmd.buffer);
+      if (!snapshot) break;
+      if (cmd.localDiscId !== undefined) {
+        reconciler.reconcile(engine, snapshot, cmd.localDiscId);
+      } else {
+        engine.setState(snapshot);
       }
+      broadcastSnapshot();
+      break;
+    }
+
+    case 'SET_MODIFIERS': {
+      engine.applyModifiers(cmd.modifiers);
       break;
     }
   }

@@ -535,6 +535,60 @@ export class GoalNet {
     this.step(disc, FIXED_DT);
   }
 
+  /** Render Canvas 2D Zero-GC: laterales, cortina con curvas cuadráticas y costillas de profundidad. */
+  public render(ctx: any): void {
+    const N = this.nodeCount;
+    if (N < 2 || !ctx) return;
+
+    ctx.save();
+    ctx.strokeStyle = this.color;
+    ctx.lineWidth = 2;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+
+    // 1. Laterales tensados
+    ctx.beginPath();
+    ctx.moveTo(this.pTopX, this.pTopY);
+    ctx.lineTo(this.posX[0], this.posY[0]);
+    ctx.moveTo(this.pBottomX, this.pBottomY);
+    ctx.lineTo(this.posX[N - 1], this.posY[N - 1]);
+    ctx.stroke();
+
+    // 2. Cortina de fondo (curva continua cuadrática por puntos medios)
+    ctx.beginPath();
+    ctx.moveTo(this.posX[0], this.posY[0]);
+    if (typeof ctx.quadraticCurveTo === 'function') {
+      for (let i = 1; i < N - 1; i++) {
+        const xc = (this.posX[i] + this.posX[i + 1]) * 0.5;
+        const yc = (this.posY[i] + this.posY[i + 1]) * 0.5;
+        ctx.quadraticCurveTo(this.posX[i], this.posY[i], xc, yc);
+      }
+      ctx.lineTo(this.posX[N - 1], this.posY[N - 1]);
+    } else {
+      for (let i = 1; i < N; i++) ctx.lineTo(this.posX[i], this.posY[i]);
+    }
+    ctx.stroke();
+
+    // 3. Costillas de profundidad
+    ctx.globalAlpha = 0.28;
+    ctx.lineWidth = 1;
+    const ribCount = 4;
+    for (let k = 1; k < ribCount; k++) {
+      const u = k / ribCount;
+      const frontY = this.pTopY + u * (this.pBottomY - this.pTopY);
+      const nodeIdx = Math.min(N - 2, Math.floor(u * (N - 1)));
+      const tSub = u * (N - 1) - nodeIdx;
+      const bx = this.posX[nodeIdx] + tSub * (this.posX[nodeIdx + 1] - this.posX[nodeIdx]);
+      const byy = this.posY[nodeIdx] + tSub * (this.posY[nodeIdx + 1] - this.posY[nodeIdx]);
+      ctx.beginPath();
+      ctx.moveTo(this.mouthX, frontY);
+      ctx.lineTo(bx, byy);
+      ctx.stroke();
+    }
+
+    ctx.restore();
+  }
+
 
   /**
    * Restauración de la red:

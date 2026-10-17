@@ -42,16 +42,22 @@ export class Disc {
   public color: string;
   public kicking: boolean = false;
 
-  // Mecánicas de Efecto Magnus y Spin
+  // Mecánicas de Efecto Magnus Continuo Dirigido (solo balón, cero GC)
   public isCurving: boolean = false;
   public isCurvingAllowed: boolean = false;
-  public curvePerp: number = 0;
-  public spin: number = 0; // Rotación angular Magnus (rad/s acumulados)
+  public curvePerp: number = 0;   // c_perp
+  public curveBrake: number = 0;  // k_brake * |c_parallel|
+  public spin: number = 0;        // Magnitud y sentido de rotación angular Magnus
   public lastKickerId: string | null = null;
   public lastKickerDiscId: number = -1;
+  public kickerHeading: Vec2 | null = null;
+  public magnusControllerId: string | null = null;
+  public magnusPressesRemaining: number = 0;
+  public magnusTimer: number = 0; // en segundos
+  public lastCurveDir: number = 0;
   public isPowerShot: boolean = false;
 
-  // Mecánicas cinemáticas de jugador
+  // Mecánicas de Jugador (escalares para colisiones y snapshots)
   public stamina: number = 100;
   public isDashing: boolean = false;
   public isTurbo: boolean = false;
@@ -93,39 +99,52 @@ export class Disc {
     this.isCurving = false;
     this.isCurvingAllowed = false;
     this.curvePerp = 0;
+    this.curveBrake = 0;
     this.spin = 0;
     this.lastKickerId = null;
     this.lastKickerDiscId = -1;
+    this.kickerHeading = null;
+    this.magnusControllerId = null;
+    this.magnusPressesRemaining = 0;
+    this.magnusTimer = 0;
+    this.lastCurveDir = 0;
     this.isPowerShot = false;
   }
 
   /**
-   * Aplica aceleración de comba Magnus lateral continua sobre el balón:
-   * a_Magnus = C_M * spin * (-vy, vx)
+   * Aplica el Efecto Magnus en coordenadas de pantalla (+Y hacia abajo, +X hacia la derecha):
+   * u = v / ||v||
+   * u_izq = (u_y, -u_x)
+   * u_der = (-u_y, u_x)
+   * Si presiona Z (Izquierda): a_perp = u_izq * k_magnus
+   * Si presiona C (Derecha): a_perp = u_der * k_magnus
    */
   public applyMagnusCurve(curveLeft: boolean, curveRight: boolean, kMagnus: number = 1.05): void {
     if (!this.isBall || !this.isCurvingAllowed) return;
     const speed = Math.hypot(this.vel.x, this.vel.y);
     if (speed <= 0.05) return;
 
-    const ux = this.vel.x / speed;
-    const uy = this.vel.y / speed;
-
     if (curveLeft && !curveRight) {
+      const ux = this.vel.x / speed;
+      const uy = this.vel.y / speed;
       this.vel.x += uy * kMagnus;
       this.vel.y += -ux * kMagnus;
       this.isCurving = true;
       this.curvePerp = -1;
       this.spin = -kMagnus;
     } else if (curveRight && !curveLeft) {
+      const ux = this.vel.x / speed;
+      const uy = this.vel.y / speed;
       this.vel.x += -uy * kMagnus;
       this.vel.y += ux * kMagnus;
       this.isCurving = true;
       this.curvePerp = 1;
       this.spin = kMagnus;
     } else {
+      // Regla estricta: aceleración lateral nula inmediatamente al no presionar Z/C
       this.isCurving = false;
       this.curvePerp = 0;
+      this.spin = 0;
     }
   }
 }

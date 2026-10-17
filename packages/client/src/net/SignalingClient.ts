@@ -1,232 +1,380 @@
-import type {
-  ClientSignalMessage,
-  ServerSignalMessage,
-  IceServerConfig,
-  RoomSummary,
-  SignalType,
-  SignalData
-} from '@legacyx/core';
+import { setDynamicIceServers, DEFAULT_STUN_SERVERS } from './PeerConnection';
 
-export type SignalingEvent =
-  | 'welcome'
-  | 'room_created'
-  | 'room_list'
-  | 'room_joined'
-  | 'peer_joined'
-  | 'peer_disconnect'
-  | 'signal'
-  | 'error'
-  | 'open'
-  | 'close';
-
-export interface SignalingClientOptions {
-  url?: string;
-  autoReconnect?: boolean;
-  maxReconnectAttempts?: number;
+export interface RoomListing {
+  id: string;
+  name: string;
+  stadiumId: string;
+  playerCount: number;
+  maxPlayers: number;
+  hasPassword: boolean;
 }
 
+export interface RoomConfig {
+  name?: string;
+  maxPlayers?: number;
+  password?: string;
+  isPrivate?: boolean;
+  timeLimit?: number;
+  scoreLimit?: number;
+  teamsLocked?: boolean;
+  stadiumId?: string;
+}
+
+export interface SignalingMessage {
+  type:
+    | 'ice_config'
+    | 'WELCOME'
+    | 'ROOM_LIST'
+    | 'ROOM_CREATED'
+    | 'JOIN_SUCCESS'
+    | 'PEER_JOINED'
+    | 'PEER_LEFT'
+    | 'SIGNAL'
+    | 'ERROR'
+    | 'register_host'
+    | 'join_room'
+    | 'offer'
+    | 'answer'
+    | 'ice_candidate'
+    | 'room_created'
+    | 'room_joined'
+    | 'peer_joined'
+    | 'room_list'
+    | 'create_room'
+    | 'list_rooms'
+    | 'error'
+    | 'host_disconnected'
+    | 'update_room_count'
+    | 'close_room'
+    | 'ping'
+    | 'pong';
+  roomId?: string;
+  peerId?: string;
+  targetPeerId?: string;
+  senderPeerId?: string;
+  fromPeerId?: string;
+  hostPeerId?: string;
+  sdp?: RTCSessionDescriptionInit;
+  candidate?: RTCIceCandidateInit;
+  data?: unknown;
+  rooms?: Array<any>;
+  config?: RoomConfig;
+  password?: string;
+  playerCount?: number;
+  reason?: string;
+  message?: string;
+  iceServers?: RTCIceServer[];
+  timestamp?: number;
+  onlineCount?: number;
+}
+
+type EventCallback = (payload: any) => void;
+
 export class SignalingClient {
-  public peerId: string | null = null;
-  public iceServers: IceServerConfig[] = [
-    { urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }
-  ];
-
-  private ws: WebSocket | null = null;
+  public ws: WebSocket | null = null;
+  public peerId: string = 'peer_' + Math.random().toString(36).substring(2, 9);
   private url: string;
-  private autoReconnect: boolean;
-  private maxReconnectAttempts: number;
-  private reconnectAttempts = 0;
-  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-  private isIntentionallyClosed = false;
+  public isConnected: boolean = false;
+  public pingMs: number | null = null;
+  public onlineCount: number = 1;
+  private pingInterval: ReturnType<typeof setInterval> | null = null;
+  private listeners = new Map<string, Set<EventCallback>>();
 
-  private listeners: Map<SignalingEvent, Array<(payload: any) => void>> = new Map();
+  public onMessage: ((msg: SignalingMessage) => void) | null = null;
+  public onConnected: (() => void) | null = null;
+  public onDisconnected: (() => void) | null = null;
 
-  constructor(options?: SignalingClientOptions) {
-    this.url = options?.url ?? (typeof window !== 'undefined'
-      ? `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.hostname}:8080`
-      : 'ws://localhost:8080');
-    this.autoReconnect = options?.autoReconnect ?? true;
-    this.maxReconnectAttempts = options?.maxReconnectAttempts ?? 5;
-  }
+  public iceConfigReady!: Promise<RTCIceServer[]>;
+  private resolveIceConfig!: (servers: RTCIceServer[]) => void;
+  public isIceReady: boolean = false;
 
-  public on(event: SignalingEvent, callback: (payload: any) => void): () => void {
-    if (!this.listeners.has(event)) {
-      this.listeners.set(event, []);
+  constructor(url?: string) {
+    if (url) {
+      this.url = url;
+    } else if (typeof window !== 'undefined') {
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const host = window.location.hostname || 'localhost';
+      const envUrl = (import.meta as unknown as { env?: Record<string, string | undefined> }).env?.VITE_SIGNALING_URL;
+      this.url = envUrl || `${protocol}//${host}:8080`;
+    } else {
+      this.url = 'ws://localhost:8080';
     }
-    this.listeners.get(event)!.push(callback);
-    return () => this.off(event, callback);
+    this.resetIcePromise();
   }
 
-  public off(event: SignalingEvent, callback: (payload: any) => void): void {
-    const arr = this.listeners.get(event);
-    if (!arr) return;
-    const index = arr.indexOf(callback);
-    if (index !== -1) arr.splice(index, 1);
-  }
-
-  private emit(event: SignalingEvent, payload?: any): void {
-    const arr = this.listeners.get(event);
-    if (!arr) return;
-    for (let i = 0; i < arr.length; i++) {
-      try {
-        arr[i](payload);
-      } catch (err) {
-        console.error(`[SignalingClient] Error en callback de evento ${event}:`, err);
-      }
-    }
-  }
-
-  public connect(): Promise<string> {
-    this.isIntentionallyClosed = false;
-    return new Promise((resolve, reject) => {
-      try {
-        this.ws = new WebSocket(this.url);
-      } catch (err) {
-        reject(err);
-        return;
-      }
-
-      this.ws.onopen = () => {
-        this.reconnectAttempts = 0;
-        this.emit('open');
+  private resetIcePromise(): void {
+    this.isIceReady = false;
+    this.iceConfigReady = new Promise<RTCIceServer[]>((resolve) => {
+      this.resolveIceConfig = (servers: RTCIceServer[]) => {
+        this.isIceReady = true;
+        resolve(servers);
       };
+    });
+  }
 
-      this.ws.onmessage = (event: MessageEvent) => {
-        let msg: ServerSignalMessage;
+  public async whenIceReady(timeoutMs: number = 2500): Promise<RTCIceServer[]> {
+    if (this.isIceReady) {
+      return this.iceConfigReady;
+    }
+    let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
+    const fallbackPromise = new Promise<RTCIceServer[]>((resolve) => {
+      timeoutHandle = setTimeout(() => {
+        console.warn('[WebRTC] Timeout esperando ice_config; usando STUN por defecto.');
+        resolve([{ urls: DEFAULT_STUN_SERVERS }]);
+      }, timeoutMs);
+    });
+
+    const result = await Promise.race([this.iceConfigReady, fallbackPromise]);
+    if (timeoutHandle) clearTimeout(timeoutHandle);
+    return result;
+  }
+
+  public measurePing(): void {
+    if (this.isOpen()) {
+      this.send({ type: 'ping', timestamp: Date.now() });
+    }
+  }
+
+  private startPingLoop(): void {
+    this.stopPingLoop();
+    this.measurePing();
+    this.pingInterval = setInterval(() => {
+      this.measurePing();
+    }, 3000);
+  }
+
+  private stopPingLoop(): void {
+    if (this.pingInterval) {
+      clearInterval(this.pingInterval);
+      this.pingInterval = null;
+    }
+  }
+
+  public connect(): Promise<void> {
+    this.resetIcePromise();
+    return new Promise((resolve) => {
+      try {
         try {
-          msg = JSON.parse(event.data);
+          this.ws = new WebSocket(this.url);
         } catch {
-          return;
+          this.ws = (WebSocket as unknown as (u: string) => WebSocket)(this.url);
         }
 
-        switch (msg.type) {
-          case 'WELCOME':
-            this.peerId = msg.peerId;
-            if (msg.iceServers && msg.iceServers.length > 0) {
-              this.iceServers = msg.iceServers;
+        this.ws.onopen = () => {
+          this.isConnected = true;
+          this.startPingLoop();
+          this.requestRooms();
+          if (this.onConnected) this.onConnected();
+          resolve();
+        };
+
+        this.ws.onmessage = (event) => {
+          try {
+            const msg = JSON.parse(event.data as string) as SignalingMessage;
+            if (typeof msg.onlineCount === 'number') {
+              this.onlineCount = msg.onlineCount;
+              this.emit('telemetry', { pingMs: this.pingMs, onlineCount: this.onlineCount });
             }
-            this.emit('welcome', { peerId: this.peerId, iceServers: this.iceServers });
-            resolve(this.peerId);
-            break;
+            if (msg.type === 'pong') {
+              if (typeof msg.timestamp === 'number') {
+                this.pingMs = Math.max(1, Math.round(Date.now() - msg.timestamp));
+                this.emit('telemetry', { pingMs: this.pingMs, onlineCount: this.onlineCount });
+              }
+              return;
+            }
+            if ((msg.type === 'ice_config' || msg.type === 'WELCOME') && Array.isArray(msg.iceServers)) {
+              console.log('[WebRTC] Servidores ICE recibidos de señalización:', msg.iceServers);
+              setDynamicIceServers(msg.iceServers);
+              const hasMeteredTurn = msg.iceServers.some((s) => {
+                const urls = Array.isArray(s.urls) ? s.urls : [s.urls];
+                return urls.some(
+                  (u) => typeof u === 'string' && (u.includes('relay.metered.ca') || u.includes('.metered.live'))
+                );
+              });
+              if (hasMeteredTurn) {
+                console.log('[WebRTC] Credenciales TURN activadas desde Metered.ca API.');
+              }
+              this.resolveIceConfig(msg.iceServers);
+              if (msg.type === 'ice_config') {
+                return;
+              }
+            }
+            if (this.onMessage) {
+              this.onMessage(msg);
+            }
+            this.emit(msg.type, msg);
+          } catch (err) {
+            console.error('Invalid signaling message:', err);
+          }
+        };
 
-          case 'ROOM_CREATED':
-            this.emit('room_created', { roomId: msg.roomId });
-            break;
+        this.ws.onclose = () => {
+          this.stopPingLoop();
+          this.pingMs = null;
+          this.isConnected = false;
+          if (this.onDisconnected) this.onDisconnected();
+          this.emit('telemetry', { pingMs: null, onlineCount: this.onlineCount });
+          this.emit('DISCONNECTED', {});
+        };
 
-          case 'ROOM_LIST':
-            this.emit('room_list', { rooms: msg.rooms });
-            break;
-
-          case 'ROOM_JOINED':
-            this.emit('room_joined', {
-              roomId: msg.roomId,
-              hostPeerId: msg.hostPeerId,
-              stadiumId: msg.stadiumId
-            });
-            break;
-
-          case 'PEER_JOINED':
-            this.emit('peer_joined', { peerId: msg.peerId, nickname: msg.nickname });
-            break;
-
-          case 'PEER_DISCONNECT':
-            this.emit('peer_disconnect', { peerId: msg.peerId });
-            break;
-
-          case 'SIGNAL_OFFER':
-          case 'SIGNAL_ANSWER':
-          case 'SIGNAL_ICE_CANDIDATE':
-            this.emit('signal', { type: msg.type, fromId: msg.fromId, data: msg.data });
-            break;
-
-          case 'ERROR':
-            this.emit('error', { code: msg.code, message: msg.message });
-            break;
-
-          case 'PONG':
-            break;
-        }
-      };
-
-      this.ws.onerror = (err) => {
-        this.emit('error', { code: 'WS_ERROR', message: 'Error de conexión WebSocket' });
-      };
-
-      this.ws.onclose = () => {
-        this.emit('close');
-        if (!this.isIntentionallyClosed && this.autoReconnect) {
-          this.scheduleReconnect();
-        }
-      };
+        this.ws.onerror = () => {
+          this.stopPingLoop();
+          this.pingMs = null;
+          this.isConnected = false;
+          resolve();
+        };
+      } catch {
+        this.stopPingLoop();
+        this.pingMs = null;
+        this.isConnected = false;
+        resolve();
+      }
     });
   }
 
-  private scheduleReconnect(): void {
-    if (this.reconnectAttempts >= this.maxReconnectAttempts) {
-      console.warn('[SignalingClient] Límite máximo de reintentos de reconexión alcanzado.');
-      return;
+  public on(event: string, cb: EventCallback): void {
+    if (!this.listeners.has(event)) {
+      this.listeners.set(event, new Set());
     }
-
-    const backoffMs = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 10000);
-    this.reconnectAttempts++;
-    console.log(`[SignalingClient] Reintentando conexión en ${backoffMs} ms (intento ${this.reconnectAttempts})...`);
-
-    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
-    this.reconnectTimer = setTimeout(() => {
-      this.connect().catch(() => {});
-    }, backoffMs);
+    this.listeners.get(event)!.add(cb);
   }
 
-  public send(message: ClientSignalMessage): void {
-    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify(message));
+  public off(event: string, cb: EventCallback): void {
+    this.listeners.get(event)?.delete(cb);
+  }
+
+  private emit(event: string, payload: unknown): void {
+    this.listeners.get(event)?.forEach((cb) => cb(payload));
+  }
+
+  public send(msg: SignalingMessage | Record<string, unknown>): void {
+    const payload = { peerId: this.peerId, ...msg };
+    if (this.ws && this.isConnected && this.ws.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify(payload));
+    } else if (this.ws && this.ws.readyState === 1) {
+      this.ws.send(JSON.stringify(payload));
     }
   }
 
-  public createRoom(name: string, stadiumId: string, maxPlayers: number, password?: string): void {
+  public createRoom(
+    nameOrPeerId: string,
+    stadiumIdOrConfig?: string | RoomConfig,
+    maxPlayers?: number,
+    password?: string
+  ): void {
+    if (typeof stadiumIdOrConfig === 'string' && typeof maxPlayers === 'number') {
+      this.send({
+        type: 'CREATE_ROOM',
+        name: nameOrPeerId,
+        stadiumId: stadiumIdOrConfig,
+        maxPlayers,
+        password
+      });
+    } else {
+      this.send({
+        type: 'create_room',
+        peerId: nameOrPeerId,
+        config: typeof stadiumIdOrConfig === 'object' ? stadiumIdOrConfig : undefined
+      });
+    }
+  }
+
+  public joinRoom(roomId: string, peerIdOrPassword?: string, password?: string): void {
+    if (password !== undefined) {
+      this.send({
+        type: 'join_room',
+        roomId,
+        peerId: peerIdOrPassword,
+        password
+      });
+    } else {
+      this.send({
+        type: 'JOIN_ROOM',
+        roomId,
+        password: peerIdOrPassword
+      });
+    }
+  }
+
+  public requestRooms(): void {
+    this.send({ type: 'GET_ROOMS' });
+  }
+
+  public listRooms(): void {
+    this.send({ type: 'list_rooms' });
+  }
+
+  public leaveRoom(roomId?: string): void {
+    this.send({ type: 'leave_room', roomId });
+  }
+
+  public sendSignal(targetPeerId: string, data: unknown): void {
     this.send({
-      type: 'ROOM_CREATE',
-      name,
-      stadiumId,
-      maxPlayers,
-      password
-    });
-  }
-
-  public joinRoom(roomId: string, password?: string, nickname?: string): void {
-    this.send({
-      type: 'ROOM_JOIN',
-      roomId,
-      password,
-      nickname
-    });
-  }
-
-  public leaveRoom(): void {
-    this.send({ type: 'ROOM_LEAVE' });
-  }
-
-  public requestRoomList(): void {
-    this.send({ type: 'ROOM_LIST' });
-  }
-
-  public sendSignal(type: SignalType, targetId: string, data: SignalData): void {
-    this.send({
-      type,
-      targetId,
+      type: 'SIGNAL',
+      targetPeerId,
       data
     });
   }
 
-  public disconnect(): void {
-    this.isIntentionallyClosed = true;
-    if (this.reconnectTimer) {
-      clearTimeout(this.reconnectTimer);
-      this.reconnectTimer = null;
+  public sendOffer(roomId: string, senderPeerId: string, targetPeerId: string, sdp: RTCSessionDescriptionInit): void {
+    this.send({
+      type: 'offer',
+      roomId,
+      senderPeerId,
+      targetPeerId,
+      sdp
+    });
+  }
+
+  public sendAnswer(roomId: string, senderPeerId: string, targetPeerId: string, sdp: RTCSessionDescriptionInit): void {
+    this.send({
+      type: 'answer',
+      roomId,
+      senderPeerId,
+      targetPeerId,
+      sdp
+    });
+  }
+
+  public sendIceCandidate(
+    roomId: string,
+    senderPeerId: string,
+    targetPeerId: string,
+    candidate: RTCIceCandidateInit
+  ): void {
+    this.send({
+      type: 'ice_candidate',
+      roomId,
+      senderPeerId,
+      targetPeerId,
+      candidate
+    });
+  }
+
+  public isOpen(): boolean {
+    const openConst = typeof WebSocket !== 'undefined' && WebSocket.OPEN ? WebSocket.OPEN : 1;
+    return Boolean(this.ws && this.isConnected && this.ws.readyState === openConst);
+  }
+
+  public reconnect(): void {
+    const openConst = typeof WebSocket !== 'undefined' && WebSocket.OPEN ? WebSocket.OPEN : 1;
+    const connectingConst = typeof WebSocket !== 'undefined' && WebSocket.CONNECTING !== undefined ? WebSocket.CONNECTING : 0;
+    if (this.ws && (this.ws.readyState === openConst || this.ws.readyState === connectingConst)) {
+      return;
     }
+    void this.connect();
+  }
+
+  public disconnect(): void {
+    this.stopPingLoop();
+    this.pingMs = null;
     if (this.ws) {
       this.ws.close();
       this.ws = null;
     }
+    this.isConnected = false;
   }
 }
+
+export const sharedSignaling = new SignalingClient();
+

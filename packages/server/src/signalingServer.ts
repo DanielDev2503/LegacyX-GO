@@ -1,0 +1,473 @@
+import { WebSocketServer, WebSocket } from 'ws';
+
+export interface RoomConfig {
+  name: string;
+  maxPlayers: number; // 2 a 20
+  isPrivate: boolean;
+  password?: string | undefined;
+  timeLimit: number; // En minutos; 0 = Indefinido
+  scoreLimit: number; // Goles; 0 = Indefinido
+  teamsLocked: boolean;
+  stadiumId?: string | undefined;
+}
+
+export interface Room {
+  id: string;
+  config: RoomConfig;
+  hostId: string;
+  hostWs: WebSocket;
+  peers: Map<string, WebSocket>;
+  pendingPeers?: Map<string, WebSocket>;
+}
+
+const HEARTBEAT_INTERVAL_MS = 15_000;
+
+interface AliveWebSocket extends WebSocket {
+  isAlive: boolean;
+  peerId?: string | undefined;
+}
+
+export interface RTCIceServer {
+  urls: string | string[];
+  username?: string;
+  credential?: string;
+}
+
+let cachedIceServers: RTCIceServer[] | null = null;
+let cacheExpiry = 0;
+
+export async function getMeteredIceServers(): Promise<RTCIceServer[]> {
+  const now = Date.now();
+  if (cachedIceServers && now < cacheExpiry) {
+    return cachedIceServers;
+  }
+
+  const rawDomain = process.env.METERED_DOMAIN || '';
+  const cleanDomain = rawDomain.replace(/^https?:\/\//i, '').replace(/\/+$/, '').trim();
+  const apiKey = (process.env.METERED_API_KEY || '').trim();
+
+  if (!cleanDomain || !apiKey) {
+    console.warn('[SignalingServer] METERED_DOMAIN o METERED_API_KEY no configurados. Usando STUN público.');
+    return [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }];
+  }
+
+  try {
+    console.log('[SignalingServer] Solicitando credenciales ICE dinámicas a Metered.ca...');
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 6000);
+
+    const url = `https://${cleanDomain}/api/v1/turn/credentials?apiKey=${apiKey}`;
+    const res = await fetch(url, { signal: controller.signal });
+    clearTimeout(timeout);
+
+    if (!res.ok) {
+      throw new Error(`Metered API status ${res.status}: ${await res.text()}`);
+    }
+
+    const servers = (await res.json()) as RTCIceServer[];
+    if (Array.isArray(servers) && servers.length > 0) {
+      cachedIceServers = servers;
+      cacheExpiry = now + 12 * 60 * 60 * 1000; // 12 horas de caché
+      console.log(`[SignalingServer] ${servers.length} servidores ICE cacheados exitosamente.`);
+      return cachedIceServers;
+    }
+    throw new Error('Respuesta inválida de Metered (no es un array de servidores)');
+  } catch (err) {
+    console.error('[SignalingServer] Error consultando Metered.ca:', err);
+    return [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }];
+  }
+}
+
+export function resetCachedIceServers(): void {
+  cachedIceServers = null;
+  cacheExpiry = 0;
+}
+
+export const getProvisionedIceServers = getMeteredIceServers;
+export const getRuntimeIceServers = getMeteredIceServers;
+
+export function setupSignalingServer(wss: WebSocketServer) {
+  getMeteredIceServers().catch((err) => {
+    console.error('[SignalingServer] Error consultando Metered.ca:', err);
+  });
+
+  const rooms = new Map<string, Room>();
+  const peerToRoom = new Map<string, string>();
+  const pendingPeerToRoom = new Map<string, string>();
+
+  function send(ws: WebSocket, data: object): void {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      try {
+        ws.send(JSON.stringify(data));
+      } catch (err) {
+        console.warn('[SignalingServer] Error sending payload:', err);
+      }
+    }
+  }
+
+  function getRoomList() {
+    return Array.from(rooms.values()).map((r) => ({
+      id: r.id,
+      name: r.config.name,
+      playerCount: r.peers.size + 1,
+      maxPlayers: r.config.maxPlayers,
+      isPrivate: r.config.isPrivate,
+      teamsLocked: r.config.teamsLocked,
+      timeLimit: r.config.timeLimit,
+      scoreLimit: r.config.scoreLimit
+    }));
+  }
+
+  function broadcastRoomList(): void {
+    const list = getRoomList();
+    const payload = JSON.stringify({ type: 'room_list', rooms: list, onlineCount: wss.clients.size });
+    for (const client of wss.clients) {
+      if (client.readyState === WebSocket.OPEN) {
+        client.send(payload);
+      }
+    }
+  }
+
+  function destroyRoom(roomId: string): void {
+    const room = rooms.get(roomId);
+    if (!room) return;
+
+    console.log(`[SignalingServer] Purgando sala zombi ${roomId} (Host: ${room.hostId})`);
+
+    for (const peerWs of room.peers.values()) {
+      send(peerWs, { type: 'host_left', roomId });
+    }
+    if (room.pendingPeers) {
+      for (const peerWs of room.pendingPeers.values()) {
+        send(peerWs, {
+          type: 'error',
+          code: 'ROOM_NOT_FOUND',
+          message: 'El anfitrión de la sala se ha desconectado.'
+        });
+      }
+    }
+
+    for (const peerId of room.peers.keys()) {
+      peerToRoom.delete(peerId);
+    }
+    if (room.pendingPeers) {
+      for (const peerId of room.pendingPeers.keys()) {
+        pendingPeerToRoom.delete(peerId);
+      }
+    }
+    peerToRoom.delete(room.hostId);
+
+    rooms.delete(roomId);
+    broadcastRoomList();
+  }
+
+  function handleDisconnect(peerId: string, closingWs?: WebSocket): void {
+    let activeRoomId = peerId ? peerToRoom.get(peerId) : undefined;
+    if (!activeRoomId && closingWs) {
+      for (const [rId, r] of rooms.entries()) {
+        if (r.hostWs === closingWs || (peerId && r.peers.has(peerId))) {
+          activeRoomId = rId;
+          break;
+        }
+      }
+    }
+
+    if (peerId && pendingPeerToRoom.has(peerId)) {
+      const pRoomId = pendingPeerToRoom.get(peerId)!;
+      const pRoom = rooms.get(pRoomId);
+      if (pRoom?.pendingPeers) {
+        pRoom.pendingPeers.delete(peerId);
+      }
+      pendingPeerToRoom.delete(peerId);
+    }
+
+    if (activeRoomId) {
+      const room = rooms.get(activeRoomId);
+      if (room) {
+        const isHost = room.hostId === peerId || (closingWs && room.hostWs === closingWs);
+        if (isHost) {
+          destroyRoom(activeRoomId);
+          return;
+        } else {
+          room.peers.delete(peerId);
+          peerToRoom.delete(peerId);
+          send(room.hostWs, { type: 'peer_left', peerId });
+          broadcastRoomList();
+        }
+      }
+      if (peerId && !rooms.get(activeRoomId)) {
+        peerToRoom.delete(peerId);
+      }
+    }
+  }
+
+  const heartbeatInterval = setInterval(() => {
+    for (const client of wss.clients) {
+      const ws = client as AliveWebSocket;
+      if (!ws.isAlive) {
+        console.log(`[SignalingServer] Heartbeat timeout para socket: ${ws.peerId || 'desconocido'}`);
+        ws.terminate();
+        continue;
+      }
+      ws.isAlive = false;
+      try {
+        ws.ping();
+        send(ws, { type: 'ping' });
+      } catch {
+        ws.terminate();
+      }
+    }
+  }, HEARTBEAT_INTERVAL_MS);
+
+  wss.on('close', () => {
+    clearInterval(heartbeatInterval);
+  });
+
+  wss.on('connection', async (socket: WebSocket) => {
+    const ws = socket as AliveWebSocket;
+    ws.isAlive = true;
+    let currentPeerId = '';
+
+    const iceServers = await getMeteredIceServers();
+    if (socket.readyState === WebSocket.OPEN) {
+      socket.send(
+        JSON.stringify({
+          type: 'ice_config',
+          iceServers,
+          onlineCount: wss.clients.size
+        })
+      );
+    }
+    broadcastRoomList();
+
+    ws.on('pong', () => {
+      ws.isAlive = true;
+    });
+
+    ws.on('message', async (raw: string) => {
+      try {
+        ws.isAlive = true;
+        const msg = JSON.parse(raw.toString());
+        const { type, peerId, targetId, roomId, roomName, payload, config, password, nickname, reason, code } = msg;
+
+        if (peerId) {
+          currentPeerId = peerId;
+          ws.peerId = peerId;
+        }
+
+        switch (type) {
+          case 'get_ice_config':
+          case 'request_ice_config': {
+            const servers = await getMeteredIceServers();
+            send(ws, { type: 'ice_config', iceServers: servers });
+            break;
+          }
+
+          case 'heartbeat':
+          case 'ping': {
+            ws.isAlive = true;
+            send(ws, {
+              type: 'pong',
+              timestamp: msg.timestamp,
+              onlineCount: wss.clients.size
+            });
+            break;
+          }
+
+          case 'pong': {
+            ws.isAlive = true;
+            break;
+          }
+
+          case 'create_room': {
+            const newRoomId = roomId || Math.random().toString(36).substring(2, 8).toUpperCase();
+            const roomConf: RoomConfig = {
+              name: config?.name || roomName || `Room #${newRoomId}`,
+              maxPlayers: Math.max(2, Math.min(20, config?.maxPlayers ?? 12)),
+              isPrivate: Boolean(config?.isPrivate),
+              password: config?.password || '',
+              timeLimit: config?.timeLimit ?? 3,
+              scoreLimit: config?.scoreLimit ?? 3,
+              teamsLocked: Boolean(config?.teamsLocked)
+            };
+            const room: Room = {
+              id: newRoomId,
+              config: roomConf,
+              hostId: peerId,
+              hostWs: ws,
+              peers: new Map(),
+              pendingPeers: new Map()
+            };
+            rooms.set(newRoomId, room);
+            peerToRoom.set(peerId, newRoomId);
+
+            console.log(`[SignalingServer] Sala creada: ${newRoomId} ("${roomConf.name}", max: ${roomConf.maxPlayers}) por ${peerId}`);
+            send(ws, { type: 'room_created', roomId: newRoomId, roomName: roomConf.name, config: roomConf });
+            broadcastRoomList();
+            break;
+          }
+
+          case 'list_rooms':
+          case 'GET_ROOMS':
+          case 'get_rooms': {
+            send(ws, { type: 'room_list', rooms: getRoomList(), onlineCount: wss.clients.size });
+            break;
+          }
+
+          case 'join_room': {
+            const room = rooms.get(roomId);
+            if (!room) {
+              send(ws, { type: 'error', code: 'ROOM_NOT_FOUND', message: 'Sala no encontrada o cerrada.' });
+              return;
+            }
+
+            if (!room.hostWs || room.hostWs.readyState !== WebSocket.OPEN) {
+              destroyRoom(roomId);
+              send(ws, { type: 'error', code: 'ROOM_NOT_FOUND', message: 'El anfitrión de la sala no está disponible.' });
+              return;
+            }
+
+            if (room.peers.size + 1 >= room.config.maxPlayers) {
+              send(ws, { type: 'error', code: 'ROOM_FULL', message: 'La sala ha alcanzado su límite máximo de jugadores.' });
+              return;
+            }
+
+            if (room.config.isPrivate) {
+              const providedPass = password || '';
+              if (providedPass !== room.config.password) {
+                send(ws, { type: 'error', code: 'INVALID_PASSWORD', message: 'Contraseña incorrecta para esta sala privada.' });
+                return;
+              }
+            }
+
+            if (!room.pendingPeers) room.pendingPeers = new Map();
+            room.pendingPeers.set(peerId, ws);
+            pendingPeerToRoom.set(peerId, roomId);
+
+            console.log(`[SignalingServer] Solicitud de unión: Peer ${peerId} ("${nickname || 'Guest'}") a sala ${roomId}`);
+            send(room.hostWs, {
+              type: 'join_request',
+              peerId,
+              nickname,
+              roomId
+            });
+            break;
+          }
+
+          case 'accept_peer':
+          case 'join_accepted': {
+            const activeRoomId = peerToRoom.get(peerId);
+            if (!activeRoomId) return;
+            const room = rooms.get(activeRoomId);
+            if (!room || room.hostId !== peerId) return;
+
+            const targetPeerWs = room.pendingPeers?.get(targetId);
+            if (targetPeerWs && targetPeerWs.readyState === WebSocket.OPEN) {
+              room.pendingPeers?.delete(targetId);
+              pendingPeerToRoom.delete(targetId);
+              room.peers.set(targetId, targetPeerWs);
+              peerToRoom.set(targetId, activeRoomId);
+
+              console.log(`[SignalingServer] Host ${peerId} aceptó a ${targetId} en sala ${activeRoomId}`);
+
+              send(targetPeerWs, {
+                type: 'room_joined',
+                roomId: room.id,
+                roomName: room.config.name,
+                hostId: room.hostId,
+                config: room.config
+              });
+              send(targetPeerWs, {
+                type: 'peer_accepted',
+                roomId: room.id,
+                hostId: room.hostId,
+                targetId
+              });
+              broadcastRoomList();
+            }
+            break;
+          }
+
+          case 'join_rejected': {
+            const activeRoomId = peerToRoom.get(peerId);
+            if (!activeRoomId) return;
+            const room = rooms.get(activeRoomId);
+            if (!room || room.hostId !== peerId) return;
+
+            const targetPeerWs = room.pendingPeers?.get(targetId);
+            if (targetPeerWs) {
+              room.pendingPeers?.delete(targetId);
+              pendingPeerToRoom.delete(targetId);
+              send(targetPeerWs, {
+                type: 'error',
+                code: code || 'JOIN_REJECTED',
+                message: reason || 'El anfitrión rechazó la solicitud de unión.'
+              });
+            }
+            break;
+          }
+
+          case 'leave_room': {
+            handleDisconnect(peerId || currentPeerId, ws);
+            break;
+          }
+
+          case 'update_room_config': {
+            const activeRoomId = peerToRoom.get(peerId);
+            if (!activeRoomId) return;
+            const room = rooms.get(activeRoomId);
+            if (!room || room.hostId !== peerId) return;
+
+            if (config) {
+              room.config = { ...room.config, ...config };
+              for (const peerWs of room.peers.values()) {
+                send(peerWs, { type: 'room_config_updated', config: room.config });
+              }
+              broadcastRoomList();
+            }
+            break;
+          }
+
+          case 'signal_offer':
+          case 'signal_answer':
+          case 'signal_ice': {
+            const activeRoomId = peerToRoom.get(peerId) || peerToRoom.get(currentPeerId) || roomId;
+            if (!activeRoomId) return;
+            const room = rooms.get(activeRoomId);
+            if (!room) return;
+
+            let targetWs: WebSocket | undefined;
+            if (targetId === room.hostId) {
+              targetWs = room.hostWs;
+            } else {
+              targetWs = room.peers.get(targetId) || room.pendingPeers?.get(targetId);
+            }
+
+            if (targetWs && targetWs.readyState === WebSocket.OPEN) {
+              send(targetWs, {
+                type,
+                senderId: peerId || currentPeerId,
+                payload
+              });
+            }
+            break;
+          }
+        }
+      } catch (err) {
+        console.error('[SignalingServer] Error processing message:', err);
+      }
+    });
+
+    ws.on('close', () => {
+      handleDisconnect(currentPeerId, ws);
+    });
+
+    ws.on('error', () => {
+      handleDisconnect(currentPeerId, ws);
+    });
+  });
+
+  return { rooms, peerToRoom };
+}
+
+export const setupSignaling = setupSignalingServer;

@@ -1,8 +1,8 @@
 /**
  * SoundFX.ts
  * Procedural Web Audio API Synthesizer for LegacyX-GO.
- * Generates kicks, post rebounds, referee whistles, goal horns, and UI clicks
- * with ZERO external audio files or dependencies.
+ * Generates kicks, wall bounces, post clinks, referee whistles, countdown beeps,
+ * chat blips, and player-join arpeggios with ZERO external audio assets.
  */
 
 export class SoundFX {
@@ -11,22 +11,35 @@ export class SoundFX {
   private _isMuted: boolean = false;
   private _volume: number = 0.5;
 
+  // Independent sound effect toggles
+  public chatSoundEnabled: boolean = true;
+  public postHitSoundEnabled: boolean = true;
+  public kickSoundEnabled: boolean = true;
+  public goalSoundEnabled: boolean = true;
+  public whistleSoundEnabled: boolean = true;
+
   public get isMuted(): boolean {
     return this._isMuted;
+  }
+
+  public set isMuted(val: boolean) {
+    this.setMuted(val);
   }
 
   public get volume(): number {
     return this._volume;
   }
 
-  /**
-   * Lazily initializes or resumes the AudioContext on first user gesture.
-   */
+  public set volume(val: number) {
+    this.setMasterVolume(val);
+  }
+
   public ensureContext(): AudioContext | null {
     if (typeof window === 'undefined') return null;
 
     if (!this.ctx) {
-      const AudioCtxClass = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+      const AudioCtxClass =
+        window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
       if (!AudioCtxClass) return null;
 
       this.ctx = new AudioCtxClass();
@@ -62,10 +75,10 @@ export class SoundFX {
   }
 
   /**
-   * Ball kick: FM percussive drop (120 Hz to 40 Hz in 60-80 ms).
+   * 1. Kick: 220 Hz -> 45 Hz triangle wave in 80ms
    */
   public playKick(strength: number = 1.0): void {
-    if (this._isMuted) return;
+    if (this._isMuted || !this.kickSoundEnabled) return;
     const ctx = this.ensureContext();
     if (!ctx || !this.masterGain) return;
 
@@ -75,39 +88,68 @@ export class SoundFX {
       const gain = ctx.createGain();
 
       const normalizedStrength = Math.max(0.2, Math.min(2.0, strength));
-      const startFreq = 120 * Math.min(1.4, 0.8 + normalizedStrength * 0.4);
-      const endFreq = 40;
-      const duration = 0.07;
-
       osc.type = 'triangle';
-      osc.frequency.setValueAtTime(startFreq, t);
-      osc.frequency.exponentialRampToValueAtTime(endFreq, t + duration);
+      osc.frequency.setValueAtTime(220, t);
+      osc.frequency.exponentialRampToValueAtTime(45, t + 0.08);
 
-      const peakGain = Math.min(1.0, 0.7 * normalizedStrength);
-      gain.gain.setValueAtTime(peakGain, t);
-      gain.gain.exponentialRampToValueAtTime(0.001, t + duration);
+      gain.gain.setValueAtTime(Math.min(1.0, 0.9 * normalizedStrength), t);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + 0.08);
 
       osc.connect(gain);
       gain.connect(this.masterGain);
 
       osc.start(t);
-      osc.stop(t + duration);
+      osc.stop(t + 0.08);
 
-      // Disconnect node tree after decay to prevent memory leaks
       osc.onended = () => {
         osc.disconnect();
         gain.disconnect();
       };
     } catch {
-      // AudioContext safety fallback
+      // AudioContext fallback
     }
   }
 
   /**
-   * Metallic chime for post and crossbar collisions (880 Hz harmonic bell resonance).
+   * 2. Wall Bounce: 110 Hz -> 40 Hz sine wave in 60ms
+   */
+  public playBounce(): void {
+    if (this._isMuted) return;
+    const ctx = this.ensureContext();
+    if (!ctx || !this.masterGain) return;
+
+    try {
+      const t = ctx.currentTime;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(110, t);
+      osc.frequency.exponentialRampToValueAtTime(40, t + 0.06);
+
+      gain.gain.setValueAtTime(0.4, t);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + 0.06);
+
+      osc.connect(gain);
+      gain.connect(this.masterGain);
+
+      osc.start(t);
+      osc.stop(t + 0.06);
+
+      osc.onended = () => {
+        osc.disconnect();
+        gain.disconnect();
+      };
+    } catch {
+      // AudioContext fallback
+    }
+  }
+
+  /**
+   * 3. Post Hit: 1400 Hz -> 900 Hz + 2850 Hz -> 2100 Hz metallic dual-resonance in 250ms
    */
   public playPostHit(): void {
-    if (this._isMuted) return;
+    if (this._isMuted || !this.postHitSoundEnabled) return;
     const ctx = this.ensureContext();
     if (!ctx || !this.masterGain) return;
 
@@ -118,15 +160,15 @@ export class SoundFX {
       const gain = ctx.createGain();
 
       osc1.type = 'sine';
-      osc1.frequency.setValueAtTime(880, t);
-      osc1.frequency.exponentialRampToValueAtTime(620, t + 0.28);
+      osc1.frequency.setValueAtTime(1400, t);
+      osc1.frequency.exponentialRampToValueAtTime(900, t + 0.25);
 
-      osc2.type = 'triangle';
-      osc2.frequency.setValueAtTime(1760, t);
-      osc2.frequency.exponentialRampToValueAtTime(1240, t + 0.28);
+      osc2.type = 'sine';
+      osc2.frequency.setValueAtTime(2850, t);
+      osc2.frequency.exponentialRampToValueAtTime(2100, t + 0.25);
 
-      gain.gain.setValueAtTime(0.6, t);
-      gain.gain.exponentialRampToValueAtTime(0.001, t + 0.28);
+      gain.gain.setValueAtTime(0.7, t);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + 0.25);
 
       osc1.connect(gain);
       osc2.connect(gain);
@@ -134,8 +176,8 @@ export class SoundFX {
 
       osc1.start(t);
       osc2.start(t + 0.002);
-      osc1.stop(t + 0.28);
-      osc2.stop(t + 0.28);
+      osc1.stop(t + 0.25);
+      osc2.stop(t + 0.25);
 
       osc1.onended = () => {
         osc1.disconnect();
@@ -143,15 +185,25 @@ export class SoundFX {
         gain.disconnect();
       };
     } catch {
-      // AudioContext safety fallback
+      // AudioContext fallback
     }
   }
 
+  public playGoal(): void {
+    this.playGoalWhistle(true);
+  }
+
   /**
-   * Referee dual-tone whistle with 32 Hz trill flutter.
+   * 4. Referee Whistle: 2600 Hz + 2950 Hz with 32 Hz LFO trill over 900ms
    */
   public playWhistle(): void {
+    this.playGoalWhistle(false);
+  }
+
+  public playGoalWhistle(isGoal: boolean = true): void {
     if (this._isMuted) return;
+    if (isGoal && !this.goalSoundEnabled) return;
+    if (!isGoal && !this.whistleSoundEnabled) return;
     const ctx = this.ensureContext();
     if (!ctx || !this.masterGain) return;
 
@@ -169,18 +221,18 @@ export class SoundFX {
       osc2.type = 'sine';
       osc2.frequency.setValueAtTime(2950, t);
 
-      // Tremolo / trill flutter
       lfo.type = 'sine';
       lfo.frequency.setValueAtTime(32, t);
-      lfoGain.gain.setValueAtTime(120, t);
+      lfoGain.gain.setValueAtTime(150, t);
 
-      lfo.connect(osc1.frequency);
-      lfo.connect(osc2.frequency);
+      lfo.connect(lfoGain);
+      lfoGain.connect(osc1.frequency);
+      lfoGain.connect(osc2.frequency);
 
       masterWhistleGain.gain.setValueAtTime(0, t);
-      masterWhistleGain.gain.linearRampToValueAtTime(0.55, t + 0.04);
-      masterWhistleGain.gain.setValueAtTime(0.55, t + 0.45);
-      masterWhistleGain.gain.exponentialRampToValueAtTime(0.001, t + 0.85);
+      masterWhistleGain.gain.linearRampToValueAtTime(0.6, t + 0.05);
+      masterWhistleGain.gain.setValueAtTime(0.6, t + 0.5);
+      masterWhistleGain.gain.exponentialRampToValueAtTime(0.001, t + 0.9);
 
       osc1.connect(masterWhistleGain);
       osc2.connect(masterWhistleGain);
@@ -190,7 +242,7 @@ export class SoundFX {
       osc1.start(t);
       osc2.start(t);
 
-      const endTime = t + 0.85;
+      const endTime = t + 0.9;
       lfo.stop(endTime);
       osc1.stop(endTime);
       osc2.stop(endTime);
@@ -203,15 +255,12 @@ export class SoundFX {
         masterWhistleGain.disconnect();
       };
     } catch {
-      // AudioContext safety fallback
+      // AudioContext fallback
     }
   }
 
-  /**
-   * Goal celebration horn: Low-frequency chord filtered through a warm lowpass filter.
-   */
   public playGoalHorn(): void {
-    if (this._isMuted) return;
+    if (this._isMuted || !this.goalSoundEnabled) return;
     const ctx = this.ensureContext();
     if (!ctx || !this.masterGain) return;
 
@@ -223,10 +272,10 @@ export class SoundFX {
       const gain = ctx.createGain();
 
       osc1.type = 'sawtooth';
-      osc1.frequency.setValueAtTime(130.81, t); // C3
+      osc1.frequency.setValueAtTime(130.81, t);
 
       osc2.type = 'sawtooth';
-      osc2.frequency.setValueAtTime(164.81, t); // E3
+      osc2.frequency.setValueAtTime(164.81, t);
 
       filter.type = 'lowpass';
       filter.frequency.setValueAtTime(340, t);
@@ -254,13 +303,122 @@ export class SoundFX {
         gain.disconnect();
       };
     } catch {
-      // AudioContext safety fallback
+      // AudioContext fallback
     }
   }
 
   /**
-   * Subtle acoustic feedback when hovering over buttons or cards.
+   * 5. Countdown beep: 440 Hz / 880 Hz GO
    */
+  public playCountdown(isGo: boolean = false): void {
+    if (this._isMuted) return;
+    const ctx = this.ensureContext();
+    if (!ctx || !this.masterGain) return;
+
+    try {
+      const t = ctx.currentTime;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+
+      osc.type = 'sine';
+      const freq = isGo ? 880 : 440;
+      const duration = isGo ? 0.35 : 0.15;
+
+      osc.frequency.setValueAtTime(freq, t);
+      gain.gain.setValueAtTime(0.5, t);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + duration);
+
+      osc.connect(gain);
+      gain.connect(this.masterGain);
+
+      osc.start(t);
+      osc.stop(t + duration);
+
+      osc.onended = () => {
+        osc.disconnect();
+        gain.disconnect();
+      };
+    } catch {
+      // AudioContext fallback
+    }
+  }
+
+  /**
+   * 6. Chat blip: 800 Hz -> 1200 Hz in 50ms
+   */
+  public playChatMessageSound(): void {
+    if (this._isMuted || !this.chatSoundEnabled) return;
+    const ctx = this.ensureContext();
+    if (!ctx || !this.masterGain) return;
+
+    try {
+      const t = ctx.currentTime;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(800, t);
+      osc.frequency.exponentialRampToValueAtTime(1200, t + 0.05);
+
+      gain.gain.setValueAtTime(0.12, t);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.08);
+
+      osc.connect(gain);
+      gain.connect(this.masterGain);
+
+      osc.start(t);
+      osc.stop(t + 0.08);
+
+      osc.onended = () => {
+        osc.disconnect();
+        gain.disconnect();
+      };
+    } catch {
+      // AudioContext fallback
+    }
+  }
+
+  /**
+   * 7. Player joined arpeggio: C5 (523.25 Hz) -> E5 (659.25 Hz)
+   */
+  public playPlayerJoinedSound(): void {
+    if (this._isMuted) return;
+    const ctx = this.ensureContext();
+    if (!ctx || !this.masterGain) return;
+
+    try {
+      const t = ctx.currentTime;
+      const notes = [523.25, 659.25];
+      const noteInterval = 0.06;
+      const noteDuration = 0.15;
+
+      notes.forEach((freq, idx) => {
+        if (!this.ctx || !this.masterGain) return;
+        const noteTime = t + idx * noteInterval;
+        const osc = this.ctx.createOscillator();
+        const gain = this.ctx.createGain();
+
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(freq, noteTime);
+        gain.gain.setValueAtTime(0.18, noteTime);
+        gain.gain.exponentialRampToValueAtTime(0.0001, noteTime + noteDuration);
+
+        osc.connect(gain);
+        gain.connect(this.masterGain);
+
+        osc.start(noteTime);
+        osc.stop(noteTime + noteDuration);
+
+        osc.onended = () => {
+          osc.disconnect();
+          gain.disconnect();
+        };
+      });
+    } catch {
+      // AudioContext fallback
+    }
+  }
+
   public playUIHover(): void {
     if (this._isMuted) return;
     const ctx = this.ensureContext();
@@ -273,7 +431,6 @@ export class SoundFX {
 
       osc.type = 'sine';
       osc.frequency.setValueAtTime(1400, t);
-
       gain.gain.setValueAtTime(0.04, t);
       gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.025);
 
@@ -288,13 +445,10 @@ export class SoundFX {
         gain.disconnect();
       };
     } catch {
-      // AudioContext safety fallback
+      // AudioContext fallback
     }
   }
 
-  /**
-   * Crisp feedback when clicking buttons or toggles.
-   */
   public playUIClick(): void {
     if (this._isMuted) return;
     const ctx = this.ensureContext();
@@ -323,9 +477,32 @@ export class SoundFX {
         gain.disconnect();
       };
     } catch {
-      // AudioContext safety fallback
+      // AudioContext fallback
+    }
+  }
+
+  public play(
+    type: 'kick' | 'bounce' | 'post' | 'goal' | 'countdown' | 'chat' | 'player_joined' | string,
+    isGo?: boolean
+  ): void {
+    switch (type) {
+      case 'kick':
+        return this.playKick();
+      case 'bounce':
+        return this.playBounce();
+      case 'post':
+        return this.playPostHit();
+      case 'goal':
+        return this.playGoalWhistle(true);
+      case 'countdown':
+        return this.playCountdown(isGo);
+      case 'chat':
+        return this.playChatMessageSound();
+      case 'player_joined':
+        return this.playPlayerJoinedSound();
     }
   }
 }
 
+export { SoundFX as AudioManager, SoundFX as AudioEngine };
 export const soundFX = new SoundFX();

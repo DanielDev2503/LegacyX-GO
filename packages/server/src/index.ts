@@ -249,6 +249,17 @@ export function startSignalingServer(port: number = PORT): WebSocketServer {
 }
 
 export { registry };
+export {
+  getMeteredIceServers,
+  resetCachedIceServers,
+  getProvisionedIceServers,
+  getRuntimeIceServers,
+  setupSignalingServer,
+  setupSignaling,
+  type RoomConfig,
+  type Room,
+  type RTCIceServer
+} from './signalingServer.js';
 
 // Inicialización directa si se ejecuta como script principal
 const isDirectExecution = process.argv[1] && (

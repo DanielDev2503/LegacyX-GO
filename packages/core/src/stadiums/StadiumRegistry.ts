@@ -1,15 +1,16 @@
 import { Stadium, StadiumOptions, StadiumBallPhysics, StadiumPlayerPhysics } from './Stadium';
+import { defaultStadium } from '../game/GameConfig';
 
 export type StadiumId =
-  | 'AF 3v3'
-  | 'af3v3'
   | 'AF 3v3 Official'
-  | 'Classic Stadium'
+  | 'af3v3'
+  | 'small'
   | 'classic'
-  | 'Big Stadium'
   | 'big'
-  | 'Small Arena'
-  | 'small';
+  | 'AF 3v3'
+  | 'Classic Stadium'
+  | 'Big Stadium'
+  | 'Small Arena';
 
 export interface StadiumPreset {
   id: StadiumId;
@@ -50,7 +51,7 @@ export const STADIUM_AF_3V3: StadiumPreset = {
   ballPhysics: {
     radius: 10,
     bCoef: 0.80,
-    invMass: 5.0, // mass = 0.2
+    invMass: 5.0,
     color: '#ffffff'
   },
   playerPhysics: {
@@ -61,73 +62,108 @@ export const STADIUM_AF_3V3: StadiumPreset = {
   }
 };
 
-export const STADIUM_CLASSIC: StadiumPreset = {
-  id: 'Classic Stadium',
-  name: 'Classic Stadium',
-  description: '800x360 - Arcos 110',
-  width: 800,
-  height: 360,
-  goalSize: 110,
-  goalWidth: 110,
-  goalDepth: 40,
-  kickOffRadius: 60,
-  runOff: 45,
-  spawnDistance: 220,
+const AF_3V3_PRESET: StadiumPreset = {
+  id: 'AF 3v3 Official',
+  name: 'AF 3v3 Official by Vitão ®',
+  description: '710x300 - Arcos 170 (Oficial Vitão)',
+  width: 1200,
+  height: 540,
+  goalSize: 170,
+  goalWidth: 170,
+  goalDepth: 35,
+  runOff: 110,
+  spawnDistance: 366.5,
+  kickOffRadius: 80,
   bgColor: '#1D2431',
-  postRadius: 8,
-  postColor: '#ffffff'
-};
-
-export const STADIUM_BIG: StadiumPreset = {
-  id: 'Big Stadium',
-  name: 'Big Stadium',
-  description: '1100x500 - Arcos 140',
-  width: 1100,
-  height: 500,
-  goalSize: 140,
-  goalWidth: 140,
-  goalDepth: 55,
-  kickOffRadius: 90,
-  runOff: 50,
-  spawnDistance: 320,
-  bgColor: '#1D2431',
-  postRadius: 8,
-  postColor: '#ffffff'
+  postRadius: 5.4,
+  postColor: '#3B424F',
+  ballPhysics: {
+    radius: 5.8,
+    bCoef: 0.412,
+    invMass: 1.5,
+    color: '#FFA500'
+  },
+  playerPhysics: {
+    acceleration: 0.11,
+    kickingAcceleration: 0.083,
+    kickStrength: 4.545,
+    bCoef: 0
+  },
+  leftGoalPos: {
+    p0: { x: -608.3, y: -85 },
+    p1: { x: -608.3, y: 85 }
+  },
+  rightGoalPos: {
+    p0: { x: 608.3, y: 85 },
+    p1: { x: 608.3, y: -85 }
+  }
 };
 
 export const STADIUM_SMALL: StadiumPreset = {
-  id: 'Small Arena',
-  name: 'Small Arena',
-  description: '600x300 - Arcos 90',
-  width: 600,
-  height: 300,
-  goalSize: 90,
-  goalWidth: 90,
+  id: 'small',
+  name: 'Pequeño (1v1 / 2v2)',
+  description: '1000x460 - Arcos 140',
+  width: 1000,
+  height: 460,
+  goalSize: 140,
+  goalWidth: 140,
   goalDepth: 35,
-  kickOffRadius: 50,
-  runOff: 40,
-  spawnDistance: 160,
-  bgColor: '#1D2431',
-  postRadius: 8,
-  postColor: '#ffffff'
+  runOff: 45
+};
+
+export const STADIUM_CLASSIC: StadiumPreset = {
+  id: 'classic',
+  name: 'Mediano (3v3 Clásico)',
+  description: '1200x540 - Arcos 170',
+  width: 1200,
+  height: 540,
+  goalSize: 170,
+  goalWidth: 170,
+  goalDepth: 35,
+  runOff: 45
+};
+
+export const STADIUM_BIG: StadiumPreset = {
+  id: 'big',
+  name: 'Grande (4v4 / Competitivo)',
+  description: '1600x720 - Arcos 200',
+  width: 1600,
+  height: 720,
+  goalSize: 200,
+  goalWidth: 200,
+  goalDepth: 35,
+  runOff: 45
 };
 
 export const STADIUM_PRESETS: Record<string, StadiumPreset> = {
-  'AF 3v3': STADIUM_AF_3V3,
-  'af3v3': { ...STADIUM_AF_3V3, id: 'af3v3' },
-  'AF 3v3 Official': { ...STADIUM_AF_3V3, id: 'AF 3v3 Official' },
-  'Classic Stadium': STADIUM_CLASSIC,
-  'classic': { ...STADIUM_CLASSIC, id: 'classic' },
-  'Big Stadium': STADIUM_BIG,
-  'big': { ...STADIUM_BIG, id: 'big' },
-  'Small Arena': STADIUM_SMALL,
-  'small': { ...STADIUM_SMALL, id: 'small' }
+  'AF 3v3 Official': AF_3V3_PRESET,
+  af3v3: { ...AF_3V3_PRESET, id: 'af3v3' },
+  small: STADIUM_SMALL,
+  classic: STADIUM_CLASSIC,
+  big: STADIUM_BIG
 };
+
+export const StadiumRegistry: Record<string, StadiumPreset> = STADIUM_PRESETS;
 
 export const DEFAULT_STADIUM_ID: StadiumId = 'AF 3v3';
 
-export function createStadium(stadiumId: string = DEFAULT_STADIUM_ID): Stadium {
-  const preset = STADIUM_PRESETS[stadiumId] ?? STADIUM_AF_3V3;
+export function createStadium(id: StadiumId | string = defaultStadium, customOptions?: Partial<StadiumOptions>): Stadium {
+  let preset: StadiumPreset;
+  if (id === 'AF 3v3') {
+    preset = STADIUM_AF_3V3;
+  } else if (id === 'Classic Stadium') {
+    preset = STADIUM_CLASSIC;
+  } else if (id === 'Big Stadium') {
+    preset = STADIUM_BIG;
+  } else if (id === 'Small Arena') {
+    preset = STADIUM_SMALL;
+  } else {
+    const presetKey = (id in STADIUM_PRESETS)
+      ? id
+      : (defaultStadium in STADIUM_PRESETS ? defaultStadium : 'classic');
+    preset = STADIUM_PRESETS[presetKey];
+  }
+
   return new Stadium({
     id: preset.id,
     name: preset.name,
@@ -144,6 +180,7 @@ export function createStadium(stadiumId: string = DEFAULT_STADIUM_ID): Stadium {
     ballPhysics: preset.ballPhysics,
     playerPhysics: preset.playerPhysics,
     leftGoalPos: preset.leftGoalPos,
-    rightGoalPos: preset.rightGoalPos
+    rightGoalPos: preset.rightGoalPos,
+    ...customOptions
   });
 }

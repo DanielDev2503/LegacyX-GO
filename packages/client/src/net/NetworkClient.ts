@@ -1,138 +1,160 @@
-import {
-  BinaryProtocol,
-  type PlayerInput,
-  type GameStateSnapshot,
-  OP_SNAPSHOT
-} from '@legacyx/core';
-import { PeerConnection } from './PeerConnection.js';
-import { JitterBuffer } from './JitterBuffer.js';
-import type { SignalingClient } from './SignalingClient.js';
-
-export interface NetworkClientOptions {
-  signalingClient: SignalingClient;
-  interpolationDelayMs?: number;
-  onConnected?: () => void;
-  onDisconnected?: () => void;
-  onSnapshotReceived?: (snapshot: GameStateSnapshot) => void;
-}
+import { BinaryProtocol, type GameStateSnapshot } from '@legacyx/core';
+import { PeerConnection } from './PeerConnection';
+import { SignalingClient } from './SignalingClient';
+import { JitterBuffer } from './JitterBuffer';
+import type { PlayerInfo } from './NetworkHost';
 
 export class NetworkClient {
-  public readonly jitterBuffer: JitterBuffer;
   private signaling: SignalingClient;
   private peer: PeerConnection | null = null;
-  private hostPeerId: string | null = null;
-  private isConnectedToHost = false;
+  private hostPeerId: string = '';
+  private iceServers: RTCIceServer[] = [];
 
-  public onConnected?: () => void;
+  public localPlayerId: number | null = null;
+  public players: PlayerInfo[] = [];
+  public teamsLocked: boolean = false;
+  public jitterBuffer = new JitterBuffer(33, 30, true);
+
+  public onConnected?: (playerId: number) => void;
   public onDisconnected?: () => void;
-  public onSnapshotReceived?: (snapshot: GameStateSnapshot) => void;
+  public onPlayerListUpdated?: (players: PlayerInfo[]) => void;
+  public onChatMessage?: (sender: string, text: string, team?: string) => void;
+  public onSnapshotBuffer?: (buffer: ArrayBuffer) => void;
 
-  constructor(options: NetworkClientOptions) {
-    this.signaling = options.signalingClient;
-    this.jitterBuffer = new JitterBuffer(options.interpolationDelayMs ?? 33);
-    this.onConnected = options.onConnected;
-    this.onDisconnected = options.onDisconnected;
-    this.onSnapshotReceived = options.onSnapshotReceived;
+  private nickname: string;
+  private number: number;
+  private reusableInputBuffer = new ArrayBuffer(8);
 
-    this.setupSignaling();
+  constructor(signaling: SignalingClient, nickname: string, number: number = 7) {
+    this.signaling = signaling;
+    this.nickname = nickname;
+    this.number = number;
+    this.setupSignalingListeners();
   }
 
-  private setupSignaling(): void {
-    this.signaling.on('room_joined', ({ hostPeerId }: { hostPeerId: string }) => {
-      this.hostPeerId = hostPeerId;
-      console.log(`[NetworkClient] Sala unida. Esperando oferta WebRTC del Host ${hostPeerId}...`);
-
-      this.peer = new PeerConnection({
-        peerId: hostPeerId,
-        isInitiator: false,
-        iceServers: this.signaling.iceServers,
-        onOpen: () => {
-          console.log(`[NetworkClient] DataChannel conectado exitosamente con el Host!`);
-          this.isConnectedToHost = true;
-          this.onConnected?.();
-        },
-        onClose: () => {
-          this.handleDisconnect();
-        },
-        onError: (err) => {
-          console.warn(`[NetworkClient] Error en PeerConnection con Host:`, err);
-        },
-        onBinaryMessage: (data) => {
-          this.handleIncomingHostData(data);
-        },
-        onSignalData: (signal) => {
-          if (signal.candidate && this.hostPeerId) {
-            this.signaling.sendSignal('SIGNAL_ICE_CANDIDATE', this.hostPeerId, signal);
-          }
-        }
-      });
-    });
-
-    this.signaling.on('signal', async ({ type, fromId, data }) => {
-      if (this.peer && fromId === this.hostPeerId) {
-        if (type === 'SIGNAL_OFFER' && data.sdp) {
-          const answer = await this.peer.handleOffer(data.sdp as RTCSessionDescriptionInit);
-          this.signaling.sendSignal('SIGNAL_ANSWER', fromId, {
-            sdp: { type: answer.type, sdp: answer.sdp }
-          });
-        } else if (type === 'SIGNAL_ICE_CANDIDATE' && data.candidate) {
-          await this.peer.addIceCandidate(data.candidate as RTCIceCandidateInit);
-        }
+  private setupSignalingListeners(): void {
+    this.signaling.on('WELCOME', (msg) => {
+      if (msg.iceServers) {
+        this.iceServers = msg.iceServers;
       }
     });
 
-    this.signaling.on('peer_disconnect', ({ peerId }: { peerId: string }) => {
-      if (peerId === this.hostPeerId) {
-        console.warn('[NetworkClient] El anfitrión (Host) se ha desconectado de la sala.');
-        this.handleDisconnect();
+    this.signaling.on('JOIN_SUCCESS', async (msg) => {
+      this.hostPeerId = msg.hostPeerId as string;
+      await this.signaling.whenIceReady();
+      this.initPeerConnection();
+    });
+
+    this.signaling.on('SIGNAL', async (msg) => {
+      const fromPeerId = (msg.fromPeerId ?? msg.senderPeerId) as string;
+      if (fromPeerId === this.hostPeerId && this.peer) {
+        await this.peer.handleSignal(msg.data ?? msg);
+      }
+    });
+
+    this.signaling.on('PEER_LEFT', (msg) => {
+      if (msg.peerId === this.hostPeerId) {
+        this.disconnect();
       }
     });
   }
 
-  private handleIncomingHostData(data: ArrayBuffer): void {
-    const view = new DataView(data);
-    if (view.byteLength < 1) return;
-
-    const opcode = view.getUint8(0);
-    if (opcode === OP_SNAPSHOT) {
-      // 1. Ingresar en el buffer de fluctuación (JitterBuffer)
-      this.jitterBuffer.push(data);
-
-      // 2. Notificar llegada de snapshot
-      const decoded = BinaryProtocol.decodeSnapshot(data);
-      if (decoded) {
-        this.onSnapshotReceived?.(decoded);
+  private initPeerConnection(): void {
+    this.peer = new PeerConnection({
+      peerId: this.hostPeerId,
+      isInitiator: false,
+      iceServers: this.iceServers.length > 0 ? this.iceServers : undefined,
+      signalingClient: this.signaling,
+      onSignal: (data) => {
+        this.signaling.sendSignal(this.hostPeerId, data);
+      },
+      onReliableMessage: (msg: unknown) => {
+        this.handleReliableMessage(msg as Record<string, unknown>);
+      },
+      onUnreliableSnapshot: (buffer: ArrayBuffer) => {
+        const snapshot = BinaryProtocol.decodeSnapshot(buffer);
+        this.jitterBuffer.push(snapshot, performance.now());
+        this.onSnapshotBuffer?.(buffer);
+      },
+      onConnected: () => {
+        this.peer?.sendReliable({
+          type: 'SET_PROFILE',
+          nickname: this.nickname,
+          number: this.number
+        });
+      },
+      onDisconnected: () => {
+        this.onDisconnected?.();
       }
+    });
+  }
+
+  private handleReliableMessage(msg: Record<string, unknown>): void {
+    if (msg.type === 'ASSIGN_ID') {
+      this.localPlayerId = msg.playerId as number;
+      this.players = (msg.players as PlayerInfo[]) || [];
+      this.teamsLocked = Boolean(msg.teamsLocked);
+      this.onPlayerListUpdated?.(this.players);
+      this.onConnected?.(this.localPlayerId);
+    } else if (msg.type === 'PLAYER_LIST') {
+      this.players = (msg.players as PlayerInfo[]) || [];
+      if (typeof msg.teamsLocked === 'boolean') {
+        this.teamsLocked = msg.teamsLocked;
+      }
+      this.onPlayerListUpdated?.(this.players);
+    } else if (msg.type === 'CHAT') {
+      this.onChatMessage?.(
+        String(msg.sender || 'Player'),
+        String(msg.text || ''),
+        msg.team as string | undefined
+      );
+    } else if (msg.type === 'MATCH_PAUSED') {
+      this.jitterBuffer.setMatchState('PAUSED');
+    } else if (msg.type === 'MATCH_RESUMED') {
+      this.jitterBuffer.setMatchState('PLAYING');
+    } else if (msg.type === 'PLAYER_KICKED' || msg.type === 'PLAYER_BANNED') {
+      this.disconnect();
     }
   }
 
-  public sendInput(input: PlayerInput): void {
-    if (this.peer && this.peer.isOpen) {
-      const buffer = BinaryProtocol.encodeInput(input);
-      this.peer.send(buffer);
-    }
+  public sendInput(inputMask: number, tick: number): void {
+    if (!this.peer) return;
+    const buffer = BinaryProtocol.encodeInput(
+      {
+        tick,
+        inputMask,
+        aimAngle: 0
+      },
+      this.reusableInputBuffer
+    );
+    this.peer.sendUnreliable(buffer);
   }
 
-  public getInterpolatedSnapshot(renderTime?: number): GameStateSnapshot | null {
-    return this.jitterBuffer.getInterpolatedSnapshot(renderTime);
+  public requestTeamChange(team: 'red' | 'blue' | 'spectator', targetPlayerId?: number): void {
+    this.peer?.sendReliable({
+      type: 'TEAM_CHANGE',
+      team,
+      targetPlayerId: targetPlayerId ?? this.localPlayerId
+    });
   }
 
-  public get isConnected(): boolean {
-    return this.isConnectedToHost && (this.peer?.isOpen ?? false);
+  public sendChat(text: string): void {
+    this.peer?.sendReliable({
+      type: 'CHAT',
+      text
+    });
   }
 
-  private handleDisconnect(): void {
-    this.isConnectedToHost = false;
-    this.jitterBuffer.clear();
-    this.onDisconnected?.();
+  public getInterpolatedState(): GameStateSnapshot | null {
+    return this.jitterBuffer.getInterpolatedState(performance.now());
   }
 
   public disconnect(): void {
-    this.handleDisconnect();
     if (this.peer) {
       this.peer.close();
       this.peer = null;
     }
-    this.hostPeerId = null;
+    this.localPlayerId = null;
+    this.onDisconnected?.();
   }
 }

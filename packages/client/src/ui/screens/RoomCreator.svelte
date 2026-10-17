@@ -7,6 +7,7 @@
   let isPasswordProtected = $state(false);
   let roomPassword = $state('');
   let isPublic = $state(true);
+  let teamsLocked = $state(false);
   let selectedTimeMinutes = $state(3);
   let selectedGoalsLimit = $state(3);
   let selectedStadiumIndex = $state(0);
@@ -20,26 +21,12 @@
 
   function decreasePlayers() {
     soundFX.playUIClick();
-    if (playerCount > 2) playerCount -= 2;
+    if (playerCount > 2) playerCount -= 1;
   }
 
   function increasePlayers() {
     soundFX.playUIClick();
-    if (playerCount < 12) playerCount += 2;
-  }
-
-  function cycleTimeLimit() {
-    soundFX.playUIClick();
-    const times = [1, 3, 5, 7, 10];
-    const idx = times.indexOf(selectedTimeMinutes);
-    selectedTimeMinutes = times[(idx + 1) % times.length];
-  }
-
-  function cycleGoalsLimit() {
-    soundFX.playUIClick();
-    const goals = [1, 3, 5, 7, 10];
-    const idx = goals.indexOf(selectedGoalsLimit);
-    selectedGoalsLimit = goals[(idx + 1) % goals.length];
+    if (playerCount < 20) playerCount += 1;
   }
 
   function cycleStadium() {
@@ -47,10 +34,27 @@
     selectedStadiumIndex = (selectedStadiumIndex + 1) % stadiums.length;
   }
 
+  function formatTimeLimit(val: number): string {
+    return val === 0 ? '0 (Indefinido)' : `${val} min`;
+  }
+
+  function formatGoalsLimit(val: number): string {
+    return val === 0 ? '0 (Sin límite)' : `${val} ${val === 1 ? 'gol' : 'goles'}`;
+  }
+
   function handleCreateRoom() {
     soundFX.playUIClick();
     const activeStadium = stadiums[selectedStadiumIndex].name;
-    gameUI.createRoomAndLaunch(roomName, activeStadium, playerCount, isPasswordProtected);
+    gameUI.createRoomAndLaunch(
+      roomName,
+      activeStadium,
+      playerCount,
+      isPasswordProtected,
+      teamsLocked,
+      roomPassword,
+      selectedTimeMinutes,
+      selectedGoalsLimit
+    );
   }
 </script>
 
@@ -63,26 +67,12 @@
       onmouseenter={() => soundFX.playUIHover()}
       onclick={() => gameUI.navigateTo('LOBBY')}
     >
-      <span class="icon">arrow_back</span>
-      <span>LOBBY</span>
+      <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+        <line x1="19" y1="12" x2="5" y2="12"></line>
+        <polyline points="12 19 5 12 12 5"></polyline>
+      </svg>
+      <span>Lobby</span>
     </button>
-
-    <div class="header-branding">
-      <span class="brand-title">LEGACY<span class="cyan">X</span>-GO</span>
-      <span class="brand-badge">HOST SALA</span>
-    </div>
-
-    <div class="header-actions">
-      <button
-        type="button"
-        class="icon-btn"
-        title="Modificadores de Físicas (#)"
-        onmouseenter={() => soundFX.playUIHover()}
-        onclick={() => gameUI.openModal('PHYSICS_MODIFIERS')}
-      >
-        <span class="icon">bolt</span>
-      </button>
-    </div>
   </header>
 
   <!-- Main Card -->
@@ -91,7 +81,7 @@
       <div class="title-with-bar">
         <div class="accent-bar"></div>
         <div>
-          <h1 class="card-title">CONFIGURAR SALA DE JUEGO</h1>
+          <h1 class="card-title">Ajustes de la sala</h1>
           <p class="card-subtitle">Define los accesos, la normativa de partido y el terreno de juego</p>
         </div>
       </div>
@@ -121,19 +111,19 @@
         <div class="param-row">
           <div class="param-label-row">
             <span class="param-name">LÍMITE DE JUGADORES</span>
-            <span class="param-badge">SLOTS RED/BLUE</span>
+            <span class="param-badge">Límite de jugadores</span>
           </div>
           <div class="stepper-box">
             <button type="button" class="stepper-btn" onclick={decreasePlayers}>−</button>
             <div class="stepper-display">
               <span class="stepper-num">{playerCount}</span>
-              <span class="stepper-sub">{playerCount / 2} vs {playerCount / 2} PITCH</span>
+              <span class="stepper-sub">Máximo 20 jugadores</span>
             </div>
             <button type="button" class="stepper-btn" onclick={increasePlayers}>+</button>
           </div>
         </div>
 
-        <!-- Password Switch & Input -->
+        <!-- Password Switch & Input (Unmasked type="text") -->
         <div class="param-row">
           <div class="toggle-row">
             <span class="toggle-label">🔒 Proteger con contraseña</span>
@@ -149,7 +139,7 @@
 
           {#if isPasswordProtected}
             <input
-              type="password"
+              type="text"
               class="styled-sub-input"
               placeholder="Ingresa la clave de acceso..."
               bind:value={roomPassword}
@@ -178,23 +168,56 @@
 
       <!-- RIGHT COLUMN: Match Rules & Stadium Preview -->
       <div class="config-column">
-        <!-- Rules Buttons -->
+        <!-- Rules Grid -->
         <div class="param-row">
           <div class="param-label-row">
             <span class="param-name">REGLAS DE PARTIDO</span>
             <span class="param-badge">PARÁMETROS</span>
           </div>
           <div class="rules-grid">
-            <button type="button" class="rule-btn" onclick={cycleTimeLimit}>
-              <span>⏱ {selectedTimeMinutes} min</span>
-              <span class="rule-cycle">▾</span>
+            <!-- Time Selector (0 to 15) -->
+            <div class="rule-select-box" title="Tiempo de partido">
+              <span class="rule-icon">⏱</span>
+              <select
+                class="rule-select"
+                bind:value={selectedTimeMinutes}
+                onchange={() => soundFX.playUIClick()}
+              >
+                {#each Array.from({ length: 16 }, (_, i) => i) as t}
+                  <option value={t}>{formatTimeLimit(t)}</option>
+                {/each}
+              </select>
+              <span class="rule-arrow">▾</span>
+            </div>
+
+            <!-- Goals Selector (0 to 15) -->
+            <div class="rule-select-box" title="Límite de goles">
+              <span class="rule-icon">⚽</span>
+              <select
+                class="rule-select"
+                bind:value={selectedGoalsLimit}
+                onchange={() => soundFX.playUIClick()}
+              >
+                {#each Array.from({ length: 16 }, (_, i) => i) as g}
+                  <option value={g}>{formatGoalsLimit(g)}</option>
+                {/each}
+              </select>
+              <span class="rule-arrow">▾</span>
+            </div>
+
+            <!-- Bloquear Equipos Toggle (A la izquierda de Modificadores) -->
+            <button
+              type="button"
+              class="rule-btn lock-teams-btn"
+              class:active-locked={teamsLocked}
+              title="Bloquear equipos para que solo el host pueda mover jugadores"
+              onclick={() => { soundFX.playUIClick(); teamsLocked = !teamsLocked; }}
+            >
+              <span class="lock-label">{teamsLocked ? '🔒 Bloqueados' : '🔓 Libres'}</span>
+              <span class="lock-tag">{teamsLocked ? 'SOLO HOST' : 'TODOS'}</span>
             </button>
 
-            <button type="button" class="rule-btn" onclick={cycleGoalsLimit}>
-              <span>⚽ {selectedGoalsLimit} goles</span>
-              <span class="rule-cycle">▾</span>
-            </button>
-
+            <!-- Modifiers Button -->
             <button
               type="button"
               class="rule-btn highlight"
@@ -219,7 +242,7 @@
               cycleStadium();
             }
           }}
-          title="Click para cambiar estadio"
+          title="Click para cambiar mapa"
         >
           <!-- Tactical Pitch SVG -->
           <svg class="stadium-svg" viewBox="0 0 300 120" preserveAspectRatio="none">
@@ -232,7 +255,7 @@
           </svg>
 
           <div class="stadium-top-badge">
-            <span>🖱 Click para cambiar mapa ([Ma])</span>
+            <span>🖱 Click para cambiar mapa</span>
             <span class="mode-tag">2D CYBER PITCH</span>
           </div>
 
@@ -263,24 +286,29 @@
 
 <style>
   .creator-root {
-    position: absolute;
+    position: fixed;
     inset: 0;
+    z-index: 10;
+    width: 100%;
+    height: 100%;
+    overflow-y: auto;
+    background-color: #0b111e;
+    background: radial-gradient(circle at 50% 20%, #111a2e 0%, #070b14 100%);
     display: flex;
     flex-direction: column;
     justify-content: space-between;
-    padding: 16px 28px;
+    padding: 20px 28px;
     box-sizing: border-box;
-    pointer-events: none;
+    pointer-events: auto;
     user-select: none;
   }
 
   .top-header {
     display: flex;
     align-items: center;
-    justify-content: space-between;
+    justify-content: flex-start;
     width: 100%;
     z-index: 30;
-    pointer-events: auto;
   }
 
   .nav-pill-btn {
@@ -299,80 +327,32 @@
     letter-spacing: 0.08em;
     cursor: pointer;
     box-shadow: 0 0 12px rgba(0, 229, 255, 0.2);
-    transition: background 0.15s, box-shadow 0.15s;
+    transition: background 0.15s, box-shadow 0.15s, transform 0.1s;
   }
 
   .nav-pill-btn:hover {
     background: rgba(0, 229, 255, 0.2);
     box-shadow: 0 0 16px rgba(0, 229, 255, 0.45);
+    transform: translateY(-1px);
   }
 
-  .header-branding {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-  }
-
-  .brand-title {
-    font-family: 'Space Grotesk', system-ui, sans-serif;
-    font-size: 20px;
-    font-weight: 800;
-    color: #ffffff;
-    letter-spacing: 0.05em;
-  }
-
-  .brand-title .cyan {
-    color: #00e5ff;
-  }
-
-  .brand-badge {
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 10px;
-    color: #00e5ff;
-    background: rgba(0, 229, 255, 0.12);
-    border: 1px solid rgba(0, 229, 255, 0.3);
-    padding: 2px 8px;
-    border-radius: 4px;
-    font-weight: 700;
-  }
-
-  .header-actions {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-  }
-
-  .icon-btn {
-    width: 36px;
-    height: 36px;
-    border-radius: 50%;
-    background: rgba(26, 32, 42, 0.9);
-    border: 1px solid rgba(0, 229, 255, 0.3);
-    color: #00e5ff;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    cursor: pointer;
-    transition: background 0.15s, border-color 0.15s;
-  }
-
-  .icon-btn:hover {
-    background: rgba(0, 229, 255, 0.2);
-    border-color: #00e5ff;
+  .nav-icon {
+    width: 16px;
+    height: 16px;
   }
 
   .creator-card {
-    width: min(92vw, 760px);
+    width: min(94vw, 740px);
     background: rgba(10, 16, 26, 0.96);
     border: 1px solid #00e5ff;
     border-radius: 12px;
     box-shadow: 0 0 24px rgba(0, 229, 255, 0.25);
-    padding: 24px;
+    padding: 22px;
     margin: auto;
     display: flex;
     flex-direction: column;
-    gap: 18px;
-    pointer-events: auto;
+    gap: 16px;
+    box-sizing: border-box;
   }
 
   .card-header {
@@ -380,7 +360,7 @@
     align-items: center;
     justify-content: space-between;
     border-bottom: 1px solid rgba(0, 229, 255, 0.15);
-    padding-bottom: 12px;
+    padding-bottom: 10px;
   }
 
   .title-with-bar {
@@ -390,8 +370,8 @@
   }
 
   .accent-bar {
-    width: 5px;
-    height: 32px;
+    width: 4px;
+    height: 30px;
     background: #00e5ff;
     border-radius: 2px;
     box-shadow: 0 0 10px #00e5ff;
@@ -399,7 +379,7 @@
 
   .card-title {
     font-family: 'Space Grotesk', system-ui, sans-serif;
-    font-size: 19px;
+    font-size: 18px;
     font-weight: 800;
     color: #c3f5ff;
     letter-spacing: 0.05em;
@@ -408,7 +388,7 @@
 
   .card-subtitle {
     font-family: 'Chivo', system-ui, sans-serif;
-    font-size: 12px;
+    font-size: 11px;
     color: #8fa0b5;
     margin: 2px 0 0 0;
   }
@@ -441,14 +421,14 @@
 
   .styled-input {
     width: 100%;
-    height: 42px;
+    height: 40px;
     padding: 0 14px;
     background: #121a29;
     border: 1px solid rgba(0, 229, 255, 0.3);
     border-radius: 6px;
     color: #00e5ff;
     font-family: 'Space Grotesk', system-ui, sans-serif;
-    font-size: 15px;
+    font-size: 14px;
     font-weight: 700;
     outline: none;
     box-sizing: border-box;
@@ -463,18 +443,19 @@
   .columns-grid {
     display: grid;
     grid-template-columns: 1fr 1fr;
-    gap: 16px;
+    gap: 14px;
   }
 
   .config-column {
     background: rgba(18, 26, 41, 0.75);
     border: 1px solid rgba(0, 229, 255, 0.18);
     border-radius: 8px;
-    padding: 14px;
+    padding: 12px;
     display: flex;
     flex-direction: column;
     justify-content: space-between;
-    gap: 14px;
+    gap: 12px;
+    box-sizing: border-box;
   }
 
   .param-row {
@@ -527,7 +508,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    transition: background 0.15s;
+    transition: background 0.15s, color 0.15s;
   }
 
   .stepper-btn:hover {
@@ -564,7 +545,7 @@
 
   .toggle-label {
     font-family: 'Chivo', system-ui, sans-serif;
-    font-size: 13px;
+    font-size: 12px;
     font-weight: 600;
     color: #dde2f1;
   }
@@ -630,6 +611,11 @@
     margin-top: 4px;
   }
 
+  .styled-sub-input:focus {
+    border-color: #00e5ff;
+    box-shadow: 0 0 8px rgba(0, 229, 255, 0.4);
+  }
+
   .param-note {
     font-family: 'JetBrains Mono', monospace;
     font-size: 10px;
@@ -642,6 +628,56 @@
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: 8px;
+  }
+
+  .rule-select-box {
+    position: relative;
+    height: 36px;
+    background: #121a29;
+    border: 1px solid rgba(0, 229, 255, 0.25);
+    border-radius: 5px;
+    display: flex;
+    align-items: center;
+    padding: 0 8px;
+    box-sizing: border-box;
+    transition: border-color 0.15s, background-color 0.15s;
+  }
+
+  .rule-select-box:hover {
+    border-color: #00e5ff;
+    background: rgba(0, 229, 255, 0.08);
+  }
+
+  .rule-icon {
+    font-size: 13px;
+    margin-right: 6px;
+  }
+
+  .rule-select {
+    flex: 1;
+    height: 100%;
+    background: transparent;
+    border: none;
+    color: #c3f5ff;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    font-weight: 600;
+    outline: none;
+    cursor: pointer;
+    appearance: none;
+    -webkit-appearance: none;
+  }
+
+  .rule-select option {
+    background: #0a101a;
+    color: #ffffff;
+  }
+
+  .rule-arrow {
+    color: #8fa0b5;
+    font-size: 11px;
+    pointer-events: none;
+    margin-left: 4px;
   }
 
   .rule-btn {
@@ -659,6 +695,7 @@
     align-items: center;
     justify-content: space-between;
     transition: border-color 0.15s, background 0.15s;
+    box-sizing: border-box;
   }
 
   .rule-btn:hover {
@@ -666,13 +703,22 @@
     background: rgba(0, 229, 255, 0.1);
   }
 
-  .rule-cycle {
-    color: #8fa0b5;
-    font-size: 12px;
+  .lock-teams-btn.active-locked {
+    background: rgba(0, 229, 255, 0.2);
+    border-color: #00e5ff;
+    color: #00e5ff;
+    box-shadow: 0 0 10px rgba(0, 229, 255, 0.25);
+  }
+
+  .lock-tag {
+    font-size: 9px;
+    background: #0e1726;
+    color: #00e5ff;
+    padding: 2px 5px;
+    border-radius: 3px;
   }
 
   .rule-btn.highlight {
-    grid-column: span 2;
     border-color: rgba(255, 219, 60, 0.4);
     color: #ffe16d;
   }
@@ -692,7 +738,7 @@
 
   .stadium-preview-box {
     position: relative;
-    height: 110px;
+    height: 104px;
     border-radius: 8px;
     overflow: hidden;
     background: #092215;
@@ -702,6 +748,7 @@
     flex-direction: column;
     justify-content: space-between;
     padding: 8px 10px;
+    box-sizing: border-box;
     transition: border-color 0.15s, box-shadow 0.15s;
   }
 
@@ -780,12 +827,12 @@
   }
 
   .footer-cta {
-    margin-top: 4px;
+    margin-top: 2px;
   }
 
   .launch-btn {
     width: 100%;
-    height: 48px;
+    height: 46px;
     border-radius: 8px;
     background: #2ecc71;
     border: none;
@@ -801,7 +848,7 @@
 
   .launch-btn:hover {
     background: #27ae60;
-    box-shadow: 0 0 22px rgba(46, 204, 113, 0.7);
+    box-shadow: 0 0 22px rgba(46, 204, 113, 0.65);
     transform: translateY(-1px);
   }
 

@@ -4,14 +4,19 @@
 
   let passwordInput = $state('');
   let passwordError = $state('');
+  let isRefreshing = $state(false);
 
   function handleSearchInput(e: Event) {
     gameUI.roomFilterQuery = (e.target as HTMLInputElement).value;
   }
 
-  function toggleLockFilter() {
+  function handleRefreshRooms() {
     soundFX.playUIClick();
-    gameUI.filterLockedOnly = !gameUI.filterLockedOnly;
+    isRefreshing = true;
+    gameUI.refreshRooms();
+    setTimeout(() => {
+      isRefreshing = false;
+    }, 600);
   }
 
   function handleJoinRoom(room: RoomInfo) {
@@ -47,37 +52,12 @@
       onmouseenter={() => soundFX.playUIHover()}
       onclick={() => gameUI.navigateTo('GATEKEEPER')}
     >
-      <span class="icon">arrow_back</span>
-      <span>INICIO</span>
+      <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+        <line x1="19" y1="12" x2="5" y2="12"></line>
+        <polyline points="12 19 5 12 12 5"></polyline>
+      </svg>
+      <span>Inicio</span>
     </button>
-
-    <div class="header-branding">
-      <span class="brand-title">LEGACY<span class="cyan">X</span>-GO</span>
-      <span class="brand-badge">LOBBY P2P</span>
-    </div>
-
-    <div class="header-actions">
-      <button
-        type="button"
-        class="icon-btn"
-        title="Modificadores de Físicas (#)"
-        onmouseenter={() => soundFX.playUIHover()}
-        onclick={() => gameUI.openModal('PHYSICS_MODIFIERS')}
-      >
-        <span class="icon">bolt</span>
-      </button>
-
-      <button
-        type="button"
-        class="icon-btn"
-        class:muted={gameUI.isAudioMuted}
-        title={gameUI.isAudioMuted ? 'Activar Sonido' : 'Silenciar'}
-        onmouseenter={() => soundFX.playUIHover()}
-        onclick={() => gameUI.toggleMute()}
-      >
-        <span class="icon">{gameUI.isAudioMuted ? 'volume_off' : 'volume_up'}</span>
-      </button>
-    </div>
   </header>
 
   <!-- Main Dual Card Layout -->
@@ -91,7 +71,9 @@
         </div>
         <div class="online-pill">
           <span class="pulse-dot"></span>
-          <span class="online-text">142 Jugadores en línea</span>
+          <span class="online-text">
+            {gameUI.onlineUsersCount} {gameUI.onlineUsersCount === 1 ? 'jugador en línea' : 'jugadores en línea'}
+          </span>
         </div>
       </div>
 
@@ -109,12 +91,14 @@
         </div>
         <button
           type="button"
-          class="lock-filter-btn"
-          class:active={gameUI.filterLockedOnly}
-          title="Filtrar por salas con candado"
-          onclick={toggleLockFilter}
+          class="refresh-btn"
+          class:spinning={isRefreshing}
+          title="Actualizar lista de salas"
+          onclick={handleRefreshRooms}
         >
-          {gameUI.filterLockedOnly ? '🔒' : '🔓'}
+          <svg class="refresh-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/>
+          </svg>
         </button>
       </div>
 
@@ -149,7 +133,9 @@
           </div>
         {:else}
           <div class="empty-rooms">
-            No se encontraron salas con el filtro seleccionado.
+            <div class="empty-icon">🏟️</div>
+            <p class="empty-title">No hay salas disponibles en este momento</p>
+            <p class="empty-subtitle">¡Sé el primero en crear una sala y desafiar a otros jugadores!</p>
           </div>
         {/each}
       </div>
@@ -168,12 +154,16 @@
 
         <button
           type="button"
-          class="btn-modifiers"
+          class="btn-settings"
+          title="Configuración general"
           onmouseenter={() => soundFX.playUIHover()}
-          onclick={() => gameUI.openModal('PHYSICS_MODIFIERS')}
+          onclick={() => gameUI.openModal('SETTINGS')}
         >
-          <span class="btn-icon">⚡</span>
-          <span>MODIFICADORES [#]</span>
+          <svg class="settings-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="3"></circle>
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+          </svg>
+          <span>AJUSTES</span>
         </button>
       </div>
     </section>
@@ -190,9 +180,9 @@
           <span class="player-nick">{gameUI.nickname}</span>
           <div class="player-telemetry">
             <span class="telemetry-green-dot"></span>
-            <span class="telemetry-ping">{gameUI.pingMs} ms</span>
+            <span class="telemetry-ping">{gameUI.realPing !== null ? `${gameUI.realPing} ms` : 'Calculando...'}</span>
             <span class="telemetry-sep">•</span>
-            <span class="telemetry-region">{gameUI.selectedRegion}</span>
+            <span class="telemetry-region">{gameUI.realRegion}</span>
           </div>
         </div>
       </div>
@@ -271,24 +261,29 @@
 
 <style>
   .lobby-root {
-    position: absolute;
+    position: fixed;
     inset: 0;
+    z-index: 10;
+    width: 100%;
+    height: 100%;
+    overflow-y: auto;
+    background-color: #0b111e;
+    background: radial-gradient(circle at 50% 20%, #111a2e 0%, #070b14 100%);
     display: flex;
     flex-direction: column;
     justify-content: space-between;
-    padding: 16px 28px;
+    padding: 20px 28px;
     box-sizing: border-box;
-    pointer-events: none;
+    pointer-events: auto;
     user-select: none;
   }
 
   .top-header {
     display: flex;
     align-items: center;
-    justify-content: space-between;
+    justify-content: flex-start;
     width: 100%;
     z-index: 30;
-    pointer-events: auto;
   }
 
   .nav-pill-btn {
@@ -307,71 +302,18 @@
     letter-spacing: 0.08em;
     cursor: pointer;
     box-shadow: 0 0 12px rgba(0, 229, 255, 0.2);
-    transition: background 0.15s, box-shadow 0.15s;
+    transition: background 0.15s, box-shadow 0.15s, transform 0.1s;
   }
 
   .nav-pill-btn:hover {
     background: rgba(0, 229, 255, 0.2);
     box-shadow: 0 0 16px rgba(0, 229, 255, 0.45);
+    transform: translateY(-1px);
   }
 
-  .header-branding {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-  }
-
-  .brand-title {
-    font-family: 'Space Grotesk', system-ui, sans-serif;
-    font-size: 20px;
-    font-weight: 800;
-    color: #ffffff;
-    letter-spacing: 0.05em;
-  }
-
-  .brand-title .cyan {
-    color: #00e5ff;
-  }
-
-  .brand-badge {
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 10px;
-    color: #00e5ff;
-    background: rgba(0, 229, 255, 0.12);
-    border: 1px solid rgba(0, 229, 255, 0.3);
-    padding: 2px 8px;
-    border-radius: 4px;
-    font-weight: 700;
-  }
-
-  .header-actions {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-  }
-
-  .icon-btn {
-    width: 36px;
-    height: 36px;
-    border-radius: 50%;
-    background: rgba(26, 32, 42, 0.9);
-    border: 1px solid rgba(0, 229, 255, 0.3);
-    color: #00e5ff;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    cursor: pointer;
-    transition: background 0.15s, border-color 0.15s;
-  }
-
-  .icon-btn:hover {
-    background: rgba(0, 229, 255, 0.2);
-    border-color: #00e5ff;
-  }
-
-  .icon-btn.muted {
-    color: #8fa0b5;
-    border-color: rgba(143, 160, 181, 0.3);
+  .nav-icon {
+    width: 16px;
+    height: 16px;
   }
 
   .content-container {
@@ -382,7 +324,7 @@
     max-width: 1040px;
     width: 100%;
     margin: auto;
-    pointer-events: auto;
+    padding: 12px 0;
   }
 
   .rooms-card {
@@ -396,6 +338,7 @@
     display: flex;
     flex-direction: column;
     gap: 16px;
+    box-sizing: border-box;
   }
 
   .card-header {
@@ -433,6 +376,7 @@
     gap: 8px;
     padding: 4px 12px;
     background: #161c26;
+    border: 1px solid rgba(46, 204, 113, 0.25);
     border-radius: 9999px;
   }
 
@@ -442,6 +386,12 @@
     border-radius: 50%;
     background: #2ecc71;
     box-shadow: 0 0 8px #2ecc71;
+    animation: pulse 2s infinite;
+  }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.5; transform: scale(0.9); }
   }
 
   .online-text {
@@ -491,31 +441,42 @@
     box-shadow: 0 0 10px rgba(0, 229, 255, 0.3);
   }
 
-  .lock-filter-btn {
+  .refresh-btn {
     width: 40px;
     height: 40px;
     border-radius: 6px;
     background: #121a29;
     border: 1px solid rgba(0, 229, 255, 0.25);
-    color: #8fa0b5;
-    font-size: 16px;
+    color: #00e5ff;
     cursor: pointer;
     display: flex;
     align-items: center;
     justify-content: center;
-    transition: background 0.15s, border-color 0.15s;
+    transition: background 0.15s, border-color 0.15s, box-shadow 0.15s;
+    flex-shrink: 0;
   }
 
-  .lock-filter-btn:hover, .lock-filter-btn.active {
+  .refresh-btn:hover {
     background: rgba(0, 229, 255, 0.15);
     border-color: #00e5ff;
-    color: #00e5ff;
+    box-shadow: 0 0 10px rgba(0, 229, 255, 0.3);
+  }
+
+  .refresh-icon {
+    width: 18px;
+    height: 18px;
+    transition: transform 0.4s ease;
+  }
+
+  .refresh-btn.spinning .refresh-icon {
+    transform: rotate(360deg);
   }
 
   .room-list {
     display: flex;
     flex-direction: column;
     gap: 8px;
+    min-height: 220px;
     max-height: 320px;
     overflow-y: auto;
     padding-right: 4px;
@@ -636,18 +597,43 @@
   }
 
   .empty-rooms {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 44px 20px;
+    background: rgba(14, 20, 32, 0.5);
+    border: 1px dashed rgba(0, 229, 255, 0.25);
+    border-radius: 8px;
     text-align: center;
-    padding: 40px 10px;
-    color: #8fa0b5;
+    margin: auto 0;
+  }
+
+  .empty-icon {
+    font-size: 32px;
+    margin-bottom: 8px;
+  }
+
+  .empty-title {
+    font-family: 'Space Grotesk', system-ui, sans-serif;
+    font-size: 14px;
+    font-weight: 700;
+    color: #ffffff;
+    margin: 0 0 4px 0;
+  }
+
+  .empty-subtitle {
     font-family: 'Chivo', system-ui, sans-serif;
-    font-size: 13px;
+    font-size: 12px;
+    color: #8fa0b5;
+    margin: 0;
   }
 
   .card-footer {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding-top: 8px;
+    padding-top: 12px;
     border-top: 1px solid rgba(0, 229, 255, 0.15);
   }
 
@@ -675,7 +661,7 @@
     box-shadow: 0 0 20px rgba(0, 229, 255, 0.75);
   }
 
-  .btn-modifiers {
+  .btn-settings {
     height: 42px;
     padding: 0 16px;
     border-radius: 6px;
@@ -689,13 +675,19 @@
     cursor: pointer;
     display: flex;
     align-items: center;
-    gap: 6px;
-    transition: background 0.15s, box-shadow 0.15s;
+    gap: 8px;
+    transition: background 0.15s, box-shadow 0.15s, border-color 0.15s;
   }
 
-  .btn-modifiers:hover {
+  .btn-settings:hover {
     background: rgba(0, 229, 255, 0.18);
+    border-color: #00e5ff;
     box-shadow: 0 0 12px rgba(0, 229, 255, 0.3);
+  }
+
+  .settings-icon {
+    width: 16px;
+    height: 16px;
   }
 
   .sidebar-module {

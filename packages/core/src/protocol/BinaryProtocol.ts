@@ -14,6 +14,12 @@ export enum EventType {
   MATCH_END = 5
 }
 
+export enum SoundEvent {
+  KICK = 1 << 0,     // 0x01
+  POST_HIT = 1 << 1, // 0x02
+  GOAL = 1 << 2      // 0x04
+}
+
 export const SOUND_KICK = 1 << 0;
 export const SOUND_POST_HIT = 1 << 1;
 export const SOUND_GOAL = 1 << 2;
@@ -30,8 +36,10 @@ export const INPUT_FLAG_MAGNUS_RIGHT = 1 << 8;
 export const INPUT_FLAG_TYPING = 1 << 9;
 
 export interface PlayerInput {
+  tick?: number;
   sequence?: number;
   inputMask?: number;
+  aimAngle?: number;
   clientTimestamp?: number;
   dirX?: number;
   dirY?: number;
@@ -50,6 +58,7 @@ export interface CompactDiscState {
   vy: number;
   flags: number;
   spin?: number;
+  stamina?: number;
 }
 
 export interface GameStateSnapshot {
@@ -66,17 +75,17 @@ export interface GameStateSnapshot {
  * Protocolo binario de alto rendimiento (Zero-GC) con ArrayBuffer y DataView
  */
 export class BinaryProtocol {
+  public static readonly PKT_INPUT = OP_INPUT;
+  public static readonly PKT_SNAPSHOT = OP_SNAPSHOT;
   public static readonly INPUT_SIZE = 9;
   public static readonly SNAPSHOT_HEADER_SIZE = 12;
   public static readonly DISC_RECORD_SIZE = 16;
 
-  /**
-   * Empaquetador de entrada (9 bytes):
-   * Byte 0: OP_INPUT (0x01)
-   * Bytes 1-4: sequence (uint32)
-   * Bytes 5-6: inputMask (uint16)
-   * Bytes 7-8: clientTimestamp (uint16)
-   */
+  public static peekPacketType(buffer: ArrayBuffer | DataView): number {
+    const view = buffer instanceof DataView ? buffer : new DataView(buffer);
+    return view.byteLength > 0 ? view.getUint8(0) : 0;
+  }
+
   public static encodeInput(input: PlayerInput, outBuffer?: ArrayBuffer): ArrayBuffer {
     const buf = outBuffer && outBuffer.byteLength >= this.INPUT_SIZE ? outBuffer : new ArrayBuffer(this.INPUT_SIZE);
     const view = new DataView(buf);
@@ -96,7 +105,7 @@ export class BinaryProtocol {
     if (input.magnusRight) mask |= INPUT_FLAG_MAGNUS_RIGHT;
 
     view.setUint8(0, OP_INPUT);
-    view.setUint32(1, input.sequence ?? 0, false);
+    view.setUint32(1, input.sequence ?? input.tick ?? 0, false);
     view.setUint16(5, mask, false);
     view.setUint16(7, (input.clientTimestamp ?? 0) & 0xffff, false);
 
@@ -127,6 +136,7 @@ export class BinaryProtocol {
     }
 
     return {
+      tick: sequence,
       sequence,
       inputMask,
       clientTimestamp,
@@ -139,26 +149,6 @@ export class BinaryProtocol {
     };
   }
 
-  /**
-   * Empaquetador de Snapshot a 60 Hz:
-   * Header (12 bytes):
-   *   Byte 0: OP_SNAPSHOT (0x02)
-   *   Bytes 1-4: tick (uint32)
-   *   Byte 5: phase (uint8)
-   *   Bytes 6-7: matchTimerSeconds (uint16)
-   *   Byte 8: redScore (uint8)
-   *   Byte 9: blueScore (uint8)
-   *   Byte 10: soundMask (uint8)
-   *   Byte 11: discCount (uint8)
-   * Disc Records (16 bytes c/u):
-   *   Bytes 0-1: id (uint16)
-   *   Byte 2: team (uint8)
-   *   Byte 3: flags (uint8)
-   *   Bytes 4-7: x (float32)
-   *   Bytes 8-11: y (float32)
-   *   Bytes 12-13: qvx (int16 cuantizado * 20)
-   *   Bytes 14-15: qvy (int16 cuantizado * 20)
-   */
   public static encodeSnapshot(snapshot: GameStateSnapshot, outBuffer?: ArrayBuffer): ArrayBuffer {
     const discCount = snapshot.discs.length;
     const totalLength = this.SNAPSHOT_HEADER_SIZE + discCount * this.DISC_RECORD_SIZE;

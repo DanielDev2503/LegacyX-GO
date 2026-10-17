@@ -11,6 +11,7 @@ export enum MatchPhase {
   COUNTDOWN = 1,
   PAUSED = 2.1,
   GOAL_CELEBRATION = 3,
+  VICTORY_CELEBRATION = 5,
   MATCH_ENDED = 5
 }
 

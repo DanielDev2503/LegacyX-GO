@@ -1,0 +1,619 @@
+import { describe, it, expect, beforeEach } from 'vitest';
+import { GameEngine } from '../../../core/src/game/GameEngine';
+import { Player, INPUT_KICK } from '../../../core/src/game/Player';
+import { MatchPhase } from '../../../core/src/game/GameFSM';
+import { POWER_SHOT_SPEED_THRESHOLD } from '../../../core/src/entities/Disc';
+import { MatchStatsModal } from '../../src/controllers/components/MatchStatsModal';
+import { DiscRenderer } from '../../src/renderer/DiscRenderer';
+import { DiscSnapshot } from '../../../core/src/game/GameState';
+
+describe('Game Scoring Engine & Ball Kinematics (Phase 1)', () => {
+  let engine: GameEngine;
+  let pRed1: Player;
+  let pRed2: Player;
+  let pBlue1: Player;
+  let pBlue2: Player;
+
+  beforeEach(() => {
+    engine = new GameEngine();
+    pRed1 = new Player({ id: 'r1', name: 'Ronaldo', team: 'red', isHost: true });
+    pRed2 = new Player({ id: 'r2', name: 'Messi', team: 'red' });
+    pBlue1 = new Player({ id: 'b1', name: 'Buffon', team: 'blue' });
+    pBlue2 = new Player({ id: 'b2', name: 'Zidane', team: 'blue' });
+
+    engine.addPlayer(pRed1);
+    engine.addPlayer(pRed2);
+    engine.addPlayer(pBlue1);
+    engine.addPlayer(pBlue2);
+
+    engine.fsm.currentState = MatchPhase.PLAYING;
+  });
+
+  describe('1. Magnus Effect Limits (Max 2 Presses & 3.0s Timer)', () => {
+    it('initializes magnus controller, 2 presses and 3.0s timer when ball is kicked', () => {
+      const disc = engine.playerDiscs.get('r1')!;
+      disc.pos.set(-24, 0);
+      engine.ball.pos.set(0, 0);
+
+      const inputs = new Map<string, number>();
+      inputs.set('r1', INPUT_KICK);
+      engine.tick(inputs);
+
+      expect(engine.ball.magnusControllerId).toBe('r1');
+      expect(engine.ball.magnusPressesRemaining).toBe(2);
+      expect(engine.ball.magnusTimer).toBeCloseTo(3.0, 1);
+    });
+
+    it('allows at most 2 directional curve presses, blocking the 3rd attempt', () => {
+      const disc = engine.playerDiscs.get('r1')!;
+      disc.pos.set(-24, 0);
+      engine.ball.pos.set(0, 0);
+
+      const kickInputs = new Map<string, number>();
+      kickInputs.set('r1', INPUT_KICK);
+      engine.tick(kickInputs);
+
+      expect(engine.ball.magnusPressesRemaining).toBe(2);
+
+      // 1st press: curveLeft (curveInput = 1)
+      pRed1.curveInput = 1;
+      engine.tick(new Map());
+      expect(engine.ball.magnusPressesRemaining).toBe(1);
+      expect(engine.ball.isCurving).toBe(true);
+
+      // Release key
+      pRed1.curveInput = 0;
+      engine.tick(new Map());
+      expect(engine.ball.magnusPressesRemaining).toBe(1);
+      expect(engine.ball.isCurving).toBe(false);
+
+      // 2nd press: curveRight (curveInput = -1)
+      pRed1.curveInput = -1;
+      engine.tick(new Map());
+      expect(engine.ball.magnusPressesRemaining).toBe(0);
+      expect(engine.ball.isCurving).toBe(true);
+
+      // Release key
+      pRed1.curveInput = 0;
+      engine.tick(new Map());
+      expect(engine.ball.magnusPressesRemaining).toBe(0);
+      expect(engine.ball.isCurving).toBe(false);
+
+      // 3rd press attempt: curveLeft (curveInput = 1) -> must be blocked!
+      pRed1.curveInput = 1;
+      engine.tick(new Map());
+      expect(engine.ball.magnusPressesRemaining).toBe(0);
+      expect(engine.ball.isCurving).toBe(false);
+      expect(engine.ball.spin).toBe(0);
+    });
+
+    it('revokes aerodynamic control after 3.0 seconds (180 ticks)', () => {
+      const disc = engine.playerDiscs.get('r1')!;
+      disc.pos.set(-24, 0);
+      engine.ball.pos.set(0, 0);
+
+      const kickInputs = new Map<string, number>();
+      kickInputs.set('r1', INPUT_KICK);
+      engine.tick(kickInputs);
+
+      expect(engine.ball.magnusTimer).toBeGreaterThan(0);
+
+      // Simulate 185 ticks (~3.08 seconds)
+      for (let i = 0; i < 185; i++) {
+        engine.tick(new Map());
+      }
+
+      expect(engine.ball.magnusTimer).toBe(0);
+
+      // Player attempts to curve now:
+      pRed1.curveInput = 1;
+      engine.tick(new Map());
+      expect(engine.ball.isCurving).toBe(false);
+      expect(engine.ball.spin).toBe(0);
+    });
+  });
+
+  describe('2. Power Shot Threshold', () => {
+    it('activates isPowerShot when ball speed >= 950 px/s', () => {
+      engine.ball.vel.set(960, 0);
+      const speed = Math.hypot(engine.ball.vel.x, engine.ball.vel.y);
+      expect(speed).toBeGreaterThanOrEqual(POWER_SHOT_SPEED_THRESHOLD);
+
+      // Register touch with high speed
+      engine.registerBallTouch('r1', false);
+      expect(engine.ball.isPowerShot).toBe(true);
+    });
+
+    it('deactivates isPowerShot when ball speed < 950 px/s', () => {
+      engine.ball.vel.set(700, 0);
+      engine.registerBallTouch('r1', false);
+      expect(engine.ball.isPowerShot).toBe(false);
+    });
+  });
+
+  describe('3. Cumulative Scoring Engine', () => {
+    it('awards +2 pts per ball touch with cooldown', () => {
+      engine.registerBallTouch('r1');
+      const stats = engine.getOrCreatePlayerStats('r1');
+      expect(stats.points).toBe(2);
+      expect(stats.touches).toBe(1);
+
+      // Immediate touch within cooldown (< 15 ticks) should not award points again
+      engine.registerBallTouch('r1');
+      expect(stats.points).toBe(2);
+      expect(stats.touches).toBe(1);
+
+      // Advance 16 ticks
+      for (let i = 0; i < 16; i++) {
+        engine.tick(new Map());
+      }
+
+      // Next touch after cooldown
+      engine.registerBallTouch('r1');
+      expect(stats.points).toBe(4);
+      expect(stats.touches).toBe(2);
+    });
+
+    it('awards +10 pts for completed pass between teammates', () => {
+      engine.registerBallTouch('r1');
+      const r1Stats = engine.getOrCreatePlayerStats('r1');
+      expect(r1Stats.points).toBe(2);
+
+      // Advance ticks
+      for (let i = 0; i < 16; i++) engine.tick(new Map());
+
+      // Teammate touches ball
+      engine.registerBallTouch('r2');
+      const r2Stats = engine.getOrCreatePlayerStats('r2');
+      expect(r2Stats.points).toBe(2);
+      expect(r1Stats.passes).toBe(1);
+      expect(r1Stats.points).toBe(12); // 2 touch + 10 pass
+    });
+
+    it('strictly awards save (+100 pts) only if intercepted in own half', () => {
+      const redGoal = engine.stadium.goals[0]; // Left goal (x around -370)
+      const blueGoal = engine.stadium.goals[1]; // Right goal (x around +370)
+      expect(redGoal).toBeDefined();
+      expect(blueGoal).toBeDefined();
+
+      // Case A: Ronaldo (red) shoots at blue goal.
+      // Buffon (blue) intercepts at x = 100 (in blue's own half: x >= 0 for blue defender)
+      engine.ball.pos.set(50, 0);
+      engine.ball.vel.set(300, 0); // heading towards blue goal on right
+      engine.registerBallTouch('r1', true); // r1 shot
+
+      for (let i = 0; i < 16; i++) engine.tick(new Map());
+      const buffonDisc = engine.playerDiscs.get('b1')!;
+      buffonDisc.pos.set(100, 0); // in blue half (x >= 0)
+      engine.ball.pos.set(100, 0);
+
+      // Buffon intercepts
+      engine.registerBallTouch('b1', false);
+
+      const buffonStats = engine.getOrCreatePlayerStats('b1');
+      expect(buffonStats.saves).toBe(1);
+      expect(buffonStats.points).toBe(102); // 2 touch + 100 save
+
+      // Case B: Zidane (blue) shoots at red goal.
+      // Ronaldo (red) intercepts at x = 100 (in opponent half! x > 0, NOT red own half)
+      engine.ball.pos.set(0, 0);
+      engine.ball.vel.set(-300, 0); // heading towards red goal on left
+      engine.registerBallTouch('b2', true); // b2 shot
+
+      const ronaldoDisc = engine.playerDiscs.get('r1')!;
+      ronaldoDisc.pos.set(100, 0); // in opponent half (x > 0)
+      engine.ball.pos.set(100, 0);
+
+      for (let i = 0; i < 16; i++) engine.tick(new Map());
+      const ronaldoStats = engine.getOrCreatePlayerStats('r1');
+      const r1PrevSaves = ronaldoStats.saves || 0;
+      const r1PrevPoints = ronaldoStats.points;
+      engine.registerBallTouch('r1', false);
+
+      expect(ronaldoStats.saves).toBe(r1PrevSaves); // Save rejected!
+      expect(ronaldoStats.points).toBe(r1PrevPoints + 2); // Only touch awarded
+
+      // Case C: Ronaldo (red) intercepts in own half (x = -50 <= 0)
+      ronaldoDisc.pos.set(-50, 0);
+      engine.ball.pos.set(-50, 0);
+      engine.ball.vel.set(-300, 0);
+      engine.registerBallTouch('b2', true); // b2 shot again
+
+      for (let i = 0; i < 16; i++) engine.tick(new Map());
+      engine.registerBallTouch('r1', false);
+      expect(ronaldoStats.saves).toBe(r1PrevSaves + 1); // Save granted!
+      expect(ronaldoStats.points).toBeGreaterThanOrEqual(100);
+    });
+
+    it('awards +50 for normal assist and +70 for curve assist, +100 for goal', () => {
+      // Normal assist: r2 passes to r1, then goal
+      engine.registerBallTouch('r2', false);
+      for (let i = 0; i < 16; i++) engine.tick(new Map());
+
+      engine.ball.vel.set(400, 0);
+      engine.registerBallTouch('r1', true); // r1 shot
+
+      const r1Stats = engine.getOrCreatePlayerStats('r1');
+      const r2Stats = engine.getOrCreatePlayerStats('r2');
+      const r1PointsBeforeGoal = r1Stats.points;
+      const r2PointsBeforeGoal = r2Stats.points;
+
+      // Simulate ball crossing blue goal line
+      const blueGoal = engine.stadium.goals[1];
+      engine.ball.pos.set(blueGoal.p0.x + 10, 0);
+
+      // Trigger goal check in engine tick
+      engine.fsm.currentState = MatchPhase.PLAYING;
+      engine.tick(new Map());
+
+      expect(r1Stats.goals).toBe(1);
+      expect(r1Stats.points).toBe(r1PointsBeforeGoal + 100); // +100 goal
+
+      expect(r2Stats.assists).toBe(1);
+      expect(r2Stats.points).toBe(r2PointsBeforeGoal + 50); // +50 normal assist
+    });
+
+    it('awards +70 for assist with active curve (wasCurve = true)', () => {
+      // Curve assist: r2 passes with curve active
+      engine.ball.spin = 3.5;
+      engine.registerBallTouch('r2', false);
+      for (let i = 0; i < 16; i++) engine.tick(new Map());
+
+      engine.ball.spin = 0;
+      engine.ball.vel.set(400, 0);
+      engine.registerBallTouch('r1', true);
+
+      const r2Stats = engine.getOrCreatePlayerStats('r2');
+      const r2PointsBefore = r2Stats.points;
+
+      const blueGoal = engine.stadium.goals[1];
+      engine.ball.pos.set(blueGoal.p0.x + 10, 0);
+      engine.fsm.currentState = MatchPhase.PLAYING;
+      engine.tick(new Map());
+
+      expect(r2Stats.assists).toBe(1);
+      expect(r2Stats.points).toBe(r2PointsBefore + 70); // +70 assist with curve
+    });
+
+    it('penalizes own goal (-50 pts) in crimson color (#ff4757) and credits no assist', () => {
+      let scoreEvents: Array<{ text: string; pts: number; color?: string | undefined }> = [];
+      engine.onScoreEvent = (_id, text, pts, _x, _y, color) => {
+        scoreEvents.push({ text, pts, color });
+      };
+
+      // Attacking team touches ball first
+      engine.registerBallTouch('r1', true);
+      for (let i = 0; i < 16; i++) engine.tick(new Map());
+
+      // Defending blue player touches ball last (deflection into own net)
+      engine.registerBallTouch('b1', false);
+      const b1Stats = engine.getOrCreatePlayerStats('b1');
+      const b1PointsBefore = b1Stats.points;
+
+      // Ball enters blue goal (red scores, blue concedes)
+      const blueGoal = engine.stadium.goals[1];
+      engine.ball.pos.set(blueGoal.p0.x + 10, 0);
+      engine.fsm.currentState = MatchPhase.PLAYING;
+      engine.tick(new Map());
+
+      // Buffon (b1) receives -50 pts penalty
+      expect(b1Stats.points).toBe(b1PointsBefore - 50);
+
+      // Event is emitted with crimson color
+      const ownGoalEvent = scoreEvents.find(e => e.text.includes('Autogol'));
+      expect(ownGoalEvent).toBeDefined();
+      expect(ownGoalEvent?.pts).toBe(-50);
+      expect(ownGoalEvent?.color).toBe('#ff4757');
+
+      // No assist should be credited
+      const r1Stats = engine.getOrCreatePlayerStats('r1');
+      expect(r1Stats.assists).toBe(0);
+    });
+
+    it('awards +120 pts for goal scored with active curve spin (total +140 with base shot of +20)', () => {
+      let scoreEvents: Array<{ text: string; pts: number }> = [];
+      engine.onScoreEvent = (_id, text, pts) => {
+        scoreEvents.push({ text, pts });
+      };
+
+      // r1 shoots with active curve
+      engine.ball.vel.set(400, 0);
+      engine.ball.spin = 3.5;
+      engine.registerBallTouch('r1', true);
+
+      const r1Stats = engine.getOrCreatePlayerStats('r1');
+      const r1PointsBefore = r1Stats.points;
+
+      const blueGoal = engine.stadium.goals[1];
+      engine.ball.pos.set(blueGoal.p0.x + 10, 0);
+      engine.fsm.currentState = MatchPhase.PLAYING;
+      engine.tick(new Map());
+
+      expect(r1Stats.goals).toBe(1);
+      expect(r1Stats.points).toBe(r1PointsBefore + 120);
+
+      const goalEvent = scoreEvents.find(e => e.text.includes('+120'));
+      expect(goalEvent).toBeDefined();
+    });
+
+    it('suppresses floating score text on simple ball touch (+2 pts)', () => {
+      let scoreEvents: Array<{ text: string; pts: number }> = [];
+      engine.onScoreEvent = (_id, text, pts) => {
+        scoreEvents.push({ text, pts });
+      };
+
+      engine.registerBallTouch('r1', false);
+      const stats = engine.getOrCreatePlayerStats('r1');
+      expect(stats.points).toBe(2);
+
+      const touchEvent = scoreEvents.find(e => e.text.includes('Toque'));
+      expect(touchEvent).toBeUndefined();
+    });
+
+    it('awards hattrick bonus (+100 pts) once when reaching 3 goals', () => {
+      const stats = engine.getOrCreatePlayerStats('r1');
+      stats.goals = 2;
+      stats.points = 200;
+
+      engine.checkHattrickBonus(stats);
+      expect(stats.hasHattrickBonus).toBe(false);
+      expect(stats.points).toBe(200);
+
+      stats.goals = 3;
+      engine.checkHattrickBonus(stats);
+      expect(stats.hasHattrickBonus).toBe(true);
+      expect(stats.points).toBe(300); // 200 + 100 bonus
+
+      // Re-triggering does not award bonus again
+      stats.goals = 4;
+      engine.checkHattrickBonus(stats);
+      expect(stats.points).toBe(300);
+    });
+  });
+
+  describe('4. MVP Determination & MatchStatsModal Presentation', () => {
+    it('correctly selects MVP based on highest total score', () => {
+      const s1 = engine.getOrCreatePlayerStats('r1');
+      const s2 = engine.getOrCreatePlayerStats('r2');
+      const s3 = engine.getOrCreatePlayerStats('b1');
+
+      s1.points = 180;
+      s2.points = 320;
+      s3.points = 110;
+
+      const mvp = engine.getMVP();
+      expect(mvp).not.toBeNull();
+      expect(mvp?.playerId).toBe('r2');
+      expect(mvp?.points).toBe(320);
+    });
+
+    it('MatchStatsModal renders table ranked by points and crowns the MVP', () => {
+      const createdElements: Record<string, any> = {};
+      const mockElement = (tag: string) => {
+        const el: any = {
+          tagName: tag.toUpperCase(),
+          id: '',
+          className: '',
+          style: {},
+          classList: {
+            add: () => {},
+            remove: () => {},
+            toggle: () => {},
+            contains: () => false
+          },
+          children: [] as any[],
+          innerHTML: '',
+          appendChild: (c: any) => {
+            if (c.id) createdElements[c.id] = c;
+            if (c.className && c.className.includes('match-stats-card')) createdElements['match-stats-card'] = c;
+            if (c.className && c.className.includes('match-stats-wrapper')) createdElements['match-stats-wrapper'] = c;
+            el.children.push(c);
+            return c;
+          },
+          removeChild: () => {},
+          querySelector: (sel: string) => {
+            if (sel === '.match-stats-card') return createdElements['match-stats-card'];
+            if (sel === '.match-stats-wrapper') return createdElements['match-stats-wrapper'];
+            if (sel === '#stats-to-menu-btn') return createdElements['stats-to-menu-btn'];
+            return null;
+          },
+          addEventListener: () => {}
+        };
+        return el;
+      };
+
+      const originalDoc = (globalThis as any).document;
+      const bodyEl = mockElement('body');
+      (globalThis as any).document = {
+        body: bodyEl,
+        getElementById: (id: string) => createdElements[id] || null,
+        createElement: (tag: string) => mockElement(tag)
+      };
+
+      const modal = new MatchStatsModal();
+      const statsList = [
+        {
+          playerId: 'p1',
+          playerName: 'Alpha',
+          team: 'red' as const,
+          points: 120,
+          goals: 1,
+          assists: 0,
+          passes: 2,
+          saves: 0,
+          shots: 2,
+          touches: 10,
+          hasHattrickBonus: false
+        },
+        {
+          playerId: 'p2',
+          playerName: 'Beta',
+          team: 'blue' as const,
+          points: 350,
+          goals: 2,
+          assists: 1,
+          passes: 5,
+          saves: 1,
+          shots: 4,
+          touches: 20,
+          hasHattrickBonus: false
+        }
+      ];
+
+      modal.show(statsList);
+      expect(modal.isOpen()).toBe(true);
+
+      const overlay = (globalThis as any).document.getElementById('match-stats-overlay') || (globalThis as any).document.getElementById('matchStatsModal');
+      expect(overlay).not.toBeNull();
+      const card = createdElements['match-stats-card'] || overlay;
+      expect(card.innerHTML).toContain('Beta');
+      expect(card.innerHTML).toContain('MVP');
+      expect(card.innerHTML).toContain('350');
+      expect(card.innerHTML).toContain('👑');
+
+      modal.close();
+      expect(modal.isOpen()).toBe(false);
+      modal.destroy();
+
+      (globalThis as any).document = originalDoc;
+    });
+  });
+
+  describe('5. Phase 1 Enhancements & Quality Assurance', () => {
+    it('mid-match team switch maintains team scores and allows concluding when scoreLimit is reached', () => {
+      const engine = new GameEngine({ scoreLimit: 2, timeLimitSeconds: 180 });
+      const p1 = new Player({ id: 'p1', name: 'Player1', team: 'red' });
+      const p2 = new Player({ id: 'p2', name: 'Player2', team: 'blue' });
+      engine.addPlayer(p1);
+      engine.addPlayer(p2);
+      engine.startMatch();
+
+      for (let i = 0; i < 180; i++) engine.tick(new Map());
+      expect(engine.fsm.currentState).toBe(MatchPhase.PLAYING);
+
+      // Red scores a goal
+      engine.redScore = 1;
+      const initialStats = engine.getOrCreatePlayerStats('p1');
+      initialStats.points = 100;
+      initialStats.goals = 1;
+
+      expect(engine.scores.red).toBe(1);
+      expect(engine.scores.blue).toBe(0);
+
+      // Player 1 switches to blue mid-match
+      engine.setPlayerTeam('p1', 'blue');
+
+      // Team scores must remain identical!
+      expect(engine.scores.red).toBe(1);
+      expect(engine.scores.blue).toBe(0);
+
+      // Player retains their individual points and stats
+      const p1Stats = engine.getOrCreatePlayerStats('p1');
+      expect(p1Stats.points).toBe(100);
+      expect(p1Stats.goals).toBe(1);
+      expect(p1Stats.team).toBe('blue');
+
+      // Red scores 2nd goal reaching scoreLimit (2)
+      engine.ball.pos.set(engine.stadium.halfWidth + 20, 0); // Goal in blue net = Red scores
+      engine.tick(new Map());
+
+      expect(engine.scores.red).toBe(2);
+      expect(engine.fsm.currentState).toBe(MatchPhase.VICTORY_CELEBRATION);
+      expect(engine.fsm.winningTeam).toBe('red');
+    });
+
+    it('3D ball rolling coordinates match the negative velocity vector sign', () => {
+      const renderer = new DiscRenderer();
+      const mockCtx: any = {
+        save: () => {},
+        restore: () => {},
+        beginPath: () => {},
+        moveTo: () => {},
+        lineTo: () => {},
+        arc: () => {},
+        fill: () => {},
+        stroke: () => {},
+        clip: () => {},
+        fillRect: () => {},
+        createRadialGradient: () => ({ addColorStop: () => {} }),
+        createLinearGradient: () => ({ addColorStop: () => {} }),
+      };
+
+      renderer.setBallRollAngles(0, 0);
+      const radius = 10;
+      const vx = 100;
+      const vy = 50;
+      const dt = 1 / 60;
+
+      const ballDisc: DiscSnapshot = {
+        id: 0,
+        team: 0,
+        x: 0,
+        y: 0,
+        vx,
+        vy,
+        radius,
+        kicking: false,
+        avatar: ''
+      };
+
+      renderer.draw(mockCtx, [ballDisc]);
+
+      const angles = renderer.getBallRollAngles();
+      const expectedRollX = -(vx * dt) / radius;
+      const expectedRollY = -(vy * dt) / radius;
+
+      expect(angles.x).toBeCloseTo(expectedRollX, 4);
+      expect(angles.y).toBeCloseTo(expectedRollY, 4);
+      expect(angles.x).toBeLessThan(0);
+      expect(angles.y).toBeLessThan(0);
+    });
+
+    it('points breakdown sums with 100% mathematical precision to the player total', () => {
+      const engine = new GameEngine();
+      const p = new Player({ id: 'p_math', name: 'Mathematician', team: 'red' });
+      engine.addPlayer(p);
+
+      const stats = engine.getOrCreatePlayerStats('p_math');
+      stats.touches = 15; // 15 * 2 = 30
+      stats.passes = 4;   // 4 * 10 = 40
+      stats.shotsNormal = 2; // 2 * 20 = 40
+      stats.shotsPowerCurve = 1; // 1 * 30 = 30
+      stats.shots = 3;
+      stats.assistsNormal = 1; // 1 * 50 = 50
+      stats.assistsCurve = 1; // 1 * 70 = 70
+      stats.assists = 2;
+      stats.saves = 2; // 2 * 100 = 200
+      stats.goals = 3; // 3 * 100 = 300
+      stats.hasHattrickBonus = true; // 100
+      stats.hattrickBonus = 100;
+
+      stats.points = (stats.touches * 2) +
+                     (stats.passes * 10) +
+                     (stats.shotsNormal * 20) +
+                     (stats.shotsPowerCurve * 30) +
+                     (stats.assistsNormal * 50) +
+                     (stats.assistsCurve * 70) +
+                     (stats.saves * 100) +
+                     (stats.goals * 100) +
+                     (stats.hasHattrickBonus ? 100 : 0);
+
+      const expectedTotal = 30 + 40 + 40 + 30 + 50 + 70 + 200 + 300 + 100;
+      expect(stats.points).toBe(expectedTotal);
+      expect(stats.points).toBe(860);
+
+      const calculatedSum = (stats.touches * 2) +
+                            (stats.passes * 10) +
+                            ((stats.shotsNormal ?? 0) * 20) +
+                            ((stats.shotsPowerCurve ?? 0) * 30) +
+                            ((stats.assistsNormal ?? 0) * 50) +
+                            ((stats.assistsCurve ?? 0) * 70) +
+                            (stats.saves * 100) +
+                            (stats.goals * 100) +
+                            (stats.hasHattrickBonus ? 100 : 0);
+
+      expect(calculatedSum).toBe(stats.points);
+    });
+  });
+});
+
