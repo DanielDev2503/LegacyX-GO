@@ -8,15 +8,38 @@
 export class SoundFX {
   private ctx: AudioContext | null = null;
   private masterGain: GainNode | null = null;
+  private chatGain: GainNode | null = null;
+  private sfxGain: GainNode | null = null;
+  private envGain: GainNode | null = null;
+
   private _isMuted: boolean = false;
   private _volume: number = 0.5;
+  private _chatVolume: number = 0.7;
+  private _sfxVolume: number = 0.7;
+  private _envVolume: number = 0.5;
 
-  // Independent sound effect toggles
-  public chatSoundEnabled: boolean = true;
-  public postHitSoundEnabled: boolean = true;
+  // Canal 2: Chat y Social
+  public chatNormalSoundEnabled: boolean = true;
+  public chatMentionSoundEnabled: boolean = true;
+  public chatEmotesSoundEnabled: boolean = true;
+
+  // Canal 3: Efectos (SFX)
   public kickSoundEnabled: boolean = true;
-  public goalSoundEnabled: boolean = true;
+  public postHitSoundEnabled: boolean = true;
+
+  // Canal 4: Entorno
   public whistleSoundEnabled: boolean = true;
+  public goalSoundEnabled: boolean = true;
+  public crowdSoundEnabled: boolean = true;
+  public ambientSoundEnabled: boolean = true;
+
+  // Backwards compatibility alias for chatSoundEnabled
+  public get chatSoundEnabled(): boolean {
+    return this.chatNormalSoundEnabled;
+  }
+  public set chatSoundEnabled(val: boolean) {
+    this.chatNormalSoundEnabled = val;
+  }
 
   public get isMuted(): boolean {
     return this._isMuted;
@@ -34,6 +57,30 @@ export class SoundFX {
     this.setMasterVolume(val);
   }
 
+  public get chatVolume(): number {
+    return this._chatVolume;
+  }
+
+  public set chatVolume(val: number) {
+    this.setChatVolume(val);
+  }
+
+  public get sfxVolume(): number {
+    return this._sfxVolume;
+  }
+
+  public set sfxVolume(val: number) {
+    this.setSfxVolume(val);
+  }
+
+  public get envVolume(): number {
+    return this._envVolume;
+  }
+
+  public set envVolume(val: number) {
+    this.setEnvVolume(val);
+  }
+
   public ensureContext(): AudioContext | null {
     if (typeof window === 'undefined') return null;
 
@@ -46,6 +93,19 @@ export class SoundFX {
       this.masterGain = this.ctx.createGain();
       this.masterGain.gain.setValueAtTime(this._isMuted ? 0 : this._volume, this.ctx.currentTime);
       this.masterGain.connect(this.ctx.destination);
+
+      // Sub-canales de audio
+      this.chatGain = this.ctx.createGain();
+      this.chatGain.gain.setValueAtTime(this._chatVolume, this.ctx.currentTime);
+      this.chatGain.connect(this.masterGain);
+
+      this.sfxGain = this.ctx.createGain();
+      this.sfxGain.gain.setValueAtTime(this._sfxVolume, this.ctx.currentTime);
+      this.sfxGain.connect(this.masterGain);
+
+      this.envGain = this.ctx.createGain();
+      this.envGain.gain.setValueAtTime(this._envVolume, this.ctx.currentTime);
+      this.envGain.connect(this.masterGain);
     }
 
     if (this.ctx.state === 'suspended') {
@@ -59,6 +119,27 @@ export class SoundFX {
     this._volume = Math.max(0, Math.min(1, val));
     if (this.masterGain && this.ctx && !this._isMuted) {
       this.masterGain.gain.setValueAtTime(this._volume, this.ctx.currentTime);
+    }
+  }
+
+  public setChatVolume(val: number): void {
+    this._chatVolume = Math.max(0, Math.min(1, val));
+    if (this.chatGain && this.ctx) {
+      this.chatGain.gain.setValueAtTime(this._chatVolume, this.ctx.currentTime);
+    }
+  }
+
+  public setSfxVolume(val: number): void {
+    this._sfxVolume = Math.max(0, Math.min(1, val));
+    if (this.sfxGain && this.ctx) {
+      this.sfxGain.gain.setValueAtTime(this._sfxVolume, this.ctx.currentTime);
+    }
+  }
+
+  public setEnvVolume(val: number): void {
+    this._envVolume = Math.max(0, Math.min(1, val));
+    if (this.envGain && this.ctx) {
+      this.envGain.gain.setValueAtTime(this._envVolume, this.ctx.currentTime);
     }
   }
 
@@ -96,7 +177,7 @@ export class SoundFX {
       gain.gain.exponentialRampToValueAtTime(0.001, t + 0.08);
 
       osc.connect(gain);
-      gain.connect(this.masterGain);
+      gain.connect(this.sfxGain || this.masterGain);
 
       osc.start(t);
       osc.stop(t + 0.08);
@@ -131,7 +212,7 @@ export class SoundFX {
       gain.gain.exponentialRampToValueAtTime(0.001, t + 0.06);
 
       osc.connect(gain);
-      gain.connect(this.masterGain);
+      gain.connect(this.sfxGain || this.masterGain);
 
       osc.start(t);
       osc.stop(t + 0.06);
@@ -172,7 +253,7 @@ export class SoundFX {
 
       osc1.connect(gain);
       osc2.connect(gain);
-      gain.connect(this.masterGain);
+      gain.connect(this.sfxGain || this.masterGain);
 
       osc1.start(t);
       osc2.start(t + 0.002);
@@ -236,7 +317,7 @@ export class SoundFX {
 
       osc1.connect(masterWhistleGain);
       osc2.connect(masterWhistleGain);
-      masterWhistleGain.connect(this.masterGain);
+      masterWhistleGain.connect(this.envGain || this.masterGain);
 
       lfo.start(t);
       osc1.start(t);
@@ -289,7 +370,7 @@ export class SoundFX {
       osc1.connect(filter);
       osc2.connect(filter);
       filter.connect(gain);
-      gain.connect(this.masterGain);
+      gain.connect(this.envGain || this.masterGain);
 
       osc1.start(t);
       osc2.start(t);
@@ -300,6 +381,90 @@ export class SoundFX {
         osc1.disconnect();
         osc2.disconnect();
         filter.disconnect();
+        gain.disconnect();
+      };
+    } catch {
+      // AudioContext fallback
+    }
+  }
+
+  /**
+   * Crowd cheering / ovation synthesizer (filtered noise with rise/fall envelope)
+   */
+  public playCrowdCheer(): void {
+    if (this._isMuted || !this.crowdSoundEnabled) return;
+    const ctx = this.ensureContext();
+    if (!ctx || !this.masterGain) return;
+
+    try {
+      const t = ctx.currentTime;
+      const bufferSize = Math.floor(ctx.sampleRate * 1.5);
+      const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
+      const data = buffer.getChannelData(0);
+      let lastOut = 0.0;
+      for (let i = 0; i < bufferSize; i++) {
+        const white = Math.random() * 2 - 1;
+        data[i] = (lastOut + 0.02 * white) / 1.02;
+        lastOut = data[i];
+      }
+
+      const noise = ctx.createBufferSource();
+      noise.buffer = buffer;
+
+      const filter = ctx.createBiquadFilter();
+      filter.type = 'bandpass';
+      filter.frequency.setValueAtTime(650, t);
+      filter.Q.setValueAtTime(1.6, t);
+
+      const gain = ctx.createGain();
+      gain.gain.setValueAtTime(0, t);
+      gain.gain.linearRampToValueAtTime(0.35, t + 0.25);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + 1.5);
+
+      noise.connect(filter);
+      filter.connect(gain);
+      gain.connect(this.envGain || this.masterGain);
+
+      noise.start(t);
+      noise.stop(t + 1.5);
+
+      noise.onended = () => {
+        noise.disconnect();
+        filter.disconnect();
+        gain.disconnect();
+      };
+    } catch {
+      // AudioContext fallback
+    }
+  }
+
+  /**
+   * Ambient stadium drone
+   */
+  public playAmbientStadium(): void {
+    if (this._isMuted || !this.ambientSoundEnabled) return;
+    const ctx = this.ensureContext();
+    if (!ctx || !this.masterGain) return;
+
+    try {
+      const t = ctx.currentTime;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(65, t);
+      gain.gain.setValueAtTime(0, t);
+      gain.gain.linearRampToValueAtTime(0.08, t + 0.4);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + 2.0);
+
+      osc.connect(gain);
+      gain.connect(this.envGain || this.masterGain);
+
+      osc.start(t);
+      osc.stop(t + 2.0);
+
+      osc.onended = () => {
+        osc.disconnect();
         gain.disconnect();
       };
     } catch {
@@ -347,7 +512,7 @@ export class SoundFX {
    * 6. Chat blip: 800 Hz -> 1200 Hz in 50ms
    */
   public playChatMessageSound(): void {
-    if (this._isMuted || !this.chatSoundEnabled) return;
+    if (this._isMuted || !this.chatNormalSoundEnabled) return;
     const ctx = this.ensureContext();
     if (!ctx || !this.masterGain) return;
 
@@ -364,10 +529,89 @@ export class SoundFX {
       gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.08);
 
       osc.connect(gain);
-      gain.connect(this.masterGain);
+      gain.connect(this.chatGain || this.masterGain);
 
       osc.start(t);
       osc.stop(t + 0.08);
+
+      osc.onended = () => {
+        osc.disconnect();
+        gain.disconnect();
+      };
+    } catch {
+      // AudioContext fallback
+    }
+  }
+
+  /**
+   * Chat Mention sound (@tu_nombre)
+   */
+  public playChatMentionSound(): void {
+    if (this._isMuted || !this.chatMentionSoundEnabled) return;
+    const ctx = this.ensureContext();
+    if (!ctx || !this.masterGain) return;
+
+    try {
+      const t = ctx.currentTime;
+      const osc1 = ctx.createOscillator();
+      const osc2 = ctx.createOscillator();
+      const gain = ctx.createGain();
+
+      osc1.type = 'sine';
+      osc1.frequency.setValueAtTime(880, t);
+      osc1.frequency.exponentialRampToValueAtTime(1320, t + 0.12);
+
+      osc2.type = 'triangle';
+      osc2.frequency.setValueAtTime(1760, t + 0.04);
+      osc2.frequency.exponentialRampToValueAtTime(2200, t + 0.16);
+
+      gain.gain.setValueAtTime(0.2, t);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.22);
+
+      osc1.connect(gain);
+      osc2.connect(gain);
+      gain.connect(this.chatGain || this.masterGain);
+
+      osc1.start(t);
+      osc2.start(t + 0.04);
+      osc1.stop(t + 0.22);
+      osc2.stop(t + 0.22);
+
+      osc1.onended = () => {
+        osc1.disconnect();
+        osc2.disconnect();
+        gain.disconnect();
+      };
+    } catch {
+      // AudioContext fallback
+    }
+  }
+
+  /**
+   * Pitch Emote pop/bubble sound
+   */
+  public playPitchEmoteSound(): void {
+    if (this._isMuted || !this.chatEmotesSoundEnabled) return;
+    const ctx = this.ensureContext();
+    if (!ctx || !this.masterGain) return;
+
+    try {
+      const t = ctx.currentTime;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(520, t);
+      osc.frequency.exponentialRampToValueAtTime(980, t + 0.09);
+
+      gain.gain.setValueAtTime(0.22, t);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.14);
+
+      osc.connect(gain);
+      gain.connect(this.chatGain || this.masterGain);
+
+      osc.start(t);
+      osc.stop(t + 0.14);
 
       osc.onended = () => {
         osc.disconnect();

@@ -47,10 +47,25 @@ export type StadiumPresetKey =
   | 'hockey';
 export type TeamSlot = 'red' | 'blue' | 'spectator';
 
+export type PatternType = 'solid' | 'vertical' | 'hoop' | 'halves' | 'chevrons' | 'diagonal_checks';
+
 export interface KitConfig {
   primaryColor: string;
   secondaryColor: string;
-  pattern: 'solid' | 'vertical' | 'hoop' | 'halves';
+  pattern: PatternType;
+}
+
+export interface TeamKitConfig {
+  name: string;
+  tag: string;
+  primaryColor: string;
+  secondaryColor: string;
+  pattern: PatternType;
+}
+
+export interface EmoteTrigger {
+  trigger: string;
+  emoji: string;
 }
 
 export const SETTINGS_STORAGE_KEY = 'haxball_settings_v1';
@@ -60,60 +75,149 @@ export const AVATAR_STORAGE_KEY = 'haxball_avatar';
 
 export interface SettingsConfig {
   theme: 'dark' | 'light';
+
+  // 4-Canal Audio Hierarchy
   masterVolume: number;
+  chatVolume: number;
   sfxVolume: number;
+  envVolume: number;
   crowdVolume: number;
   isMuted: boolean;
+
+  // Canal 2: Chat y Social
+  chatNormalSoundEnabled: boolean;
+  chatMentionSoundEnabled: boolean;
+  chatEmotesSoundEnabled: boolean;
+  chatSoundEnabled: boolean;
+
+  // Canal 3: SFX
   kickSoundEnabled: boolean;
   postHitSoundEnabled: boolean;
-  goalSoundEnabled: boolean;
+
+  // Canal 4: Entorno
   whistleSoundEnabled: boolean;
-  chatSoundEnabled: boolean;
-  ballSkin: BallSkinType;
-  fpsCap: number;
-  extrapolationMs: number;
+  goalSoundEnabled: boolean;
+  crowdSoundEnabled: boolean;
+  ambientSoundEnabled: boolean;
+
+  // Video y Gráficos
+  cameraZoom: number;
+  chatOpacity: number;
+  minimapOpacity: number;
+
+  // Togglers Visuales de Jugabilidad
+  magnusTrailEnabled: boolean;
   ballTrailEnabled: boolean;
-  playerGlowEnabled: boolean;
-  netDeformationEnabled: boolean;
+  fireShotEnabled: boolean;
+  floatingPointsEnabled: boolean;
+  minimapEnabled: boolean;
   offscreenIndicatorsEnabled: boolean;
   offscreenIndicators: boolean;
-  showStatsMonitor: boolean;
+  playerGlowEnabled: boolean;
+  screenShakeEnabled: boolean;
   goalShakeEnabled: boolean;
-  minimapEnabled: boolean;
+  cameraFrustumOnMinimap: boolean;
+  minimapCameraFrustum: boolean;
+
+  // Minimapa
+  minimapSize: 'small' | 'medium' | 'large' | number;
   minimapMode: 'radar' | 'overlay' | 'hidden' | 'always' | 'auto' | 'off';
   minimapPosition: 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right';
-  minimapOpacity: number;
-  minimapSize: number | 'small' | 'normal' | 'large'; // 160 | 200 | 240 or preset
-  minimapCameraFrustum: boolean;
+
+  // Personalización del Balón (Diseño vs Color)
+  ballMode: 'texture' | 'color';
+  ballSkin: BallSkinType | 'futsal';
+  ballCustomColor: string;
+
+  // Compatibility fields
+  fpsCap: number;
+  extrapolationMs: number;
+  netDeformationEnabled: boolean;
+  showStatsMonitor: boolean;
+
+  // Equipaciones (Local / Visitante)
+  localKit: TeamKitConfig;
+  visitorKit: TeamKitConfig;
+
+  // Avatar y Emotes
+  showPitchEmotes: boolean;
+  emoteTriggers: EmoteTrigger[];
 }
 
 export const DEFAULT_SETTINGS: SettingsConfig = {
   theme: 'dark',
   masterVolume: 0.5,
+  chatVolume: 0.7,
   sfxVolume: 0.7,
+  envVolume: 0.5,
   crowdVolume: 0.4,
   isMuted: false,
+
+  chatNormalSoundEnabled: true,
+  chatMentionSoundEnabled: true,
+  chatEmotesSoundEnabled: true,
+  chatSoundEnabled: true,
+
   kickSoundEnabled: true,
   postHitSoundEnabled: true,
-  goalSoundEnabled: true,
+
   whistleSoundEnabled: true,
-  chatSoundEnabled: true,
-  ballSkin: 'classic',
-  fpsCap: 60,
-  extrapolationMs: 0,
+  goalSoundEnabled: true,
+  crowdSoundEnabled: true,
+  ambientSoundEnabled: true,
+
+  cameraZoom: 1.0,
+  chatOpacity: 85,
+  minimapOpacity: 90,
+
+  magnusTrailEnabled: true,
   ballTrailEnabled: true,
-  playerGlowEnabled: true,
-  netDeformationEnabled: true,
+  fireShotEnabled: true,
+  floatingPointsEnabled: true,
+  minimapEnabled: true,
   offscreenIndicatorsEnabled: true,
   offscreenIndicators: true,
-  showStatsMonitor: true,
+  playerGlowEnabled: true,
+  screenShakeEnabled: true,
   goalShakeEnabled: true,
-  minimapEnabled: true,
+  cameraFrustumOnMinimap: true,
+  minimapCameraFrustum: true,
+
+  minimapSize: 'medium',
   minimapMode: 'radar',
   minimapPosition: 'top-left',
-  minimapOpacity: 0.6,
-  minimapSize: 200,
-  minimapCameraFrustum: true
+
+  ballMode: 'texture',
+  ballSkin: 'classic',
+  ballCustomColor: '#ffffff',
+
+  fpsCap: 60,
+  extrapolationMs: 0,
+  netDeformationEnabled: true,
+  showStatsMonitor: true,
+
+  localKit: {
+    name: 'Local FC',
+    tag: 'LOC',
+    primaryColor: '#e74c3c',
+    secondaryColor: '#ffffff',
+    pattern: 'solid'
+  },
+  visitorKit: {
+    name: 'Visitante CF',
+    tag: 'VIS',
+    primaryColor: '#3498db',
+    secondaryColor: '#00e5ff',
+    pattern: 'solid'
+  },
+
+  showPitchEmotes: true,
+  emoteTriggers: [
+    { trigger: 'gol', emoji: '⚽' },
+    { trigger: 'gg', emoji: '🤝' },
+    { trigger: 'wow', emoji: '😮' },
+    { trigger: 'fire', emoji: '🔥' }
+  ]
 };
 
 export interface KeybindConfig {
@@ -128,20 +232,22 @@ export interface KeybindConfig {
   curveRight: string[];
   pause: string[];
   menu: string[];
+  chat: string[];
 }
 
 export const DEFAULT_KEYBINDS: KeybindConfig = {
-  up: ['KeyW', 'ArrowUp'],
-  down: ['KeyS', 'ArrowDown'],
-  left: ['KeyA', 'ArrowLeft'],
-  right: ['KeyD', 'ArrowRight'],
-  kick: ['KeyX', 'Space'],
-  turbo: ['ShiftLeft', 'ShiftRight'],
-  dash: ['Space'],
-  curveLeft: ['KeyZ', 'KeyQ'],
-  curveRight: ['KeyC', 'KeyE'],
+  up: ['KeyW'],
+  down: ['KeyS'],
+  left: ['KeyA'],
+  right: ['KeyD'],
+  kick: ['Space'],
+  turbo: ['ShiftLeft'],
+  dash: ['ArrowUp'],
+  curveLeft: ['ArrowLeft'],
+  curveRight: ['ArrowRight'],
   pause: ['KeyP'],
-  menu: ['Escape']
+  menu: ['Escape'],
+  chat: ['Enter']
 };
 
 export interface RoomInfo {
@@ -337,7 +443,7 @@ class GameUIStore {
 
   // Settings & Keybinds
   public settings = $state<SettingsConfig>({ ...DEFAULT_SETTINGS });
-  public activeSettingsTab = $state<'controls' | 'audio' | 'video' | 'kits' | 'club'>('controls');
+  public activeSettingsTab = $state<'controls' | 'audio' | 'video' | 'kits' | 'avatar' | 'club'>('controls');
   public keybinds = $state<KeybindConfig>({
     up: [...DEFAULT_KEYBINDS.up],
     down: [...DEFAULT_KEYBINDS.down],
@@ -349,7 +455,8 @@ class GameUIStore {
     curveLeft: [...DEFAULT_KEYBINDS.curveLeft],
     curveRight: [...DEFAULT_KEYBINDS.curveRight],
     pause: [...DEFAULT_KEYBINDS.pause],
-    menu: [...DEFAULT_KEYBINDS.menu]
+    menu: [...DEFAULT_KEYBINDS.menu],
+    chat: [...DEFAULT_KEYBINDS.chat]
   });
 
   // Rooms & Lobby (Clean live state, zero mock rooms)
@@ -504,7 +611,15 @@ class GameUIStore {
       const rawSettings = localStorage.getItem(SETTINGS_STORAGE_KEY);
       if (rawSettings) {
         const parsed = JSON.parse(rawSettings) as Partial<SettingsConfig>;
-        this.settings = { ...DEFAULT_SETTINGS, ...parsed };
+        this.settings = {
+          ...DEFAULT_SETTINGS,
+          ...parsed,
+          localKit: { ...DEFAULT_SETTINGS.localKit, ...(parsed.localKit || {}) },
+          visitorKit: { ...DEFAULT_SETTINGS.visitorKit, ...(parsed.visitorKit || {}) },
+          emoteTriggers: Array.isArray(parsed.emoteTriggers) && parsed.emoteTriggers.length > 0
+            ? parsed.emoteTriggers
+            : [...DEFAULT_SETTINGS.emoteTriggers]
+        };
         this.isAudioMuted = this.settings.isMuted;
         this.masterVolume = this.settings.masterVolume;
       }
@@ -544,13 +659,38 @@ class GameUIStore {
     }
     this.isAudioMuted = this.settings.isMuted;
     this.masterVolume = this.settings.masterVolume;
+
+    // Sincronizar todos los 4 canales al motor Web Audio SoundFX
     soundFX.setMuted(this.settings.isMuted);
     soundFX.setMasterVolume(this.settings.masterVolume);
+    soundFX.setChatVolume(this.settings.chatVolume);
+    soundFX.setSfxVolume(this.settings.sfxVolume);
+    soundFX.setEnvVolume(this.settings.envVolume);
+
+    soundFX.chatNormalSoundEnabled = this.settings.chatNormalSoundEnabled;
+    soundFX.chatMentionSoundEnabled = this.settings.chatMentionSoundEnabled;
+    soundFX.chatEmotesSoundEnabled = this.settings.chatEmotesSoundEnabled;
+    soundFX.chatSoundEnabled = this.settings.chatNormalSoundEnabled;
+
     soundFX.kickSoundEnabled = this.settings.kickSoundEnabled;
     soundFX.postHitSoundEnabled = this.settings.postHitSoundEnabled;
-    soundFX.goalSoundEnabled = this.settings.goalSoundEnabled;
+
     soundFX.whistleSoundEnabled = this.settings.whistleSoundEnabled;
-    soundFX.chatSoundEnabled = this.settings.chatSoundEnabled;
+    soundFX.goalSoundEnabled = this.settings.goalSoundEnabled;
+    soundFX.crowdSoundEnabled = this.settings.crowdSoundEnabled;
+    soundFX.ambientSoundEnabled = this.settings.ambientSoundEnabled;
+
+    // Sincronizar kits con redKit y blueKit para compatibilidad
+    if (this.settings.localKit) {
+      this.redKit.primaryColor = this.settings.localKit.primaryColor;
+      this.redKit.secondaryColor = this.settings.localKit.secondaryColor;
+      this.redKit.pattern = this.settings.localKit.pattern;
+    }
+    if (this.settings.visitorKit) {
+      this.blueKit.primaryColor = this.settings.visitorKit.primaryColor;
+      this.blueKit.secondaryColor = this.settings.visitorKit.secondaryColor;
+      this.blueKit.pattern = this.settings.visitorKit.pattern;
+    }
 
     if (typeof localStorage !== 'undefined') {
       try {
@@ -561,6 +701,29 @@ class GameUIStore {
       }
     }
     this.onSettingsChanged?.(this.settings);
+  }
+
+  public resetGraphicsSettings(): void {
+    this.settings.cameraZoom = DEFAULT_SETTINGS.cameraZoom;
+    this.settings.chatOpacity = DEFAULT_SETTINGS.chatOpacity;
+    this.settings.minimapOpacity = DEFAULT_SETTINGS.minimapOpacity;
+    this.settings.magnusTrailEnabled = DEFAULT_SETTINGS.magnusTrailEnabled;
+    this.settings.ballTrailEnabled = DEFAULT_SETTINGS.ballTrailEnabled;
+    this.settings.fireShotEnabled = DEFAULT_SETTINGS.fireShotEnabled;
+    this.settings.floatingPointsEnabled = DEFAULT_SETTINGS.floatingPointsEnabled;
+    this.settings.minimapEnabled = DEFAULT_SETTINGS.minimapEnabled;
+    this.settings.offscreenIndicatorsEnabled = DEFAULT_SETTINGS.offscreenIndicatorsEnabled;
+    this.settings.offscreenIndicators = DEFAULT_SETTINGS.offscreenIndicators;
+    this.settings.playerGlowEnabled = DEFAULT_SETTINGS.playerGlowEnabled;
+    this.settings.screenShakeEnabled = DEFAULT_SETTINGS.screenShakeEnabled;
+    this.settings.goalShakeEnabled = DEFAULT_SETTINGS.goalShakeEnabled;
+    this.settings.cameraFrustumOnMinimap = DEFAULT_SETTINGS.cameraFrustumOnMinimap;
+    this.settings.minimapCameraFrustum = DEFAULT_SETTINGS.minimapCameraFrustum;
+    this.settings.minimapSize = DEFAULT_SETTINGS.minimapSize;
+    this.settings.ballMode = DEFAULT_SETTINGS.ballMode;
+    this.settings.ballSkin = DEFAULT_SETTINGS.ballSkin;
+    this.settings.ballCustomColor = DEFAULT_SETTINGS.ballCustomColor;
+    this.saveSettings();
   }
 
   public remapKey(action: keyof KeybindConfig, code: string): void {
@@ -595,7 +758,8 @@ class GameUIStore {
       curveLeft: [...DEFAULT_KEYBINDS.curveLeft],
       curveRight: [...DEFAULT_KEYBINDS.curveRight],
       pause: [...DEFAULT_KEYBINDS.pause],
-      menu: [...DEFAULT_KEYBINDS.menu]
+      menu: [...DEFAULT_KEYBINDS.menu],
+      chat: [...DEFAULT_KEYBINDS.chat]
     };
     if (typeof localStorage !== 'undefined') {
       try {
