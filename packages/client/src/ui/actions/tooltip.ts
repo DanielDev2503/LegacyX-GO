@@ -1,4 +1,53 @@
-import { tooltipState } from '../state/tooltipState.svelte.js';
+import { tooltipState, type AnchorRect } from '../state/tooltipState.svelte.js';
+
+export interface TooltipPositionResult {
+  x: number;
+  y: number;
+  placement: 'top' | 'bottom';
+  arrowX: number;
+}
+
+export function calculateTooltipPosition(
+  anchorRect: AnchorRect,
+  tooltipSize: { width: number; height: number },
+  viewportSize: { width: number; height: number } = {
+    width: typeof window !== 'undefined' ? window.innerWidth : 1280,
+    height: typeof window !== 'undefined' ? window.innerHeight : 800
+  },
+  safeMargin = 16
+): TooltipPositionResult {
+  const tooltipWidth = tooltipSize.width || 280;
+  const tooltipHeight = tooltipSize.height || 60;
+
+  let placement: 'top' | 'bottom' = 'top';
+  let y: number;
+
+  // B. Auto-Flip Vertical con Detección Rigurosa
+  if (anchorRect.top - tooltipHeight < safeMargin) {
+    // No cabe arriba -> colocar abajo del elemento
+    y = anchorRect.bottom + 8;
+    placement = 'bottom';
+  } else {
+    // Cabe arriba
+    y = anchorRect.top - tooltipHeight - 8;
+    placement = 'top';
+  }
+
+  // C. Viewport Hard-Clamp Bidireccional: Eje Y
+  const maxY = viewportSize.height - tooltipHeight - safeMargin;
+  y = Math.max(safeMargin, Math.min(y, maxY));
+
+  // C. Centrado y Viewport Hard-Clamp Bidireccional: Eje X
+  let x = anchorRect.left + anchorRect.width / 2 - tooltipWidth / 2;
+  const maxX = viewportSize.width - tooltipWidth - safeMargin;
+  x = Math.max(safeMargin, Math.min(x, maxX));
+
+  // D. Flecha Indicadora Dinámica (Pointer Arrow)
+  const anchorCenterX = anchorRect.left + anchorRect.width / 2;
+  const arrowX = Math.max(12, Math.min(tooltipWidth - 12, anchorCenterX - x));
+
+  return { x, y, placement, arrowX };
+}
 
 export function tooltip(node: HTMLElement, text: string | undefined | null) {
   let currentText = text;
@@ -8,30 +57,24 @@ export function tooltip(node: HTMLElement, text: string | undefined | null) {
     if (!currentText || !currentText.trim()) return;
 
     const rect = node.getBoundingClientRect();
-    const padding = 12;
-    const estimatedHeight = 60;
-    const estimatedHalfWidth = 140;
+    const anchorRect: AnchorRect = {
+      left: rect.left,
+      top: rect.top,
+      right: rect.right,
+      bottom: rect.bottom,
+      width: rect.width,
+      height: rect.height
+    };
 
-    // Auto-flip vertical logic: If not enough room above (less than 12px), flip to bottom
-    const position: 'top' | 'bottom' = rect.top - estimatedHeight < padding ? 'bottom' : 'top';
-    const y = position === 'top' ? rect.top - 8 : rect.bottom + 8;
-
-    // Horizontal centering with viewport clamping
-    let x = rect.left + rect.width / 2;
-    if (typeof window !== 'undefined') {
-      const minX = padding + estimatedHalfWidth;
-      const maxX = window.innerWidth - padding - estimatedHalfWidth;
-      if (minX < maxX) {
-        x = Math.max(minX, Math.min(maxX, x));
-      }
-    }
+    const initialPos = calculateTooltipPosition(anchorRect, { width: 280, height: 60 });
 
     isTargetActive = true;
     tooltipState.show({
       text: currentText,
-      x,
-      y,
-      position
+      anchorRect,
+      x: initialPos.x,
+      y: initialPos.y,
+      position: initialPos.placement
     });
 
     if (typeof window !== 'undefined') {
