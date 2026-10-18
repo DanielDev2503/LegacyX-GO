@@ -19,11 +19,14 @@ export type ModalType =
   | 'STADIUM_SELECTOR'
   | 'MODIFIERS'
   | 'STADIUM_SELECT'
+  | 'STATS'
+  | 'TEAM_SELECT'
   | 'settings'
   | 'keybinds'
   | 'physics'
   | 'teamSelect'
-  | 'stadiumSelect';
+  | 'stadiumSelect'
+  | 'stats';
 
 export type BallSkinType = 'classic' | 'retro' | 'neon';
 export type StadiumPresetKey =
@@ -322,8 +325,11 @@ export interface PlayerStatEntry {
   assists: number;
   passes: number;
   shots: number;
+  touches?: number;
+  ownGoals?: number;
   isCaptain?: boolean;
   isMvp?: boolean;
+  isHost?: boolean;
 }
 
 export interface PhysicsModifiers {
@@ -551,14 +557,14 @@ class GameUIStore {
     team: 'blue' as 'red' | 'blue'
   });
   public redTeamStats = $state<PlayerStatEntry[]>([
-    { nickname: 'kiko', points: 180, goals: 0, assists: 0, passes: 14, shots: 2, isCaptain: true },
-    { nickname: 'dani', points: 140, goals: 0, assists: 0, passes: 9, shots: 1 },
-    { nickname: 'mateo', points: 110, goals: 0, assists: 0, passes: 6, shots: 0 }
+    { nickname: 'kiko', points: 180, goals: 0, assists: 0, passes: 14, shots: 2, touches: 14, ownGoals: 0, isCaptain: true },
+    { nickname: 'dani', points: 140, goals: 0, assists: 0, passes: 9, shots: 1, touches: 10, ownGoals: 0 },
+    { nickname: 'mateo', points: 110, goals: 0, assists: 0, passes: 6, shots: 0, touches: 8, ownGoals: 0 }
   ]);
   public blueTeamStats = $state<PlayerStatEntry[]>([
-    { nickname: 'yami', points: 420, goals: 3, assists: 1, passes: 12, shots: 4, isMvp: true },
-    { nickname: 'nano', points: 290, goals: 0, assists: 2, passes: 18, shots: 3, isCaptain: true },
-    { nickname: 'leo', points: 210, goals: 0, assists: 0, passes: 11, shots: 1 }
+    { nickname: 'yami', points: 420, goals: 3, assists: 1, passes: 12, shots: 4, touches: 14, ownGoals: 0, isMvp: true, isHost: true },
+    { nickname: 'nano', points: 290, goals: 0, assists: 2, passes: 18, shots: 3, touches: 8, ownGoals: 0, isCaptain: true },
+    { nickname: 'leo', points: 210, goals: 0, assists: 0, passes: 11, shots: 1, touches: 6, ownGoals: 0 }
   ]);
 
   // Physical Modifiers and Gameplay Config
@@ -924,8 +930,37 @@ class GameUIStore {
     return this.activeRoom?.name ?? 'LegacyX-GO Arena';
   }
 
+  public set activeRoomName(name: string) {
+    if (this.activeRoom) {
+      this.activeRoom.name = name;
+    } else {
+      this.activeRoom = {
+        id: this.matchId || 'CTNYRS',
+        name,
+        playersCount: 2,
+        maxPlayers: 12,
+        ping: 20,
+        isPrivate: false,
+        stadium: 'AF 3v3'
+      };
+    }
+  }
+
   public get lastMatchStats(): PlayerStatEntry[] {
     return [...this.redTeamStats, ...this.blueTeamStats];
+  }
+
+  public get myTeam(): TeamSlot {
+    const local = this.rosterPlayers.find((p) => p.id === this.localPlayerId);
+    return local?.team ?? 'red';
+  }
+
+  public get redTeamKit(): TeamKitConfig {
+    return this.settings.localKit;
+  }
+
+  public get blueTeamKit(): TeamKitConfig {
+    return this.settings.visitorKit;
   }
 
   public get theme(): 'dark' | 'light' {
@@ -1016,7 +1051,33 @@ class GameUIStore {
   }
 
   public get matchPhase(): number {
-    return this.fsmPhase === 'STOPPED' ? 0 : 1;
+    switch (this.fsmPhase) {
+      case 'STOPPED': return 0;
+      case 'KICKOFF': return 1;
+      case 'PLAYING': return 2;
+      case 'PAUSED': return 2.1;
+      case 'GOAL': return 3;
+      case 'OVERTIME': return 2;
+      case 'WARMUP': return 1;
+      case 'STATS': return 5;
+      default: return 0;
+    }
+  }
+
+  public set matchPhase(phase: number) {
+    if (phase === 0) {
+      this.fsmPhase = 'STOPPED';
+    } else if (phase === 1) {
+      this.fsmPhase = 'KICKOFF';
+    } else if (phase === 2) {
+      this.fsmPhase = 'PLAYING';
+    } else if (phase === 2.1) {
+      this.fsmPhase = 'PAUSED';
+    } else if (phase === 3) {
+      this.fsmPhase = 'GOAL';
+    } else if (phase === 5) {
+      this.fsmPhase = 'STATS';
+    }
   }
 
   public navigateTo(screen: ScreenType): void {
@@ -1032,8 +1093,11 @@ class GameUIStore {
       physics: 'PHYSICS_MODIFIERS',
       MODIFIERS: 'PHYSICS_MODIFIERS',
       teamSelect: 'TEAM_MANAGEMENT',
+      TEAM_SELECT: 'TEAM_MANAGEMENT',
       stadiumSelect: 'STADIUM_SELECTOR',
-      STADIUM_SELECT: 'STADIUM_SELECTOR'
+      STADIUM_SELECT: 'STADIUM_SELECTOR',
+      stats: 'STATS',
+      STATS: 'STATS'
     };
     this.activeModal = map[modal] ?? modal;
   }

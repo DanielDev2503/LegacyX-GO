@@ -219,18 +219,40 @@
         gameUI.redScore = engine.fsm.redScore;
         gameUI.blueScore = engine.fsm.blueScore;
 
+        if (typeof (engine.fsm as any).getPossessionPercentages === 'function') {
+          const possession = (engine.fsm as any).getPossessionPercentages();
+          if (possession) {
+            gameUI.redPossession = possession.red;
+            gameUI.bluePossession = possession.blue;
+          }
+        }
+
         const totalSec = Math.floor(engine.currentTick / 60);
         const mins = Math.floor(totalSec / 60).toString().padStart(2, '0');
         const secs = (totalSec % 60).toString().padStart(2, '0');
         gameUI.matchTimeFormatted = `${mins}:${secs}`;
 
         const phase = engine.fsm.state;
-        if (gameUI.fsmPhase !== 'STATS') {
-          gameUI.fsmPhase = phase === MatchPhase.PLAYING ? 'PLAYING'
-            : phase === MatchPhase.KICKOFF ? 'KICKOFF'
-            : phase === MatchPhase.GOAL ? 'GOAL'
-            : phase === MatchPhase.STATS ? 'STATS'
-            : 'WARMUP';
+        if (phase === MatchPhase.STATS) {
+          gameUI.fsmPhase = 'STATS';
+          gameUI.matchPhase = 5;
+        } else if (gameUI.fsmPhase !== 'STATS') {
+          if (phase === MatchPhase.PLAYING) {
+            gameUI.fsmPhase = 'PLAYING';
+            gameUI.matchPhase = 2;
+          } else if (phase === MatchPhase.KICKOFF) {
+            gameUI.fsmPhase = 'KICKOFF';
+            gameUI.matchPhase = 1;
+          } else if (phase === MatchPhase.GOAL) {
+            gameUI.fsmPhase = 'GOAL';
+            gameUI.matchPhase = 3;
+          } else if (phase === MatchPhase.PAUSE) {
+            gameUI.fsmPhase = 'PAUSED';
+            gameUI.matchPhase = 2.1;
+          } else if (phase === MatchPhase.STOP) {
+            gameUI.fsmPhase = 'STOPPED';
+            gameUI.matchPhase = 0;
+          }
         }
       }
 
@@ -275,7 +297,7 @@
     <!-- Modales canónicos -->
     {#if gameUI.activeModal === 'PHYSICS_MODIFIERS' || gameUI.activeModal === 'physics' || gameUI.activeModal === 'MODIFIERS'}
       <PhysicsModal />
-    {:else if gameUI.activeModal === 'TEAM_MANAGEMENT' || gameUI.activeModal === 'teamSelect'}
+    {:else if gameUI.activeModal === 'TEAM_MANAGEMENT' || gameUI.activeModal === 'teamSelect' || gameUI.activeModal === 'TEAM_SELECT'}
       <TeamSelectModal />
     {:else if gameUI.activeModal === 'STADIUM_SELECTOR' || gameUI.activeModal === 'stadiumSelect' || gameUI.activeModal === 'STADIUM_SELECT'}
       <StadiumSelectModal />
@@ -283,10 +305,12 @@
       <SettingsModal />
     {:else if gameUI.activeModal === 'KEYBINDS' || gameUI.activeModal === 'keybinds'}
       <KeybindModal />
+    {:else if gameUI.activeModal === 'STATS' || gameUI.activeModal === 'stats'}
+      <PostMatchCarousel />
     {/if}
 
-    <!-- Carrusel panorámico post-partido (100vw) -->
-    {#if gameUI.currentScreen === 'IN_GAME' && (gameUI.fsmPhase === 'STATS' || gameUI.showPostMatchCarousel)}
+    <!-- Carrusel panorámico post-partido (100vw) si fsmPhase === 'STATS' o showPostMatchCarousel y modal no es ya STATS -->
+    {#if gameUI.currentScreen === 'IN_GAME' && (gameUI.fsmPhase === 'STATS' || gameUI.showPostMatchCarousel) && gameUI.activeModal !== 'STATS' && gameUI.activeModal !== 'stats'}
       <PostMatchCarousel />
     {/if}
 
