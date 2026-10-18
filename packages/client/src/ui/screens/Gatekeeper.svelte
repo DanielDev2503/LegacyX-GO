@@ -1,32 +1,38 @@
 <script lang="ts">
-  import { gameUI } from '../state/gameUI.svelte.js';
-  import { soundFX } from '../../audio/SoundFX.js';
-  import { EMOJI_CATALOG } from '../utils/constants.js';
+  import { gameUI } from "../state/gameUI.svelte.js";
+  import { soundFX } from "../../audio/SoundFX.js";
+  import { EMOJI_CATALOG } from "../utils/constants.js";
 
   const emojiList: readonly string[] = EMOJI_CATALOG;
 
   function handleNicknameChange(e: Event) {
     const val = (e.target as HTMLInputElement).value;
-    gameUI.nickname = val.slice(0, 25);
+    gameUI.setPlayerNickname(val.slice(0, 25));
   }
 
   function handleAvatarTextChange(e: Event) {
     const val = (e.target as HTMLInputElement).value.toUpperCase().slice(0, 2);
-    gameUI.avatarValue = val;
+    gameUI.setPlayerAvatar(val, "text");
   }
 
   function selectEmoji(emoji: string) {
     soundFX.playUIClick();
-    gameUI.avatarValue = emoji;
+    gameUI.setPlayerAvatar(emoji, "emoji");
   }
 
   function toggleMode(isEmoji: boolean) {
     soundFX.playUIClick();
-    gameUI.avatarMode = isEmoji ? 'emoji' : 'letters';
-    if (isEmoji && gameUI.avatarValue.length > 1 && !emojiList.includes(gameUI.avatarValue)) {
-      gameUI.avatarValue = '⚽';
+    gameUI.avatarMode = isEmoji ? "emoji" : "letters";
+    if (
+      isEmoji &&
+      gameUI.avatarValue &&
+      !emojiList.includes(gameUI.avatarValue)
+    ) {
+      gameUI.setPlayerAvatar(emojiList[0] || "⚽", "emoji");
     } else if (!isEmoji && emojiList.includes(gameUI.avatarValue)) {
-      gameUI.avatarValue = 'YA';
+      gameUI.setPlayerAvatar("", "text");
+    } else {
+      gameUI.setPlayerAvatar(gameUI.avatarValue, isEmoji ? "emoji" : "text");
     }
   }
 
@@ -34,9 +40,9 @@
     soundFX.ensureContext();
     soundFX.playUIClick();
     if (!gameUI.nickname.trim()) {
-      gameUI.nickname = 'Player';
+      gameUI.setPlayerNickname("Player");
     }
-    gameUI.navigateTo('LOBBY');
+    gameUI.navigateTo("LOBBY");
   }
 </script>
 
@@ -46,11 +52,7 @@
     <!-- Logotipo Oficial Circular -->
     <div class="logo-wrapper">
       <div class="logo-badge">
-        <img
-          src="/Logo LegacyX-GO.webp"
-          alt="LegacyX-GO"
-          class="logo-image"
-        />
+        <img src="/Logo LegacyX-GO.webp" alt="LegacyX-GO" class="logo-image" />
       </div>
     </div>
 
@@ -59,14 +61,15 @@
       <h1 class="game-title">
         <span>LEGACY</span><span class="cyan-accent">X</span><span>-GO</span>
       </h1>
-      <p class="game-subtitle">Clon multijugador 2D P2P en tiempo real</p>
+      <p class="game-subtitle">fútbol multijugador 2D en tiempo real</p>
     </div>
 
     <!-- Formulario / Controles -->
     <div class="form-container">
       <!-- Selector de Nombre -->
       <div class="input-group">
-        <label class="group-label" for="nickname-input">NOMBRE DE JUGADOR</label>
+        <label class="group-label" for="nickname-input">NOMBRE DE JUGADOR</label
+        >
         <div class="relative-input">
           <input
             id="nickname-input"
@@ -85,13 +88,17 @@
       <div class="input-group">
         <div class="avatar-header">
           <label class="group-label" for="avatar-input">AVATAR EN CANCHA</label>
-          <div class="avatar-mode-tabs" role="tablist" aria-label="Modo de avatar">
+          <div
+            class="avatar-mode-tabs"
+            role="tablist"
+            aria-label="Modo de avatar"
+          >
             <button
               type="button"
               role="tab"
-              aria-selected={gameUI.avatarMode === 'letters'}
+              aria-selected={gameUI.avatarMode === "letters"}
               class="mode-tab-btn"
-              class:active={gameUI.avatarMode === 'letters'}
+              class:active={gameUI.avatarMode === "letters"}
               onclick={() => toggleMode(false)}
             >
               Letras / Números
@@ -99,9 +106,9 @@
             <button
               type="button"
               role="tab"
-              aria-selected={gameUI.avatarMode === 'emoji'}
+              aria-selected={gameUI.avatarMode === "emoji"}
               class="mode-tab-btn"
-              class:active={gameUI.avatarMode === 'emoji'}
+              class:active={gameUI.avatarMode === "emoji"}
               onclick={() => toggleMode(true)}
             >
               Emojis
@@ -109,11 +116,11 @@
           </div>
         </div>
 
-        {#if gameUI.avatarMode === 'letters'}
+        {#if gameUI.avatarMode === "letters"}
           <div class="avatar-controls-row">
             <!-- Preview del Disco -->
             <div class="avatar-disc-preview" title="Renderizado en cancha">
-              <span class="avatar-disc-text">{gameUI.avatarValue || 'YA'}</span>
+              <span class="avatar-disc-text">{gameUI.avatarValue}</span>
               <div class="status-dot-active" title="Jugador activo"></div>
             </div>
 
@@ -122,7 +129,7 @@
               class="avatar-text-input"
               type="text"
               maxlength="2"
-              placeholder="YA"
+              placeholder="Ej: 10"
               value={gameUI.avatarValue}
               oninput={handleAvatarTextChange}
             />
@@ -131,7 +138,7 @@
           <div class="avatar-emoji-block">
             <!-- Preview del Disco -->
             <div class="avatar-disc-preview" title="Renderizado en cancha">
-              <span class="avatar-disc-text">{gameUI.avatarValue || '⚽'}</span>
+              <span class="avatar-disc-text">{gameUI.avatarValue}</span>
               <div class="status-dot-active" title="Jugador activo"></div>
             </div>
 
@@ -161,7 +168,11 @@
       >
         <span>ENTRAR AL LOBBY</span>
         <svg class="play-icon" viewBox="0 0 20 20" fill="currentColor">
-          <path fill-rule="evenodd" d="M10.293 3.293a1 1 0 011.414 0l6 6a1 1 0 010 1.414l-6 6a1 1 0 01-1.414-1.414L14.586 11H3a1 1 0 110-2h11.586l-4.293-4.293a1 1 0 010-1.414z" clip-rule="evenodd" />
+          <path
+            fill-rule="evenodd"
+            d="M10.293 3.293a1 1 0 011.414 0l6 6a1 1 0 010 1.414l-6 6a1 1 0 01-1.414-1.414L14.586 11H3a1 1 0 110-2h11.586l-4.293-4.293a1 1 0 010-1.414z"
+            clip-rule="evenodd"
+          />
         </svg>
       </button>
     </div>
@@ -194,7 +205,9 @@
     background: rgba(10, 16, 26, 0.95);
     border: 1px solid #00e5ff;
     border-radius: 0.5rem;
-    box-shadow: 0 0 24px rgba(0, 229, 255, 0.35), inset 0 0 12px rgba(0, 229, 255, 0.15);
+    box-shadow:
+      0 0 24px rgba(0, 229, 255, 0.35),
+      inset 0 0 12px rgba(0, 229, 255, 0.15);
     padding: 24px;
     padding-top: 0;
     box-sizing: border-box;
@@ -237,7 +250,7 @@
   }
 
   .game-title {
-    font-family: 'Space Grotesk', system-ui, sans-serif;
+    font-family: "Space Grotesk", system-ui, sans-serif;
     font-size: 26px;
     font-weight: 800;
     letter-spacing: 0.05em;
@@ -251,7 +264,7 @@
   }
 
   .game-subtitle {
-    font-family: 'Chivo', system-ui, sans-serif;
+    font-family: "Chivo", system-ui, sans-serif;
     font-size: 12px;
     color: #8fa0b5;
     margin-top: 4px;
@@ -265,7 +278,7 @@
 
   .group-label {
     display: block;
-    font-family: 'JetBrains Mono', monospace;
+    font-family: "JetBrains Mono", monospace;
     font-size: 11px;
     font-weight: 600;
     text-transform: uppercase;
@@ -288,12 +301,14 @@
     border: 1px solid rgba(0, 229, 255, 0.35);
     border-radius: 0.5rem;
     color: #ffffff;
-    font-family: 'Chivo', system-ui, sans-serif;
+    font-family: "Chivo", system-ui, sans-serif;
     font-size: 14px;
     font-weight: 600;
     outline: none;
     box-sizing: border-box;
-    transition: border-color 0.15s, box-shadow 0.15s;
+    transition:
+      border-color 0.15s,
+      box-shadow 0.15s;
   }
 
   .styled-input:focus {
@@ -306,7 +321,7 @@
     right: 12px;
     top: 50%;
     transform: translateY(-50%);
-    font-family: 'JetBrains Mono', monospace;
+    font-family: "JetBrains Mono", monospace;
     font-variant-numeric: tabular-nums;
     font-size: 11px;
     color: rgba(0, 229, 255, 0.65);
@@ -338,12 +353,15 @@
     background: transparent;
     border: none;
     border-radius: 6px;
-    font-family: 'Chivo', system-ui, sans-serif;
+    font-family: "Chivo", system-ui, sans-serif;
     font-size: 11px;
     font-weight: 700;
     color: #8fa0b5;
     cursor: pointer;
-    transition: background-color 0.18s ease, color 0.18s ease, box-shadow 0.18s ease;
+    transition:
+      background-color 0.18s ease,
+      color 0.18s ease,
+      box-shadow 0.18s ease;
   }
 
   .mode-tab-btn:hover {
@@ -370,7 +388,7 @@
     background: #1b2234;
     border: 2px solid #00e5ff;
     color: #00e5ff;
-    font-family: 'Space Grotesk', system-ui, sans-serif;
+    font-family: "Space Grotesk", system-ui, sans-serif;
     font-weight: 700;
     font-size: 16px;
     display: flex;
@@ -399,13 +417,15 @@
     border-radius: 0.5rem;
     color: #ffffff;
     text-align: center;
-    font-family: 'JetBrains Mono', monospace;
+    font-family: "JetBrains Mono", monospace;
     font-size: 16px;
     font-weight: 700;
     letter-spacing: 0.15em;
     outline: none;
     box-sizing: border-box;
-    transition: border-color 0.15s, box-shadow 0.15s;
+    transition:
+      border-color 0.15s,
+      box-shadow 0.15s;
   }
 
   .avatar-text-input:focus {
@@ -436,7 +456,11 @@
     align-items: center;
     justify-content: center;
     cursor: pointer;
-    transition: transform 0.1s, border-color 0.15s, background-color 0.15s, box-shadow 0.15s;
+    transition:
+      transform 0.1s,
+      border-color 0.15s,
+      background-color 0.15s,
+      box-shadow 0.15s;
     user-select: none;
   }
 
@@ -461,7 +485,7 @@
     border: none;
     border-radius: 0.5rem;
     color: #0a101a;
-    font-family: 'Space Grotesk', system-ui, sans-serif;
+    font-family: "Space Grotesk", system-ui, sans-serif;
     font-weight: 800;
     font-size: 15px;
     text-transform: uppercase;
@@ -472,7 +496,10 @@
     justify-content: center;
     gap: 8px;
     box-shadow: 0 0 20px rgba(0, 229, 255, 0.45);
-    transition: transform 0.1s, box-shadow 0.15s, filter 0.15s;
+    transition:
+      transform 0.1s,
+      box-shadow 0.15s,
+      filter 0.15s;
   }
 
   .play-btn:hover {

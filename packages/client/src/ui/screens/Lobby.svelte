@@ -198,19 +198,12 @@
       <!-- Practice Mode Card -->
       <aside class="practice-card">
         <div class="practice-header">
-          <div class="practice-icon-box">⚽</div>
+          <h3 class="practice-title">⚽ MODO PRÁCTICA</h3>
           <span class="solo-badge">OFFLINE / SOLO</span>
         </div>
-        <h3 class="practice-title">MODO PRÁCTICA</h3>
         <p class="practice-desc">
-          Entra a la cancha en solitario para calibrar tus físicas personales, ensayar la curva del efecto Magnus y practicar remates a 60 Hz sin latencia.
+          Entrena tiros, regates y mecánicas en solitario sin conexión de red.
         </p>
-
-        <ul class="practice-features">
-          <li><span class="cyan-bullet"></span> Físicas y respuesta sin latencia</li>
-          <li><span class="cyan-bullet"></span> Balón con efecto Magnus dinámico</li>
-          <li><span class="cyan-bullet"></span> Telemetría y cronómetro sincronizado</li>
-        </ul>
 
         <button
           type="button"
@@ -498,11 +491,14 @@
   .room-list {
     display: flex;
     flex-direction: column;
-    gap: 8px;
     min-height: 220px;
     max-height: 320px;
     overflow-y: auto;
-    padding-right: 4px;
+    background: #080e18;
+    border: 1px solid rgba(0, 229, 255, 0.15);
+    border-radius: 8px;
+    box-shadow: inset 0 2px 8px rgba(0, 0, 0, 0.7), inset 0 0 2px rgba(0, 229, 255, 0.15);
+    padding: 2px 6px;
     scrollbar-width: thin;
     scrollbar-color: rgba(0, 229, 255, 0.35) rgba(8, 14, 24, 0.6);
   }
@@ -529,17 +525,21 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    height: 52px;
-    padding: 0 14px;
-    background: rgba(22, 28, 38, 0.8);
-    border: 1px solid rgba(0, 229, 255, 0.12);
-    border-radius: 0.5rem;
-    transition: background 0.15s, border-color 0.15s;
+    height: 48px;
+    padding: 0 12px;
+    background: transparent;
+    border: none;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    border-radius: 4px;
+    transition: background 0.15s ease;
+  }
+
+  .room-row:last-child {
+    border-bottom: none;
   }
 
   .room-row:hover {
-    background: rgba(0, 229, 255, 0.08);
-    border-color: rgba(0, 229, 255, 0.35);
+    background: rgba(0, 229, 255, 0.04);
   }
 
   .room-info {
@@ -800,10 +800,10 @@
     background: rgba(8, 14, 24, 0.96);
     border: 1px solid rgba(0, 229, 255, 0.25);
     border-radius: 10px;
-    padding: 18px;
+    padding: 16px 18px;
     display: flex;
     flex-direction: column;
-    gap: 12px;
+    gap: 10px;
     box-shadow: 0 0 18px rgba(0, 229, 255, 0.15);
   }
 
@@ -811,18 +811,7 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-  }
-
-  .practice-icon-box {
-    width: 36px;
-    height: 36px;
-    border-radius: 8px;
-    background: rgba(0, 229, 255, 0.12);
-    border: 1px solid rgba(0, 229, 255, 0.3);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 18px;
+    gap: 8px;
   }
 
   .solo-badge {
@@ -833,49 +822,27 @@
     padding: 2px 8px;
     border-radius: 4px;
     font-weight: 600;
+    flex-shrink: 0;
   }
 
   .practice-title {
     font-family: 'Space Grotesk', system-ui, sans-serif;
-    font-size: 16px;
+    font-size: 15px;
     font-weight: 700;
     color: #fff9ef;
     margin: 0;
-    letter-spacing: 0.05em;
+    letter-spacing: 0.04em;
+    display: flex;
+    align-items: center;
+    gap: 6px;
   }
 
   .practice-desc {
     font-family: 'Chivo', system-ui, sans-serif;
-    font-size: 11px;
-    line-height: 1.5;
+    font-size: 12px;
+    line-height: 1.45;
     color: #8fa0b5;
     margin: 0;
-  }
-
-  .practice-features {
-    list-style: none;
-    padding: 0;
-    margin: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    font-family: 'Chivo', system-ui, sans-serif;
-    font-size: 11px;
-    color: #dde2f1;
-  }
-
-  .practice-features li {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-
-  .cyan-bullet {
-    width: 5px;
-    height: 5px;
-    border-radius: 50%;
-    background: #00e5ff;
-    flex-shrink: 0;
   }
 
   .btn-train {

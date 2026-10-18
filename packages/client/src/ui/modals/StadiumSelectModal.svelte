@@ -285,7 +285,7 @@
                   <span class="arena-name">{arena.name}</span>
                   <span class="format-badge">{arena.recommendedMode}</span>
                 </div>
-                <span class="card-measures">{arena.measuresText}</span>
+                <span class="card-author">Autor: {arena.author}</span>
               </div>
             </button>
           {/each}
@@ -635,7 +635,7 @@
   .stadium-scroll-list {
     display: flex;
     flex-direction: column;
-    gap: 0.6rem;
+    gap: 0;
     overflow-y: auto;
     scrollbar-width: thin;
     scrollbar-color: rgba(0, 229, 255, 0.35) rgba(8, 14, 24, 0.6);
@@ -658,34 +658,34 @@
     border-radius: 4px;
   }
 
-  /* Arena Card */
+  /* Sleek, continuous compact arena item with subtle bottom border */
   .arena-card {
     display: flex;
     align-items: center;
     gap: 0.75rem;
-    padding: 0.85rem 0.95rem;
-    background: rgba(18, 28, 48, 0.65);
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    border-radius: 0.5rem;
+    padding: 0.75rem 0.65rem;
+    background: transparent;
+    border: none;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 4px;
     cursor: pointer;
     text-align: left;
     transition: all 0.15s ease;
   }
 
+  .arena-card:last-child {
+    border-bottom: none;
+  }
+
   .arena-card:hover {
-    background: rgba(18, 28, 48, 0.95);
-    border-color: rgba(0, 229, 255, 0.35);
+    background: rgba(0, 229, 255, 0.06);
   }
 
   .arena-card.inspected {
-    border-color: #00e5ff;
-    background: rgba(0, 229, 255, 0.1);
-    box-shadow: 0 0 16px rgba(0, 229, 255, 0.22);
+    background: rgba(0, 229, 255, 0.12);
+    box-shadow: inset 2px 0 0 #00e5ff, 0 0 12px rgba(0, 229, 255, 0.15);
   }
 
-  .arena-card.confirmed {
-    border-color: #00e5ff;
-  }
 
   /* Custom Checkbox */
   .checkbox-container {
@@ -719,7 +719,7 @@
   .card-text {
     display: flex;
     flex-direction: column;
-    gap: 0.25rem;
+    gap: 0.2rem;
     overflow: hidden;
     flex: 1;
   }
@@ -749,11 +749,10 @@
     border-radius: 0.25rem;
   }
 
-  .card-measures {
-    font-family: 'JetBrains Mono', monospace;
-    font-variant-numeric: tabular-nums;
-    font-size: 0.68rem;
-    color: #94a3b8;
+  .card-author {
+    font-family: 'Chivo', system-ui, sans-serif;
+    font-size: 0.72rem;
+    color: #38bdf8;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;

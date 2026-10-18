@@ -87,8 +87,11 @@ export const SETTINGS_STORAGE_KEY = 'haxball_settings_v1';
 export const KEYBINDS_STORAGE_KEY = 'haxball_keybinds_v1';
 export const SETTINGS_VERSION_KEY = 'haxball_settings_version';
 export const SETTINGS_VERSION = 2;
-export const NICKNAME_STORAGE_KEY = 'haxball_nickname';
-export const AVATAR_STORAGE_KEY = 'haxball_avatar';
+export const LEGACYX_PLAYER_NAME_KEY = 'legacyx_player_name';
+export const LEGACYX_PLAYER_AVATAR_KEY = 'legacyx_player_avatar';
+export const LEGACYX_AVATAR_TYPE_KEY = 'legacyx_avatar_type';
+export const NICKNAME_STORAGE_KEY = 'legacyx_player_name';
+export const AVATAR_STORAGE_KEY = 'legacyx_player_avatar';
 
 export interface SettingsConfig {
   theme: 'dark' | 'light';
@@ -431,9 +434,9 @@ class GameUIStore {
   public activeModal = $state<ModalType>('NONE');
 
   // Player identity & Club
-  public nickname = $state('yami');
+  public nickname = $state('');
   public avatarMode = $state<'letters' | 'emoji'>('letters');
-  public avatarValue = $state('YA');
+  public avatarValue = $state('');
   public playerNumber = $state(10);
   public selectedRegion = $state(detectUserRegion());
   public realRegion = $state<string>(detectUserRegion());
@@ -618,13 +621,19 @@ class GameUIStore {
   public loadPersistedState(): void {
     if (typeof localStorage === 'undefined') return;
     try {
-      const savedNick = localStorage.getItem(NICKNAME_STORAGE_KEY);
-      if (savedNick && validateNickname(savedNick)) {
+      const savedNick = localStorage.getItem(LEGACYX_PLAYER_NAME_KEY) ?? localStorage.getItem('haxball_nickname');
+      if (savedNick !== null) {
         this.nickname = savedNick;
       }
-      const savedAvatar = localStorage.getItem(AVATAR_STORAGE_KEY);
-      if (savedAvatar) {
-        this.avatarValue = savedAvatar.slice(0, 2);
+      const savedAvatar = localStorage.getItem(LEGACYX_PLAYER_AVATAR_KEY) ?? localStorage.getItem('haxball_avatar');
+      if (savedAvatar !== null) {
+        this.avatarValue = savedAvatar;
+      }
+      const savedAvatarType = localStorage.getItem(LEGACYX_AVATAR_TYPE_KEY);
+      if (savedAvatarType === 'emoji') {
+        this.avatarMode = 'emoji';
+      } else if (savedAvatarType === 'text' || savedAvatarType === 'letters') {
+        this.avatarMode = 'letters';
       }
       const currentVersion = Number(localStorage.getItem(SETTINGS_VERSION_KEY) || 0);
 
@@ -656,20 +665,64 @@ class GameUIStore {
     }
   }
 
-  public saveProfile(nick: string, avatar: string): void {
-    const cleanNick = validateNickname(nick) ? nick.trim() : 'Player';
-    const cleanAvatar = (avatar || 'P1').slice(0, 2);
-    this.nickname = cleanNick;
-    this.avatarValue = cleanAvatar;
+  public setPlayerNickname(name: string): void {
+    this.nickname = name;
     const hostEntry = this.rosterPlayers.find((p) => p.id === this.localPlayerId);
     if (hostEntry) {
-      hostEntry.nickname = cleanNick;
-      hostEntry.avatar = cleanAvatar;
+      hostEntry.nickname = name;
     }
     if (typeof localStorage !== 'undefined') {
       try {
-        localStorage.setItem(NICKNAME_STORAGE_KEY, cleanNick);
-        localStorage.setItem(AVATAR_STORAGE_KEY, cleanAvatar);
+        localStorage.setItem(LEGACYX_PLAYER_NAME_KEY, name);
+        localStorage.setItem('haxball_nickname', name);
+      } catch {
+        // Ignore storage quota
+      }
+    }
+  }
+
+  public setPlayerAvatar(avatar: string, type?: 'emoji' | 'text' | 'letters'): void {
+    this.avatarValue = avatar;
+    if (type) {
+      this.avatarMode = type === 'emoji' ? 'emoji' : 'letters';
+    }
+    const hostEntry = this.rosterPlayers.find((p) => p.id === this.localPlayerId);
+    if (hostEntry) {
+      hostEntry.avatar = avatar;
+    }
+    if (typeof localStorage !== 'undefined') {
+      try {
+        localStorage.setItem(LEGACYX_PLAYER_AVATAR_KEY, avatar);
+        localStorage.setItem('haxball_avatar', avatar);
+        if (type) {
+          localStorage.setItem(LEGACYX_AVATAR_TYPE_KEY, type === 'emoji' ? 'emoji' : 'text');
+        }
+      } catch {
+        // Ignore storage quota
+      }
+    }
+  }
+
+  public saveProfile(nick: string, avatar: string, type?: 'emoji' | 'text' | 'letters'): void {
+    this.nickname = nick;
+    this.avatarValue = avatar;
+    if (type) {
+      this.avatarMode = type === 'emoji' ? 'emoji' : 'letters';
+    }
+    const hostEntry = this.rosterPlayers.find((p) => p.id === this.localPlayerId);
+    if (hostEntry) {
+      hostEntry.nickname = nick;
+      hostEntry.avatar = avatar;
+    }
+    if (typeof localStorage !== 'undefined') {
+      try {
+        localStorage.setItem(LEGACYX_PLAYER_NAME_KEY, nick);
+        localStorage.setItem('haxball_nickname', nick);
+        localStorage.setItem(LEGACYX_PLAYER_AVATAR_KEY, avatar);
+        localStorage.setItem('haxball_avatar', avatar);
+        if (type) {
+          localStorage.setItem(LEGACYX_AVATAR_TYPE_KEY, type === 'emoji' ? 'emoji' : 'text');
+        }
       } catch {
         // Ignore storage quota errors
       }

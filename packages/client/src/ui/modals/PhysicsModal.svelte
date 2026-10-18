@@ -233,6 +233,16 @@
     gameUI.updateGameplayConfig(key, target.checked);
   }
 
+  function stepValue(key: keyof GameplayConfig, step: number, min: number, max: number, direction: 1 | -1) {
+    if (!gameUI.isHost && !gameUI.isAdmin) return;
+    soundFX.playUIClick();
+    const current = Number(gameUI.gameplayConfig[key]);
+    const decimals = step < 0.01 ? 3 : step < 0.1 ? 2 : 1;
+    const next = parseFloat((current + direction * step).toFixed(decimals));
+    const clamped = Math.max(min, Math.min(max, next));
+    gameUI.updateGameplayConfig(key, clamped as any);
+  }
+
   function handleClose() {
     soundFX.playUIClick();
     gameUI.closeOverlay();
@@ -360,15 +370,6 @@
             </h3>
           </div>
         </div>
-        <p class="panel-desc">
-          {#if gameUI.activeModifiersTab === 'player'}
-            Calibra inercia, dimensiones, fuerza de patada y fricción cinética del jugador.
-          {:else if gameUI.activeModifiersTab === 'ball'}
-            Ajusta rozamiento del césped, masa de transferencia y restitución esférica.
-          {:else}
-            Personaliza turbo, distancia de dash, recarga de estamina y curvatura Magnus.
-          {/if}
-        </p>
 
         {#if !gameUI.isHost && !gameUI.isAdmin}
           <div class="guest-warning-banner">
@@ -381,38 +382,53 @@
       <div class="sliders-container">
         <!-- CATEGORY 1: PLAYER -->
         {#if gameUI.activeModifiersTab === 'player'}
-          <div class="grid-controls">
+          <div class="grid-controls-2col">
             {#each PLAYER_CONTROLS as ctrl (ctrl.key)}
               {@const currentVal = Number(gameUI.gameplayConfig[ctrl.key])}
-              <div class="control-card">
+              <div class="control-item">
                 <div class="control-header">
-                  <div class="label-group">
+                  <div class="label-with-tooltip">
                     <span class="control-label">{ctrl.label}</span>
-                    <span class="control-sublabel">{ctrl.sublabel}</span>
+                    <div class="info-tooltip-wrapper" tabindex="0" role="button" aria-label="Información sobre {ctrl.label}">
+                      <svg class="info-help-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="12" cy="12" r="10"></circle>
+                        <line x1="12" y1="16" x2="12" y2="12"></line>
+                        <line x1="12" y1="8" x2="12.01" y2="8"></line>
+                      </svg>
+                      <div class="tooltip-bubble" role="tooltip">{ctrl.sublabel}</div>
+                    </div>
                   </div>
-                  <div class="val-pill-row">
-                    {#if Math.abs(currentVal - ctrl.defaultVal) < 0.0001}
-                      <span class="delta-chip standard">ESTÁNDAR</span>
-                    {:else if currentVal > ctrl.defaultVal}
-                      <span class="delta-chip positive">+{(currentVal - ctrl.defaultVal).toFixed(ctrl.step < 0.01 ? 3 : ctrl.step < 0.1 ? 2 : 1)}</span>
-                    {:else}
-                      <span class="delta-chip negative">-{(ctrl.defaultVal - currentVal).toFixed(ctrl.step < 0.01 ? 3 : ctrl.step < 0.1 ? 2 : 1)}</span>
+
+                  <div class="number-input-wrap">
+                    <input
+                      type="number"
+                      class="num-input"
+                      min={ctrl.min}
+                      max={ctrl.max}
+                      step={ctrl.step}
+                      value={currentVal}
+                      disabled={!gameUI.isHost && !gameUI.isAdmin}
+                      oninput={(e) => handleNumberInput(ctrl.key, e, ctrl.min, ctrl.max)}
+                      onchange={(e) => handleNumberChange(ctrl.key, e, ctrl.min, ctrl.max)}
+                    />
+                    {#if ctrl.unit}
+                      <span class="unit-tag">{ctrl.unit}</span>
                     {/if}
-                    <div class="number-input-wrap">
-                      <input
-                        type="number"
-                        class="num-input"
-                        min={ctrl.min}
-                        max={ctrl.max}
-                        step={ctrl.step}
-                        value={currentVal}
-                        disabled={!gameUI.isHost && !gameUI.isAdmin}
-                        oninput={(e) => handleNumberInput(ctrl.key, e, ctrl.min, ctrl.max)}
-                        onchange={(e) => handleNumberChange(ctrl.key, e, ctrl.min, ctrl.max)}
-                      />
-                      {#if ctrl.unit}
-                        <span class="unit-tag">{ctrl.unit}</span>
-                      {/if}
+                    <div class="micro-stepper-col">
+                      <button
+                        type="button"
+                        class="micro-step-btn"
+                        disabled={!gameUI.isHost && !gameUI.isAdmin || currentVal >= ctrl.max}
+                        onclick={() => stepValue(ctrl.key, ctrl.step, ctrl.min, ctrl.max, 1)}
+                        aria-label="Incrementar {ctrl.label}"
+                      >▲</button>
+                      <button
+                        type="button"
+                        class="micro-step-btn"
+                        disabled={!gameUI.isHost && !gameUI.isAdmin || currentVal <= ctrl.min}
+                        onclick={() => stepValue(ctrl.key, ctrl.step, ctrl.min, ctrl.max, -1)}
+                        aria-label="Decrementar {ctrl.label}"
+                      >▼</button>
                     </div>
                   </div>
                 </div>
@@ -421,15 +437,12 @@
                 <div class="slider-track-wrap">
                   <div class="track-bg"></div>
 
-                  <!-- Marca del valor por defecto -->
+                  <!-- Marca discreta del valor por defecto (hover/focus) -->
                   <div
-                    class="default-marker"
+                    class="default-dot"
                     style="left: {calcPercent(ctrl.defaultVal, ctrl.min, ctrl.max)}%;"
                     title="Valor por defecto: {ctrl.defaultVal}"
-                  >
-                    <span class="default-tick"></span>
-                    <span class="default-tooltip">DEF</span>
-                  </div>
+                  ></div>
 
                   <!-- Rastro / Barra Delta respecto al valor original -->
                   <div
@@ -450,12 +463,6 @@
                     oninput={(e) => handleSlider(ctrl.key, e, ctrl.min, ctrl.max)}
                   />
                 </div>
-
-                <div class="range-bounds-row">
-                  <span>Mín: {ctrl.min}</span>
-                  <span class="def-info">Por defecto: {ctrl.defaultVal}</span>
-                  <span>Máx: {ctrl.max}</span>
-                </div>
               </div>
             {/each}
           </div>
@@ -463,38 +470,53 @@
 
         <!-- CATEGORY 2: BALL -->
         {#if gameUI.activeModifiersTab === 'ball'}
-          <div class="grid-controls">
+          <div class="grid-controls-2col">
             {#each BALL_CONTROLS as ctrl (ctrl.key)}
               {@const currentVal = Number(gameUI.gameplayConfig[ctrl.key])}
-              <div class="control-card">
+              <div class="control-item">
                 <div class="control-header">
-                  <div class="label-group">
+                  <div class="label-with-tooltip">
                     <span class="control-label">{ctrl.label}</span>
-                    <span class="control-sublabel">{ctrl.sublabel}</span>
+                    <div class="info-tooltip-wrapper" tabindex="0" role="button" aria-label="Información sobre {ctrl.label}">
+                      <svg class="info-help-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="12" cy="12" r="10"></circle>
+                        <line x1="12" y1="16" x2="12" y2="12"></line>
+                        <line x1="12" y1="8" x2="12.01" y2="8"></line>
+                      </svg>
+                      <div class="tooltip-bubble" role="tooltip">{ctrl.sublabel}</div>
+                    </div>
                   </div>
-                  <div class="val-pill-row">
-                    {#if Math.abs(currentVal - ctrl.defaultVal) < 0.0001}
-                      <span class="delta-chip standard">ESTÁNDAR</span>
-                    {:else if currentVal > ctrl.defaultVal}
-                      <span class="delta-chip positive">+{(currentVal - ctrl.defaultVal).toFixed(ctrl.step < 0.01 ? 3 : ctrl.step < 0.1 ? 2 : 1)}</span>
-                    {:else}
-                      <span class="delta-chip negative">-{(ctrl.defaultVal - currentVal).toFixed(ctrl.step < 0.01 ? 3 : ctrl.step < 0.1 ? 2 : 1)}</span>
+
+                  <div class="number-input-wrap">
+                    <input
+                      type="number"
+                      class="num-input"
+                      min={ctrl.min}
+                      max={ctrl.max}
+                      step={ctrl.step}
+                      value={currentVal}
+                      disabled={!gameUI.isHost && !gameUI.isAdmin}
+                      oninput={(e) => handleNumberInput(ctrl.key, e, ctrl.min, ctrl.max)}
+                      onchange={(e) => handleNumberChange(ctrl.key, e, ctrl.min, ctrl.max)}
+                    />
+                    {#if ctrl.unit}
+                      <span class="unit-tag">{ctrl.unit}</span>
                     {/if}
-                    <div class="number-input-wrap">
-                      <input
-                        type="number"
-                        class="num-input"
-                        min={ctrl.min}
-                        max={ctrl.max}
-                        step={ctrl.step}
-                        value={currentVal}
-                        disabled={!gameUI.isHost && !gameUI.isAdmin}
-                        oninput={(e) => handleNumberInput(ctrl.key, e, ctrl.min, ctrl.max)}
-                        onchange={(e) => handleNumberChange(ctrl.key, e, ctrl.min, ctrl.max)}
-                      />
-                      {#if ctrl.unit}
-                        <span class="unit-tag">{ctrl.unit}</span>
-                      {/if}
+                    <div class="micro-stepper-col">
+                      <button
+                        type="button"
+                        class="micro-step-btn"
+                        disabled={!gameUI.isHost && !gameUI.isAdmin || currentVal >= ctrl.max}
+                        onclick={() => stepValue(ctrl.key, ctrl.step, ctrl.min, ctrl.max, 1)}
+                        aria-label="Incrementar {ctrl.label}"
+                      >▲</button>
+                      <button
+                        type="button"
+                        class="micro-step-btn"
+                        disabled={!gameUI.isHost && !gameUI.isAdmin || currentVal <= ctrl.min}
+                        onclick={() => stepValue(ctrl.key, ctrl.step, ctrl.min, ctrl.max, -1)}
+                        aria-label="Decrementar {ctrl.label}"
+                      >▼</button>
                     </div>
                   </div>
                 </div>
@@ -503,13 +525,10 @@
                   <div class="track-bg"></div>
 
                   <div
-                    class="default-marker"
+                    class="default-dot"
                     style="left: {calcPercent(ctrl.defaultVal, ctrl.min, ctrl.max)}%;"
                     title="Valor por defecto: {ctrl.defaultVal}"
-                  >
-                    <span class="default-tick"></span>
-                    <span class="default-tooltip">DEF</span>
-                  </div>
+                  ></div>
 
                   <div
                     class="delta-track-fill"
@@ -529,12 +548,6 @@
                     oninput={(e) => handleSlider(ctrl.key, e, ctrl.min, ctrl.max)}
                   />
                 </div>
-
-                <div class="range-bounds-row">
-                  <span>Mín: {ctrl.min}</span>
-                  <span class="def-info">Por defecto: {ctrl.defaultVal}</span>
-                  <span>Máx: {ctrl.max}</span>
-                </div>
               </div>
             {/each}
           </div>
@@ -542,16 +555,15 @@
 
         <!-- CATEGORY 3: MECHANICS & SKILLS -->
         {#if gameUI.activeModifiersTab === 'mechanics'}
-          <div class="grid-controls">
+          <div class="grid-controls-2col">
             <!-- Togglers de Habilidades (Fila de 3 switches) -->
             <div class="toggles-panel-card">
-              <span class="toggles-header-title">⚡ HABILIDADES ESPECIALES DE PARTIDA</span>
               <div class="toggles-row">
                 <!-- Toggle 1: Turbo -->
                 <label class="toggle-item" class:disabled={!gameUI.isHost && !gameUI.isAdmin}>
                   <div class="toggle-text">
-                    <span class="toggle-name">🔥 Habilitar Turbo</span>
-                    <span class="toggle-sub">Sprint continuo con consumo de estamina</span>
+                    <span class="toggle-name">🔥 Turbo</span>
+                    <span class="toggle-sub">Sprint con estamina</span>
                   </div>
                   <input
                     type="checkbox"
@@ -568,8 +580,8 @@
                 <!-- Toggle 2: Dash -->
                 <label class="toggle-item" class:disabled={!gameUI.isHost && !gameUI.isAdmin}>
                   <div class="toggle-text">
-                    <span class="toggle-name">⚡ Habilitar Dash</span>
-                    <span class="toggle-sub">Impulso instantáneo direccional</span>
+                    <span class="toggle-name">⚡ Dash</span>
+                    <span class="toggle-sub">Impulso direccional</span>
                   </div>
                   <input
                     type="checkbox"
@@ -586,8 +598,8 @@
                 <!-- Toggle 3: Magnus -->
                 <label class="toggle-item" class:disabled={!gameUI.isHost && !gameUI.isAdmin}>
                   <div class="toggle-text">
-                    <span class="toggle-name">🌀 Efecto Magnus</span>
-                    <span class="toggle-sub">Comba y curvatura balística en vuelo</span>
+                    <span class="toggle-name">🌀 Magnus</span>
+                    <span class="toggle-sub">Curvatura balística</span>
                   </div>
                   <input
                     type="checkbox"
@@ -606,35 +618,50 @@
             <!-- Sliders de Mecánicas -->
             {#each MECHANICS_CONTROLS as ctrl (ctrl.key)}
               {@const currentVal = Number(gameUI.gameplayConfig[ctrl.key])}
-              <div class="control-card">
+              <div class="control-item">
                 <div class="control-header">
-                  <div class="label-group">
+                  <div class="label-with-tooltip">
                     <span class="control-label">{ctrl.label}</span>
-                    <span class="control-sublabel">{ctrl.sublabel}</span>
+                    <div class="info-tooltip-wrapper" tabindex="0" role="button" aria-label="Información sobre {ctrl.label}">
+                      <svg class="info-help-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="12" cy="12" r="10"></circle>
+                        <line x1="12" y1="16" x2="12" y2="12"></line>
+                        <line x1="12" y1="8" x2="12.01" y2="8"></line>
+                      </svg>
+                      <div class="tooltip-bubble" role="tooltip">{ctrl.sublabel}</div>
+                    </div>
                   </div>
-                  <div class="val-pill-row">
-                    {#if Math.abs(currentVal - ctrl.defaultVal) < 0.0001}
-                      <span class="delta-chip standard">ESTÁNDAR</span>
-                    {:else if currentVal > ctrl.defaultVal}
-                      <span class="delta-chip positive">+{(currentVal - ctrl.defaultVal).toFixed(ctrl.step < 0.01 ? 3 : ctrl.step < 0.1 ? 2 : 1)}</span>
-                    {:else}
-                      <span class="delta-chip negative">-{(ctrl.defaultVal - currentVal).toFixed(ctrl.step < 0.01 ? 3 : ctrl.step < 0.1 ? 2 : 1)}</span>
+
+                  <div class="number-input-wrap">
+                    <input
+                      type="number"
+                      class="num-input"
+                      min={ctrl.min}
+                      max={ctrl.max}
+                      step={ctrl.step}
+                      value={currentVal}
+                      disabled={!gameUI.isHost && !gameUI.isAdmin}
+                      oninput={(e) => handleNumberInput(ctrl.key, e, ctrl.min, ctrl.max)}
+                      onchange={(e) => handleNumberChange(ctrl.key, e, ctrl.min, ctrl.max)}
+                    />
+                    {#if ctrl.unit}
+                      <span class="unit-tag">{ctrl.unit}</span>
                     {/if}
-                    <div class="number-input-wrap">
-                      <input
-                        type="number"
-                        class="num-input"
-                        min={ctrl.min}
-                        max={ctrl.max}
-                        step={ctrl.step}
-                        value={currentVal}
-                        disabled={!gameUI.isHost && !gameUI.isAdmin}
-                        oninput={(e) => handleNumberInput(ctrl.key, e, ctrl.min, ctrl.max)}
-                        onchange={(e) => handleNumberChange(ctrl.key, e, ctrl.min, ctrl.max)}
-                      />
-                      {#if ctrl.unit}
-                        <span class="unit-tag">{ctrl.unit}</span>
-                      {/if}
+                    <div class="micro-stepper-col">
+                      <button
+                        type="button"
+                        class="micro-step-btn"
+                        disabled={!gameUI.isHost && !gameUI.isAdmin || currentVal >= ctrl.max}
+                        onclick={() => stepValue(ctrl.key, ctrl.step, ctrl.min, ctrl.max, 1)}
+                        aria-label="Incrementar {ctrl.label}"
+                      >▲</button>
+                      <button
+                        type="button"
+                        class="micro-step-btn"
+                        disabled={!gameUI.isHost && !gameUI.isAdmin || currentVal <= ctrl.min}
+                        onclick={() => stepValue(ctrl.key, ctrl.step, ctrl.min, ctrl.max, -1)}
+                        aria-label="Decrementar {ctrl.label}"
+                      >▼</button>
                     </div>
                   </div>
                 </div>
@@ -643,13 +670,10 @@
                   <div class="track-bg"></div>
 
                   <div
-                    class="default-marker"
+                    class="default-dot"
                     style="left: {calcPercent(ctrl.defaultVal, ctrl.min, ctrl.max)}%;"
                     title="Valor por defecto: {ctrl.defaultVal}"
-                  >
-                    <span class="default-tick"></span>
-                    <span class="default-tooltip">DEF</span>
-                  </div>
+                  ></div>
 
                   <div
                     class="delta-track-fill"
@@ -668,12 +692,6 @@
                     disabled={!gameUI.isHost && !gameUI.isAdmin}
                     oninput={(e) => handleSlider(ctrl.key, e, ctrl.min, ctrl.max)}
                   />
-                </div>
-
-                <div class="range-bounds-row">
-                  <span>Mín: {ctrl.min}</span>
-                  <span class="def-info">Por defecto: {ctrl.defaultVal}</span>
-                  <span>Máx: {ctrl.max}</span>
                 </div>
               </div>
             {/each}
@@ -955,13 +973,6 @@
     letter-spacing: -0.01em;
   }
 
-  .panel-desc {
-    margin: 0;
-    font-family: 'Chivo', system-ui, sans-serif;
-    font-size: 0.8rem;
-    color: #94a3b8;
-    line-height: 1.4;
-  }
 
   .guest-warning-banner {
     margin-top: 0.75rem;
@@ -983,108 +994,141 @@
     scrollbar-color: rgba(0, 229, 255, 0.35) rgba(8, 14, 24, 0.6);
   }
 
-  .grid-controls {
-    display: flex;
-    flex-direction: column;
-    gap: 0.9rem;
+  .grid-controls-2col {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 1rem 1.25rem;
   }
 
-  /* Control Card */
-  .control-card {
-    background: rgba(18, 28, 48, 0.75);
-    border: 1px solid rgba(255, 255, 255, 0.06);
+  @media (max-width: 900px) {
+    .grid-controls-2col {
+      grid-template-columns: 1fr;
+    }
+  }
+
+  /* Control Item "al aire" */
+  .control-item {
+    background: rgba(18, 28, 48, 0.45);
+    border: 1px solid rgba(255, 255, 255, 0.05);
     border-radius: 0.5rem;
-    padding: 0.9rem 1.1rem;
+    padding: 0.75rem 0.95rem;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
     transition: border-color 0.15s ease, background 0.15s ease;
   }
 
-  .control-card:hover {
+  .control-item:hover,
+  .control-item:focus-within {
     border-color: rgba(0, 229, 255, 0.25);
-    background: rgba(18, 28, 48, 0.95);
+    background: rgba(18, 28, 48, 0.85);
   }
 
   .control-header {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    margin-bottom: 0.75rem;
-    gap: 1rem;
+    margin-bottom: 0.5rem;
+    gap: 0.75rem;
   }
 
-  .label-group {
+  .label-with-tooltip {
     display: flex;
-    flex-direction: column;
-    gap: 0.15rem;
+    align-items: center;
+    gap: 0.45rem;
   }
 
   .control-label {
     font-family: 'Chivo', system-ui, sans-serif;
-    font-size: 0.85rem;
+    font-size: 0.825rem;
     font-weight: 700;
     color: #f1f5f9;
   }
 
-  .control-sublabel {
+  /* Info Tooltip */
+  .info-tooltip-wrapper {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: help;
+    outline: none;
+  }
+
+  .info-help-icon {
+    width: 0.825rem;
+    height: 0.825rem;
+    color: #64748b;
+    transition: color 0.15s ease, filter 0.15s ease;
+  }
+
+  .info-tooltip-wrapper:hover .info-help-icon,
+  .info-tooltip-wrapper:focus .info-help-icon {
+    color: #00e5ff;
+    filter: drop-shadow(0 0 4px rgba(0, 229, 255, 0.5));
+  }
+
+  .tooltip-bubble {
+    position: absolute;
+    bottom: calc(100% + 6px);
+    left: 50%;
+    transform: translateX(-50%);
+    padding: 0.45rem 0.65rem;
+    background: #080e18;
+    border: 1px solid rgba(0, 229, 255, 0.3);
+    border-radius: 0.35rem;
+    color: #e2e8f0;
     font-family: 'Chivo', system-ui, sans-serif;
     font-size: 0.72rem;
-    color: #64748b;
+    line-height: 1.35;
+    white-space: normal;
+    width: max-content;
+    max-width: 240px;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.85), 0 0 8px rgba(0, 229, 255, 0.2);
+    pointer-events: none;
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 0.15s ease, transform 0.15s ease;
+    z-index: 50;
   }
 
-  .val-pill-row {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
+  .info-tooltip-wrapper:hover .tooltip-bubble,
+  .info-tooltip-wrapper:focus .tooltip-bubble {
+    opacity: 1;
+    visibility: visible;
+    transform: translateX(-50%) translateY(-2px);
   }
 
-  /* Delta Chip */
-  .delta-chip {
-    padding: 0.2rem 0.45rem;
-    border-radius: 0.3rem;
-    font-size: 0.68rem;
-    font-weight: 700;
-    font-family: 'JetBrains Mono', monospace;
-    font-variant-numeric: tabular-nums;
-  }
-
-  .delta-chip.standard {
-    background: rgba(255, 255, 255, 0.06);
-    color: #94a3b8;
-    border: 1px solid rgba(255, 255, 255, 0.1);
-  }
-
-  .delta-chip.positive {
-    background: rgba(0, 229, 255, 0.12);
-    color: #00e5ff;
-    border: 1px solid rgba(0, 229, 255, 0.35);
-  }
-
-  .delta-chip.negative {
-    background: rgba(245, 158, 11, 0.12);
-    color: #fbbf24;
-    border: 1px solid rgba(245, 158, 11, 0.35);
-  }
-
+  /* Number Input with Cross-Browser Hidden Spinners */
   .number-input-wrap {
     display: flex;
     align-items: center;
-    gap: 0.35rem;
-    background: rgba(11, 17, 30, 0.8);
+    gap: 0.25rem;
+    background: rgba(11, 17, 30, 0.85);
     border: 1px solid rgba(0, 229, 255, 0.25);
     border-radius: 0.4rem;
-    padding: 0.2rem 0.5rem;
+    padding: 0.15rem 0.35rem 0.15rem 0.5rem;
   }
 
   .num-input {
-    width: 62px;
+    width: 54px;
     background: transparent;
     border: none;
     color: #00e5ff;
-    font-size: 0.85rem;
+    font-size: 0.825rem;
     font-weight: 700;
     font-family: 'JetBrains Mono', monospace;
     font-variant-numeric: tabular-nums;
     text-align: right;
     outline: none;
+    -moz-appearance: textfield;
+    appearance: textfield;
+  }
+
+  .num-input::-webkit-inner-spin-button,
+  .num-input::-webkit-outer-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
   }
 
   .num-input:focus {
@@ -1097,16 +1141,51 @@
   }
 
   .unit-tag {
-    font-size: 0.68rem;
+    font-size: 0.65rem;
     color: #64748b;
     font-weight: 600;
+    margin-right: 0.15rem;
   }
 
-  /* Slider Track with Delta Range & Default Marker */
+  /* Micro Steppers */
+  .micro-stepper-col {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 1px;
+    margin-left: 0.15rem;
+  }
+
+  .micro-step-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: transparent;
+    border: none;
+    color: #64748b;
+    font-size: 0.52rem;
+    line-height: 1;
+    padding: 1px 2px;
+    cursor: pointer;
+    border-radius: 2px;
+    transition: all 0.1s ease;
+  }
+
+  .micro-step-btn:hover:not(:disabled) {
+    color: #00e5ff;
+    background: rgba(0, 229, 255, 0.18);
+  }
+
+  .micro-step-btn:disabled {
+    opacity: 0.2;
+    cursor: not-allowed;
+  }
+
+  /* Slider Track with Delta Range & Discrete Default Dot */
   .slider-track-wrap {
     position: relative;
     width: 100%;
-    height: 28px;
+    height: 24px;
     display: flex;
     align-items: center;
   }
@@ -1115,48 +1194,35 @@
     position: absolute;
     left: 0;
     right: 0;
-    height: 6px;
+    height: 5px;
     border-radius: 3px;
     background: rgba(255, 255, 255, 0.08);
   }
 
-  .default-marker {
+  .default-dot {
     position: absolute;
-    top: 4px;
-    bottom: 4px;
-    width: 2px;
-    background: rgba(255, 255, 255, 0.45);
-    z-index: 2;
-    transform: translateX(-50%);
-    pointer-events: none;
-  }
-
-  .default-tick {
-    position: absolute;
-    top: -3px;
-    left: -2px;
-    width: 6px;
-    height: 6px;
+    top: 50%;
+    width: 4px;
+    height: 4px;
     border-radius: 50%;
     background: #ffffff;
-    box-shadow: 0 0 4px #ffffff;
+    box-shadow: 0 0 5px #ffffff;
+    transform: translate(-50%, -50%);
+    pointer-events: none;
+    z-index: 2;
+    opacity: 0;
+    transition: opacity 0.2s ease;
   }
 
-  .default-tooltip {
-    position: absolute;
-    bottom: -14px;
-    left: 50%;
-    transform: translateX(-50%);
-    font-size: 0.58rem;
-    color: #94a3b8;
-    font-family: 'JetBrains Mono', monospace;
-    opacity: 0.7;
-    white-space: nowrap;
+  .control-item:hover .default-dot,
+  .control-item:focus-within .default-dot,
+  .slider-track-wrap:hover .default-dot {
+    opacity: 1;
   }
 
   .delta-track-fill {
     position: absolute;
-    height: 6px;
+    height: 5px;
     border-radius: 3px;
     z-index: 1;
     pointer-events: none;
@@ -1176,7 +1242,7 @@
   .range-slider {
     position: relative;
     width: 100%;
-    height: 28px;
+    height: 24px;
     background: transparent;
     appearance: none;
     cursor: pointer;
@@ -1187,28 +1253,28 @@
 
   .range-slider::-webkit-slider-thumb {
     appearance: none;
-    width: 16px;
-    height: 16px;
+    width: 14px;
+    height: 14px;
     border-radius: 50%;
     background: #00e5ff;
     border: 2px solid #0d1526;
-    box-shadow: 0 0 10px #00e5ff;
+    box-shadow: 0 0 8px #00e5ff;
     cursor: pointer;
     transition: transform 0.1s ease, box-shadow 0.1s ease;
   }
 
   .range-slider::-webkit-slider-thumb:hover {
-    transform: scale(1.2);
-    box-shadow: 0 0 15px #00e5ff;
+    transform: scale(1.25);
+    box-shadow: 0 0 14px #00e5ff;
   }
 
   .range-slider::-moz-range-thumb {
-    width: 16px;
-    height: 16px;
+    width: 14px;
+    height: 14px;
     border-radius: 50%;
     background: #00e5ff;
     border: 2px solid #0d1526;
-    box-shadow: 0 0 10px #00e5ff;
+    box-shadow: 0 0 8px #00e5ff;
     cursor: pointer;
   }
 
@@ -1217,43 +1283,20 @@
     opacity: 0.5;
   }
 
-  .range-bounds-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    margin-top: 0.35rem;
-    font-size: 0.68rem;
-    color: #64748b;
-    font-family: 'JetBrains Mono', monospace;
-    font-variant-numeric: tabular-nums;
-  }
-
-  .def-info {
-    color: #94a3b8;
-  }
-
-  /* Toggles Card */
+  /* Toggles Card (Spans full width in 2-col grid) */
   .toggles-panel-card {
-    background: rgba(18, 28, 48, 0.85);
-    border: 1px solid rgba(0, 229, 255, 0.2);
+    grid-column: 1 / -1;
+    background: rgba(18, 28, 48, 0.45);
+    border: 1px solid rgba(0, 229, 255, 0.15);
     border-radius: 0.5rem;
-    padding: 1rem 1.25rem;
-    margin-bottom: 0.5rem;
-  }
-
-  .toggles-header-title {
-    display: block;
-    font-size: 0.8rem;
-    font-weight: 800;
-    color: #00e5ff;
-    letter-spacing: 0.05em;
-    margin-bottom: 0.85rem;
+    padding: 0.85rem 1rem;
+    margin-bottom: 0.25rem;
   }
 
   .toggles-row {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-    gap: 1rem;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 0.75rem;
   }
 
   .toggle-item {

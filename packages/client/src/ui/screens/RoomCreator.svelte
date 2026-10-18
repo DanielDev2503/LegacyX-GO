@@ -168,7 +168,19 @@
         <div class="config-section">
           <div class="param-row">
             <div class="toggle-row">
-              <span class="toggle-label">🌐 Mostrar en lista pública</span>
+              <div class="label-with-tooltip">
+                <span class="toggle-label">🌐 Mostrar en lista pública</span>
+                <div class="info-tooltip-wrapper" tabindex="0" role="button" aria-label="Información sobre visibilidad en lista pública">
+                  <svg class="info-help-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="12" cy="12" r="10"></circle>
+                    <line x1="12" y1="16" x2="12" y2="12"></line>
+                    <line x1="12" y1="8" x2="12.01" y2="8"></line>
+                  </svg>
+                  <div class="tooltip-bubble" role="tooltip">
+                    Si se desactiva, la sala no aparecerá en la lista pública y solo se podrá acceder buscándola por su ID en el lobby.
+                  </div>
+                </div>
+              </div>
               <label class="switch">
                 <input
                   type="checkbox"
@@ -178,9 +190,6 @@
                 <span class="slider"></span>
               </label>
             </div>
-            <p class="param-note">
-              Si se desactiva, la sala no aparecerá en la lista pública y solo se podrá acceder buscándola por su ID en el lobby.
-            </p>
           </div>
         </div>
       </div>
@@ -695,12 +704,65 @@
     box-shadow: 0 0 8px rgba(0, 229, 255, 0.4);
   }
 
-  .param-note {
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 10px;
+  .label-with-tooltip {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .info-tooltip-wrapper {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: help;
+    outline: none;
+  }
+
+  .info-help-icon {
+    width: 14px;
+    height: 14px;
     color: #8fa0b5;
-    margin: 2px 0 0 0;
+    transition: color 0.15s ease, transform 0.15s ease;
+  }
+
+  .info-tooltip-wrapper:hover .info-help-icon,
+  .info-tooltip-wrapper:focus-visible .info-help-icon {
+    color: #00e5ff;
+    transform: scale(1.15);
+  }
+
+  .tooltip-bubble {
+    position: absolute;
+    bottom: calc(100% + 8px);
+    left: 50%;
+    transform: translateX(-50%);
+    width: max-content;
+    max-width: 260px;
+    padding: 7px 11px;
+    background: rgba(8, 14, 24, 0.98);
+    border: 1px solid rgba(0, 229, 255, 0.3);
+    border-radius: 6px;
+    box-shadow: 0 4px 18px rgba(0, 0, 0, 0.8), 0 0 10px rgba(0, 229, 255, 0.15);
+    color: #ffffff;
+    font-family: 'Chivo', system-ui, sans-serif;
+    font-size: 12px;
+    font-weight: 500;
     line-height: 1.35;
+    text-align: left;
+    white-space: normal;
+    z-index: 50;
+    pointer-events: none;
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 0.18s ease, transform 0.18s ease, visibility 0.18s;
+  }
+
+  .info-tooltip-wrapper:hover .tooltip-bubble,
+  .info-tooltip-wrapper:focus-visible .tooltip-bubble {
+    opacity: 1;
+    visibility: visible;
+    transform: translateX(-50%) translateY(-2px);
   }
 
   .right-panel-scroll {
