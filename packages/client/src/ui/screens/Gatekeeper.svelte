@@ -6,7 +6,7 @@
   const emojiList: readonly string[] = EMOJI_CATALOG;
 
   let isNameValid = $derived(gameUI.nickname.trim().length > 0);
-  let hasExplicitAvatar = $state(
+  let hasUserManuallyEditedAvatar = $state(
     Boolean(
       gameUI.avatarMode === "emoji" ||
         (gameUI.avatarValue &&
@@ -16,7 +16,7 @@
 
   let effectiveAvatar = $derived(
     gameUI.avatarValue ||
-      (!hasExplicitAvatar && gameUI.avatarMode === "letters"
+      (!hasUserManuallyEditedAvatar && gameUI.avatarMode === "letters"
         ? gameUI.nickname.trim().slice(0, 2).toUpperCase()
         : "")
   );
@@ -24,7 +24,10 @@
   function handleNicknameChange(e: Event) {
     const val = (e.target as HTMLInputElement).value;
     gameUI.setPlayerNickname(val.slice(0, 25));
-    if (!hasExplicitAvatar && gameUI.avatarMode === "letters") {
+    if (!val.trim()) {
+      hasUserManuallyEditedAvatar = false;
+    }
+    if (!hasUserManuallyEditedAvatar && gameUI.avatarMode === "letters") {
       const autoInitials = val.trim().slice(0, 2).toUpperCase();
       gameUI.setPlayerAvatar(autoInitials, "text");
     }
@@ -32,19 +35,13 @@
 
   function handleAvatarTextChange(e: Event) {
     const val = (e.target as HTMLInputElement).value.toUpperCase().slice(0, 2);
-    if (!val.trim()) {
-      hasExplicitAvatar = false;
-      const autoInitials = gameUI.nickname.trim().slice(0, 2).toUpperCase();
-      gameUI.setPlayerAvatar(autoInitials, "text");
-    } else {
-      hasExplicitAvatar = true;
-      gameUI.setPlayerAvatar(val, "text");
-    }
+    hasUserManuallyEditedAvatar = true;
+    gameUI.setPlayerAvatar(val, "text");
   }
 
   function selectEmoji(emoji: string) {
     soundFX.playUIClick();
-    hasExplicitAvatar = true;
+    hasUserManuallyEditedAvatar = true;
     gameUI.setPlayerAvatar(emoji, "emoji");
   }
 
@@ -53,12 +50,12 @@
     gameUI.avatarMode = isEmoji ? "emoji" : "letters";
     if (isEmoji) {
       if (!gameUI.avatarValue || !emojiList.includes(gameUI.avatarValue)) {
-        hasExplicitAvatar = true;
+        hasUserManuallyEditedAvatar = true;
         gameUI.setPlayerAvatar(emojiList[0] || "⚽", "emoji");
       }
     } else {
       if (emojiList.includes(gameUI.avatarValue)) {
-        hasExplicitAvatar = false;
+        hasUserManuallyEditedAvatar = false;
         const autoInitials = gameUI.nickname.trim().slice(0, 2).toUpperCase();
         gameUI.setPlayerAvatar(autoInitials, "text");
       }
@@ -69,7 +66,7 @@
     if (!isNameValid) return;
     soundFX.ensureContext();
     soundFX.playUIClick();
-    if (!gameUI.avatarValue && gameUI.avatarMode === "letters") {
+    if (!hasUserManuallyEditedAvatar && !gameUI.avatarValue && gameUI.avatarMode === "letters") {
       gameUI.setPlayerAvatar(gameUI.nickname.trim().slice(0, 2).toUpperCase(), "text");
     }
     gameUI.navigateTo("LOBBY");
@@ -159,7 +156,7 @@
               class="avatar-text-input"
               type="text"
               maxlength="2"
-              placeholder={!hasExplicitAvatar && gameUI.nickname.trim() ? gameUI.nickname.trim().slice(0, 2).toUpperCase() : "Ej: 10"}
+              placeholder={!hasUserManuallyEditedAvatar && gameUI.nickname.trim() ? gameUI.nickname.trim().slice(0, 2).toUpperCase() : "Ej: 10"}
               value={gameUI.avatarValue}
               oninput={handleAvatarTextChange}
             />

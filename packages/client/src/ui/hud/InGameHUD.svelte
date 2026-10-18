@@ -97,21 +97,13 @@
   <!-- 1. TOP BAR: 3 CÁPSULAS FLOTANTES           -->
   <!-- ========================================== -->
   <div class="top-bar-container">
-    <!-- A) Cartucho Izquierdo: Nombre de Sala & Telemetría en Vivo -->
+    <!-- A) Cartucho Izquierdo: Únicamente Nombre de Sala -->
     <div class="top-card top-card-left">
       <div class="room-title-block">
         <span class="pulse-dot"></span>
         <h1 class="room-title">
-          {gameUI.activeRoomName || 'TORNEO NOCTURNO'}
+          {gameUI.activeRoomName || 'TORNEO NOCTURNO #12'}
         </h1>
-      </div>
-      <span class="card-sep">|</span>
-      <div class="telemetry-pill">
-        <span class="tel-label">Ping:</span>
-        <span class="tel-val {pingColorClass}">{gameUI.pingMs} ms</span>
-        <span class="card-sep">|</span>
-        <span class="tel-label">FPS:</span>
-        <span class="tel-val text-cyan">{gameUI.fps}</span>
       </div>
     </div>
 
@@ -152,6 +144,7 @@
       <!-- 1. Silenciar / Audio Toggle -->
       <button
         type="button"
+        id="btn-audio-toggle"
         class="hud-action-btn"
         class:is-muted={gameUI.isAudioMuted}
         title={gameUI.isAudioMuted ? 'Activar Sonido' : 'Silenciar Todo'}
@@ -176,6 +169,7 @@
       <!-- 2. Menú de Sala Toggle [Esc] -->
       <button
         type="button"
+        id="btn-menu-toggle"
         class="hud-action-btn menu-toggle-btn"
         title="Menú de Sala [Esc]"
         aria-label="Menú de Sala"
@@ -207,7 +201,19 @@
   </div>
 
   <!-- ========================================== -->
-  <!-- 2. MÓDULO INFERIOR IZQUIERDO: CHAT TÁCTICO -->
+  <!-- 2. TELEMETRÍA EN VIVO (ESQUINA INFERIOR IZQ)-->
+  <!-- ========================================== -->
+  <div class="hud-telemetry-corner">
+    <span class="tel-pulse-dot"></span>
+    <span class="tel-label">Ping:</span>
+    <span class="tel-val {pingColorClass}">{gameUI.pingMs} ms</span>
+    <span class="tel-sep">|</span>
+    <span class="tel-label">FPS:</span>
+    <span class="tel-val text-cyan">{gameUI.fps}</span>
+  </div>
+
+  <!-- ========================================== -->
+  <!-- 3. CHAT TÁCTICO FLOTANTE (INFERIOR CENTRO) -->
   <!-- ========================================== -->
   <div
     class="hud-chat-container"
@@ -249,37 +255,6 @@
       </button>
     </div>
   </div>
-
-  <!-- ========================================== -->
-  <!-- 3. MÓDULO INFERIOR DERECHO: RADAR MINIMAPA -->
-  <!-- ========================================== -->
-  {#if gameUI.settings.minimapEnabled}
-    <div
-      class="hud-radar-container"
-      style="opacity: {gameUI.settings.minimapOpacity ?? 0.95};"
-    >
-      <div class="radar-pitch-box">
-        <div class="pitch-inner-border"></div>
-        <div class="pitch-half-line"></div>
-        <div class="pitch-center-circle"></div>
-        <!-- Blips Tácticos Representativos -->
-        <div class="radar-blip blip-red" style="top: 25%; left: 20%;"></div>
-        <div class="radar-blip blip-red" style="top: 65%; left: 35%;"></div>
-        <div class="radar-blip blip-blue" style="top: 30%; right: 25%;"></div>
-        <div class="radar-blip blip-blue" style="top: 70%; right: 20%;"></div>
-        <div class="radar-blip blip-ball" style="top: 48%; left: 52%;"></div>
-        <!-- Frustum de Cámara -->
-        {#if gameUI.settings.minimapCameraFrustum}
-          <div class="camera-frustum-rect"></div>
-        {/if}
-      </div>
-      <div class="radar-legend">
-        <span class="legend-red">● RED</span>
-        <span class="legend-ball">● BALL</span>
-        <span class="legend-blue">● BLUE</span>
-      </div>
-    </div>
-  {/if}
 </div>
 
 <style>
@@ -297,7 +272,7 @@
   /* TOP BAR */
   .top-bar-container {
     position: fixed;
-    top: 1rem;
+    top: 0.5rem;
     left: 1.5rem;
     right: 1.5rem;
     display: flex;
@@ -386,12 +361,17 @@
 
   /* Cartucho Central */
   .top-card-center {
+    position: fixed;
+    top: 0.5rem;
+    left: 50%;
+    transform: translateX(-50%);
     padding: 0.45rem 1rem;
     display: flex;
     flex-direction: column;
     align-items: center;
     gap: 0.35rem;
     min-width: 290px;
+    z-index: 101;
     box-shadow: 0 0 24px rgba(0, 229, 255, 0.18), 0 4px 20px rgba(0, 0, 0, 0.6);
   }
 
@@ -558,15 +538,51 @@
     height: 1.15rem;
   }
 
-  /* CHAT TÁCTICO INFERIOR IZQUIERDO */
-  .hud-chat-container {
+  /* TELEMETRÍA EN VIVO (ESQUINA INFERIOR IZQUIERDA) */
+  .hud-telemetry-corner {
     pointer-events: auto;
     position: fixed;
     bottom: 1rem;
     left: 1.5rem;
     z-index: 90;
-    width: 360px;
-    max-width: calc(100vw - 3rem);
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    padding: 0.35rem 0.75rem;
+    background: rgba(10, 16, 26, 0.95);
+    border: 1px solid rgba(0, 229, 255, 0.3);
+    border-radius: 0.5rem;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.6);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.75rem;
+    user-select: none;
+  }
+
+  .tel-pulse-dot {
+    width: 0.45rem;
+    height: 0.45rem;
+    border-radius: 9999px;
+    background: #2ecc71;
+    box-shadow: 0 0 6px #2ecc71;
+    animation: pulseGlow 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  }
+
+  .tel-sep {
+    color: #3b494c;
+    font-size: 0.75rem;
+    margin: 0 0.1rem;
+  }
+
+  /* CHAT TÁCTICO FLOTANTE (INFERIOR CENTRO) */
+  .hud-chat-container {
+    pointer-events: auto;
+    position: fixed;
+    bottom: 1rem;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 90;
+    width: 440px;
+    max-width: 90vw;
     background: rgba(10, 16, 26, var(--chat-opacity, 0.95));
     border: 1px solid rgba(0, 229, 255, 0.3);
     border-radius: 0.75rem;
@@ -655,111 +671,6 @@
     color: #00363d;
     box-shadow: 0 0 10px rgba(0, 229, 255, 0.4);
   }
-
-  /* RADAR MINIMAPA INFERIOR DERECHO */
-  .hud-radar-container {
-    pointer-events: auto;
-    position: fixed;
-    bottom: 1rem;
-    right: 1.5rem;
-    z-index: 90;
-    width: 200px;
-    height: 115px;
-    background: rgba(10, 16, 26, 0.95);
-    border: 1px solid rgba(0, 229, 255, 0.4);
-    border-radius: 0.75rem;
-    box-shadow: 0 0 16px rgba(0, 229, 255, 0.2);
-    padding: 0.4rem;
-    display: flex;
-    flex-direction: column;
-    justify-content: space-between;
-    user-select: none;
-  }
-
-  .radar-pitch-box {
-    width: 100%;
-    height: 80px;
-    background: #080e18;
-    border: 1px solid rgba(0, 229, 255, 0.2);
-    border-radius: 0.375rem;
-    position: relative;
-    overflow: hidden;
-  }
-
-  .pitch-inner-border {
-    position: absolute;
-    inset: 4px;
-    border: 1px solid rgba(0, 229, 255, 0.3);
-    border-radius: 2px;
-  }
-
-  .pitch-half-line {
-    position: absolute;
-    top: 4px;
-    bottom: 4px;
-    left: 50%;
-    width: 1px;
-    background: rgba(0, 229, 255, 0.3);
-    transform: translateX(-50%);
-  }
-
-  .pitch-center-circle {
-    position: absolute;
-    top: 50%;
-    left: 50%;
-    width: 1.25rem;
-    height: 1.25rem;
-    border: 1px solid rgba(0, 229, 255, 0.3);
-    border-radius: 9999px;
-    transform: translate(-50%, -50%);
-  }
-
-  .radar-blip {
-    position: absolute;
-    width: 0.45rem;
-    height: 0.45rem;
-    border-radius: 9999px;
-    transform: translate(-50%, -50%);
-  }
-
-  .blip-red {
-    background: #ff3366;
-    box-shadow: 0 0 6px #ff3366;
-  }
-
-  .blip-blue {
-    background: #00e5ff;
-    box-shadow: 0 0 6px #00e5ff;
-  }
-
-  .blip-ball {
-    background: #ffffff;
-    box-shadow: 0 0 8px #ffffff;
-    animation: pulseGlow 1s infinite;
-  }
-
-  .camera-frustum-rect {
-    position: absolute;
-    top: 15%;
-    bottom: 15%;
-    left: 20%;
-    right: 20%;
-    border: 1px dashed rgba(255, 225, 109, 0.5);
-    pointer-events: none;
-  }
-
-  .radar-legend {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 0.6rem;
-    padding: 0 0.25rem;
-  }
-
-  .legend-red { color: #ff3366; font-weight: 700; }
-  .legend-ball { color: #ffffff; font-weight: 700; }
-  .legend-blue { color: #00e5ff; font-weight: 700; }
 
   /* Custom Scrollbar */
   .custom-scrollbar::-webkit-scrollbar {

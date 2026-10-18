@@ -1421,7 +1421,7 @@
                     maxlength="25"
                     bind:value={currentKit.name}
                     oninput={() => gameUI.saveSettings()}
-                    placeholder={activeKitTab === 'local' ? 'Local FC' : 'Visitante CF'}
+                    placeholder={activeKitTab === 'local' ? 'RED' : 'BLUE'}
                   />
                 </div>
 
@@ -1436,7 +1436,7 @@
                       currentKit.tag = (e.currentTarget as HTMLInputElement).value.toUpperCase();
                       gameUI.saveSettings();
                     }}
-                    placeholder={activeKitTab === 'local' ? 'LOC' : 'VIS'}
+                    placeholder={activeKitTab === 'local' ? 'RED' : 'BLUE'}
                   />
                 </div>
               </div>

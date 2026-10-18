@@ -230,18 +230,18 @@ export const DEFAULT_SETTINGS: SettingsConfig = {
   showStatsMonitor: true,
 
   localKit: {
-    name: 'Local FC',
-    tag: 'LOC',
+    name: 'RED',
+    tag: 'RED',
     primaryColor: '#e74c3c',
     secondaryColor: '#ffffff',
     tertiaryColor: '#ffffff',
     pattern: 'solid'
   },
   visitorKit: {
-    name: 'Visitante CF',
-    tag: 'VIS',
-    primaryColor: '#3498db',
-    secondaryColor: '#00e5ff',
+    name: 'BLUE',
+    tag: 'BLUE',
+    primaryColor: '#00e5ff',
+    secondaryColor: '#ffffff',
     tertiaryColor: '#ffffff',
     pattern: 'solid'
   },
@@ -660,11 +660,20 @@ class GameUIStore {
       const rawSettings = localStorage.getItem(SETTINGS_STORAGE_KEY);
       if (rawSettings) {
         const parsed = JSON.parse(rawSettings) as Partial<SettingsConfig>;
+        const localKit = { ...DEFAULT_SETTINGS.localKit, ...(parsed.localKit || {}) };
+        if (localKit.name === 'Local FC') localKit.name = 'RED';
+        if (localKit.tag === 'LOC') localKit.tag = 'RED';
+
+        const visitorKit = { ...DEFAULT_SETTINGS.visitorKit, ...(parsed.visitorKit || {}) };
+        if (visitorKit.name === 'Visitante CF') visitorKit.name = 'BLUE';
+        if (visitorKit.tag === 'VIS') visitorKit.tag = 'BLUE';
+        if (visitorKit.primaryColor === '#3498db') visitorKit.primaryColor = '#00e5ff';
+
         this.settings = {
           ...DEFAULT_SETTINGS,
           ...parsed,
-          localKit: { ...DEFAULT_SETTINGS.localKit, ...(parsed.localKit || {}) },
-          visitorKit: { ...DEFAULT_SETTINGS.visitorKit, ...(parsed.visitorKit || {}) },
+          localKit,
+          visitorKit,
           emoteTriggers: Array.isArray(parsed.emoteTriggers) && parsed.emoteTriggers.length > 0
             ? parsed.emoteTriggers
             : [...DEFAULT_SETTINGS.emoteTriggers]
