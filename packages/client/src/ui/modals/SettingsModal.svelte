@@ -2,6 +2,7 @@
   import { gameUI, type BallSkinType, type PatternType } from '../state/gameUI.svelte.js';
   import { soundFX } from '../../audio/SoundFX.js';
   import { EMOJI_CATALOG } from '../utils/constants.js';
+  import { tooltip } from '../actions/tooltip.js';
 
   type SettingsTab = 'controls' | 'audio' | 'video' | 'kits' | 'avatar';
   let activeTab = $state<SettingsTab>(
@@ -802,13 +803,18 @@
                   <div class="slider-meta">
                     <span class="param-name label-with-tooltip">
                       Zoom de la cámara
-                      <span class="info-tooltip-wrapper" tabindex="0" role="button" aria-label="Info zoom">
+                      <span
+                        class="info-tooltip-wrapper"
+                        tabindex="0"
+                        role="button"
+                        aria-label="Info zoom"
+                        use:tooltip={"Nivel de magnificación de la cámara respecto a la acción"}
+                      >
                         <svg class="info-help-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                           <circle cx="12" cy="12" r="10"></circle>
                           <line x1="12" y1="16" x2="12" y2="12"></line>
                           <line x1="12" y1="8" x2="12.01" y2="8"></line>
                         </svg>
-                        <span class="tooltip-bubble">Nivel de magnificación de la cámara respecto a la acción</span>
                       </span>
                     </span>
                     <strong class="param-val">{gameUI.settings.cameraZoom.toFixed(2)}x</strong>
@@ -833,13 +839,18 @@
                   <div class="slider-meta">
                     <span class="param-name label-with-tooltip">
                       Opacidad del minimapa
-                      <span class="info-tooltip-wrapper" tabindex="0" role="button" aria-label="Info opacidad minimapa">
+                      <span
+                        class="info-tooltip-wrapper"
+                        tabindex="0"
+                        role="button"
+                        aria-label="Info opacidad minimapa"
+                        use:tooltip={"Transparencia del radar sobre el campo de juego"}
+                      >
                         <svg class="info-help-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                           <circle cx="12" cy="12" r="10"></circle>
                           <line x1="12" y1="16" x2="12" y2="12"></line>
                           <line x1="12" y1="8" x2="12.01" y2="8"></line>
                         </svg>
-                        <span class="tooltip-bubble">Transparencia del radar sobre el campo de juego</span>
                       </span>
                     </span>
                     <strong class="param-val">{Math.round(gameUI.settings.minimapOpacity)}%</strong>
@@ -864,13 +875,18 @@
                   <div class="slider-meta">
                     <span class="param-name label-with-tooltip">
                       Opacidad del chat
-                      <span class="info-tooltip-wrapper" tabindex="0" role="button" aria-label="Info opacidad chat">
+                      <span
+                        class="info-tooltip-wrapper"
+                        tabindex="0"
+                        role="button"
+                        aria-label="Info opacidad chat"
+                        use:tooltip={"Transparencia del cuadro de chat durante el partido"}
+                      >
                         <svg class="info-help-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                           <circle cx="12" cy="12" r="10"></circle>
                           <line x1="12" y1="16" x2="12" y2="12"></line>
                           <line x1="12" y1="8" x2="12.01" y2="8"></line>
                         </svg>
-                        <span class="tooltip-bubble">Transparencia del cuadro de chat durante el partido</span>
                       </span>
                     </span>
                     <strong class="param-val">{Math.round(gameUI.settings.chatOpacity)}%</strong>
@@ -935,13 +951,18 @@
                   <div class="toggle-item">
                     <span class="label-with-tooltip">
                       Minimapa activo
-                      <span class="info-tooltip-wrapper" tabindex="0" role="button" aria-label="Info minimapa">
+                      <span
+                        class="info-tooltip-wrapper"
+                        tabindex="0"
+                        role="button"
+                        aria-label="Info minimapa"
+                        use:tooltip={"Radar táctico de posiciones en la esquina de la pantalla"}
+                      >
                         <svg class="info-help-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                           <circle cx="12" cy="12" r="10"></circle>
                           <line x1="12" y1="16" x2="12" y2="12"></line>
                           <line x1="12" y1="8" x2="12.01" y2="8"></line>
                         </svg>
-                        <span class="tooltip-bubble">Radar táctico de posiciones en la esquina de la pantalla</span>
                       </span>
                     </span>
                     <label class="switch-toggle" aria-label="Minimapa activo">
@@ -960,13 +981,18 @@
                   <div class="toggle-item">
                     <span class="label-with-tooltip">
                       Cono de visión en minimapa
-                      <span class="info-tooltip-wrapper" tabindex="0" role="button" aria-label="Info cono de visión">
+                      <span
+                        class="info-tooltip-wrapper"
+                        tabindex="0"
+                        role="button"
+                        aria-label="Info cono de visión"
+                        use:tooltip={"Área proyectada de la cámara visible en el radar"}
+                      >
                         <svg class="info-help-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                           <circle cx="12" cy="12" r="10"></circle>
                           <line x1="12" y1="16" x2="12" y2="12"></line>
                           <line x1="12" y1="8" x2="12.01" y2="8"></line>
                         </svg>
-                        <span class="tooltip-bubble">Área proyectada de la cámara visible en el radar</span>
                       </span>
                     </span>
                     <label class="switch-toggle" aria-label="Cono de visión de cámara">
@@ -994,13 +1020,18 @@
                     <div class="toggle-item">
                       <span class="label-with-tooltip">
                         Sacudida de pantalla (Screen shake)
-                        <span class="info-tooltip-wrapper" tabindex="0" role="button" aria-label="Info screen shake">
+                        <span
+                          class="info-tooltip-wrapper"
+                          tabindex="0"
+                          role="button"
+                          aria-label="Info screen shake"
+                          use:tooltip={"Vibración sutil al impactar postes o marcar gol"}
+                        >
                           <svg class="info-help-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                             <circle cx="12" cy="12" r="10"></circle>
                             <line x1="12" y1="16" x2="12" y2="12"></line>
                             <line x1="12" y1="8" x2="12.01" y2="8"></line>
                           </svg>
-                          <span class="tooltip-bubble">Vibración sutil al impactar postes o marcar gol</span>
                         </span>
                       </span>
                       <label class="switch-toggle" aria-label="Screen shake">
@@ -1020,13 +1051,18 @@
                     <div class="toggle-item">
                       <span class="label-with-tooltip">
                         Resplandor / Aura en jugadores
-                        <span class="info-tooltip-wrapper" tabindex="0" role="button" aria-label="Info aura">
+                        <span
+                          class="info-tooltip-wrapper"
+                          tabindex="0"
+                          role="button"
+                          aria-label="Info aura"
+                          use:tooltip={"Aura neón distintiva alrededor del disco del jugador"}
+                        >
                           <svg class="info-help-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                             <circle cx="12" cy="12" r="10"></circle>
                             <line x1="12" y1="16" x2="12" y2="12"></line>
                             <line x1="12" y1="8" x2="12.01" y2="8"></line>
                           </svg>
-                          <span class="tooltip-bubble">Aura neón distintiva alrededor del disco del jugador</span>
                         </span>
                       </span>
                       <label class="switch-toggle" aria-label="Resplandor de jugadores">
@@ -1045,13 +1081,18 @@
                     <div class="toggle-item">
                       <span class="label-with-tooltip">
                         Estela de curva Magnus
-                        <span class="info-tooltip-wrapper" tabindex="0" role="button" aria-label="Info estela">
+                        <span
+                          class="info-tooltip-wrapper"
+                          tabindex="0"
+                          role="button"
+                          aria-label="Info estela"
+                          use:tooltip={"Rastro visual curvado al aplicar efecto de giro al balón"}
+                        >
                           <svg class="info-help-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                             <circle cx="12" cy="12" r="10"></circle>
                             <line x1="12" y1="16" x2="12" y2="12"></line>
                             <line x1="12" y1="8" x2="12.01" y2="8"></line>
                           </svg>
-                          <span class="tooltip-bubble">Rastro visual curvado al aplicar efecto de giro al balón</span>
                         </span>
                       </span>
                       <label class="switch-toggle" aria-label="Estela de curva Magnus">
@@ -1071,13 +1112,18 @@
                     <div class="toggle-item">
                       <span class="label-with-tooltip">
                         Efecto de fuego en tiros (&gt;950 px/s)
-                        <span class="info-tooltip-wrapper" tabindex="0" role="button" aria-label="Info fuego">
+                        <span
+                          class="info-tooltip-wrapper"
+                          tabindex="0"
+                          role="button"
+                          aria-label="Info fuego"
+                          use:tooltip={"Llamas visuales en lanzamientos de alta potencia"}
+                        >
                           <svg class="info-help-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                             <circle cx="12" cy="12" r="10"></circle>
                             <line x1="12" y1="16" x2="12" y2="12"></line>
                             <line x1="12" y1="8" x2="12.01" y2="8"></line>
                           </svg>
-                          <span class="tooltip-bubble">Llamas visuales en lanzamientos de alta potencia</span>
                         </span>
                       </span>
                       <label class="switch-toggle" aria-label="Efecto de fuego">
@@ -1096,13 +1142,18 @@
                     <div class="toggle-item">
                       <span class="label-with-tooltip">
                         Textos flotantes de puntos / eventos
-                        <span class="info-tooltip-wrapper" tabindex="0" role="button" aria-label="Info textos flotantes">
+                        <span
+                          class="info-tooltip-wrapper"
+                          tabindex="0"
+                          role="button"
+                          aria-label="Info textos flotantes"
+                          use:tooltip={"Notificaciones dinámicas de puntos y eventos en pantalla"}
+                        >
                           <svg class="info-help-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                             <circle cx="12" cy="12" r="10"></circle>
                             <line x1="12" y1="16" x2="12" y2="12"></line>
                             <line x1="12" y1="8" x2="12.01" y2="8"></line>
                           </svg>
-                          <span class="tooltip-bubble">Notificaciones dinámicas de puntos y eventos en pantalla</span>
                         </span>
                       </span>
                       <label class="switch-toggle" aria-label="Textos flotantes">
@@ -1121,13 +1172,18 @@
                     <div class="toggle-item">
                       <span class="label-with-tooltip">
                         Indicadores perimetrales
-                        <span class="info-tooltip-wrapper" tabindex="0" role="button" aria-label="Info indicadores">
+                        <span
+                          class="info-tooltip-wrapper"
+                          tabindex="0"
+                          role="button"
+                          aria-label="Info indicadores"
+                          use:tooltip={"Flechas direccionales para jugadores fuera de pantalla"}
+                        >
                           <svg class="info-help-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                             <circle cx="12" cy="12" r="10"></circle>
                             <line x1="12" y1="16" x2="12" y2="12"></line>
                             <line x1="12" y1="8" x2="12.01" y2="8"></line>
                           </svg>
-                          <span class="tooltip-bubble">Flechas direccionales para jugadores fuera de pantalla</span>
                         </span>
                       </span>
                       <label class="switch-toggle" aria-label="Indicadores perimetrales">
@@ -1316,13 +1372,18 @@
           <div class="section-header-row">
             <h3 class="section-heading label-with-tooltip">
               Equipaciones de Equipo
-              <span class="info-tooltip-wrapper" tabindex="0" role="button" aria-label="Info capitán">
+              <span
+                class="info-tooltip-wrapper"
+                tabindex="0"
+                role="button"
+                aria-label="Info capitán"
+                use:tooltip={"Las modificaciones de nombre, siglas y equipación solo se aplicarán en partido si eres el Capitán del equipo (primer jugador listado en tu bando)."}
+              >
                 <svg class="info-help-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                   <circle cx="12" cy="12" r="10"></circle>
                   <line x1="12" y1="16" x2="12" y2="12"></line>
                   <line x1="12" y1="8" x2="12.01" y2="8"></line>
                 </svg>
-                <span class="tooltip-bubble">Las modificaciones de nombre, siglas y equipación solo se aplicarán en partido si eres el Capitán del equipo (primer jugador listado en tu bando).</span>
               </span>
             </h3>
           </div>
@@ -1589,13 +1650,18 @@
                 <div class="toggle-card-info">
                   <div class="label-with-tooltip">
                     <strong class="toggle-card-title">Mostrar emotes flotantes en cancha</strong>
-                    <span class="info-tooltip-wrapper" tabindex="0" role="button" aria-label="Info emotes cancha">
+                    <span
+                      class="info-tooltip-wrapper"
+                      tabindex="0"
+                      role="button"
+                      aria-label="Info emotes cancha"
+                      use:tooltip={"Al escribir un comando (ej. gol), verás el emote flotante sobre el disco y el texto se ocultará del feed de chat."}
+                    >
                       <svg class="info-help-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                         <circle cx="12" cy="12" r="10"></circle>
                         <line x1="12" y1="16" x2="12" y2="12"></line>
                         <line x1="12" y1="8" x2="12.01" y2="8"></line>
                       </svg>
-                      <span class="tooltip-bubble">Al escribir un comando (ej. gol), verás el emote flotante sobre el disco y el texto se ocultará del feed de chat.</span>
                     </span>
                   </div>
                 </div>
@@ -2465,36 +2531,6 @@
     color: #00e5ff;
   }
 
-  .tooltip-bubble {
-    position: absolute;
-    bottom: calc(100% + 6px);
-    left: 50%;
-    transform: translateX(-50%);
-    padding: 0.45rem 0.65rem;
-    background: #080e18;
-    border: 1px solid rgba(0, 229, 255, 0.3);
-    border-radius: 0.35rem;
-    color: #e2e8f0;
-    font-family: 'Chivo', system-ui, sans-serif;
-    font-size: 0.72rem;
-    line-height: 1.35;
-    white-space: normal;
-    width: max-content;
-    max-width: 250px;
-    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.85), 0 0 8px rgba(0, 229, 255, 0.2);
-    pointer-events: none;
-    opacity: 0;
-    visibility: hidden;
-    transition: opacity 0.15s ease, transform 0.15s ease;
-    z-index: 50;
-  }
-
-  .info-tooltip-wrapper:hover .tooltip-bubble,
-  .info-tooltip-wrapper:focus .tooltip-bubble {
-    opacity: 1;
-    visibility: visible;
-    transform: translateX(-50%) translateY(-2px);
-  }
 
   /* Ball Customization */
   .card-header-flex {

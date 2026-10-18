@@ -28,6 +28,7 @@
   import SettingsModal from './ui/modals/SettingsModal.svelte';
   import KeybindModal from './ui/modals/KeybindModal.svelte';
   import PostMatchCarousel from './ui/hud/PostMatchCarousel.svelte';
+  import GlobalTooltip from './ui/components/GlobalTooltip.svelte';
 
   let canvasRef = $state<HTMLCanvasElement | null>(null);
 
@@ -288,6 +289,9 @@
     {#if gameUI.currentScreen === 'IN_GAME' && (gameUI.fsmPhase === 'STATS' || gameUI.showPostMatchCarousel)}
       <PostMatchCarousel />
     {/if}
+
+    <!-- Tooltip Global Singleton (Portal) -->
+    <GlobalTooltip />
   </div>
 </main>
 

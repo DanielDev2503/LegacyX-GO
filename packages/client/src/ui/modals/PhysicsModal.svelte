@@ -1,6 +1,7 @@
 <script lang="ts">
   import { gameUI } from '../state/gameUI.svelte.js';
   import { soundFX } from '../../audio/SoundFX.js';
+  import { tooltip } from '../actions/tooltip.js';
   import type { GameplayConfig } from '@legacyx/core';
 
   interface ControlDef {
@@ -389,13 +390,18 @@
                 <div class="control-header">
                   <div class="label-with-tooltip">
                     <span class="control-label">{ctrl.label}</span>
-                    <div class="info-tooltip-wrapper" tabindex="0" role="button" aria-label="Información sobre {ctrl.label}">
+                    <div
+                      class="info-tooltip-wrapper"
+                      tabindex="0"
+                      role="button"
+                      aria-label="Información sobre {ctrl.label}"
+                      use:tooltip={ctrl.sublabel}
+                    >
                       <svg class="info-help-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                         <circle cx="12" cy="12" r="10"></circle>
                         <line x1="12" y1="16" x2="12" y2="12"></line>
                         <line x1="12" y1="8" x2="12.01" y2="8"></line>
                       </svg>
-                      <div class="tooltip-bubble" role="tooltip">{ctrl.sublabel}</div>
                     </div>
                   </div>
 
@@ -477,13 +483,18 @@
                 <div class="control-header">
                   <div class="label-with-tooltip">
                     <span class="control-label">{ctrl.label}</span>
-                    <div class="info-tooltip-wrapper" tabindex="0" role="button" aria-label="Información sobre {ctrl.label}">
+                    <div
+                      class="info-tooltip-wrapper"
+                      tabindex="0"
+                      role="button"
+                      aria-label="Información sobre {ctrl.label}"
+                      use:tooltip={ctrl.sublabel}
+                    >
                       <svg class="info-help-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                         <circle cx="12" cy="12" r="10"></circle>
                         <line x1="12" y1="16" x2="12" y2="12"></line>
                         <line x1="12" y1="8" x2="12.01" y2="8"></line>
                       </svg>
-                      <div class="tooltip-bubble" role="tooltip">{ctrl.sublabel}</div>
                     </div>
                   </div>
 
@@ -622,13 +633,18 @@
                 <div class="control-header">
                   <div class="label-with-tooltip">
                     <span class="control-label">{ctrl.label}</span>
-                    <div class="info-tooltip-wrapper" tabindex="0" role="button" aria-label="Información sobre {ctrl.label}">
+                    <div
+                      class="info-tooltip-wrapper"
+                      tabindex="0"
+                      role="button"
+                      aria-label="Información sobre {ctrl.label}"
+                      use:tooltip={ctrl.sublabel}
+                    >
                       <svg class="info-help-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                         <circle cx="12" cy="12" r="10"></circle>
                         <line x1="12" y1="16" x2="12" y2="12"></line>
                         <line x1="12" y1="8" x2="12.01" y2="8"></line>
                       </svg>
-                      <div class="tooltip-bubble" role="tooltip">{ctrl.sublabel}</div>
                     </div>
                   </div>
 
@@ -1068,36 +1084,6 @@
     filter: drop-shadow(0 0 4px rgba(0, 229, 255, 0.5));
   }
 
-  .tooltip-bubble {
-    position: absolute;
-    bottom: calc(100% + 6px);
-    left: 50%;
-    transform: translateX(-50%);
-    padding: 0.45rem 0.65rem;
-    background: #080e18;
-    border: 1px solid rgba(0, 229, 255, 0.3);
-    border-radius: 0.35rem;
-    color: #e2e8f0;
-    font-family: 'Chivo', system-ui, sans-serif;
-    font-size: 0.72rem;
-    line-height: 1.35;
-    white-space: normal;
-    width: max-content;
-    max-width: 240px;
-    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.85), 0 0 8px rgba(0, 229, 255, 0.2);
-    pointer-events: none;
-    opacity: 0;
-    visibility: hidden;
-    transition: opacity 0.15s ease, transform 0.15s ease;
-    z-index: 50;
-  }
-
-  .info-tooltip-wrapper:hover .tooltip-bubble,
-  .info-tooltip-wrapper:focus .tooltip-bubble {
-    opacity: 1;
-    visibility: visible;
-    transform: translateX(-50%) translateY(-2px);
-  }
 
   /* Number Input with Cross-Browser Hidden Spinners */
   .number-input-wrap {

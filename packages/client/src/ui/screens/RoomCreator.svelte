@@ -1,6 +1,7 @@
 <script lang="ts">
   import { gameUI } from '../state/gameUI.svelte.js';
   import { soundFX } from '../../audio/SoundFX.js';
+  import { tooltip } from '../actions/tooltip.js';
 
   let roomName = $state(`${gameUI.nickname || 'Player'}'s room`);
   let playerCount = $state(12);
@@ -170,15 +171,18 @@
             <div class="toggle-row">
               <div class="label-with-tooltip">
                 <span class="toggle-label">🌐 Mostrar en lista pública</span>
-                <div class="info-tooltip-wrapper" tabindex="0" role="button" aria-label="Información sobre visibilidad en lista pública">
+                <div
+                  class="info-tooltip-wrapper"
+                  tabindex="0"
+                  role="button"
+                  aria-label="Información sobre visibilidad en lista pública"
+                  use:tooltip={"Si se desactiva, la sala no aparecerá en la lista pública y solo se podrá acceder buscándola por su ID en el lobby."}
+                >
                   <svg class="info-help-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <circle cx="12" cy="12" r="10"></circle>
                     <line x1="12" y1="16" x2="12" y2="12"></line>
                     <line x1="12" y1="8" x2="12.01" y2="8"></line>
                   </svg>
-                  <div class="tooltip-bubble" role="tooltip">
-                    Si se desactiva, la sala no aparecerá en la lista pública y solo se podrá acceder buscándola por su ID en el lobby.
-                  </div>
                 </div>
               </div>
               <label class="switch">
@@ -732,38 +736,6 @@
     transform: scale(1.15);
   }
 
-  .tooltip-bubble {
-    position: absolute;
-    bottom: calc(100% + 8px);
-    left: 50%;
-    transform: translateX(-50%);
-    width: max-content;
-    max-width: 260px;
-    padding: 7px 11px;
-    background: rgba(8, 14, 24, 0.98);
-    border: 1px solid rgba(0, 229, 255, 0.3);
-    border-radius: 6px;
-    box-shadow: 0 4px 18px rgba(0, 0, 0, 0.8), 0 0 10px rgba(0, 229, 255, 0.15);
-    color: #ffffff;
-    font-family: 'Chivo', system-ui, sans-serif;
-    font-size: 12px;
-    font-weight: 500;
-    line-height: 1.35;
-    text-align: left;
-    white-space: normal;
-    z-index: 50;
-    pointer-events: none;
-    opacity: 0;
-    visibility: hidden;
-    transition: opacity 0.18s ease, transform 0.18s ease, visibility 0.18s;
-  }
-
-  .info-tooltip-wrapper:hover .tooltip-bubble,
-  .info-tooltip-wrapper:focus-visible .tooltip-bubble {
-    opacity: 1;
-    visibility: visible;
-    transform: translateX(-50%) translateY(-2px);
-  }
 
   .right-panel-scroll {
     overflow-y: auto;
