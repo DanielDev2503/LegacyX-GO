@@ -21,15 +21,26 @@
   let currentKit = $derived(activeKitTab === 'local' ? gameUI.settings.localKit : gameUI.settings.visitorKit);
 
   // Avatar state
-  let initialsInput = $state(gameUI.avatarMode === 'letters' ? gameUI.avatarValue : 'YA');
+  let initialsInput = $state(gameUI.avatarMode === 'letters' ? gameUI.avatarValue : '10');
   let selectedEmoji = $state(gameUI.avatarMode === 'emoji' ? gameUI.avatarValue : '⚽');
   let avatarFormat = $state<'letters' | 'emoji'>(gameUI.avatarMode);
 
   // New trigger draft inputs
   let newTriggerWord = $state('');
-  let newTriggerEmoji = $state<string>(EMOJI_CATALOG[0]);
+  let newTriggerEmoji = $state<string>(EMOJI_CATALOG[0] || '⚽');
 
   const EMOJI_PALETTE = EMOJI_CATALOG;
+
+  const PATTERNS_LIST = [
+    { id: 'solid', name: 'Liso' },
+    { id: 'vertical', name: 'Rayas verticales' },
+    { id: 'hoop', name: 'Franja horizontal' },
+    { id: 'halves', name: 'Mitades' },
+    { id: 'diagonal', name: 'Diagonal' },
+    { id: 'cross', name: 'Cruz' },
+    { id: 'chevrons', name: 'Chevrones' },
+    { id: 'diagonal_checks', name: 'Cuadros diagonales' }
+  ] as const;
 
   function switchTab(tab: SettingsTab) {
     soundFX.playUIClick();
@@ -105,7 +116,7 @@
     avatarFormat = mode;
     gameUI.avatarMode = mode;
     if (mode === 'letters') {
-      const clean = initialsInput.trim().toUpperCase().slice(0, 2) || 'YA';
+      const clean = initialsInput.trim().toUpperCase().slice(0, 2) || (gameUI.nickname ? gameUI.nickname.trim().slice(0, 2).toUpperCase() : '10');
       gameUI.avatarValue = clean;
       gameUI.saveProfile(gameUI.nickname, clean);
     } else {
@@ -117,7 +128,7 @@
   function handleInitialsChange(val: string) {
     initialsInput = val.trim().toUpperCase().slice(0, 2);
     if (avatarFormat === 'letters') {
-      const clean = initialsInput || 'YA';
+      const clean = initialsInput || (gameUI.nickname ? gameUI.nickname.trim().slice(0, 2).toUpperCase() : '10');
       gameUI.avatarValue = clean;
       gameUI.saveProfile(gameUI.nickname, clean);
     }
@@ -178,7 +189,7 @@
   onclick={handleBackdropClick}
 >
   <div class="settings-modal-card" role="dialog" aria-modal="true" aria-labelledby="settings-dialog-title">
-    <!-- Panel Izquierdo: Encabezado y Lista vertical de 5 Pestañas -->
+    <!-- Panel Izquierdo: Encabezado y Lista vertical continua de 5 Pestañas -->
     <aside class="tabs-sidebar">
       <div class="sidebar-header">
         <span class="settings-icon-box">⚙️</span>
@@ -241,275 +252,284 @@
       </nav>
     </aside>
 
-      <!-- Panel Derecho: Scroll independiente para la sección activa -->
-      <div class="tab-content" role="region" aria-label="Contenido de la sección seleccionada">
-        <!-- ======================================================== -->
-        <!-- SECCIÓN 1: CONTROLES                                     -->
-        <!-- ======================================================== -->
-        {#if activeTab === 'controls'}
-          <div class="tab-pane">
-            <div class="section-header-row">
-              <h3 class="section-heading">Configuración de Controles</h3>
-              {#if rebindingAction}
-                <span class="pulse-rebinding">Presiona una tecla para asignar...</span>
-              {/if}
-            </div>
+    <!-- Panel Derecho: Scroll independiente para la sección activa -->
+    <div class="tab-content" role="region" aria-label="Contenido de la sección seleccionada">
+      <!-- ======================================================== -->
+      <!-- SECCIÓN 1: CONTROLES                                     -->
+      <!-- ======================================================== -->
+      {#if activeTab === 'controls'}
+        <div class="tab-pane">
+          <div class="section-header-row">
+            <h3 class="section-heading">Configuración de Controles</h3>
+            {#if rebindingAction}
+              <span class="pulse-rebinding">Presiona una tecla para asignar...</span>
+            {/if}
+          </div>
 
-            <div class="controls-scroll-area">
-              <!-- Desplazamiento y Movimiento -->
-              <div class="controls-card">
-                <h4 class="card-title">Desplazamiento y Movimiento</h4>
-                <div class="grid-2col">
-                  <div class="bind-row">
-                    <span class="bind-name">Arriba</span>
-                    <button
-                      type="button"
-                      class="key-badge"
-                      class:rebinding={rebindingAction === 'up'}
-                      onclick={() => startRebind('up')}
-                    >
-                      {rebindingAction === 'up' ? '...' : getKeyLabel(gameUI.keybinds.up)}
-                    </button>
-                  </div>
-                  <div class="bind-row">
-                    <span class="bind-name">Abajo</span>
-                    <button
-                      type="button"
-                      class="key-badge"
-                      class:rebinding={rebindingAction === 'down'}
-                      onclick={() => startRebind('down')}
-                    >
-                      {rebindingAction === 'down' ? '...' : getKeyLabel(gameUI.keybinds.down)}
-                    </button>
-                  </div>
-                  <div class="bind-row">
-                    <span class="bind-name">Izquierda</span>
-                    <button
-                      type="button"
-                      class="key-badge"
-                      class:rebinding={rebindingAction === 'left'}
-                      onclick={() => startRebind('left')}
-                    >
-                      {rebindingAction === 'left' ? '...' : getKeyLabel(gameUI.keybinds.left)}
-                    </button>
-                  </div>
-                  <div class="bind-row">
-                    <span class="bind-name">Derecha</span>
-                    <button
-                      type="button"
-                      class="key-badge"
-                      class:rebinding={rebindingAction === 'right'}
-                      onclick={() => startRebind('right')}
-                    >
-                      {rebindingAction === 'right' ? '...' : getKeyLabel(gameUI.keybinds.right)}
-                    </button>
-                  </div>
+          <div class="controls-scroll-area">
+            <!-- Desplazamiento y Movimiento -->
+            <div class="controls-card">
+              <h4 class="card-title">Desplazamiento y Movimiento</h4>
+              <div class="grid-2col">
+                <div class="bind-row">
+                  <span class="bind-name">Arriba</span>
+                  <button
+                    type="button"
+                    class="key-badge"
+                    class:rebinding={rebindingAction === 'up'}
+                    onclick={() => startRebind('up')}
+                  >
+                    {rebindingAction === 'up' ? '...' : getKeyLabel(gameUI.keybinds.up)}
+                  </button>
                 </div>
-              </div>
-
-              <!-- Acciones Principales y Disparo -->
-              <div class="controls-card">
-                <h4 class="card-title">Acciones Principales y Disparo</h4>
-                <div class="grid-2col">
-                  <div class="bind-row">
-                    <div>
-                      <span class="bind-name">Patear / Remate</span>
-                      <small class="bind-hint">Contacto balístico o pase</small>
-                    </div>
-                    <button
-                      type="button"
-                      class="key-badge"
-                      class:rebinding={rebindingAction === 'kick'}
-                      onclick={() => startRebind('kick')}
-                    >
-                      {rebindingAction === 'kick' ? '...' : getKeyLabel(gameUI.keybinds.kick)}
-                    </button>
-                  </div>
-
-                  <div class="bind-row">
-                    <div>
-                      <span class="bind-name">Turbo / Sprint</span>
-                      <small class="bind-hint">Velocidad extra constante</small>
-                    </div>
-                    <button
-                      type="button"
-                      class="key-badge"
-                      class:rebinding={rebindingAction === 'turbo'}
-                      onclick={() => startRebind('turbo')}
-                    >
-                      {rebindingAction === 'turbo' ? '...' : getKeyLabel(gameUI.keybinds.turbo)}
-                    </button>
-                  </div>
-
-                  <div class="bind-row">
-                    <div>
-                      <span class="bind-name">Dash (Impulso)</span>
-                      <small class="bind-hint">Aceleración explosiva instantánea</small>
-                    </div>
-                    <button
-                      type="button"
-                      class="key-badge"
-                      class:rebinding={rebindingAction === 'dash'}
-                      onclick={() => startRebind('dash')}
-                    >
-                      {rebindingAction === 'dash' ? '...' : getKeyLabel(gameUI.keybinds.dash)}
-                    </button>
-                  </div>
-
-                  <div class="bind-row">
-                    <div>
-                      <span class="bind-name">Curva Magnus Izquierda</span>
-                      <small class="bind-hint">Efecto con giro antihorario</small>
-                    </div>
-                    <button
-                      type="button"
-                      class="key-badge"
-                      class:rebinding={rebindingAction === 'curveLeft'}
-                      onclick={() => startRebind('curveLeft')}
-                    >
-                      {rebindingAction === 'curveLeft' ? '...' : getKeyLabel(gameUI.keybinds.curveLeft)}
-                    </button>
-                  </div>
-
-                  <div class="bind-row">
-                    <div>
-                      <span class="bind-name">Curva Magnus Derecha</span>
-                      <small class="bind-hint">Efecto con giro horario</small>
-                    </div>
-                    <button
-                      type="button"
-                      class="key-badge"
-                      class:rebinding={rebindingAction === 'curveRight'}
-                      onclick={() => startRebind('curveRight')}
-                    >
-                      {rebindingAction === 'curveRight' ? '...' : getKeyLabel(gameUI.keybinds.curveRight)}
-                    </button>
-                  </div>
+                <div class="bind-row">
+                  <span class="bind-name">Abajo</span>
+                  <button
+                    type="button"
+                    class="key-badge"
+                    class:rebinding={rebindingAction === 'down'}
+                    onclick={() => startRebind('down')}
+                  >
+                    {rebindingAction === 'down' ? '...' : getKeyLabel(gameUI.keybinds.down)}
+                  </button>
                 </div>
-              </div>
-
-              <!-- Nueva Subsección: Interacción con la interfaz -->
-              <div class="controls-card">
-                <h4 class="card-title">Interacción con la interfaz</h4>
-                <div class="grid-2col">
-                  <div class="bind-row">
-                    <div>
-                      <span class="bind-name">Pausar partida</span>
-                      <small class="bind-hint">Congelar o reanudar el juego</small>
-                    </div>
-                    <button
-                      type="button"
-                      class="key-badge"
-                      class:rebinding={rebindingAction === 'pause'}
-                      onclick={() => startRebind('pause')}
-                    >
-                      {rebindingAction === 'pause' ? '...' : getKeyLabel(gameUI.keybinds.pause)}
-                    </button>
-                  </div>
-
-                  <div class="bind-row">
-                    <div>
-                      <span class="bind-name">Abrir menú / Cancelar</span>
-                      <small class="bind-hint">Cerrar modales o pausar</small>
-                    </div>
-                    <button
-                      type="button"
-                      class="key-badge"
-                      class:rebinding={rebindingAction === 'menu'}
-                      onclick={() => startRebind('menu')}
-                    >
-                      {rebindingAction === 'menu' ? '...' : getKeyLabel(gameUI.keybinds.menu)}
-                    </button>
-                  </div>
-
-                  <div class="bind-row">
-                    <div>
-                      <span class="bind-name">Interactuar con el chat</span>
-                      <small class="bind-hint">Abrir o enviar mensajes</small>
-                    </div>
-                    <button
-                      type="button"
-                      class="key-badge"
-                      class:rebinding={rebindingAction === 'chat'}
-                      onclick={() => startRebind('chat')}
-                    >
-                      {rebindingAction === 'chat' ? '...' : getKeyLabel(gameUI.keybinds.chat)}
-                    </button>
-                  </div>
+                <div class="bind-row">
+                  <span class="bind-name">Izquierda</span>
+                  <button
+                    type="button"
+                    class="key-badge"
+                    class:rebinding={rebindingAction === 'left'}
+                    onclick={() => startRebind('left')}
+                  >
+                    {rebindingAction === 'left' ? '...' : getKeyLabel(gameUI.keybinds.left)}
+                  </button>
+                </div>
+                <div class="bind-row">
+                  <span class="bind-name">Derecha</span>
+                  <button
+                    type="button"
+                    class="key-badge"
+                    class:rebinding={rebindingAction === 'right'}
+                    onclick={() => startRebind('right')}
+                  >
+                    {rebindingAction === 'right' ? '...' : getKeyLabel(gameUI.keybinds.right)}
+                  </button>
                 </div>
               </div>
             </div>
 
-            <!-- Footer con reset -->
-            <div class="pane-footer">
-              <button
-                type="button"
-                class="btn-reset"
-                onclick={handleResetControls}
-              >
-                ↺ Restablecer controles por defecto
-              </button>
+            <!-- Acciones Principales y Disparo -->
+            <div class="controls-card">
+              <h4 class="card-title">Acciones Principales y Disparo</h4>
+              <div class="grid-2col">
+                <div class="bind-row">
+                  <div>
+                    <span class="bind-name">Patear / Remate</span>
+                    <small class="bind-hint">Contacto balístico o pase</small>
+                  </div>
+                  <button
+                    type="button"
+                    class="key-badge"
+                    class:rebinding={rebindingAction === 'kick'}
+                    onclick={() => startRebind('kick')}
+                  >
+                    {rebindingAction === 'kick' ? '...' : getKeyLabel(gameUI.keybinds.kick)}
+                  </button>
+                </div>
+
+                <div class="bind-row">
+                  <div>
+                    <span class="bind-name">Turbo / Sprint</span>
+                    <small class="bind-hint">Velocidad extra constante</small>
+                  </div>
+                  <button
+                    type="button"
+                    class="key-badge"
+                    class:rebinding={rebindingAction === 'turbo'}
+                    onclick={() => startRebind('turbo')}
+                  >
+                    {rebindingAction === 'turbo' ? '...' : getKeyLabel(gameUI.keybinds.turbo)}
+                  </button>
+                </div>
+
+                <div class="bind-row">
+                  <div>
+                    <span class="bind-name">Dash (Impulso)</span>
+                    <small class="bind-hint">Aceleración explosiva instantánea</small>
+                  </div>
+                  <button
+                    type="button"
+                    class="key-badge"
+                    class:rebinding={rebindingAction === 'dash'}
+                    onclick={() => startRebind('dash')}
+                  >
+                    {rebindingAction === 'dash' ? '...' : getKeyLabel(gameUI.keybinds.dash)}
+                  </button>
+                </div>
+
+                <div class="bind-row">
+                  <div>
+                    <span class="bind-name">Curva Magnus Izquierda</span>
+                    <small class="bind-hint">Efecto con giro antihorario</small>
+                  </div>
+                  <button
+                    type="button"
+                    class="key-badge"
+                    class:rebinding={rebindingAction === 'curveLeft'}
+                    onclick={() => startRebind('curveLeft')}
+                  >
+                    {rebindingAction === 'curveLeft' ? '...' : getKeyLabel(gameUI.keybinds.curveLeft)}
+                  </button>
+                </div>
+
+                <div class="bind-row">
+                  <div>
+                    <span class="bind-name">Curva Magnus Derecha</span>
+                    <small class="bind-hint">Efecto con giro horario</small>
+                  </div>
+                  <button
+                    type="button"
+                    class="key-badge"
+                    class:rebinding={rebindingAction === 'curveRight'}
+                    onclick={() => startRebind('curveRight')}
+                  >
+                    {rebindingAction === 'curveRight' ? '...' : getKeyLabel(gameUI.keybinds.curveRight)}
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <!-- Subsección: Interacción con la interfaz -->
+            <div class="controls-card">
+              <h4 class="card-title">Interacción con la interfaz</h4>
+              <div class="grid-2col">
+                <div class="bind-row">
+                  <div>
+                    <span class="bind-name">Pausar partida</span>
+                    <small class="bind-hint">Congelar o reanudar el juego</small>
+                  </div>
+                  <button
+                    type="button"
+                    class="key-badge"
+                    class:rebinding={rebindingAction === 'pause'}
+                    onclick={() => startRebind('pause')}
+                  >
+                    {rebindingAction === 'pause' ? '...' : getKeyLabel(gameUI.keybinds.pause)}
+                  </button>
+                </div>
+
+                <div class="bind-row">
+                  <div>
+                    <span class="bind-name">Abrir menú / Cancelar</span>
+                    <small class="bind-hint">Cerrar modales o pausar</small>
+                  </div>
+                  <button
+                    type="button"
+                    class="key-badge"
+                    class:rebinding={rebindingAction === 'menu'}
+                    onclick={() => startRebind('menu')}
+                  >
+                    {rebindingAction === 'menu' ? '...' : getKeyLabel(gameUI.keybinds.menu)}
+                  </button>
+                </div>
+
+                <div class="bind-row">
+                  <div>
+                    <span class="bind-name">Interactuar con el chat</span>
+                    <small class="bind-hint">Abrir o enviar mensajes</small>
+                  </div>
+                  <button
+                    type="button"
+                    class="key-badge"
+                    class:rebinding={rebindingAction === 'chat'}
+                    onclick={() => startRebind('chat')}
+                  >
+                    {rebindingAction === 'chat' ? '...' : getKeyLabel(gameUI.keybinds.chat)}
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
 
-        <!-- ======================================================== -->
-        <!-- SECCIÓN 2: SONIDO                                        -->
-        <!-- ======================================================== -->
-        {:else if activeTab === 'audio'}
-          <div class="tab-pane">
-            <div class="section-header-row">
-              <h3 class="section-heading">Audio y Efectos Sonoros</h3>
-            </div>
+          <!-- Footer con reset -->
+          <div class="pane-footer">
+            <button
+              type="button"
+              class="btn-reset"
+              onclick={handleResetControls}
+            >
+              ↺ Restablecer controles por defecto
+            </button>
+          </div>
+        </div>
 
-            <div class="settings-scroll-area">
-              <!-- Mute All Global Toggle Card -->
-              <div class="mute-all-card">
-                <div class="mute-text">
-                  <strong class="mute-title">Silenciar todo el audio</strong>
-                  <p class="mute-desc">Desactiva inmediatamente toda la salida acústica del juego.</p>
+      <!-- ======================================================== -->
+      <!-- SECCIÓN 2: SONIDO                                        -->
+      <!-- ======================================================== -->
+      {:else if activeTab === 'audio'}
+        <div class="tab-pane">
+          <div class="section-header-row">
+            <h3 class="section-heading">Audio y Efectos Sonoros</h3>
+          </div>
+
+          <div class="settings-scroll-area">
+            <!-- Full-Width Master Volume Card con switch de "Silenciar todo" integrado -->
+            <div class="master-volume-card">
+              <div class="master-header">
+                <div class="master-title-box">
+                  <span class="master-icon">🔊</span>
+                  <div>
+                    <strong class="master-title">Audio General (Master)</strong>
+                    <span class="master-desc">Control maestro de ganancia acústica</span>
+                  </div>
                 </div>
-                <label class="switch-toggle" aria-label="Silenciar todo el audio">
-                  <input
-                    type="checkbox"
-                    checked={gameUI.settings.isMuted}
-                    onchange={(e) => {
-                      gameUI.settings.isMuted = (e.currentTarget as HTMLInputElement).checked;
-                      gameUI.saveSettings();
-                    }}
-                  />
-                  <span class="toggle-slider"></span>
-                </label>
+
+                <div class="mute-all-toggle-wrap">
+                  <span class="mute-label" class:muted-active={gameUI.settings.isMuted}>
+                    {gameUI.settings.isMuted ? 'Silenciado' : 'Silenciar todo'}
+                  </span>
+                  <label class="switch-toggle" aria-label="Silenciar todo el audio">
+                    <input
+                      type="checkbox"
+                      checked={gameUI.settings.isMuted}
+                      onchange={(e) => {
+                        gameUI.settings.isMuted = (e.currentTarget as HTMLInputElement).checked;
+                        soundFX.setMuted(gameUI.settings.isMuted);
+                        gameUI.saveSettings();
+                      }}
+                    />
+                    <span class="toggle-slider mute-slider" class:muted-active={gameUI.settings.isMuted}></span>
+                  </label>
+                </div>
               </div>
 
-              <!-- BARRA 1: Audio General (Master) -->
-              <div class="channel-card">
-                <div class="channel-header">
-                  <div class="channel-info">
-                    <span class="channel-name">1. Audio General (Master)</span>
-                    <span class="channel-desc">Control maestro de ganancia acústica</span>
-                  </div>
-                  <span class="channel-val">{Math.round(gameUI.settings.masterVolume * 100)}%</span>
-                </div>
+              <div class="master-slider-row">
                 <input
                   type="range"
-                  class="custom-slider"
+                  class="custom-slider master-slider"
                   min="0"
                   max="1"
                   step="0.01"
+                  style="--val-percent: {Math.round(gameUI.settings.masterVolume * 100)}%;"
                   value={gameUI.settings.masterVolume}
                   oninput={(e) => {
                     gameUI.settings.masterVolume = Number((e.currentTarget as HTMLInputElement).value);
+                    soundFX.setMasterVolume(gameUI.settings.masterVolume);
                     gameUI.saveSettings();
                   }}
                 />
+                <span class="volume-percent-large">{Math.round(gameUI.settings.masterVolume * 100)}%</span>
               </div>
+            </div>
 
-              <!-- BARRA 2: Chat y Social -->
+            <!-- Grupos secundarios en Rejilla de 2 Columnas (Desactivados en Mute) -->
+            <div class="sound-grid-2col" class:sound-disabled={gameUI.settings.isMuted}>
+              <!-- COLUMNA 1: Chat y Social -->
               <div class="channel-card">
                 <div class="channel-header">
                   <div class="channel-info">
-                    <span class="channel-name">2. Chat y Social</span>
-                    <span class="channel-desc">Notificaciones de texto, menciones y emotes</span>
+                    <span class="channel-name">Chat y Social</span>
+                    <span class="channel-desc">Mensajes, menciones y emotes</span>
                   </div>
                   <div class="channel-actions">
                     <span class="channel-val">{Math.round(gameUI.settings.chatVolume * 100)}%</span>
@@ -523,12 +543,14 @@
                     </button>
                   </div>
                 </div>
+
                 <input
                   type="range"
                   class="custom-slider"
                   min="0"
                   max="1"
                   step="0.01"
+                  style="--val-percent: {Math.round(gameUI.settings.chatVolume * 100)}%;"
                   value={gameUI.settings.chatVolume}
                   oninput={(e) => {
                     gameUI.settings.chatVolume = Number((e.currentTarget as HTMLInputElement).value);
@@ -539,8 +561,8 @@
                 {#if showChatAccordion}
                   <div class="subtoggles-box">
                     <div class="subtoggle-row">
-                      <span>Sonido normal de mensajes de chat</span>
-                      <label class="switch-toggle mini" aria-label="Sonido normal de chat">
+                      <span>Notificación chat</span>
+                      <label class="switch-toggle mini" aria-label="Notificación chat">
                         <input
                           type="checkbox"
                           checked={gameUI.settings.chatNormalSoundEnabled}
@@ -554,8 +576,8 @@
                     </div>
 
                     <div class="subtoggle-row">
-                      <span>Sonido de mención (@tu_nombre)</span>
-                      <label class="switch-toggle mini" aria-label="Sonido de mención">
+                      <span>Menciones</span>
+                      <label class="switch-toggle mini" aria-label="Menciones">
                         <input
                           type="checkbox"
                           checked={gameUI.settings.chatMentionSoundEnabled}
@@ -569,8 +591,8 @@
                     </div>
 
                     <div class="subtoggle-row">
-                      <span>Sonido de emotes en cancha</span>
-                      <label class="switch-toggle mini" aria-label="Sonido de emotes en cancha">
+                      <span>Emotes</span>
+                      <label class="switch-toggle mini" aria-label="Emotes">
                         <input
                           type="checkbox"
                           checked={gameUI.settings.chatEmotesSoundEnabled}
@@ -586,188 +608,209 @@
                 {/if}
               </div>
 
-              <!-- BARRA 3: Efectos (SFX) -->
-              <div class="channel-card">
-                <div class="channel-header">
-                  <div class="channel-info">
-                    <span class="channel-name">3. Efectos (SFX)</span>
-                    <span class="channel-desc">Impactos mecánicos, rebotes y choques</span>
+              <!-- COLUMNA 2: SFX + Entorno -->
+              <div class="col-sfx-env">
+                <!-- SFX Card -->
+                <div class="channel-card">
+                  <div class="channel-header">
+                    <div class="channel-info">
+                      <span class="channel-name">Efectos (SFX)</span>
+                      <span class="channel-desc">Impactos mecánicos y balísticos</span>
+                    </div>
+                    <div class="channel-actions">
+                      <span class="channel-val">{Math.round(gameUI.settings.sfxVolume * 100)}%</span>
+                      <button
+                        type="button"
+                        class="accordion-btn"
+                        onclick={() => (showSfxAccordion = !showSfxAccordion)}
+                        title="Opciones individuales de SFX"
+                      >
+                        {showSfxAccordion ? '▲ Menos' : '▼ Opciones'}
+                      </button>
+                    </div>
                   </div>
-                  <div class="channel-actions">
-                    <span class="channel-val">{Math.round(gameUI.settings.sfxVolume * 100)}%</span>
-                    <button
-                      type="button"
-                      class="accordion-btn"
-                      onclick={() => (showSfxAccordion = !showSfxAccordion)}
-                      title="Opciones individuales de SFX"
-                    >
-                      {showSfxAccordion ? '▲ Menos' : '▼ Opciones'}
-                    </button>
-                  </div>
+
+                  <input
+                    type="range"
+                    class="custom-slider"
+                    min="0"
+                    max="1"
+                    step="0.01"
+                    style="--val-percent: {Math.round(gameUI.settings.sfxVolume * 100)}%;"
+                    value={gameUI.settings.sfxVolume}
+                    oninput={(e) => {
+                      gameUI.settings.sfxVolume = Number((e.currentTarget as HTMLInputElement).value);
+                      gameUI.saveSettings();
+                    }}
+                  />
+
+                  {#if showSfxAccordion}
+                    <div class="subtoggles-box">
+                      <div class="subtoggle-row">
+                        <span>Disparo / Remate</span>
+                        <label class="switch-toggle mini" aria-label="Disparo / Remate">
+                          <input
+                            type="checkbox"
+                            checked={gameUI.settings.kickSoundEnabled}
+                            onchange={(e) => {
+                              gameUI.settings.kickSoundEnabled = (e.currentTarget as HTMLInputElement).checked;
+                              gameUI.saveSettings();
+                            }}
+                          />
+                          <span class="toggle-slider"></span>
+                        </label>
+                      </div>
+
+                      <div class="subtoggle-row">
+                        <span>Postes</span>
+                        <label class="switch-toggle mini" aria-label="Postes">
+                          <input
+                            type="checkbox"
+                            checked={gameUI.settings.postHitSoundEnabled}
+                            onchange={(e) => {
+                              gameUI.settings.postHitSoundEnabled = (e.currentTarget as HTMLInputElement).checked;
+                              gameUI.saveSettings();
+                            }}
+                          />
+                          <span class="toggle-slider"></span>
+                        </label>
+                      </div>
+                    </div>
+                  {/if}
                 </div>
-                <input
-                  type="range"
-                  class="custom-slider"
-                  min="0"
-                  max="1"
-                  step="0.01"
-                  value={gameUI.settings.sfxVolume}
-                  oninput={(e) => {
-                    gameUI.settings.sfxVolume = Number((e.currentTarget as HTMLInputElement).value);
-                    gameUI.saveSettings();
-                  }}
-                />
 
-                {#if showSfxAccordion}
-                  <div class="subtoggles-box">
-                    <div class="subtoggle-row">
-                      <span>Pateo del balón</span>
-                      <label class="switch-toggle mini" aria-label="Pateo del balón">
-                        <input
-                          type="checkbox"
-                          checked={gameUI.settings.kickSoundEnabled}
-                          onchange={(e) => {
-                            gameUI.settings.kickSoundEnabled = (e.currentTarget as HTMLInputElement).checked;
-                            gameUI.saveSettings();
-                          }}
-                        />
-                        <span class="toggle-slider"></span>
-                      </label>
+                <!-- Entorno Card -->
+                <div class="channel-card">
+                  <div class="channel-header">
+                    <div class="channel-info">
+                      <span class="channel-name">Entorno</span>
+                      <span class="channel-desc">Silbato, ovaciones y ambiente</span>
                     </div>
-
-                    <div class="subtoggle-row">
-                      <span>Impacto del balón con los postes</span>
-                      <label class="switch-toggle mini" aria-label="Impacto del balón con postes">
-                        <input
-                          type="checkbox"
-                          checked={gameUI.settings.postHitSoundEnabled}
-                          onchange={(e) => {
-                            gameUI.settings.postHitSoundEnabled = (e.currentTarget as HTMLInputElement).checked;
-                            gameUI.saveSettings();
-                          }}
-                        />
-                        <span class="toggle-slider"></span>
-                      </label>
+                    <div class="channel-actions">
+                      <span class="channel-val">{Math.round(gameUI.settings.envVolume * 100)}%</span>
+                      <button
+                        type="button"
+                        class="accordion-btn"
+                        onclick={() => (showEnvAccordion = !showEnvAccordion)}
+                        title="Opciones individuales de entorno"
+                      >
+                        {showEnvAccordion ? '▲ Menos' : '▼ Opciones'}
+                      </button>
                     </div>
                   </div>
-                {/if}
-              </div>
 
-              <!-- BARRA 4: Entorno -->
-              <div class="channel-card">
-                <div class="channel-header">
-                  <div class="channel-info">
-                    <span class="channel-name">4. Entorno</span>
-                    <span class="channel-desc">Silbato arbitral, bocinas, multitud y estadio</span>
-                  </div>
-                  <div class="channel-actions">
-                    <span class="channel-val">{Math.round(gameUI.settings.envVolume * 100)}%</span>
-                    <button
-                      type="button"
-                      class="accordion-btn"
-                      onclick={() => (showEnvAccordion = !showEnvAccordion)}
-                      title="Opciones individuales de entorno"
-                    >
-                      {showEnvAccordion ? '▲ Menos' : '▼ Opciones'}
-                    </button>
-                  </div>
+                  <input
+                    type="range"
+                    class="custom-slider"
+                    min="0"
+                    max="1"
+                    step="0.01"
+                    style="--val-percent: {Math.round(gameUI.settings.envVolume * 100)}%;"
+                    value={gameUI.settings.envVolume}
+                    oninput={(e) => {
+                      gameUI.settings.envVolume = Number((e.currentTarget as HTMLInputElement).value);
+                      gameUI.saveSettings();
+                    }}
+                  />
+
+                  {#if showEnvAccordion}
+                    <div class="subtoggles-box">
+                      <div class="subtoggle-row">
+                        <span>Silbato</span>
+                        <label class="switch-toggle mini" aria-label="Silbato">
+                          <input
+                            type="checkbox"
+                            checked={gameUI.settings.whistleSoundEnabled}
+                            onchange={(e) => {
+                              gameUI.settings.whistleSoundEnabled = (e.currentTarget as HTMLInputElement).checked;
+                              gameUI.saveSettings();
+                            }}
+                          />
+                          <span class="toggle-slider"></span>
+                        </label>
+                      </div>
+
+                      <div class="subtoggle-row">
+                        <span>Bocina de gol</span>
+                        <label class="switch-toggle mini" aria-label="Bocina de gol">
+                          <input
+                            type="checkbox"
+                            checked={gameUI.settings.goalSoundEnabled}
+                            onchange={(e) => {
+                              gameUI.settings.goalSoundEnabled = (e.currentTarget as HTMLInputElement).checked;
+                              gameUI.saveSettings();
+                            }}
+                          />
+                          <span class="toggle-slider"></span>
+                        </label>
+                      </div>
+
+                      <div class="subtoggle-row">
+                        <span>Gradas / Ovación</span>
+                        <label class="switch-toggle mini" aria-label="Gradas y ovación">
+                          <input
+                            type="checkbox"
+                            checked={gameUI.settings.crowdSoundEnabled}
+                            onchange={(e) => {
+                              gameUI.settings.crowdSoundEnabled = (e.currentTarget as HTMLInputElement).checked;
+                              gameUI.saveSettings();
+                            }}
+                          />
+                          <span class="toggle-slider"></span>
+                        </label>
+                      </div>
+
+                      <div class="subtoggle-row">
+                        <span>Ambiente</span>
+                        <label class="switch-toggle mini" aria-label="Ambiente">
+                          <input
+                            type="checkbox"
+                            checked={gameUI.settings.ambientSoundEnabled}
+                            onchange={(e) => {
+                              gameUI.settings.ambientSoundEnabled = (e.currentTarget as HTMLInputElement).checked;
+                              gameUI.saveSettings();
+                            }}
+                          />
+                          <span class="toggle-slider"></span>
+                        </label>
+                      </div>
+                    </div>
+                  {/if}
                 </div>
-                <input
-                  type="range"
-                  class="custom-slider"
-                  min="0"
-                  max="1"
-                  step="0.01"
-                  value={gameUI.settings.envVolume}
-                  oninput={(e) => {
-                    gameUI.settings.envVolume = Number((e.currentTarget as HTMLInputElement).value);
-                    gameUI.saveSettings();
-                  }}
-                />
-
-                {#if showEnvAccordion}
-                  <div class="subtoggles-box">
-                    <div class="subtoggle-row">
-                      <span>Pitido del silbato</span>
-                      <label class="switch-toggle mini" aria-label="Pitido del silbato">
-                        <input
-                          type="checkbox"
-                          checked={gameUI.settings.whistleSoundEnabled}
-                          onchange={(e) => {
-                            gameUI.settings.whistleSoundEnabled = (e.currentTarget as HTMLInputElement).checked;
-                            gameUI.saveSettings();
-                          }}
-                        />
-                        <span class="toggle-slider"></span>
-                      </label>
-                    </div>
-
-                    <div class="subtoggle-row">
-                      <span>Bocina de gol y celebración</span>
-                      <label class="switch-toggle mini" aria-label="Bocina de gol">
-                        <input
-                          type="checkbox"
-                          checked={gameUI.settings.goalSoundEnabled}
-                          onchange={(e) => {
-                            gameUI.settings.goalSoundEnabled = (e.currentTarget as HTMLInputElement).checked;
-                            gameUI.saveSettings();
-                          }}
-                        />
-                        <span class="toggle-slider"></span>
-                      </label>
-                    </div>
-
-                    <div class="subtoggle-row">
-                      <span>Multitud / Ovaciones</span>
-                      <label class="switch-toggle mini" aria-label="Multitud y ovaciones">
-                        <input
-                          type="checkbox"
-                          checked={gameUI.settings.crowdSoundEnabled}
-                          onchange={(e) => {
-                            gameUI.settings.crowdSoundEnabled = (e.currentTarget as HTMLInputElement).checked;
-                            gameUI.saveSettings();
-                          }}
-                        />
-                        <span class="toggle-slider"></span>
-                      </label>
-                    </div>
-
-                    <div class="subtoggle-row">
-                      <span>Sonido ambiente del estadio</span>
-                      <label class="switch-toggle mini" aria-label="Ambiente del estadio">
-                        <input
-                          type="checkbox"
-                          checked={gameUI.settings.ambientSoundEnabled}
-                          onchange={(e) => {
-                            gameUI.settings.ambientSoundEnabled = (e.currentTarget as HTMLInputElement).checked;
-                            gameUI.saveSettings();
-                          }}
-                        />
-                        <span class="toggle-slider"></span>
-                      </label>
-                    </div>
-                  </div>
-                {/if}
               </div>
             </div>
           </div>
+        </div>
 
-        <!-- ======================================================== -->
-        <!-- SECCIÓN 3: VIDEO Y GRÁFICOS                              -->
-        <!-- ======================================================== -->
-        {:else if activeTab === 'video'}
-          <div class="tab-pane">
-            <div class="section-header-row">
-              <h3 class="section-heading">Video y Gráficos</h3>
-            </div>
+      <!-- ======================================================== -->
+      <!-- SECCIÓN 3: VIDEO Y GRÁFICOS                              -->
+      <!-- ======================================================== -->
+      {:else if activeTab === 'video'}
+        <div class="tab-pane">
+          <div class="section-header-row">
+            <h3 class="section-heading">Video y Gráficos</h3>
+          </div>
 
-            <div class="settings-scroll-area">
-              <!-- Tarjeta 1: Cámara y Campo -->
+          <div class="settings-scroll-area">
+            <div class="video-grid-2col">
+              <!-- COLUMNA 1: Cámara e Interfaz -->
               <div class="graphics-card">
-                <h4 class="card-title">Cámara y Campo</h4>
+                <h4 class="card-title">Cámara e Interfaz</h4>
+
+                <!-- Zoom de la cámara -->
                 <div class="slider-row">
                   <div class="slider-meta">
-                    <span class="param-name">Zoom de la cámara</span>
+                    <span class="param-name label-with-tooltip">
+                      Zoom de la cámara
+                      <span class="info-tooltip-wrapper" tabindex="0" role="button" aria-label="Info zoom">
+                        <svg class="info-help-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                          <circle cx="12" cy="12" r="10"></circle>
+                          <line x1="12" y1="16" x2="12" y2="12"></line>
+                          <line x1="12" y1="8" x2="12.01" y2="8"></line>
+                        </svg>
+                        <span class="tooltip-bubble">Nivel de magnificación de la cámara respecto a la acción</span>
+                      </span>
+                    </span>
                     <strong class="param-val">{gameUI.settings.cameraZoom.toFixed(2)}x</strong>
                   </div>
                   <input
@@ -776,6 +819,7 @@
                     min="0.7"
                     max="1.5"
                     step="0.05"
+                    style="--val-percent: {((gameUI.settings.cameraZoom - 0.7) / 0.8) * 100}%;"
                     value={gameUI.settings.cameraZoom}
                     oninput={(e) => {
                       gameUI.settings.cameraZoom = Number((e.currentTarget as HTMLInputElement).value);
@@ -784,145 +828,69 @@
                   />
                 </div>
 
-                <div class="toggles-grid pt-3">
-                  <div class="toggle-item">
-                    <span>Sacudida de pantalla (Screen shake)</span>
-                    <label class="switch-toggle" aria-label="Screen shake">
-                      <input
-                        type="checkbox"
-                        checked={gameUI.settings.screenShakeEnabled}
-                        onchange={(e) => {
-                          gameUI.settings.screenShakeEnabled = (e.currentTarget as HTMLInputElement).checked;
-                          gameUI.settings.goalShakeEnabled = gameUI.settings.screenShakeEnabled;
-                          gameUI.saveSettings();
-                        }}
-                      />
-                      <span class="toggle-slider"></span>
-                    </label>
+                <!-- Opacidad del minimapa -->
+                <div class="slider-row pt-2">
+                  <div class="slider-meta">
+                    <span class="param-name label-with-tooltip">
+                      Opacidad del minimapa
+                      <span class="info-tooltip-wrapper" tabindex="0" role="button" aria-label="Info opacidad minimapa">
+                        <svg class="info-help-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                          <circle cx="12" cy="12" r="10"></circle>
+                          <line x1="12" y1="16" x2="12" y2="12"></line>
+                          <line x1="12" y1="8" x2="12.01" y2="8"></line>
+                        </svg>
+                        <span class="tooltip-bubble">Transparencia del radar sobre el campo de juego</span>
+                      </span>
+                    </span>
+                    <strong class="param-val">{Math.round(gameUI.settings.minimapOpacity)}%</strong>
                   </div>
-
-                  <div class="toggle-item">
-                    <span>Resplandor / Aura en los jugadores</span>
-                    <label class="switch-toggle" aria-label="Resplandor de jugadores">
-                      <input
-                        type="checkbox"
-                        checked={gameUI.settings.playerGlowEnabled}
-                        onchange={(e) => {
-                          gameUI.settings.playerGlowEnabled = (e.currentTarget as HTMLInputElement).checked;
-                          gameUI.saveSettings();
-                        }}
-                      />
-                      <span class="toggle-slider"></span>
-                    </label>
-                  </div>
-                </div>
-              </div>
-
-              <!-- Tarjeta 2: Efectos de Jugabilidad -->
-              <div class="graphics-card">
-                <h4 class="card-title">Efectos de Jugabilidad</h4>
-                <div class="toggles-grid">
-                  <div class="toggle-item">
-                    <span>Estela de curva Magnus en el balón</span>
-                    <label class="switch-toggle" aria-label="Estela de curva Magnus">
-                      <input
-                        type="checkbox"
-                        checked={gameUI.settings.magnusTrailEnabled}
-                        onchange={(e) => {
-                          gameUI.settings.magnusTrailEnabled = (e.currentTarget as HTMLInputElement).checked;
-                          gameUI.settings.ballTrailEnabled = gameUI.settings.magnusTrailEnabled;
-                          gameUI.saveSettings();
-                        }}
-                      />
-                      <span class="toggle-slider"></span>
-                    </label>
-                  </div>
-
-                  <div class="toggle-item">
-                    <span>Efecto de fuego en tiros potentes (&gt;950 px/s)</span>
-                    <label class="switch-toggle" aria-label="Efecto de fuego">
-                      <input
-                        type="checkbox"
-                        checked={gameUI.settings.fireShotEnabled}
-                        onchange={(e) => {
-                          gameUI.settings.fireShotEnabled = (e.currentTarget as HTMLInputElement).checked;
-                          gameUI.saveSettings();
-                        }}
-                      />
-                      <span class="toggle-slider"></span>
-                    </label>
-                  </div>
-
-                  <div class="toggle-item">
-                    <span>Textos flotantes de puntos / eventos</span>
-                    <label class="switch-toggle" aria-label="Textos flotantes">
-                      <input
-                        type="checkbox"
-                        checked={gameUI.settings.floatingPointsEnabled}
-                        onchange={(e) => {
-                          gameUI.settings.floatingPointsEnabled = (e.currentTarget as HTMLInputElement).checked;
-                          gameUI.saveSettings();
-                        }}
-                      />
-                      <span class="toggle-slider"></span>
-                    </label>
-                  </div>
-                </div>
-              </div>
-
-              <!-- Tarjeta 3: Interfaz y Radar -->
-              <div class="graphics-card">
-                <h4 class="card-title">Interfaz y Radar</h4>
-                <div class="toggles-grid">
-                  <div class="toggle-item">
-                    <span>Activar / Desactivar minimapa</span>
-                    <label class="switch-toggle" aria-label="Minimapa activo">
-                      <input
-                        type="checkbox"
-                        checked={gameUI.settings.minimapEnabled}
-                        onchange={(e) => {
-                          gameUI.settings.minimapEnabled = (e.currentTarget as HTMLInputElement).checked;
-                          gameUI.saveSettings();
-                        }}
-                      />
-                      <span class="toggle-slider"></span>
-                    </label>
-                  </div>
-
-                  <div class="toggle-item">
-                    <span>Cono de visión de la cámara en minimapa</span>
-                    <label class="switch-toggle" aria-label="Cono de visión de cámara">
-                      <input
-                        type="checkbox"
-                        checked={gameUI.settings.cameraFrustumOnMinimap}
-                        onchange={(e) => {
-                          gameUI.settings.cameraFrustumOnMinimap = (e.currentTarget as HTMLInputElement).checked;
-                          gameUI.settings.minimapCameraFrustum = gameUI.settings.cameraFrustumOnMinimap;
-                          gameUI.saveSettings();
-                        }}
-                      />
-                      <span class="toggle-slider"></span>
-                    </label>
-                  </div>
-
-                  <div class="toggle-item">
-                    <span>Indicadores perimetrales fuera de pantalla</span>
-                    <label class="switch-toggle" aria-label="Indicadores perimetrales">
-                      <input
-                        type="checkbox"
-                        checked={gameUI.settings.offscreenIndicatorsEnabled}
-                        onchange={(e) => {
-                          gameUI.settings.offscreenIndicatorsEnabled = (e.currentTarget as HTMLInputElement).checked;
-                          gameUI.settings.offscreenIndicators = gameUI.settings.offscreenIndicatorsEnabled;
-                          gameUI.saveSettings();
-                        }}
-                      />
-                      <span class="toggle-slider"></span>
-                    </label>
-                  </div>
+                  <input
+                    type="range"
+                    class="custom-slider"
+                    min="10"
+                    max="100"
+                    step="5"
+                    style="--val-percent: {((gameUI.settings.minimapOpacity - 10) / 90) * 100}%;"
+                    value={gameUI.settings.minimapOpacity}
+                    oninput={(e) => {
+                      gameUI.settings.minimapOpacity = Number((e.currentTarget as HTMLInputElement).value);
+                      gameUI.saveSettings();
+                    }}
+                  />
                 </div>
 
-                <!-- Selector segmentado Tamaño de Minimapa -->
+                <!-- Opacidad del chat -->
+                <div class="slider-row pt-2">
+                  <div class="slider-meta">
+                    <span class="param-name label-with-tooltip">
+                      Opacidad del chat
+                      <span class="info-tooltip-wrapper" tabindex="0" role="button" aria-label="Info opacidad chat">
+                        <svg class="info-help-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                          <circle cx="12" cy="12" r="10"></circle>
+                          <line x1="12" y1="16" x2="12" y2="12"></line>
+                          <line x1="12" y1="8" x2="12.01" y2="8"></line>
+                        </svg>
+                        <span class="tooltip-bubble">Transparencia del cuadro de chat durante el partido</span>
+                      </span>
+                    </span>
+                    <strong class="param-val">{Math.round(gameUI.settings.chatOpacity)}%</strong>
+                  </div>
+                  <input
+                    type="range"
+                    class="custom-slider"
+                    min="10"
+                    max="100"
+                    step="5"
+                    style="--val-percent: {((gameUI.settings.chatOpacity - 10) / 90) * 100}%;"
+                    value={gameUI.settings.chatOpacity}
+                    oninput={(e) => {
+                      gameUI.settings.chatOpacity = Number((e.currentTarget as HTMLInputElement).value);
+                      gameUI.saveSettings();
+                    }}
+                  />
+                </div>
+
+                <!-- Tamaño del minimapa -->
                 <div class="segmented-control-row pt-3">
                   <span class="param-name">Tamaño del minimapa</span>
                   <div class="segmented-pills">
@@ -962,517 +930,647 @@
                   </div>
                 </div>
 
-                <!-- Sliders Opacidad -->
-                <div class="slider-row pt-3">
-                  <div class="slider-meta">
-                    <span class="param-name">Opacidad del minimapa</span>
-                    <strong class="param-val">{Math.round(gameUI.settings.minimapOpacity)}%</strong>
+                <!-- Toggles Interfaz -->
+                <div class="toggles-column pt-3">
+                  <div class="toggle-item">
+                    <span class="label-with-tooltip">
+                      Minimapa activo
+                      <span class="info-tooltip-wrapper" tabindex="0" role="button" aria-label="Info minimapa">
+                        <svg class="info-help-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                          <circle cx="12" cy="12" r="10"></circle>
+                          <line x1="12" y1="16" x2="12" y2="12"></line>
+                          <line x1="12" y1="8" x2="12.01" y2="8"></line>
+                        </svg>
+                        <span class="tooltip-bubble">Radar táctico de posiciones en la esquina de la pantalla</span>
+                      </span>
+                    </span>
+                    <label class="switch-toggle" aria-label="Minimapa activo">
+                      <input
+                        type="checkbox"
+                        checked={gameUI.settings.minimapEnabled}
+                        onchange={(e) => {
+                          gameUI.settings.minimapEnabled = (e.currentTarget as HTMLInputElement).checked;
+                          gameUI.saveSettings();
+                        }}
+                      />
+                      <span class="toggle-slider"></span>
+                    </label>
                   </div>
-                  <input
-                    type="range"
-                    class="custom-slider"
-                    min="10"
-                    max="100"
-                    step="5"
-                    value={gameUI.settings.minimapOpacity}
-                    oninput={(e) => {
-                      gameUI.settings.minimapOpacity = Number((e.currentTarget as HTMLInputElement).value);
-                      gameUI.saveSettings();
-                    }}
-                  />
-                </div>
 
-                <div class="slider-row pt-3">
-                  <div class="slider-meta">
-                    <span class="param-name">Opacidad del chat</span>
-                    <strong class="param-val">{Math.round(gameUI.settings.chatOpacity)}%</strong>
+                  <div class="toggle-item">
+                    <span class="label-with-tooltip">
+                      Cono de visión en minimapa
+                      <span class="info-tooltip-wrapper" tabindex="0" role="button" aria-label="Info cono de visión">
+                        <svg class="info-help-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                          <circle cx="12" cy="12" r="10"></circle>
+                          <line x1="12" y1="16" x2="12" y2="12"></line>
+                          <line x1="12" y1="8" x2="12.01" y2="8"></line>
+                        </svg>
+                        <span class="tooltip-bubble">Área proyectada de la cámara visible en el radar</span>
+                      </span>
+                    </span>
+                    <label class="switch-toggle" aria-label="Cono de visión de cámara">
+                      <input
+                        type="checkbox"
+                        checked={gameUI.settings.cameraFrustumOnMinimap}
+                        onchange={(e) => {
+                          gameUI.settings.cameraFrustumOnMinimap = (e.currentTarget as HTMLInputElement).checked;
+                          gameUI.settings.minimapCameraFrustum = gameUI.settings.cameraFrustumOnMinimap;
+                          gameUI.saveSettings();
+                        }}
+                      />
+                      <span class="toggle-slider"></span>
+                    </label>
                   </div>
-                  <input
-                    type="range"
-                    class="custom-slider"
-                    min="10"
-                    max="100"
-                    step="5"
-                    value={gameUI.settings.chatOpacity}
-                    oninput={(e) => {
-                      gameUI.settings.chatOpacity = Number((e.currentTarget as HTMLInputElement).value);
-                      gameUI.saveSettings();
-                    }}
-                  />
                 </div>
               </div>
 
-              <!-- Tarjeta 4: Personalización del Balón (Diseño vs Color Exclusivo) -->
-              <div class="graphics-card">
-                <div class="card-header-flex">
-                  <h4 class="card-title">Personalización del Balón</h4>
-                  <div class="exclusive-mode-selector">
-                    <button
-                      type="button"
-                      class="mode-choice-btn"
-                      class:active={gameUI.settings.ballMode === 'texture'}
-                      onclick={() => {
-                        gameUI.settings.ballMode = 'texture';
-                        gameUI.saveSettings();
-                      }}
-                    >
-                      Diseño predefinido
-                    </button>
-                    <button
-                      type="button"
-                      class="mode-choice-btn"
-                      class:active={gameUI.settings.ballMode === 'color'}
-                      onclick={() => {
-                        gameUI.settings.ballMode = 'color';
-                        gameUI.saveSettings();
-                      }}
-                    >
-                      Color plano sólido
-                    </button>
-                  </div>
-                </div>
-
-                <p class="exclusive-hint">
-                  {gameUI.settings.ballMode === 'texture'
-                    ? '✓ Modo activo: Diseño con skin y textura 3D procedural.'
-                    : '✓ Modo activo: Balón sólido uniforme con color personalizado.'}
-                </p>
-
-                {#if gameUI.settings.ballMode === 'texture'}
-                  <!-- Cuadrícula de 4 Diseños Predefinidos -->
-                  <div class="ball-cards-grid">
-                    <!-- Clásico -->
-                    <button
-                      type="button"
-                      class="ball-card"
-                      class:selected={gameUI.settings.ballSkin === 'classic'}
-                      onclick={() => {
-                        gameUI.settings.ballSkin = 'classic';
-                        gameUI.saveSettings();
-                      }}
-                    >
-                      <div class="ball-circle classic-ball">
-                        <svg viewBox="0 0 100 100" class="ball-svg">
-                          <polygon fill="#080e18" points="50,30 65,42 60,60 40,60 35,42" />
-                          <polygon fill="#f8fafc" points="50,5 30,12 22,25 35,42 50,30" />
-                          <polygon fill="#f8fafc" points="50,5 70,12 78,25 65,42 50,30" />
-                          <polygon fill="#080e18" points="40,60 60,60 70,80 50,95 30,80" />
-                        </svg>
-                      </div>
-                      <strong class="ball-name">Clásico</strong>
-                      <span class="ball-desc">Hexágonos icónicos</span>
-                    </button>
-
-                    <!-- Neón -->
-                    <button
-                      type="button"
-                      class="ball-card"
-                      class:selected={gameUI.settings.ballSkin === 'neon'}
-                      onclick={() => {
-                        gameUI.settings.ballSkin = 'neon';
-                        gameUI.saveSettings();
-                      }}
-                    >
-                      <div class="ball-circle neon-ball">
-                        <svg viewBox="0 0 100 100" class="ball-svg">
-                          <circle cx="50" cy="50" r="44" fill="none" stroke="#ccff00" stroke-width="5" />
-                          <circle cx="50" cy="50" r="5" fill="#00e5ff" />
-                        </svg>
-                      </div>
-                      <strong class="ball-name">Neón</strong>
-                      <span class="ball-desc">Flúor de alta visibilidad</span>
-                    </button>
-
-                    <!-- Retro -->
-                    <button
-                      type="button"
-                      class="ball-card"
-                      class:selected={gameUI.settings.ballSkin === 'retro'}
-                      onclick={() => {
-                        gameUI.settings.ballSkin = 'retro';
-                        gameUI.saveSettings();
-                      }}
-                    >
-                      <div class="ball-circle retro-ball">
-                        <svg viewBox="0 0 100 100" class="ball-svg">
-                          <path d="M 50,0 Q 55,50 50,100" fill="none" stroke="#3a1c06" stroke-width="3" />
-                          <path d="M 25,0 Q 35,50 25,100" fill="none" stroke="#3a1c06" stroke-width="2.5" />
-                          <path d="M 75,0 Q 65,50 75,100" fill="none" stroke="#3a1c06" stroke-width="2.5" />
-                        </svg>
-                      </div>
-                      <strong class="ball-name">Retro</strong>
-                      <span class="ball-desc">Cuero tradicional cosido</span>
-                    </button>
-
-                    <!-- Fútbol Sala -->
-                    <button
-                      type="button"
-                      class="ball-card"
-                      class:selected={gameUI.settings.ballSkin === 'futsal'}
-                      onclick={() => {
-                        gameUI.settings.ballSkin = 'futsal';
-                        gameUI.saveSettings();
-                      }}
-                    >
-                      <div class="ball-circle futsal-ball">
-                        <svg viewBox="0 0 100 100" class="ball-svg">
-                          <circle cx="50" cy="50" r="45" fill="none" stroke="#ff0055" stroke-width="4" stroke-dasharray="14 10" />
-                          <polygon fill="#ffcc00" points="50,25 58,42 75,42 62,54 66,72 50,60 34,72 38,54 25,42 42,42" />
-                        </svg>
-                      </div>
-                      <strong class="ball-name">Fútbol Sala</strong>
-                      <span class="ball-desc">Patrón dinámico Pro Court</span>
-                    </button>
-                  </div>
-                {:else}
-                  <!-- Selector de Color Hexadecimal para Balón Liso -->
-                  <div class="solid-color-picker-box">
-                    <div class="color-preview-disc" style="background-color: {gameUI.settings.ballCustomColor};">
-                      <div class="ball-shine-overlay"></div>
-                    </div>
-                    <div class="color-picker-inputs">
-                      <label for="ball-hex-color">Color plano del balón</label>
-                      <div class="inputs-row">
+              <!-- COLUMNA 2: Efectos de Cancha y Personalización del Balón -->
+              <div class="col-visuals-ball">
+                <!-- Efectos Visuales de Cancha -->
+                <div class="graphics-card">
+                  <h4 class="card-title">Efectos Visuales de Cancha</h4>
+                  <div class="toggles-column">
+                    <div class="toggle-item">
+                      <span class="label-with-tooltip">
+                        Sacudida de pantalla (Screen shake)
+                        <span class="info-tooltip-wrapper" tabindex="0" role="button" aria-label="Info screen shake">
+                          <svg class="info-help-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <circle cx="12" cy="12" r="10"></circle>
+                            <line x1="12" y1="16" x2="12" y2="12"></line>
+                            <line x1="12" y1="8" x2="12.01" y2="8"></line>
+                          </svg>
+                          <span class="tooltip-bubble">Vibración sutil al impactar postes o marcar gol</span>
+                        </span>
+                      </span>
+                      <label class="switch-toggle" aria-label="Screen shake">
                         <input
-                          id="ball-hex-color"
-                          type="color"
-                          value={gameUI.settings.ballCustomColor}
-                          oninput={(e) => {
-                            gameUI.settings.ballCustomColor = (e.currentTarget as HTMLInputElement).value;
+                          type="checkbox"
+                          checked={gameUI.settings.screenShakeEnabled}
+                          onchange={(e) => {
+                            gameUI.settings.screenShakeEnabled = (e.currentTarget as HTMLInputElement).checked;
+                            gameUI.settings.goalShakeEnabled = gameUI.settings.screenShakeEnabled;
                             gameUI.saveSettings();
                           }}
                         />
+                        <span class="toggle-slider"></span>
+                      </label>
+                    </div>
+
+                    <div class="toggle-item">
+                      <span class="label-with-tooltip">
+                        Resplandor / Aura en jugadores
+                        <span class="info-tooltip-wrapper" tabindex="0" role="button" aria-label="Info aura">
+                          <svg class="info-help-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <circle cx="12" cy="12" r="10"></circle>
+                            <line x1="12" y1="16" x2="12" y2="12"></line>
+                            <line x1="12" y1="8" x2="12.01" y2="8"></line>
+                          </svg>
+                          <span class="tooltip-bubble">Aura neón distintiva alrededor del disco del jugador</span>
+                        </span>
+                      </span>
+                      <label class="switch-toggle" aria-label="Resplandor de jugadores">
                         <input
-                          type="text"
-                          class="hex-text-input"
-                          maxlength="7"
-                          value={gameUI.settings.ballCustomColor}
-                          oninput={(e) => {
-                            const val = (e.currentTarget as HTMLInputElement).value;
-                            if (/^#[0-9A-Fa-f]{0,6}$/.test(val)) {
-                              gameUI.settings.ballCustomColor = val;
-                              if (val.length === 7) gameUI.saveSettings();
-                            }
+                          type="checkbox"
+                          checked={gameUI.settings.playerGlowEnabled}
+                          onchange={(e) => {
+                            gameUI.settings.playerGlowEnabled = (e.currentTarget as HTMLInputElement).checked;
+                            gameUI.saveSettings();
                           }}
                         />
-                      </div>
+                        <span class="toggle-slider"></span>
+                      </label>
+                    </div>
+
+                    <div class="toggle-item">
+                      <span class="label-with-tooltip">
+                        Estela de curva Magnus
+                        <span class="info-tooltip-wrapper" tabindex="0" role="button" aria-label="Info estela">
+                          <svg class="info-help-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <circle cx="12" cy="12" r="10"></circle>
+                            <line x1="12" y1="16" x2="12" y2="12"></line>
+                            <line x1="12" y1="8" x2="12.01" y2="8"></line>
+                          </svg>
+                          <span class="tooltip-bubble">Rastro visual curvado al aplicar efecto de giro al balón</span>
+                        </span>
+                      </span>
+                      <label class="switch-toggle" aria-label="Estela de curva Magnus">
+                        <input
+                          type="checkbox"
+                          checked={gameUI.settings.magnusTrailEnabled}
+                          onchange={(e) => {
+                            gameUI.settings.magnusTrailEnabled = (e.currentTarget as HTMLInputElement).checked;
+                            gameUI.settings.ballTrailEnabled = gameUI.settings.magnusTrailEnabled;
+                            gameUI.saveSettings();
+                          }}
+                        />
+                        <span class="toggle-slider"></span>
+                      </label>
+                    </div>
+
+                    <div class="toggle-item">
+                      <span class="label-with-tooltip">
+                        Efecto de fuego en tiros (&gt;950 px/s)
+                        <span class="info-tooltip-wrapper" tabindex="0" role="button" aria-label="Info fuego">
+                          <svg class="info-help-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <circle cx="12" cy="12" r="10"></circle>
+                            <line x1="12" y1="16" x2="12" y2="12"></line>
+                            <line x1="12" y1="8" x2="12.01" y2="8"></line>
+                          </svg>
+                          <span class="tooltip-bubble">Llamas visuales en lanzamientos de alta potencia</span>
+                        </span>
+                      </span>
+                      <label class="switch-toggle" aria-label="Efecto de fuego">
+                        <input
+                          type="checkbox"
+                          checked={gameUI.settings.fireShotEnabled}
+                          onchange={(e) => {
+                            gameUI.settings.fireShotEnabled = (e.currentTarget as HTMLInputElement).checked;
+                            gameUI.saveSettings();
+                          }}
+                        />
+                        <span class="toggle-slider"></span>
+                      </label>
+                    </div>
+
+                    <div class="toggle-item">
+                      <span class="label-with-tooltip">
+                        Textos flotantes de puntos / eventos
+                        <span class="info-tooltip-wrapper" tabindex="0" role="button" aria-label="Info textos flotantes">
+                          <svg class="info-help-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <circle cx="12" cy="12" r="10"></circle>
+                            <line x1="12" y1="16" x2="12" y2="12"></line>
+                            <line x1="12" y1="8" x2="12.01" y2="8"></line>
+                          </svg>
+                          <span class="tooltip-bubble">Notificaciones dinámicas de puntos y eventos en pantalla</span>
+                        </span>
+                      </span>
+                      <label class="switch-toggle" aria-label="Textos flotantes">
+                        <input
+                          type="checkbox"
+                          checked={gameUI.settings.floatingPointsEnabled}
+                          onchange={(e) => {
+                            gameUI.settings.floatingPointsEnabled = (e.currentTarget as HTMLInputElement).checked;
+                            gameUI.saveSettings();
+                          }}
+                        />
+                        <span class="toggle-slider"></span>
+                      </label>
+                    </div>
+
+                    <div class="toggle-item">
+                      <span class="label-with-tooltip">
+                        Indicadores perimetrales
+                        <span class="info-tooltip-wrapper" tabindex="0" role="button" aria-label="Info indicadores">
+                          <svg class="info-help-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <circle cx="12" cy="12" r="10"></circle>
+                            <line x1="12" y1="16" x2="12" y2="12"></line>
+                            <line x1="12" y1="8" x2="12.01" y2="8"></line>
+                          </svg>
+                          <span class="tooltip-bubble">Flechas direccionales para jugadores fuera de pantalla</span>
+                        </span>
+                      </span>
+                      <label class="switch-toggle" aria-label="Indicadores perimetrales">
+                        <input
+                          type="checkbox"
+                          checked={gameUI.settings.offscreenIndicatorsEnabled}
+                          onchange={(e) => {
+                            gameUI.settings.offscreenIndicatorsEnabled = (e.currentTarget as HTMLInputElement).checked;
+                            gameUI.settings.offscreenIndicators = gameUI.settings.offscreenIndicatorsEnabled;
+                            gameUI.saveSettings();
+                          }}
+                        />
+                        <span class="toggle-slider"></span>
+                      </label>
                     </div>
                   </div>
-                {/if}
-              </div>
-            </div>
+                </div>
 
-            <!-- Footer con botón de reset siempre visible -->
-            <div class="pane-footer">
-              <button
-                type="button"
-                class="btn-reset"
-                onclick={handleResetGraphics}
-              >
-                ↺ Restablecer valores gráficos por defecto
-              </button>
-            </div>
-          </div>
-
-        <!-- ======================================================== -->
-        <!-- SECCIÓN 4: EQUIPACIONES                                  -->
-        <!-- ======================================================== -->
-        {:else if activeTab === 'kits'}
-          <div class="tab-pane">
-            <div class="section-header-row">
-              <h3 class="section-heading">Equipaciones de Equipo</h3>
-            </div>
-
-            <!-- Tabs Local / Visitante -->
-            <div class="team-filter-tabs">
-              <button
-                type="button"
-                class="team-tab-pill local"
-                class:active={activeKitTab === 'local'}
-                onclick={() => (activeKitTab = 'local')}
-              >
-                🏠 Local
-              </button>
-              <button
-                type="button"
-                class="team-tab-pill visitor"
-                class:active={activeKitTab === 'visitor'}
-                onclick={() => (activeKitTab = 'visitor')}
-              >
-                ✈️ Visitante
-              </button>
-            </div>
-
-            <!-- Nota de Capitán -->
-            <div class="captain-callout-box">
-              <div class="callout-icon">ℹ️</div>
-              <p class="callout-text">
-                <strong>Nota:</strong> Las modificaciones de nombre, siglas y equipación solo se aplicarán en partido si eres el Capitán del equipo (primer jugador listado en tu bando).
-              </p>
-            </div>
-
-            <div class="kits-layout-grid">
-              <!-- Columna Izquierda: Nombres, Siglas, Colores y Patrones -->
-              <div class="kits-controls-col">
-                <div class="form-row-2col">
-                  <div class="input-group">
-                    <label for="team-name-input">Nombre del Equipo (máx. 25)</label>
-                    <input
-                      id="team-name-input"
-                      type="text"
-                      maxlength="25"
-                      bind:value={currentKit.name}
-                      oninput={() => gameUI.saveSettings()}
-                      placeholder={activeKitTab === 'local' ? 'Local FC' : 'Visitante CF'}
-                    />
-                  </div>
-
-                  <div class="input-group">
-                    <label for="team-tag-input">Siglas (máx. 4)</label>
-                    <div class="tag-input-wrapper">
-                      <input
-                        id="team-tag-input"
-                        type="text"
-                        maxlength="4"
-                        bind:value={currentKit.tag}
-                        oninput={(e) => {
-                          currentKit.tag = (e.currentTarget as HTMLInputElement).value.toUpperCase();
+                <!-- Personalización del Balón -->
+                <div class="graphics-card">
+                  <div class="card-header-flex">
+                    <h4 class="card-title">Personalización del Balón</h4>
+                    <div class="exclusive-mode-selector">
+                      <button
+                        type="button"
+                        class="mode-choice-btn"
+                        class:active={gameUI.settings.ballMode === 'texture'}
+                        onclick={() => {
+                          gameUI.settings.ballMode = 'texture';
                           gameUI.saveSettings();
                         }}
-                        placeholder={activeKitTab === 'local' ? 'LOC' : 'VIS'}
-                      />
-                      <span class="tag-badge">[{currentKit.tag || 'TAG'}]</span>
-                    </div>
-                  </div>
-                </div>
-
-                <div class="form-row-2col pt-2">
-                  <div class="color-picker-box">
-                    <label for="kit-color-primary">Color Primario</label>
-                    <div class="color-control">
-                      <input
-                        id="kit-color-primary"
-                        type="color"
-                        bind:value={currentKit.primaryColor}
-                        oninput={() => gameUI.saveSettings()}
-                      />
-                      <input
-                        type="text"
-                        class="hex-mini-input"
-                        maxlength="7"
-                        bind:value={currentKit.primaryColor}
-                        oninput={() => gameUI.saveSettings()}
-                      />
+                      >
+                        Diseño
+                      </button>
+                      <button
+                        type="button"
+                        class="mode-choice-btn"
+                        class:active={gameUI.settings.ballMode === 'color'}
+                        onclick={() => {
+                          gameUI.settings.ballMode = 'color';
+                          gameUI.saveSettings();
+                        }}
+                      >
+                        Color sólido
+                      </button>
                     </div>
                   </div>
 
-                  <div class="color-picker-box">
-                    <label for="kit-color-secondary">Color Secundario</label>
-                    <div class="color-control">
-                      <input
-                        id="kit-color-secondary"
-                        type="color"
-                        bind:value={currentKit.secondaryColor}
-                        oninput={() => gameUI.saveSettings()}
-                      />
-                      <input
-                        type="text"
-                        class="hex-mini-input"
-                        maxlength="7"
-                        bind:value={currentKit.secondaryColor}
-                        oninput={() => gameUI.saveSettings()}
-                      />
+                  {#if gameUI.settings.ballMode === 'texture'}
+                    <div class="ball-cards-grid">
+                      <!-- Clásico -->
+                      <button
+                        type="button"
+                        class="ball-card"
+                        class:selected={gameUI.settings.ballSkin === 'classic'}
+                        onclick={() => {
+                          gameUI.settings.ballSkin = 'classic';
+                          gameUI.saveSettings();
+                        }}
+                      >
+                        <div class="ball-circle classic-ball">
+                          <svg viewBox="0 0 100 100" class="ball-svg">
+                            <polygon fill="#080e18" points="50,30 65,42 60,60 40,60 35,42" />
+                            <polygon fill="#f8fafc" points="50,5 30,12 22,25 35,42 50,30" />
+                            <polygon fill="#f8fafc" points="50,5 70,12 78,25 65,42 50,30" />
+                            <polygon fill="#080e18" points="40,60 60,60 70,80 50,95 30,80" />
+                          </svg>
+                        </div>
+                        <strong class="ball-name">Clásico</strong>
+                      </button>
+
+                      <!-- Neón -->
+                      <button
+                        type="button"
+                        class="ball-card"
+                        class:selected={gameUI.settings.ballSkin === 'neon'}
+                        onclick={() => {
+                          gameUI.settings.ballSkin = 'neon';
+                          gameUI.saveSettings();
+                        }}
+                      >
+                        <div class="ball-circle neon-ball">
+                          <svg viewBox="0 0 100 100" class="ball-svg">
+                            <circle cx="50" cy="50" r="44" fill="none" stroke="#ccff00" stroke-width="5" />
+                            <circle cx="50" cy="50" r="5" fill="#00e5ff" />
+                          </svg>
+                        </div>
+                        <strong class="ball-name">Neón</strong>
+                      </button>
+
+                      <!-- Retro -->
+                      <button
+                        type="button"
+                        class="ball-card"
+                        class:selected={gameUI.settings.ballSkin === 'retro'}
+                        onclick={() => {
+                          gameUI.settings.ballSkin = 'retro';
+                          gameUI.saveSettings();
+                        }}
+                      >
+                        <div class="ball-circle retro-ball">
+                          <svg viewBox="0 0 100 100" class="ball-svg">
+                            <path d="M 50,0 Q 55,50 50,100" fill="none" stroke="#3a1c06" stroke-width="3" />
+                            <path d="M 25,0 Q 35,50 25,100" fill="none" stroke="#3a1c06" stroke-width="2.5" />
+                            <path d="M 75,0 Q 65,50 75,100" fill="none" stroke="#3a1c06" stroke-width="2.5" />
+                          </svg>
+                        </div>
+                        <strong class="ball-name">Retro</strong>
+                      </button>
+
+                      <!-- Fútbol Sala -->
+                      <button
+                        type="button"
+                        class="ball-card"
+                        class:selected={gameUI.settings.ballSkin === 'futsal'}
+                        onclick={() => {
+                          gameUI.settings.ballSkin = 'futsal';
+                          gameUI.saveSettings();
+                        }}
+                      >
+                        <div class="ball-circle futsal-ball">
+                          <svg viewBox="0 0 100 100" class="ball-svg">
+                            <circle cx="50" cy="50" r="45" fill="none" stroke="#ff0055" stroke-width="4" stroke-dasharray="14 10" />
+                            <polygon fill="#ffcc00" points="50,25 58,42 75,42 62,54 66,72 50,60 34,72 38,54 25,42 42,42" />
+                          </svg>
+                        </div>
+                        <strong class="ball-name">Sala</strong>
+                      </button>
                     </div>
-                  </div>
-                </div>
-
-                <span class="group-subtitle pt-3">Patrón de Camiseta</span>
-                <div class="patterns-grid">
-                  <button
-                    type="button"
-                    class="pattern-card"
-                    class:active={currentKit.pattern === 'solid'}
-                    onclick={() => {
-                      currentKit.pattern = 'solid';
-                      gameUI.saveSettings();
-                    }}
-                  >
-                    <div class="pattern-sample solid" style="--c1: {currentKit.primaryColor}; --c2: {currentKit.secondaryColor};"></div>
-                    <span>Liso</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    class="pattern-card"
-                    class:active={currentKit.pattern === 'vertical'}
-                    onclick={() => {
-                      currentKit.pattern = 'vertical';
-                      gameUI.saveSettings();
-                    }}
-                  >
-                    <div class="pattern-sample vertical" style="--c1: {currentKit.primaryColor}; --c2: {currentKit.secondaryColor};"></div>
-                    <span>Rayas Verticales</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    class="pattern-card"
-                    class:active={currentKit.pattern === 'hoop'}
-                    onclick={() => {
-                      currentKit.pattern = 'hoop';
-                      gameUI.saveSettings();
-                    }}
-                  >
-                    <div class="pattern-sample hoop" style="--c1: {currentKit.primaryColor}; --c2: {currentKit.secondaryColor};"></div>
-                    <span>Franja Horizontal</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    class="pattern-card"
-                    class:active={currentKit.pattern === 'halves'}
-                    onclick={() => {
-                      currentKit.pattern = 'halves';
-                      gameUI.saveSettings();
-                    }}
-                  >
-                    <div class="pattern-sample halves" style="--c1: {currentKit.primaryColor}; --c2: {currentKit.secondaryColor};"></div>
-                    <span>Mitades</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    class="pattern-card"
-                    class:active={currentKit.pattern === 'chevrons'}
-                    onclick={() => {
-                      currentKit.pattern = 'chevrons';
-                      gameUI.saveSettings();
-                    }}
-                  >
-                    <div class="pattern-sample chevrons" style="--c1: {currentKit.primaryColor}; --c2: {currentKit.secondaryColor};"></div>
-                    <span>Chevrones</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    class="pattern-card"
-                    class:active={currentKit.pattern === 'diagonal_checks'}
-                    onclick={() => {
-                      currentKit.pattern = 'diagonal_checks';
-                      gameUI.saveSettings();
-                    }}
-                  >
-                    <div class="pattern-sample diagonal-checks" style="--c1: {currentKit.primaryColor}; --c2: {currentKit.secondaryColor};"></div>
-                    <span>Cuadros Diagonales</span>
-                  </button>
-                </div>
-              </div>
-
-              <!-- Columna Derecha: Previsualización en Vivo 1:1 Scale con Disco y Capitán 'C' -->
-              <div class="kits-preview-col">
-                <span class="preview-title">Previsualización en cancha (Escala 1:1)</span>
-                <div class="tactical-pitch-box">
-                  <div class="tactical-pitch-lines"></div>
-
-                  <!-- Disco del Jugador Capitán -->
-                  <div
-                    class="kit-live-disc"
-                    style="background-color: {currentKit.primaryColor}; border-color: {currentKit.secondaryColor};"
-                  >
-                    {#if currentKit.pattern === 'vertical'}
-                      <div class="live-pattern-overlay vertical-stripes" style="--c1: {currentKit.primaryColor}; --c2: {currentKit.secondaryColor};"></div>
-                    {:else if currentKit.pattern === 'hoop'}
-                      <div class="live-pattern-overlay hoop-stripes" style="--c1: {currentKit.primaryColor}; --c2: {currentKit.secondaryColor};"></div>
-                    {:else if currentKit.pattern === 'halves'}
-                      <div class="live-pattern-overlay halves-stripes" style="--c1: {currentKit.primaryColor}; --c2: {currentKit.secondaryColor};"></div>
-                    {:else if currentKit.pattern === 'chevrons'}
-                      <div class="live-pattern-overlay chevrons-stripes" style="--c1: {currentKit.primaryColor}; --c2: {currentKit.secondaryColor};"></div>
-                    {:else if currentKit.pattern === 'diagonal_checks'}
-                      <div class="live-pattern-overlay diagonal-checks-stripes" style="--c1: {currentKit.primaryColor}; --c2: {currentKit.secondaryColor};"></div>
-                    {/if}
-
-                    <span class="captain-badge">C</span>
-                    <div class="disc-pip"></div>
-                  </div>
-                </div>
-
-                <div class="preview-legend">
-                  <span class="legend-badge">Capitán: {currentKit.name || 'Equipo'} [{currentKit.tag || 'TAG'}]</span>
-                  <span class="legend-auto">✓ Guardado automático</span>
+                  {:else}
+                    <div class="solid-color-picker-box">
+                      <div class="color-preview-disc" style="background-color: {gameUI.settings.ballCustomColor};">
+                        <div class="ball-shine-overlay"></div>
+                      </div>
+                      <div class="color-picker-inputs">
+                        <label for="ball-hex-color">Color plano del balón</label>
+                        <div class="inputs-row">
+                          <input
+                            id="ball-hex-color"
+                            type="color"
+                            value={gameUI.settings.ballCustomColor}
+                            oninput={(e) => {
+                              gameUI.settings.ballCustomColor = (e.currentTarget as HTMLInputElement).value;
+                              gameUI.saveSettings();
+                            }}
+                          />
+                          <input
+                            type="text"
+                            class="hex-text-input"
+                            maxlength="7"
+                            value={gameUI.settings.ballCustomColor}
+                            oninput={(e) => {
+                              const val = (e.currentTarget as HTMLInputElement).value;
+                              if (/^#[0-9A-Fa-f]{0,6}$/.test(val)) {
+                                gameUI.settings.ballCustomColor = val;
+                                if (val.length === 7) gameUI.saveSettings();
+                              }
+                            }}
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  {/if}
                 </div>
               </div>
             </div>
           </div>
 
-        <!-- ======================================================== -->
-        <!-- SECCIÓN 5: AVATAR Y EMOTES                               -->
-        <!-- ======================================================== -->
-        {:else if activeTab === 'avatar'}
-          <div class="tab-pane">
-            <div class="section-header-row">
-              <h3 class="section-heading">Avatar y emotes</h3>
+          <!-- Footer con botón de reset siempre visible -->
+          <div class="pane-footer">
+            <button
+              type="button"
+              class="btn-reset"
+              onclick={handleResetGraphics}
+            >
+              ↺ Restablecer valores gráficos por defecto
+            </button>
+          </div>
+        </div>
+
+      <!-- ======================================================== -->
+      <!-- SECCIÓN 4: EQUIPACIONES                                  -->
+      <!-- ======================================================== -->
+      {:else if activeTab === 'kits'}
+        <div class="tab-pane">
+          <div class="section-header-row">
+            <h3 class="section-heading label-with-tooltip">
+              Equipaciones de Equipo
+              <span class="info-tooltip-wrapper" tabindex="0" role="button" aria-label="Info capitán">
+                <svg class="info-help-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <circle cx="12" cy="12" r="10"></circle>
+                  <line x1="12" y1="16" x2="12" y2="12"></line>
+                  <line x1="12" y1="8" x2="12.01" y2="8"></line>
+                </svg>
+                <span class="tooltip-bubble">Las modificaciones de nombre, siglas y equipación solo se aplicarán en partido si eres el Capitán del equipo (primer jugador listado en tu bando).</span>
+              </span>
+            </h3>
+          </div>
+
+          <!-- Tabs Local / Visitante -->
+          <div class="team-filter-tabs">
+            <button
+              type="button"
+              class="team-tab-pill local"
+              class:active={activeKitTab === 'local'}
+              onclick={() => (activeKitTab = 'local')}
+            >
+              🏠 Local
+            </button>
+            <button
+              type="button"
+              class="team-tab-pill visitor"
+              class:active={activeKitTab === 'visitor'}
+              onclick={() => (activeKitTab = 'visitor')}
+            >
+              ✈️ Visitante
+            </button>
+          </div>
+
+          <div class="kits-layout-grid">
+            <!-- Columna Izquierda: Nombres, Siglas, Colores y Patrones -->
+            <div class="kits-controls-col">
+              <!-- Fila simétrica: Nombre de equipo y Siglas (80px) -->
+              <div class="team-name-tag-row">
+                <div class="input-group team-name-group">
+                  <label for="team-name-input">Nombre del Equipo</label>
+                  <input
+                    id="team-name-input"
+                    type="text"
+                    maxlength="25"
+                    bind:value={currentKit.name}
+                    oninput={() => gameUI.saveSettings()}
+                    placeholder={activeKitTab === 'local' ? 'Local FC' : 'Visitante CF'}
+                  />
+                </div>
+
+                <div class="input-group team-tag-group">
+                  <label for="team-tag-input">Siglas</label>
+                  <input
+                    id="team-tag-input"
+                    type="text"
+                    maxlength="4"
+                    value={currentKit.tag}
+                    oninput={(e) => {
+                      currentKit.tag = (e.currentTarget as HTMLInputElement).value.toUpperCase();
+                      gameUI.saveSettings();
+                    }}
+                    placeholder={activeKitTab === 'local' ? 'LOC' : 'VIS'}
+                  />
+                </div>
+              </div>
+
+              <!-- Fila de 3 Colores: Primario, Secundario y Terciario (Borde y Dorsal) -->
+              <div class="form-row-3col pt-2">
+                <div class="color-picker-box">
+                  <label for="kit-color-primary">Primario</label>
+                  <div class="color-control">
+                    <input
+                      id="kit-color-primary"
+                      type="color"
+                      bind:value={currentKit.primaryColor}
+                      oninput={() => gameUI.saveSettings()}
+                    />
+                    <input
+                      type="text"
+                      class="hex-mini-input"
+                      maxlength="7"
+                      bind:value={currentKit.primaryColor}
+                      oninput={() => gameUI.saveSettings()}
+                    />
+                  </div>
+                </div>
+
+                <div class="color-picker-box">
+                  <label for="kit-color-secondary">Secundario</label>
+                  <div class="color-control">
+                    <input
+                      id="kit-color-secondary"
+                      type="color"
+                      bind:value={currentKit.secondaryColor}
+                      oninput={() => gameUI.saveSettings()}
+                    />
+                    <input
+                      type="text"
+                      class="hex-mini-input"
+                      maxlength="7"
+                      bind:value={currentKit.secondaryColor}
+                      oninput={() => gameUI.saveSettings()}
+                    />
+                  </div>
+                </div>
+
+                <div class="color-picker-box">
+                  <label for="kit-color-tertiary">Borde y Dorsal</label>
+                  <div class="color-control">
+                    <input
+                      id="kit-color-tertiary"
+                      type="color"
+                      value={currentKit.tertiaryColor || '#ffffff'}
+                      oninput={(e) => {
+                        currentKit.tertiaryColor = (e.currentTarget as HTMLInputElement).value;
+                        gameUI.saveSettings();
+                      }}
+                    />
+                    <input
+                      type="text"
+                      class="hex-mini-input"
+                      maxlength="7"
+                      value={currentKit.tertiaryColor || '#ffffff'}
+                      oninput={(e) => {
+                        const val = (e.currentTarget as HTMLInputElement).value;
+                        if (/^#[0-9A-Fa-f]{0,6}$/.test(val)) {
+                          currentKit.tertiaryColor = val;
+                          if (val.length === 7) gameUI.saveSettings();
+                        }
+                      }}
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <!-- Rejilla de 8 Patrones Visuales (sin etiquetas de texto) -->
+              <span class="group-subtitle pt-3">Patrón de Camiseta</span>
+              <div class="patterns-grid">
+                {#each PATTERNS_LIST as pattern}
+                  <button
+                    type="button"
+                    class="pattern-card"
+                    class:active={currentKit.pattern === pattern.id}
+                    onclick={() => {
+                      currentKit.pattern = pattern.id as PatternType;
+                      gameUI.saveSettings();
+                    }}
+                    title={pattern.name}
+                    aria-label={pattern.name}
+                  >
+                    <div
+                      class="pattern-sample {pattern.id}"
+                      style="--c1: {currentKit.primaryColor}; --c2: {currentKit.secondaryColor};"
+                    ></div>
+                  </button>
+                {/each}
+              </div>
             </div>
 
-            <div class="settings-scroll-area">
-              <!-- Previsualización circular del disco del jugador en tiempo real -->
-              <div class="avatar-hero-preview">
+            <!-- Columna Derecha: Previsualización en Vivo 1:1 Scale con Disco y Capitán 'C' -->
+            <div class="kits-preview-col">
+              <span class="preview-title">Previsualización</span>
+              <div class="tactical-pitch-box">
+                <div class="tactical-pitch-lines"></div>
+
+                <!-- Disco del Jugador Capitán -->
+                <div
+                  class="kit-live-disc"
+                  style="background-color: {currentKit.primaryColor}; border-color: {currentKit.tertiaryColor || currentKit.secondaryColor};"
+                >
+                  {#if currentKit.pattern === 'vertical'}
+                    <div class="live-pattern-overlay vertical-stripes" style="--c1: {currentKit.primaryColor}; --c2: {currentKit.secondaryColor};"></div>
+                  {:else if currentKit.pattern === 'hoop'}
+                    <div class="live-pattern-overlay hoop-stripes" style="--c1: {currentKit.primaryColor}; --c2: {currentKit.secondaryColor};"></div>
+                  {:else if currentKit.pattern === 'halves'}
+                    <div class="live-pattern-overlay halves-stripes" style="--c1: {currentKit.primaryColor}; --c2: {currentKit.secondaryColor};"></div>
+                  {:else if currentKit.pattern === 'diagonal'}
+                    <div class="live-pattern-overlay diagonal-stripes" style="--c1: {currentKit.primaryColor}; --c2: {currentKit.secondaryColor};"></div>
+                  {:else if currentKit.pattern === 'cross'}
+                    <div class="live-pattern-overlay cross-stripes" style="--c1: {currentKit.primaryColor}; --c2: {currentKit.secondaryColor};"></div>
+                  {:else if currentKit.pattern === 'chevrons'}
+                    <div class="live-pattern-overlay chevrons-stripes" style="--c1: {currentKit.primaryColor}; --c2: {currentKit.secondaryColor};"></div>
+                  {:else if currentKit.pattern === 'diagonal_checks'}
+                    <div class="live-pattern-overlay diagonal-checks-stripes" style="--c1: {currentKit.primaryColor}; --c2: {currentKit.secondaryColor};"></div>
+                  {/if}
+
+                  <span class="captain-badge" style="color: {currentKit.tertiaryColor || '#ffffff'};">C</span>
+                  <div class="disc-pip" style="background-color: {currentKit.tertiaryColor || '#ffffff'};"></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+      <!-- ======================================================== -->
+      <!-- SECCIÓN 5: AVATAR Y EMOTES                               -->
+      <!-- ======================================================== -->
+      {:else if activeTab === 'avatar'}
+        <div class="tab-pane">
+          <div class="section-header-row">
+            <h3 class="section-heading">Avatar y emotes</h3>
+          </div>
+
+          <div class="settings-scroll-area">
+            <!-- Editor compacto estilo Gatekeeper (disco izquierda, selector derecha) -->
+            <div class="compact-avatar-editor">
+              <div class="avatar-disc-side">
                 <div class="hero-disc-circle">
                   {#if avatarFormat === 'letters'}
-                    <span class="hero-disc-text">{initialsInput || 'YA'}</span>
+                    <span class="hero-disc-text">{initialsInput || '10'}</span>
                   {:else}
                     <span class="hero-disc-emoji">{selectedEmoji}</span>
                   {/if}
                   <div class="hero-disc-shine"></div>
                 </div>
-                <div class="hero-disc-info">
-                  <h4 class="player-nick-title">{gameUI.nickname}</h4>
-                  <p class="player-avatar-desc">
-                    {avatarFormat === 'letters' ? `Iniciales en dorsal: "${initialsInput || 'YA'}"` : `Avatar de emoji activo: ${selectedEmoji}`}
-                  </p>
-                </div>
+                <span class="player-nick-badge">{gameUI.nickname}</span>
               </div>
 
-              <!-- Selector partido: Letras / Números vs Emojis -->
-              <div class="avatar-mode-segmented">
-                <button
-                  type="button"
-                  class="mode-seg-btn"
-                  class:active={avatarFormat === 'letters'}
-                  onclick={() => setAvatarMode('letters')}
-                >
-                  Letras / Números (máx. 2)
-                </button>
-                <button
-                  type="button"
-                  class="mode-seg-btn"
-                  class:active={avatarFormat === 'emoji'}
-                  onclick={() => setAvatarMode('emoji')}
-                >
-                  Emojis Predeterminados
-                </button>
-              </div>
-
-              {#if avatarFormat === 'letters'}
-                <div class="initials-editor-box">
-                  <label for="initials-field">Escribe hasta 2 caracteres para tu disco:</label>
-                  <input
-                    id="initials-field"
-                    type="text"
-                    class="initials-input-field"
-                    maxlength="2"
-                    value={initialsInput}
-                    oninput={(e) => handleInitialsChange((e.currentTarget as HTMLInputElement).value)}
-                    placeholder="YA"
-                  />
+              <div class="avatar-controls-cartucho">
+                <div class="avatar-mode-segmented">
+                  <button
+                    type="button"
+                    class="mode-seg-btn"
+                    class:active={avatarFormat === 'letters'}
+                    onclick={() => setAvatarMode('letters')}
+                  >
+                    Letras / Números
+                  </button>
+                  <button
+                    type="button"
+                    class="mode-seg-btn"
+                    class:active={avatarFormat === 'emoji'}
+                    onclick={() => setAvatarMode('emoji')}
+                  >
+                    Emojis
+                  </button>
                 </div>
-              {:else}
-                <div class="emoji-palette-container">
-                  <span class="palette-title">Selecciona un emoji para tu disco:</span>
-                  <div class="emoji-grid-12">
+
+                {#if avatarFormat === 'letters'}
+                  <div class="initials-compact-row">
+                    <label for="initials-field">Dorsal / Iniciales (máx. 2):</label>
+                    <input
+                      id="initials-field"
+                      type="text"
+                      class="initials-input-field"
+                      maxlength="2"
+                      value={initialsInput}
+                      oninput={(e) => handleInitialsChange((e.currentTarget as HTMLInputElement).value)}
+                      placeholder="10"
+                    />
+                  </div>
+                {:else}
+                  <div class="emoji-compact-grid">
                     {#each EMOJI_PALETTE as emoji}
                       <button
                         type="button"
-                        class="emoji-choice-btn"
+                        class="emoji-choice-btn-compact"
                         class:selected={selectedEmoji === emoji}
                         onclick={() => handleEmojiSelect(emoji)}
                         aria-label={`Seleccionar avatar ${emoji}`}
@@ -1481,157 +1579,154 @@
                       </button>
                     {/each}
                   </div>
-                </div>
-              {/if}
+                {/if}
+              </div>
+            </div>
 
-              <!-- Toggler de Emotes en Cancha y Filtrado de Chat -->
-              <div class="emotes-toggle-card">
-                <div class="toggle-card-head">
-                  <div class="toggle-card-info">
+            <!-- Toggler de Emotes en Cancha con Tooltip Explicativo -->
+            <div class="emotes-toggle-card">
+              <div class="toggle-card-head">
+                <div class="toggle-card-info">
+                  <div class="label-with-tooltip">
                     <strong class="toggle-card-title">Mostrar emotes flotantes en cancha</strong>
-                    <p class="toggle-card-desc">
-                      Recomendamos mantener los emotes activados para evitar saturar el chat de texto con líneas de comando.
-                    </p>
+                    <span class="info-tooltip-wrapper" tabindex="0" role="button" aria-label="Info emotes cancha">
+                      <svg class="info-help-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="12" cy="12" r="10"></circle>
+                        <line x1="12" y1="16" x2="12" y2="12"></line>
+                        <line x1="12" y1="8" x2="12.01" y2="8"></line>
+                      </svg>
+                      <span class="tooltip-bubble">Al escribir un comando (ej. gol), verás el emote flotante sobre el disco y el texto se ocultará del feed de chat.</span>
+                    </span>
                   </div>
-                  <label class="switch-toggle" aria-label="Mostrar emotes flotantes en cancha">
-                    <input
-                      type="checkbox"
-                      checked={gameUI.settings.showPitchEmotes}
-                      onchange={(e) => {
-                        gameUI.settings.showPitchEmotes = (e.currentTarget as HTMLInputElement).checked;
-                        gameUI.saveSettings();
-                      }}
-                    />
-                    <span class="toggle-slider"></span>
-                  </label>
                 </div>
+                <label class="switch-toggle" aria-label="Mostrar emotes flotantes en cancha">
+                  <input
+                    type="checkbox"
+                    checked={gameUI.settings.showPitchEmotes}
+                    onchange={(e) => {
+                      gameUI.settings.showPitchEmotes = (e.currentTarget as HTMLInputElement).checked;
+                      gameUI.saveSettings();
+                    }}
+                  />
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
+            </div>
 
-                <div class="behavior-note-box">
-                  <span class="behavior-badge">Lógica de comportamiento:</span>
-                  <p class="behavior-text">
-                    {#if gameUI.settings.showPitchEmotes}
-                      • Al escribir un comando (ej. <code>gol</code>), verás el globo flotante ⚽ sobre el disco del jugador y el texto NO se imprimirá en el feed de chat.
-                    {:else}
-                      • Emotes desactivados: No se dibujarán globos en la cancha y leerás el texto del comando directamente en el feed de chat.
-                    {/if}
-                  </p>
-                </div>
+            <!-- Editor de Disparadores de Emotes (Custom Triggers) -->
+            <div class="triggers-editor-card">
+              <div class="triggers-header">
+                <h4 class="card-title">Disparadores de Emotes Rápidos (Triggers)</h4>
+                <span class="triggers-subtitle">Comandos de texto que invocan globos animados en cancha</span>
               </div>
 
-              <!-- Editor de Disparadores de Emotes (Custom Triggers) -->
-              <div class="triggers-editor-card">
-                <div class="triggers-header">
-                  <h4 class="card-title">Disparadores de Emotes Rápidos (Triggers)</h4>
-                  <span class="triggers-subtitle">Comandos de texto que invocan globos animados</span>
-                </div>
-
-                <!-- Tabla Interactiva -->
-                <div class="triggers-table-wrap">
-                  <table class="triggers-table">
-                    <thead>
+              <!-- Tabla Interactiva Compacta -->
+              <div class="triggers-table-wrap">
+                <table class="triggers-table">
+                  <thead>
+                    <tr>
+                      <th>Comando disparador</th>
+                      <th>Emoji resultante</th>
+                      <th class="actions-th">Acción</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {#each gameUI.settings.emoteTriggers as item, index}
                       <tr>
-                        <th>Comando disparador</th>
-                        <th>Emoji resultante</th>
-                        <th class="actions-th">Acción</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {#each gameUI.settings.emoteTriggers as item, index}
-                        <tr>
-                          <td class="trigger-code-td">
-                            <div class="code-wrapper">
-                              <code>:{item.trigger}:</code>
-                              <input
-                                type="text"
-                                class="inline-trigger-edit"
-                                maxlength="15"
-                                value={item.trigger}
-                                onchange={(e) => {
-                                  const clean = (e.currentTarget as HTMLInputElement).value.trim().toLowerCase().replace(/[^a-z0-9]/g, '');
-                                  if (clean) {
-                                    item.trigger = clean;
-                                    gameUI.saveSettings();
-                                  }
-                                }}
-                              />
-                            </div>
-                          </td>
-                          <td class="emoji-picker-td">
-                            <select
-                              class="inline-emoji-select"
-                              value={item.emoji}
+                        <td class="trigger-code-td">
+                          <div class="code-wrapper">
+                            <code>:{item.trigger}:</code>
+                            <input
+                              type="text"
+                              class="inline-trigger-edit"
+                              maxlength="15"
+                              value={item.trigger}
                               onchange={(e) => {
-                                item.emoji = (e.currentTarget as HTMLSelectElement).value;
-                                soundFX.playUIClick();
-                                gameUI.saveSettings();
+                                const clean = (e.currentTarget as HTMLInputElement).value.trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+                                if (clean) {
+                                  item.trigger = clean;
+                                  gameUI.saveSettings();
+                                }
                               }}
-                              aria-label="Seleccionar emoji"
-                            >
-                              {#each EMOJI_CATALOG as emoji}
-                                <option value={emoji}>{emoji}</option>
-                              {/each}
-                            </select>
-                          </td>
-                          <td class="delete-td">
-                            <button
-                              type="button"
-                              class="btn-delete-row"
-                              onclick={() => removeEmoteTrigger(index)}
-                              title="Eliminar disparador"
-                              aria-label="Eliminar disparador"
-                            >
-                              ✕
-                            </button>
-                          </td>
-                        </tr>
-                      {/each}
-                    </tbody>
-                  </table>
+                            />
+                          </div>
+                        </td>
+                        <td class="emoji-picker-td">
+                          <select
+                            class="inline-emoji-select"
+                            value={item.emoji}
+                            onchange={(e) => {
+                              item.emoji = (e.currentTarget as HTMLSelectElement).value;
+                              soundFX.playUIClick();
+                              gameUI.saveSettings();
+                            }}
+                            aria-label="Seleccionar emoji"
+                          >
+                            {#each EMOJI_CATALOG as emoji}
+                              <option value={emoji}>{emoji}</option>
+                            {/each}
+                          </select>
+                        </td>
+                        <td class="delete-td">
+                          <button
+                            type="button"
+                            class="btn-delete-row"
+                            onclick={() => removeEmoteTrigger(index)}
+                            title="Eliminar disparador"
+                            aria-label="Eliminar disparador"
+                          >
+                            ✕
+                          </button>
+                        </td>
+                      </tr>
+                    {/each}
+                  </tbody>
+                </table>
+              </div>
+
+              <!-- Agregar Nuevo Disparador Form -->
+              <div class="add-trigger-form">
+                <div class="input-field">
+                  <label for="new-trigger-word">Nuevo comando (sin dos puntos):</label>
+                  <input
+                    id="new-trigger-word"
+                    type="text"
+                    bind:value={newTriggerWord}
+                    maxlength="15"
+                    placeholder="ej. crack"
+                  />
                 </div>
 
-                <!-- Agregar Nuevo Disparador Form -->
-                <div class="add-trigger-form">
-                  <div class="input-field">
-                    <label for="new-trigger-word">Nuevo comando (sin dos puntos):</label>
-                    <input
-                      id="new-trigger-word"
-                      type="text"
-                      bind:value={newTriggerWord}
-                      maxlength="15"
-                      placeholder="ej. crack"
-                    />
-                  </div>
-
-                  <div class="input-field emoji-field">
-                    <label for="new-trigger-emoji">Emoji:</label>
-                    <select
-                      id="new-trigger-emoji"
-                      class="trigger-emoji-select"
-                      bind:value={newTriggerEmoji}
-                      onchange={() => soundFX.playUIClick()}
-                    >
-                      {#each EMOJI_CATALOG as emoji}
-                        <option value={emoji}>{emoji}</option>
-                      {/each}
-                    </select>
-                  </div>
-
-                  <button
-                    type="button"
-                    class="btn-add-trigger"
-                    onclick={addEmoteTrigger}
-                    disabled={!newTriggerWord.trim()}
+                <div class="input-field emoji-field">
+                  <label for="new-trigger-emoji">Emoji:</label>
+                  <select
+                    id="new-trigger-emoji"
+                    class="trigger-emoji-select"
+                    bind:value={newTriggerEmoji}
+                    onchange={() => soundFX.playUIClick()}
                   >
-                    + Agregar nuevo disparador
-                  </button>
+                    {#each EMOJI_CATALOG as emoji}
+                      <option value={emoji}>{emoji}</option>
+                    {/each}
+                  </select>
                 </div>
+
+                <button
+                  type="button"
+                  class="btn-add-trigger"
+                  onclick={addEmoteTrigger}
+                  disabled={!newTriggerWord.trim()}
+                >
+                  + Agregar nuevo disparador
+                </button>
               </div>
             </div>
           </div>
-        {/if}
-      </div>
+        </div>
+      {/if}
     </div>
   </div>
+</div>
 
 <style>
   /* Floating back button outside the modal card (top-left) */
@@ -1695,9 +1790,9 @@
   .settings-modal-card {
     position: relative;
     width: 100%;
-    max-width: 960px;
+    max-width: 980px;
     height: 680px;
-    max-height: 85vh;
+    max-height: 88vh;
     background: rgba(10, 16, 26, 0.95);
     border: 1px solid rgba(0, 229, 255, 0.6);
     border-radius: 0.5rem;
@@ -1712,11 +1807,11 @@
   .tabs-sidebar {
     width: 240px;
     height: 100%;
-    background: rgba(11, 17, 30, 0.85);
+    background: rgba(11, 17, 30, 0.9);
     border-right: 1px solid rgba(255, 255, 255, 0.08);
     display: flex;
     flex-direction: column;
-    padding: 1.25rem 0.85rem;
+    padding: 1.25rem 0;
     box-sizing: border-box;
     flex-shrink: 0;
   }
@@ -1725,8 +1820,8 @@
     display: flex;
     align-items: center;
     gap: 0.75rem;
-    margin-bottom: 1.5rem;
-    padding: 0.25rem 0.5rem;
+    margin-bottom: 1.25rem;
+    padding: 0 1.25rem;
   }
 
   .settings-icon-box {
@@ -1760,20 +1855,23 @@
     letter-spacing: 0.05em;
   }
 
+  /* Continuous list separated by border-b border-white/5, no individual card wrappers */
   .nav-tabs {
     display: flex;
     flex-direction: column;
-    gap: 0.4rem;
+    border-top: 1px solid rgba(255, 255, 255, 0.05);
   }
 
   .tab-btn {
     display: flex;
     align-items: center;
     gap: 0.75rem;
-    padding: 0.75rem 0.9rem;
+    padding: 0.85rem 1.25rem;
     background: transparent;
-    border: 1px solid transparent;
-    border-radius: 0.5rem;
+    border: none;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    border-left: 2px solid transparent;
+    border-radius: 0;
     color: #94a3b8;
     font-family: 'Chivo', system-ui, sans-serif;
     font-size: 0.875rem;
@@ -1784,16 +1882,15 @@
   }
 
   .tab-btn:hover {
-    background: rgba(255, 255, 255, 0.04);
-    color: #f1f5f9;
+    background: rgba(255, 255, 255, 0.03);
+    color: #e2e8f0;
   }
 
   .tab-btn.active {
-    background: rgba(0, 229, 255, 0.12);
-    border-color: rgba(0, 229, 255, 0.4);
-    border-left: 3px solid #00e5ff;
-    color: #00e5ff;
-    box-shadow: 0 0 12px rgba(0, 229, 255, 0.1);
+    background: rgba(0, 229, 255, 0.08);
+    border-left: 2px solid #00e5ff;
+    color: #ffffff;
+    font-weight: 700;
   }
 
   .tab-icon {
@@ -1825,7 +1922,6 @@
 
   .tab-content::-webkit-scrollbar-track {
     background: rgba(8, 14, 24, 0.6);
-    border-radius: 4px;
   }
 
   .tab-content::-webkit-scrollbar-thumb {
@@ -1851,12 +1947,14 @@
     justify-content: space-between;
   }
 
+  /* Section headings large and prominent */
   .section-heading {
     font-family: 'Space Grotesk', system-ui, sans-serif;
     margin: 0;
-    font-size: 1.15rem;
-    font-weight: 700;
+    font-size: 1.65rem;
+    font-weight: 800;
     color: #f8fafc;
+    letter-spacing: -0.02em;
   }
 
   .pulse-rebinding {
@@ -1871,7 +1969,6 @@
     50% { opacity: 1; }
   }
 
-  /* Scrollable section container */
   .settings-scroll-area,
   .controls-scroll-area {
     display: flex;
@@ -1886,8 +1983,8 @@
   .graphics-card,
   .triggers-editor-card,
   .emotes-toggle-card {
-    background: rgba(18, 27, 46, 0.7);
-    border: 1px solid rgba(255, 255, 255, 0.07);
+    background: #1a202a;
+    border: 1px solid rgba(255, 255, 255, 0.08);
     border-radius: 0.5rem;
     padding: 1.15rem;
   }
@@ -1995,6 +2092,7 @@
     width: 44px;
     height: 24px;
     cursor: pointer;
+    flex-shrink: 0;
   }
 
   .switch-toggle.mini {
@@ -2047,11 +2145,28 @@
     transform: translateX(16px);
   }
 
-  /* Custom Sliders */
+  /* Mute Switch Active Red Glowing State */
+  .toggle-slider.mute-slider.muted-active {
+    background-color: #ff4757 !important;
+    box-shadow: 0 0 14px rgba(255, 71, 87, 0.6) !important;
+  }
+
+  .toggle-slider.mute-slider.muted-active:before {
+    transform: translateX(20px);
+    background-color: #ffffff !important;
+  }
+
+  /* Dynamic Track Fill Custom Sliders */
   .custom-slider {
     width: 100%;
     height: 6px;
-    background: #1e293b;
+    background: linear-gradient(
+      to right,
+      #00e5ff 0%,
+      #00e5ff var(--val-percent, 50%),
+      rgba(255, 255, 255, 0.1) var(--val-percent, 50%),
+      rgba(255, 255, 255, 0.1) 100%
+    );
     border-radius: 3px;
     outline: none;
     -webkit-appearance: none;
@@ -2067,34 +2182,107 @@
     border-radius: 50%;
     background: #00e5ff;
     cursor: pointer;
-    box-shadow: 0 0 8px rgba(0, 229, 255, 0.6);
+    box-shadow: 0 0 8px rgba(0, 229, 255, 0.7);
   }
 
-  /* Mute All Card */
-  .mute-all-card {
+  /* Master Volume Card */
+  .master-volume-card {
+    display: flex;
+    flex-direction: column;
+    gap: 0.9rem;
+    padding: 1.25rem;
+    background: #1a202a;
+    border: 1px solid rgba(0, 229, 255, 0.3);
+    border-radius: 0.5rem;
+    box-shadow: 0 0 16px rgba(0, 229, 255, 0.1);
+  }
+
+  .master-header {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 1rem 1.25rem;
-    background: rgba(239, 68, 68, 0.1);
-    border: 1px solid rgba(239, 68, 68, 0.3);
-    border-radius: 0.5rem;
   }
 
-  .mute-title {
+  .master-title-box {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+  }
+
+  .master-icon {
+    font-size: 1.4rem;
+  }
+
+  .master-title {
     display: block;
-    font-size: 0.95rem;
+    font-size: 1.05rem;
     font-weight: 700;
-    color: #fca5a5;
+    color: #f8fafc;
   }
 
-  .mute-desc {
-    margin: 0.2rem 0 0 0;
-    font-size: 0.8rem;
+  .master-desc {
+    font-size: 0.775rem;
     color: #94a3b8;
   }
 
-  /* Audio Channels */
+  .mute-all-toggle-wrap {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+  }
+
+  .mute-label {
+    font-size: 0.825rem;
+    font-weight: 700;
+    color: #94a3b8;
+    transition: color 0.15s ease;
+  }
+
+  .mute-label.muted-active {
+    color: #ff4757;
+  }
+
+  .master-slider-row {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+  }
+
+  .master-slider {
+    flex: 1;
+    height: 8px;
+  }
+
+  .volume-percent-large {
+    min-width: 60px;
+    text-align: right;
+    font-family: 'JetBrains Mono', monospace;
+    font-variant-numeric: tabular-nums;
+    font-size: 1.25rem;
+    font-weight: 800;
+    color: #00e5ff;
+  }
+
+  /* 2-Column Sound Grid & Disabled State */
+  .sound-grid-2col {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1rem;
+    transition: opacity 0.2s ease, filter 0.2s ease;
+  }
+
+  .sound-grid-2col.sound-disabled {
+    opacity: 0.4;
+    filter: grayscale(1);
+    pointer-events: none;
+  }
+
+  .col-sfx-env {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+  }
+
   .channel-header {
     display: flex;
     align-items: center;
@@ -2161,7 +2349,19 @@
     color: #cbd5e1;
   }
 
-  /* Video & Graphics */
+  /* 2-Column Video Layout */
+  .video-grid-2col {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1rem;
+  }
+
+  .col-visuals-ball {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+  }
+
   .slider-row {
     display: flex;
     flex-direction: column;
@@ -2171,6 +2371,7 @@
   .slider-meta {
     display: flex;
     justify-content: space-between;
+    align-items: center;
     font-size: 0.85rem;
   }
 
@@ -2183,19 +2384,20 @@
     color: #00e5ff;
     font-family: 'JetBrains Mono', monospace;
     font-variant-numeric: tabular-nums;
+    font-size: 0.875rem;
   }
 
-  .toggles-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-    gap: 0.75rem;
+  .toggles-column {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
   }
 
   .toggle-item {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 0.6rem 0.8rem;
+    padding: 0.55rem 0.75rem;
     background: rgba(11, 17, 30, 0.6);
     border: 1px solid rgba(255, 255, 255, 0.05);
     border-radius: 0.5rem;
@@ -2235,17 +2437,76 @@
     font-weight: 700;
   }
 
+  /* Info Tooltip Pattern */
+  .label-with-tooltip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+  }
+
+  .info-tooltip-wrapper {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: help;
+    outline: none;
+  }
+
+  .info-help-icon {
+    width: 0.85rem;
+    height: 0.85rem;
+    color: #64748b;
+    transition: color 0.15s ease;
+  }
+
+  .info-tooltip-wrapper:hover .info-help-icon,
+  .info-tooltip-wrapper:focus .info-help-icon {
+    color: #00e5ff;
+  }
+
+  .tooltip-bubble {
+    position: absolute;
+    bottom: calc(100% + 6px);
+    left: 50%;
+    transform: translateX(-50%);
+    padding: 0.45rem 0.65rem;
+    background: #080e18;
+    border: 1px solid rgba(0, 229, 255, 0.3);
+    border-radius: 0.35rem;
+    color: #e2e8f0;
+    font-family: 'Chivo', system-ui, sans-serif;
+    font-size: 0.72rem;
+    line-height: 1.35;
+    white-space: normal;
+    width: max-content;
+    max-width: 250px;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.85), 0 0 8px rgba(0, 229, 255, 0.2);
+    pointer-events: none;
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 0.15s ease, transform 0.15s ease;
+    z-index: 50;
+  }
+
+  .info-tooltip-wrapper:hover .tooltip-bubble,
+  .info-tooltip-wrapper:focus .tooltip-bubble {
+    opacity: 1;
+    visibility: visible;
+    transform: translateX(-50%) translateY(-2px);
+  }
+
   /* Ball Customization */
   .card-header-flex {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    margin-bottom: 0.4rem;
+    margin-bottom: 0.6rem;
   }
 
   .exclusive-mode-selector {
     display: flex;
-    gap: 0.35rem;
+    gap: 0.25rem;
     background: #0b111e;
     padding: 0.2rem;
     border-radius: 0.5rem;
@@ -2269,23 +2530,17 @@
     font-weight: 700;
   }
 
-  .exclusive-hint {
-    margin: 0 0 0.85rem 0;
-    font-size: 0.775rem;
-    color: #38bdf8;
-  }
-
   .ball-cards-grid {
     display: grid;
     grid-template-columns: repeat(4, 1fr);
-    gap: 0.75rem;
+    gap: 0.5rem;
   }
 
   .ball-card {
     display: flex;
     flex-direction: column;
     align-items: center;
-    padding: 0.85rem 0.5rem;
+    padding: 0.65rem 0.4rem;
     background: rgba(11, 17, 30, 0.7);
     border: 1px solid rgba(255, 255, 255, 0.08);
     border-radius: 0.5rem;
@@ -2305,10 +2560,10 @@
   }
 
   .ball-circle {
-    width: 48px;
-    height: 48px;
+    width: 40px;
+    height: 40px;
     border-radius: 50%;
-    margin-bottom: 0.5rem;
+    margin-bottom: 0.4rem;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -2341,28 +2596,22 @@
   }
 
   .ball-name {
-    font-size: 0.825rem;
+    font-size: 0.775rem;
     color: #f1f5f9;
-  }
-
-  .ball-desc {
-    font-size: 0.7rem;
-    color: #64748b;
-    text-align: center;
   }
 
   .solid-color-picker-box {
     display: flex;
     align-items: center;
-    gap: 1.5rem;
-    padding: 1rem;
+    gap: 1.25rem;
+    padding: 0.85rem;
     background: rgba(11, 17, 30, 0.7);
     border-radius: 0.5rem;
   }
 
   .color-preview-disc {
-    width: 64px;
-    height: 64px;
+    width: 52px;
+    height: 52px;
     border-radius: 50%;
     border: 2px solid rgba(255, 255, 255, 0.3);
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
@@ -2379,11 +2628,11 @@
   .color-picker-inputs {
     display: flex;
     flex-direction: column;
-    gap: 0.4rem;
+    gap: 0.35rem;
   }
 
   .color-picker-inputs label {
-    font-size: 0.825rem;
+    font-size: 0.8rem;
     color: #cbd5e1;
   }
 
@@ -2394,8 +2643,8 @@
   }
 
   .inputs-row input[type="color"] {
-    width: 36px;
-    height: 36px;
+    width: 32px;
+    height: 32px;
     border: none;
     border-radius: 0.375rem;
     background: transparent;
@@ -2403,15 +2652,15 @@
   }
 
   .hex-text-input {
-    width: 90px;
-    padding: 0.4rem 0.6rem;
+    width: 85px;
+    padding: 0.35rem 0.5rem;
     background: #0b111e;
     border: 1px solid rgba(255, 255, 255, 0.15);
     border-radius: 0.375rem;
     color: #00e5ff;
     font-family: 'JetBrains Mono', monospace;
     font-variant-numeric: tabular-nums;
-    font-size: 0.85rem;
+    font-size: 0.8rem;
   }
 
   /* SECTION 4: EQUIPACIONES */
@@ -2422,12 +2671,12 @@
 
   .team-tab-pill {
     flex: 1;
-    padding: 0.65rem 1rem;
-    background: rgba(18, 27, 46, 0.8);
+    padding: 0.6rem 1rem;
+    background: #1a202a;
     border: 1px solid rgba(255, 255, 255, 0.1);
     border-radius: 0.5rem;
     color: #94a3b8;
-    font-size: 0.9rem;
+    font-size: 0.875rem;
     font-weight: 700;
     cursor: pointer;
     transition: all 0.15s ease;
@@ -2445,27 +2694,6 @@
     color: #00e5ff;
   }
 
-  .captain-callout-box {
-    display: flex;
-    align-items: flex-start;
-    gap: 0.75rem;
-    padding: 0.75rem 1rem;
-    background: rgba(56, 189, 248, 0.08);
-    border: 1px solid rgba(56, 189, 248, 0.25);
-    border-radius: 0.5rem;
-  }
-
-  .callout-icon {
-    font-size: 1.1rem;
-  }
-
-  .callout-text {
-    margin: 0;
-    font-size: 0.8rem;
-    color: #bae6fd;
-    line-height: 1.4;
-  }
-
   .kits-layout-grid {
     display: grid;
     grid-template-columns: 1fr 280px;
@@ -2476,12 +2704,37 @@
     display: flex;
     flex-direction: column;
     gap: 0.75rem;
+    padding: 1.15rem;
+    background: #080e18;
+    border: 1px solid rgba(0, 229, 255, 0.2);
+    border-radius: 0.5rem;
   }
 
-  .form-row-2col {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
+  .team-name-tag-row {
+    display: flex;
     gap: 0.75rem;
+    align-items: flex-end;
+  }
+
+  .team-name-group {
+    flex: 1;
+  }
+
+  .team-tag-group {
+    width: 80px;
+    flex-shrink: 0;
+  }
+
+  .team-tag-group input {
+    text-align: center;
+    font-family: 'JetBrains Mono', monospace;
+    font-weight: 700;
+  }
+
+  .form-row-3col {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 0.5rem;
   }
 
   .input-group {
@@ -2492,50 +2745,29 @@
 
   .input-group label,
   .color-picker-box label {
-    font-size: 0.8rem;
+    font-size: 0.775rem;
     color: #94a3b8;
     font-weight: 600;
   }
 
   .input-group input[type="text"] {
-    padding: 0.5rem 0.75rem;
+    padding: 0.45rem 0.65rem;
     background: #0b111e;
     border: 1px solid rgba(255, 255, 255, 0.12);
     border-radius: 0.375rem;
     color: #f8fafc;
-    font-size: 0.875rem;
-  }
-
-  .tag-input-wrapper {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-  }
-
-  .tag-input-wrapper input {
-    flex: 1;
-  }
-
-  .tag-badge {
-    padding: 0.35rem 0.5rem;
-    background: #1e293b;
-    border: 1px solid rgba(0, 229, 255, 0.3);
-    border-radius: 0.375rem;
-    color: #00e5ff;
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 0.8rem;
-    font-weight: 700;
+    font-size: 0.85rem;
   }
 
   .color-control {
     display: flex;
     align-items: center;
-    gap: 0.5rem;
+    gap: 0.4rem;
   }
 
   .color-control input[type="color"] {
-    width: 34px;
-    height: 34px;
+    width: 30px;
+    height: 30px;
     background: transparent;
     border: none;
     border-radius: 0.375rem;
@@ -2543,58 +2775,56 @@
   }
 
   .hex-mini-input {
-    width: 80px;
-    padding: 0.35rem 0.5rem;
+    width: 68px;
+    padding: 0.3rem 0.4rem;
     background: #0b111e;
     border: 1px solid rgba(255, 255, 255, 0.1);
     border-radius: 0.375rem;
     color: #e2e8f0;
     font-family: 'JetBrains Mono', monospace;
     font-variant-numeric: tabular-nums;
-    font-size: 0.8rem;
+    font-size: 0.75rem;
   }
 
   .group-subtitle {
-    font-size: 0.825rem;
+    font-size: 0.8rem;
     font-weight: 700;
     color: #cbd5e1;
   }
 
+  /* 8 patterns grid without text labels */
   .patterns-grid {
     display: grid;
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: repeat(4, 1fr);
     gap: 0.5rem;
   }
 
   .pattern-card {
     display: flex;
-    flex-direction: column;
     align-items: center;
-    gap: 0.4rem;
-    padding: 0.6rem 0.4rem;
+    justify-content: center;
+    padding: 0.5rem;
     background: rgba(11, 17, 30, 0.6);
     border: 1px solid rgba(255, 255, 255, 0.08);
     border-radius: 0.5rem;
     cursor: pointer;
-    font-size: 0.75rem;
-    color: #cbd5e1;
     transition: all 0.15s ease;
   }
 
   .pattern-card:hover {
-    border-color: rgba(0, 229, 255, 0.3);
+    border-color: rgba(0, 229, 255, 0.4);
+    transform: scale(1.04);
   }
 
   .pattern-card.active {
     border-color: #00e5ff;
-    background: rgba(0, 229, 255, 0.1);
-    color: #00e5ff;
-    font-weight: 700;
+    background: rgba(0, 229, 255, 0.15);
+    box-shadow: 0 0 10px rgba(0, 229, 255, 0.3);
   }
 
   .pattern-sample {
-    width: 36px;
-    height: 36px;
+    width: 32px;
+    height: 32px;
     border-radius: 50%;
     border: 2px solid rgba(255, 255, 255, 0.2);
   }
@@ -2615,11 +2845,21 @@
     background: linear-gradient(90deg, var(--c1) 50%, var(--c2) 50%);
   }
 
+  .pattern-sample.diagonal {
+    background: linear-gradient(45deg, var(--c1) 50%, var(--c2) 50%);
+  }
+
+  .pattern-sample.cross {
+    background: linear-gradient(var(--c2), var(--c2)) no-repeat center/30% 100%,
+      linear-gradient(var(--c2), var(--c2)) no-repeat center/100% 30%,
+      var(--c1);
+  }
+
   .pattern-sample.chevrons {
     background: repeating-linear-gradient(135deg, var(--c1) 0 5px, var(--c2) 5px 10px);
   }
 
-  .pattern-sample.diagonal-checks {
+  .pattern-sample.diagonal_checks {
     background: repeating-linear-gradient(45deg, var(--c1) 0, var(--c1) 5px, var(--c2) 5px, var(--c2) 10px);
   }
 
@@ -2628,22 +2868,25 @@
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 0.75rem;
+    gap: 0.65rem;
     padding: 1rem;
-    background: rgba(18, 27, 46, 0.6);
-    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: #080e18;
+    border: 1px solid rgba(0, 229, 255, 0.2);
     border-radius: 0.5rem;
+    justify-content: center;
   }
 
   .preview-title {
-    font-size: 0.775rem;
-    font-weight: 600;
-    color: #94a3b8;
+    font-size: 0.85rem;
+    font-weight: 700;
+    color: #f8fafc;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
   }
 
   .tactical-pitch-box {
     width: 100%;
-    height: 180px;
+    height: 190px;
     background: #143521;
     border: 2px solid rgba(255, 255, 255, 0.15);
     border-radius: 0.5rem;
@@ -2703,6 +2946,16 @@
     background: linear-gradient(90deg, var(--c1) 50%, var(--c2) 50%);
   }
 
+  .live-pattern-overlay.diagonal-stripes {
+    background: linear-gradient(45deg, var(--c1) 50%, var(--c2) 50%);
+  }
+
+  .live-pattern-overlay.cross-stripes {
+    background: linear-gradient(var(--c2), var(--c2)) no-repeat center/28% 100%,
+      linear-gradient(var(--c2), var(--c2)) no-repeat center/100% 28%,
+      var(--c1);
+  }
+
   .live-pattern-overlay.chevrons-stripes {
     background: repeating-linear-gradient(135deg, var(--c1) 0 8px, var(--c2) 8px 16px);
   }
@@ -2717,7 +2970,6 @@
     font-family: 'JetBrains Mono', monospace;
     font-size: 1.35rem;
     font-weight: 900;
-    color: #ffffff;
     text-shadow: 0 2px 4px rgba(0, 0, 0, 0.8);
   }
 
@@ -2729,38 +2981,26 @@
     width: 6px;
     height: 6px;
     border-radius: 50%;
-    background: #ffffff;
     z-index: 3;
     box-shadow: 0 0 4px rgba(0, 0, 0, 0.8);
   }
 
-  .preview-legend {
+  /* SECTION 5: AVATAR Y EMOTES */
+  .compact-avatar-editor {
+    display: flex;
+    align-items: center;
+    gap: 1.5rem;
+    padding: 1.15rem;
+    background: #1a202a;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 0.5rem;
+  }
+
+  .avatar-disc-side {
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 0.25rem;
-    font-size: 0.775rem;
-  }
-
-  .legend-badge {
-    color: #e2e8f0;
-    font-weight: 600;
-  }
-
-  .legend-auto {
-    color: #00e5ff;
-    font-size: 0.725rem;
-  }
-
-  /* SECTION 5: AVATAR Y EMOTES */
-  .avatar-hero-preview {
-    display: flex;
-    align-items: center;
-    gap: 1.25rem;
-    padding: 1.15rem;
-    background: rgba(18, 27, 46, 0.8);
-    border: 1px solid rgba(0, 229, 255, 0.2);
-    border-radius: 0.5rem;
+    gap: 0.5rem;
   }
 
   .hero-disc-circle {
@@ -2795,17 +3035,17 @@
     background: radial-gradient(circle at 30% 30%, rgba(255, 255, 255, 0.5) 0%, transparent 60%);
   }
 
-  .player-nick-title {
-    margin: 0;
-    font-size: 1.2rem;
+  .player-nick-badge {
+    font-size: 0.85rem;
     font-weight: 700;
     color: #f8fafc;
   }
 
-  .player-avatar-desc {
-    margin: 0.2rem 0 0 0;
-    font-size: 0.825rem;
-    color: #94a3b8;
+  .avatar-controls-cartucho {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
   }
 
   .avatar-mode-segmented {
@@ -2819,12 +3059,12 @@
 
   .mode-seg-btn {
     flex: 1;
-    padding: 0.55rem;
+    padding: 0.45rem;
     background: transparent;
     border: none;
     border-radius: 0.375rem;
     color: #94a3b8;
-    font-size: 0.85rem;
+    font-size: 0.8rem;
     font-weight: 600;
     cursor: pointer;
   }
@@ -2835,73 +3075,59 @@
     font-weight: 700;
   }
 
-  .initials-editor-box {
+  .initials-compact-row {
     display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
-    padding: 1rem;
-    background: rgba(18, 27, 46, 0.6);
-    border-radius: 0.5rem;
+    align-items: center;
+    gap: 0.75rem;
   }
 
-  .initials-editor-box label {
+  .initials-compact-row label {
     font-size: 0.825rem;
     color: #cbd5e1;
   }
 
   .initials-input-field {
-    width: 80px;
-    padding: 0.5rem 0.75rem;
+    width: 70px;
+    padding: 0.4rem 0.6rem;
     background: #0b111e;
     border: 1px solid rgba(0, 229, 255, 0.3);
     border-radius: 0.375rem;
     color: #00e5ff;
     font-family: 'JetBrains Mono', monospace;
-    font-size: 1.25rem;
+    font-size: 1.15rem;
     font-weight: 800;
     text-align: center;
   }
 
-  .emoji-palette-container {
-    display: flex;
-    flex-direction: column;
-    gap: 0.6rem;
-  }
-
-  .palette-title {
-    font-size: 0.825rem;
-    color: #cbd5e1;
-  }
-
-  .emoji-grid-12 {
+  .emoji-compact-grid {
     display: grid;
     grid-template-columns: repeat(5, 1fr);
-    gap: 0.5rem;
+    gap: 0.4rem;
   }
 
-  .emoji-choice-btn {
-    height: 48px;
+  .emoji-choice-btn-compact {
+    height: 38px;
     display: flex;
     align-items: center;
     justify-content: center;
     background: rgba(11, 17, 30, 0.7);
     border: 1px solid rgba(255, 255, 255, 0.1);
-    border-radius: 0.5rem;
-    font-size: 1.5rem;
+    border-radius: 0.375rem;
+    font-size: 1.25rem;
     cursor: pointer;
     transition: all 0.15s ease;
   }
 
-  .emoji-choice-btn:hover {
+  .emoji-choice-btn-compact:hover {
     background: rgba(0, 229, 255, 0.1);
     border-color: #00e5ff;
-    transform: scale(1.05);
+    transform: scale(1.06);
   }
 
-  .emoji-choice-btn.selected {
+  .emoji-choice-btn-compact.selected {
     background: rgba(0, 229, 255, 0.2);
     border-color: #00e5ff;
-    box-shadow: 0 0 12px rgba(0, 229, 255, 0.3);
+    box-shadow: 0 0 10px rgba(0, 229, 255, 0.3);
   }
 
   /* Emotes Toggle Card */
@@ -2909,49 +3135,12 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    margin-bottom: 0.75rem;
   }
 
   .toggle-card-title {
     display: block;
     font-size: 0.95rem;
     color: #f1f5f9;
-  }
-
-  .toggle-card-desc {
-    margin: 0.2rem 0 0 0;
-    font-size: 0.8rem;
-    color: #94a3b8;
-  }
-
-  .behavior-note-box {
-    padding: 0.65rem 0.85rem;
-    background: rgba(11, 17, 30, 0.7);
-    border-left: 3px solid #00e5ff;
-    border-radius: 0.375rem;
-  }
-
-  .behavior-badge {
-    display: block;
-    font-size: 0.75rem;
-    font-weight: 700;
-    color: #00e5ff;
-    margin-bottom: 0.2rem;
-  }
-
-  .behavior-text {
-    margin: 0;
-    font-size: 0.775rem;
-    color: #cbd5e1;
-    line-height: 1.4;
-  }
-
-  .behavior-text code {
-    background: rgba(0, 229, 255, 0.15);
-    color: #00e5ff;
-    padding: 0.1rem 0.3rem;
-    border-radius: 0.25rem;
-    font-family: monospace;
   }
 
   /* Custom Triggers Editor Table */
@@ -2961,7 +3150,7 @@
 
   .triggers-subtitle {
     display: block;
-    font-size: 0.775rem;
+    font-size: 0.75rem;
     color: #64748b;
   }
 
@@ -2969,7 +3158,7 @@
     overflow-x: auto;
     border: 1px solid rgba(255, 255, 255, 0.08);
     border-radius: 0.5rem;
-    margin-bottom: 0.85rem;
+    margin-bottom: 0.75rem;
   }
 
   .triggers-table {
@@ -2979,7 +3168,7 @@
   }
 
   .triggers-table th {
-    padding: 0.6rem 0.75rem;
+    padding: 0.5rem 0.75rem;
     background: #0b111e;
     color: #94a3b8;
     text-align: left;
@@ -2993,7 +3182,7 @@
   }
 
   .triggers-table td {
-    padding: 0.5rem 0.75rem;
+    padding: 0.45rem 0.75rem;
     border-bottom: 1px solid rgba(255, 255, 255, 0.04);
     background: rgba(18, 27, 46, 0.5);
   }
@@ -3021,7 +3210,7 @@
   }
 
   .inline-emoji-select {
-    padding: 0.25rem 0.35rem;
+    padding: 0.2rem 0.35rem;
     background: #0b111e;
     border: 1px solid rgba(0, 229, 255, 0.3);
     border-radius: 0.25rem;
@@ -3050,7 +3239,7 @@
   }
 
   .btn-delete-row {
-    padding: 0.25rem 0.5rem;
+    padding: 0.2rem 0.45rem;
     background: transparent;
     border: 1px solid rgba(239, 68, 68, 0.3);
     border-radius: 0.25rem;
@@ -3068,7 +3257,7 @@
     display: flex;
     align-items: flex-end;
     gap: 0.75rem;
-    padding: 0.75rem;
+    padding: 0.65rem 0.75rem;
     background: rgba(11, 17, 30, 0.7);
     border-radius: 0.5rem;
   }
@@ -3076,7 +3265,7 @@
   .input-field {
     display: flex;
     flex-direction: column;
-    gap: 0.3rem;
+    gap: 0.25rem;
   }
 
   .input-field label {
@@ -3085,7 +3274,7 @@
   }
 
   .input-field input {
-    padding: 0.4rem 0.6rem;
+    padding: 0.35rem 0.55rem;
     background: #0b111e;
     border: 1px solid rgba(255, 255, 255, 0.12);
     border-radius: 0.375rem;
@@ -3094,15 +3283,15 @@
   }
 
   .emoji-field {
-    width: 72px;
+    width: 68px;
   }
 
   .trigger-emoji-select {
-    padding: 0.35rem 0.4rem;
+    padding: 0.3rem 0.35rem;
     background: #0b111e;
     border: 1px solid rgba(0, 229, 255, 0.3);
     border-radius: 0.375rem;
-    font-size: 1.1rem;
+    font-size: 1.05rem;
     color: #f1f5f9;
     cursor: pointer;
     text-align: center;
@@ -3116,7 +3305,7 @@
   }
 
   .btn-add-trigger {
-    padding: 0.5rem 1rem;
+    padding: 0.45rem 0.85rem;
     background: rgba(0, 229, 255, 0.15);
     border: 1px solid #00e5ff;
     border-radius: 0.375rem;
@@ -3152,7 +3341,23 @@
       overflow-x: auto;
       border-right: none;
       border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+      padding: 0.75rem;
     }
+    .nav-tabs {
+      flex-direction: row;
+      border-top: none;
+    }
+    .tab-btn {
+      border-bottom: none;
+      border-left: none;
+      border-bottom: 2px solid transparent;
+    }
+    .tab-btn.active {
+      border-left: none;
+      border-bottom: 2px solid #00e5ff;
+    }
+    .sound-grid-2col,
+    .video-grid-2col,
     .kits-layout-grid {
       grid-template-columns: 1fr;
     }

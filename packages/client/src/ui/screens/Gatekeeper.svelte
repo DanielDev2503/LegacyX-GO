@@ -5,42 +5,72 @@
 
   const emojiList: readonly string[] = EMOJI_CATALOG;
 
+  let isNameValid = $derived(gameUI.nickname.trim().length > 0);
+  let hasExplicitAvatar = $state(
+    Boolean(
+      gameUI.avatarMode === "emoji" ||
+        (gameUI.avatarValue &&
+          gameUI.avatarValue !== gameUI.nickname.trim().slice(0, 2).toUpperCase())
+    )
+  );
+
+  let effectiveAvatar = $derived(
+    gameUI.avatarValue ||
+      (!hasExplicitAvatar && gameUI.avatarMode === "letters"
+        ? gameUI.nickname.trim().slice(0, 2).toUpperCase()
+        : "")
+  );
+
   function handleNicknameChange(e: Event) {
     const val = (e.target as HTMLInputElement).value;
     gameUI.setPlayerNickname(val.slice(0, 25));
+    if (!hasExplicitAvatar && gameUI.avatarMode === "letters") {
+      const autoInitials = val.trim().slice(0, 2).toUpperCase();
+      gameUI.setPlayerAvatar(autoInitials, "text");
+    }
   }
 
   function handleAvatarTextChange(e: Event) {
     const val = (e.target as HTMLInputElement).value.toUpperCase().slice(0, 2);
-    gameUI.setPlayerAvatar(val, "text");
+    if (!val.trim()) {
+      hasExplicitAvatar = false;
+      const autoInitials = gameUI.nickname.trim().slice(0, 2).toUpperCase();
+      gameUI.setPlayerAvatar(autoInitials, "text");
+    } else {
+      hasExplicitAvatar = true;
+      gameUI.setPlayerAvatar(val, "text");
+    }
   }
 
   function selectEmoji(emoji: string) {
     soundFX.playUIClick();
+    hasExplicitAvatar = true;
     gameUI.setPlayerAvatar(emoji, "emoji");
   }
 
   function toggleMode(isEmoji: boolean) {
     soundFX.playUIClick();
     gameUI.avatarMode = isEmoji ? "emoji" : "letters";
-    if (
-      isEmoji &&
-      gameUI.avatarValue &&
-      !emojiList.includes(gameUI.avatarValue)
-    ) {
-      gameUI.setPlayerAvatar(emojiList[0] || "⚽", "emoji");
-    } else if (!isEmoji && emojiList.includes(gameUI.avatarValue)) {
-      gameUI.setPlayerAvatar("", "text");
+    if (isEmoji) {
+      if (!gameUI.avatarValue || !emojiList.includes(gameUI.avatarValue)) {
+        hasExplicitAvatar = true;
+        gameUI.setPlayerAvatar(emojiList[0] || "⚽", "emoji");
+      }
     } else {
-      gameUI.setPlayerAvatar(gameUI.avatarValue, isEmoji ? "emoji" : "text");
+      if (emojiList.includes(gameUI.avatarValue)) {
+        hasExplicitAvatar = false;
+        const autoInitials = gameUI.nickname.trim().slice(0, 2).toUpperCase();
+        gameUI.setPlayerAvatar(autoInitials, "text");
+      }
     }
   }
 
   function handlePlayClick() {
+    if (!isNameValid) return;
     soundFX.ensureContext();
     soundFX.playUIClick();
-    if (!gameUI.nickname.trim()) {
-      gameUI.setPlayerNickname("Player");
+    if (!gameUI.avatarValue && gameUI.avatarMode === "letters") {
+      gameUI.setPlayerAvatar(gameUI.nickname.trim().slice(0, 2).toUpperCase(), "text");
     }
     gameUI.navigateTo("LOBBY");
   }
@@ -120,7 +150,7 @@
           <div class="avatar-controls-row">
             <!-- Preview del Disco -->
             <div class="avatar-disc-preview" title="Renderizado en cancha">
-              <span class="avatar-disc-text">{gameUI.avatarValue}</span>
+              <span class="avatar-disc-text">{effectiveAvatar}</span>
               <div class="status-dot-active" title="Jugador activo"></div>
             </div>
 
@@ -129,7 +159,7 @@
               class="avatar-text-input"
               type="text"
               maxlength="2"
-              placeholder="Ej: 10"
+              placeholder={!hasExplicitAvatar && gameUI.nickname.trim() ? gameUI.nickname.trim().slice(0, 2).toUpperCase() : "Ej: 10"}
               value={gameUI.avatarValue}
               oninput={handleAvatarTextChange}
             />
@@ -138,7 +168,7 @@
           <div class="avatar-emoji-block">
             <!-- Preview del Disco -->
             <div class="avatar-disc-preview" title="Renderizado en cancha">
-              <span class="avatar-disc-text">{gameUI.avatarValue}</span>
+              <span class="avatar-disc-text">{effectiveAvatar}</span>
               <div class="status-dot-active" title="Jugador activo"></div>
             </div>
 
@@ -163,7 +193,8 @@
       <button
         type="button"
         class="play-btn"
-        onmouseenter={() => soundFX.playUIHover()}
+        disabled={!isNameValid}
+        onmouseenter={() => isNameValid && soundFX.playUIHover()}
         onclick={handlePlayClick}
       >
         <span>ENTRAR AL LOBBY</span>
@@ -510,6 +541,15 @@
 
   .play-btn:active {
     transform: scale(0.98);
+  }
+
+  .play-btn:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+    filter: grayscale(0.8);
+    box-shadow: none;
+    transform: none;
+    pointer-events: none;
   }
 
   .play-icon {

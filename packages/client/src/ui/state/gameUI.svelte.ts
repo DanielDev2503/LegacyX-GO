@@ -62,12 +62,21 @@ export type StadiumPresetKey =
   | 'hockey';
 export type TeamSlot = 'red' | 'blue' | 'spectator';
 
-export type PatternType = 'solid' | 'vertical' | 'hoop' | 'halves' | 'chevrons' | 'diagonal_checks';
+export type PatternType =
+  | 'solid'
+  | 'vertical'
+  | 'hoop'
+  | 'halves'
+  | 'diagonal'
+  | 'cross'
+  | 'chevrons'
+  | 'diagonal_checks';
 
 export interface KitConfig {
   primaryColor: string;
   secondaryColor: string;
   pattern: PatternType;
+  tertiaryColor?: string;
 }
 
 export interface TeamKitConfig {
@@ -76,6 +85,7 @@ export interface TeamKitConfig {
   primaryColor: string;
   secondaryColor: string;
   pattern: PatternType;
+  tertiaryColor?: string;
 }
 
 export interface EmoteTrigger {
@@ -221,6 +231,7 @@ export const DEFAULT_SETTINGS: SettingsConfig = {
     tag: 'LOC',
     primaryColor: '#e74c3c',
     secondaryColor: '#ffffff',
+    tertiaryColor: '#ffffff',
     pattern: 'solid'
   },
   visitorKit: {
@@ -228,6 +239,7 @@ export const DEFAULT_SETTINGS: SettingsConfig = {
     tag: 'VIS',
     primaryColor: '#3498db',
     secondaryColor: '#00e5ff',
+    tertiaryColor: '#ffffff',
     pattern: 'solid'
   },
 
@@ -447,11 +459,13 @@ class GameUIStore {
   public redKit = $state<KitConfig>({
     primaryColor: '#e74c3c',
     secondaryColor: '#ffffff',
+    tertiaryColor: '#ffffff',
     pattern: 'solid'
   });
   public blueKit = $state<KitConfig>({
     primaryColor: '#3498db',
     secondaryColor: '#00e5ff',
+    tertiaryColor: '#ffffff',
     pattern: 'solid'
   });
 
@@ -760,11 +774,13 @@ class GameUIStore {
     if (this.settings.localKit) {
       this.redKit.primaryColor = this.settings.localKit.primaryColor;
       this.redKit.secondaryColor = this.settings.localKit.secondaryColor;
+      this.redKit.tertiaryColor = this.settings.localKit.tertiaryColor || '#ffffff';
       this.redKit.pattern = this.settings.localKit.pattern;
     }
     if (this.settings.visitorKit) {
       this.blueKit.primaryColor = this.settings.visitorKit.primaryColor;
       this.blueKit.secondaryColor = this.settings.visitorKit.secondaryColor;
+      this.blueKit.tertiaryColor = this.settings.visitorKit.tertiaryColor || '#ffffff';
       this.blueKit.pattern = this.settings.visitorKit.pattern;
     }
 
