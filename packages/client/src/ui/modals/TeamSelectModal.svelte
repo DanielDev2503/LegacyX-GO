@@ -395,17 +395,6 @@
                 <span>{gameUI.matchState === 'PAUSED' ? '▶ Reanudar (P)' : '⏸ Pausar (P)'}</span>
               </button>
             </div>
-
-            {#if canClose}
-              <button
-                type="button"
-                id="btn-return-game"
-                class="btn-return-pitch"
-                onclick={handleClose}
-              >
-                Volver al Campo (Esc)
-              </button>
-            {/if}
           {/if}
         </div>
       </aside>
@@ -634,28 +623,36 @@
   .modal-backdrop {
     position: fixed;
     inset: 0;
-    background: rgba(5, 8, 14, 0.65);
+    background: transparent;
     display: flex;
     align-items: center;
     justify-content: center;
-    z-index: 120;
-    padding: 1rem;
-    pointer-events: auto;
+    z-index: 95;
+    padding: 0;
+    pointer-events: none;
     user-select: none;
   }
 
   .team-modal-card {
+    position: fixed;
+    left: 50%;
+    transform: translateX(-50%);
+    top: calc(var(--top-banner-height, 48px) + 16px);
+    bottom: calc(var(--chat-height, 160px) + 16px);
     width: min(94vw, 1060px);
-    height: min(82vh, 620px);
+    max-height: calc(100vh - var(--chat-height, 160px) - var(--top-banner-height, 48px) - 32px);
     background: rgba(10, 16, 26, 0.96);
     border: 1px solid rgba(0, 229, 255, 0.45);
     border-radius: 1rem;
     display: flex;
     flex-direction: column;
-    overflow: hidden;
+    overflow-y: auto;
+    overflow-x: hidden;
     color: #dde2f1;
     box-shadow: 0 0 35px rgba(0, 229, 255, 0.22), 0 10px 30px rgba(0, 0, 0, 0.8);
     font-family: 'Chivo', system-ui, sans-serif;
+    pointer-events: auto;
+    z-index: 96;
   }
 
   /* HEADER */
@@ -1233,25 +1230,6 @@
   .btn-pause-match.is-resuming {
     background: #00e5ff;
     box-shadow: 0 0 12px rgba(0, 229, 255, 0.4);
-  }
-
-  .btn-return-pitch {
-    width: 100%;
-    padding: 0.45rem;
-    background: #161c26;
-    border: 1px solid rgba(0, 229, 255, 0.3);
-    border-radius: 0.375rem;
-    font-family: 'Chivo', system-ui, sans-serif;
-    font-size: 0.72rem;
-    font-weight: 700;
-    color: #00e5ff;
-    cursor: pointer;
-    transition: all 0.15s ease;
-  }
-
-  .btn-return-pitch:hover {
-    background: #242a35;
-    border-color: #00e5ff;
   }
 
   /* COLUMNAS 2, 3, 4 (2/3: BANQUILLOS) */

@@ -306,6 +306,7 @@ export interface RosterPlayer {
   isAdmin: boolean;
   isHost: boolean;
   ping: number;
+  kit?: TeamKitConfig;
 }
 
 export interface ChatEntry {
@@ -538,14 +539,10 @@ class GameUIStore {
   public pingSampleCount = $state(0);
   public avgPingMs = $state(24);
 
-  // Chat State (Invariant 140px height on menu open/close)
-  public chatHeight = $state(140);
+  // Chat State (Responsive & Dynamic Height)
+  public chatHeight = $state(160);
   public isChatFocused = $state(false);
-  public chatMessages = $state<ChatEntry[]>([
-    { id: 1, team: 'RED', sender: 'kiko', text: 'Cuidado con el rebote central en el travesaño.' },
-    { id: 2, team: 'BLUE', sender: 'yami', isHost: true, text: 'Buen tiro al ángulo superior, gg a todos.' },
-    { id: 3, team: 'SPEC', sender: 'lucas', text: 'Ese hat-trick fue quirúrgico 🔥' }
-  ]);
+  public chatMessages = $state<ChatEntry[]>([]);
 
   // Post-match Carousel state (100vw slides)
   public postMatchSlide = $state<0 | 1 | 2>(0);

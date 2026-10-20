@@ -1561,7 +1561,7 @@
                     <div class="live-pattern-overlay diagonal-checks-stripes" style="--c1: {currentKit.primaryColor}; --c2: {currentKit.secondaryColor};"></div>
                   {/if}
 
-                  <span class="captain-badge" style="color: {currentKit.tertiaryColor || '#ffffff'};">C</span>
+                  <span class="captain-badge" style="color: {currentKit.tertiaryColor || '#ffffff'};">10</span>
                   <div class="disc-pip" style="background-color: {currentKit.tertiaryColor || '#ffffff'};"></div>
                 </div>
               </div>
@@ -3004,8 +3004,9 @@
     position: relative;
     z-index: 2;
     font-family: 'JetBrains Mono', monospace;
-    font-size: 1.35rem;
+    font-size: 1.25rem;
     font-weight: 900;
+    letter-spacing: -0.04em;
     text-shadow: 0 2px 4px rgba(0, 0, 0, 0.8);
   }
 
