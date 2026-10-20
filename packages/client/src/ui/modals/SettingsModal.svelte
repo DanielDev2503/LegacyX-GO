@@ -79,7 +79,7 @@
     }
 
     if (e.key === 'Escape') {
-      handleClose();
+      e.preventDefault();      handleClose();
       e.stopPropagation();
     }
   }

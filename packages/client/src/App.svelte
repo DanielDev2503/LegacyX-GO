@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { untrack } from 'svelte';
   import {
     EngineInstance,
     MatchPhase,
@@ -50,7 +51,12 @@
 
   $effect(() => {
     if (gameUI.currentScreen !== 'IN_GAME' || !canvasRef) return;
+    // untrack: el montaje del motor solo depende de pantalla y canvas. Sin esto, cualquier
+    // cambio en activeModal/stadium re-ejecutaba el efecto y reabría el menú (bug overlays #).
+    return untrack(() => mountGame(canvasRef!));
+  });
 
+  function mountGame(canvasEl: HTMLCanvasElement): () => void {
     // 1. Inicializar motor matemático canónico a 60 Hz
     const engine = new EngineInstance(gameUI.selectedStadiumId || 'mediano');
     testEngine = engine;
@@ -63,6 +69,7 @@
     // Inicializar siempre en 0: STOP con el menú de sala abierto
     gameUI.fsmPhase = 'STOPPED';
     gameUI.matchPhase = 0;
+    gameUI.clearModalStack();
     gameUI.openOverlay('TEAM_MANAGEMENT');
 
     // Conectar callbacks de estado UI
@@ -73,12 +80,13 @@
     gameUI.onStartMatch = () => {
       engine.startMatch();
       soundFX.playWhistle();
-      gameUI.closeOverlay();
+      gameUI.clearModalStack();
     };
 
     gameUI.onStopMatch = () => {
       engine.stopMatch();
       soundFX.playWhistle();
+      gameUI.clearModalStack();
       gameUI.openOverlay('TEAM_MANAGEMENT');
     };
 
@@ -90,7 +98,7 @@
       engine.resetPositions();
       gameUI.fsmPhase = 'STOPPED';
       gameUI.matchPhase = 0;
-      gameUI.openOverlay('TEAM_MANAGEMENT');
+      gameUI.enforceStopMenu();
     };
 
     // Conectar eventos del motor al sintetizador procedural Web Audio API
@@ -116,7 +124,7 @@
     });
 
     // 2. Inicializar GameRenderer desacoplado
-    const renderer = new GameRenderer(canvasRef, {
+    const renderer = new GameRenderer(canvasEl, {
       stadium: engine.stadium,
       playerInfos: new Map([
         [1, { nickname: gameUI.nickname || 'Host (Red)', number: 10 }],
@@ -141,16 +149,17 @@
       soundFX.ensureContext();
 
       // Atajo canónico para Modificadores [#] o cerrar modales [Escape]
+      // Escape: los overlays `#` gestionan su propio cierre (svelte:window + preventDefault);
+      // aquí solo se conmuta el menú de sala (bloqueado abierto en 0: STOP).
       if (e.code === 'Escape') {
-        if (gameUI.activeModal !== 'NONE') {
+        if (e.defaultPrevented || gameUI.isSecondaryOverlayOpen) return;
+        if (gameUI.currentScreen === 'IN_GAME') {
+          gameUI.toggleRoomMenu();
+        } else if (gameUI.activeModal !== 'NONE') {
           gameUI.closeOverlay();
-          e.preventDefault();
-          return;
-        } else if (gameUI.currentScreen === 'IN_GAME') {
-          gameUI.openOverlay('TEAM_MANAGEMENT');
-          e.preventDefault();
-          return;
         }
+        e.preventDefault();
+        return;
       }
 
       // No capturar controles de movimiento si el usuario está escribiendo en un input
@@ -266,6 +275,14 @@
 
         const phase = engine.fsm.state;
         if (phase === MatchPhase.STATS) {
+          if (gameUI.fsmPhase !== 'STATS') {
+            // Transición a 5: STATS → contenedor central unificado en vista de estadísticas
+            gameUI.hasCompletedMatch = true;
+            if (!gameUI.isSecondaryOverlayOpen) {
+              gameUI.clearModalStack();
+              gameUI.activeModal = 'STATS';
+            }
+          }
           gameUI.fsmPhase = 'STATS';
           gameUI.matchPhase = 5;
         } else if (gameUI.fsmPhase !== 'STATS') {
@@ -286,6 +303,7 @@
             gameUI.matchPhase = 0;
           }
         }
+        gameUI.enforceStopMenu();
       }
 
       animFrameId = requestAnimationFrame(renderLoop);
@@ -302,7 +320,7 @@
       rendererInstance = null;
       testEngine = null;
     };
-  });
+  }
 </script>
 
 <main class="app-root">
@@ -329,7 +347,7 @@
     <!-- Modales canónicos -->
     {#if gameUI.activeModal === 'PHYSICS_MODIFIERS' || gameUI.activeModal === 'physics' || gameUI.activeModal === 'MODIFIERS'}
       <PhysicsModal />
-    {:else if gameUI.activeModal === 'TEAM_MANAGEMENT' || gameUI.activeModal === 'teamSelect' || gameUI.activeModal === 'TEAM_SELECT'}
+    {:else if gameUI.activeModal === 'TEAM_MANAGEMENT' || gameUI.activeModal === 'teamSelect' || gameUI.activeModal === 'TEAM_SELECT' || gameUI.activeModal === 'STATS' || gameUI.activeModal === 'stats'}
       <TeamSelectModal />
     {:else if gameUI.activeModal === 'STADIUM_SELECTOR' || gameUI.activeModal === 'stadiumSelect' || gameUI.activeModal === 'STADIUM_SELECT'}
       <StadiumSelectModal />
@@ -337,13 +355,6 @@
       <SettingsModal />
     {:else if gameUI.activeModal === 'KEYBINDS' || gameUI.activeModal === 'keybinds'}
       <KeybindModal />
-    {:else if gameUI.activeModal === 'STATS' || gameUI.activeModal === 'stats'}
-      <PostMatchCarousel />
-    {/if}
-
-    <!-- Carrusel panorámico post-partido (100vw) si fsmPhase === 'STATS' o showPostMatchCarousel y modal no es ya STATS -->
-    {#if gameUI.currentScreen === 'IN_GAME' && (gameUI.fsmPhase === 'STATS' || gameUI.showPostMatchCarousel) && gameUI.activeModal !== 'STATS' && gameUI.activeModal !== 'stats'}
-      <PostMatchCarousel />
     {/if}
 
     <!-- Tooltip Global Singleton (Portal) -->

@@ -293,6 +293,7 @@ export interface RoomInfo {
   maxPlayers: number;
   ping: number;
   isPrivate: boolean;
+  password?: string;
   stadium: string;
   timeLimit?: number;
   scoreLimit?: number;
@@ -549,6 +550,7 @@ class GameUIStore {
 
   // Post-match Carousel state (100vw slides)
   public postMatchSlide = $state<0 | 1 | 2>(0);
+  public hasCompletedMatch = $state(false);
   public mvp = $state({
     nickname: 'yami',
     points: 420,
@@ -1130,10 +1132,54 @@ class GameUIStore {
     this.openModal(modal);
   }
 
+  /** Overlays `#` de mayor jerarquía que nunca deben ser pisados por la FSM. */
+  public get isSecondaryOverlayOpen(): boolean {
+    return ['SETTINGS', 'KEYBINDS', 'PHYSICS_MODIFIERS', 'STADIUM_SELECTOR'].includes(this.activeModal);
+  }
+
+  /** Contenedor central unificado (menú de sala / estadísticas) visible. */
+  public get isRoomPanelOpen(): boolean {
+    return this.activeModal === 'TEAM_MANAGEMENT' || this.activeModal === 'STATS';
+  }
+
+  /** Conmuta el menú de sala in-game (`Escape` / botón ☰). En `0: STOP` permanece abierto. */
+  public toggleRoomMenu(): void {
+    if (this.isSecondaryOverlayOpen) {
+      this.closeOverlay();
+      return;
+    }
+    if (this.isRoomPanelOpen) {
+      if (this.matchPhase === 0) return;
+      this.clearModalStack();
+    } else {
+      this.openModal('TEAM_MANAGEMENT');
+    }
+  }
+
+  /** Guardia `0: STOP`: fuerza el menú abierto sin pisar overlays `#` ni la vista de estadísticas. */
+  public enforceStopMenu(): void {
+    if (
+      this.matchPhase === 0 &&
+      this.currentScreen === 'IN_GAME' &&
+      !this.isSecondaryOverlayOpen &&
+      this.activeModal !== 'STATS' &&
+      this.activeModal !== 'TEAM_MANAGEMENT'
+    ) {
+      this.modalStack = [];
+      this.activeModal = 'TEAM_MANAGEMENT';
+    }
+  }
+
   public closeOverlay(): void {
     soundFX.playUIClick();
     if (this.modalStack.length > 0) {
       this.activeModal = this.modalStack.pop() as ModalType;
+    } else if (
+      this.matchPhase === 0 &&
+      this.currentScreen === 'IN_GAME' &&
+      !this.isRoomPanelOpen
+    ) {
+      this.activeModal = 'TEAM_MANAGEMENT';
     } else {
       this.activeModal = 'NONE';
     }
@@ -1380,6 +1426,7 @@ class GameUIStore {
       maxPlayers: maxPlayers,
       ping: this.realPing ?? 20,
       isPrivate: isPrivate,
+      password: password,
       stadium: stadium
     };
 

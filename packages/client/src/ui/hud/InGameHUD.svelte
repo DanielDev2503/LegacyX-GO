@@ -131,11 +131,7 @@
 
   function toggleRoomMenu() {
     soundFX.playUIClick();
-    if (gameUI.activeModal === 'TEAM_MANAGEMENT' || gameUI.activeModal === 'teamSelect') {
-      gameUI.clearModalStack();
-    } else {
-      gameUI.openOverlay('TEAM_MANAGEMENT');
-    }
+    gameUI.toggleRoomMenu();
   }
 
   function openSettings() {
