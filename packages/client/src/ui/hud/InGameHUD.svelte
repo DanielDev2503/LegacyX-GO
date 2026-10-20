@@ -22,17 +22,17 @@
     redCaptain?.kit?.primaryColor || gameUI.redTeamKit?.primaryColor || '#e74c3c'
   );
   let redKitSecondary = $derived(
-    redCaptain?.kit?.secondaryColor || gameUI.redTeamKit?.secondaryColor || '#e74c3c'
+    redCaptain?.kit?.secondaryColor || gameUI.redTeamKit?.secondaryColor || '#ffffff'
   );
   let redKitTertiary = $derived(
     redCaptain?.kit?.tertiaryColor || gameUI.redTeamKit?.tertiaryColor || '#ffffff'
   );
 
   let blueKitPrimary = $derived(
-    blueCaptain?.kit?.primaryColor || gameUI.blueTeamKit?.primaryColor || '#3498db'
+    blueCaptain?.kit?.primaryColor || gameUI.blueTeamKit?.primaryColor || '#00e5ff'
   );
   let blueKitSecondary = $derived(
-    blueCaptain?.kit?.secondaryColor || gameUI.blueTeamKit?.secondaryColor || '#3498db'
+    blueCaptain?.kit?.secondaryColor || gameUI.blueTeamKit?.secondaryColor || '#ffffff'
   );
   let blueKitTertiary = $derived(
     blueCaptain?.kit?.tertiaryColor || gameUI.blueTeamKit?.tertiaryColor || '#ffffff'
@@ -42,7 +42,7 @@
   let minimapWidth = $derived.by(() => {
     if (!gameUI.settings.minimapEnabled) return 0;
     const sz = gameUI.settings.minimapSize;
-    const base = sz === 'small' || sz === 160 ? 160 : (sz === 'large' || sz === 240 ? 240 : 200);
+    const base = sz === 'small' || sz === 160 ? 160 : (sz === 'large' || sz === 280 || sz === 240 ? 280 : 220);
     return base + 16;
   });
 
@@ -83,21 +83,20 @@
   });
 
   function handleSendChat() {
-    if (!chatMessage.trim()) {
-      isChatInputActive = false;
-      return;
-    }
-    soundFX.playUIClick();
-    const newMsg: ChatEntry = {
-      id: Date.now(),
-      team: (gameUI.myTeam === 'red' ? 'RED' : gameUI.myTeam === 'blue' ? 'BLUE' : 'SPEC'),
-      sender: gameUI.nickname || 'Player',
-      isHost: gameUI.isHost,
-      text: chatMessage.trim()
-    };
-    gameUI.chatMessages.push(newMsg);
-    if (gameUI.onChatSent) {
-      gameUI.onChatSent(chatMessage.trim());
+    const text = chatMessage.trim();
+    if (text) {
+      soundFX.playUIClick();
+      const newMsg: ChatEntry = {
+        id: Date.now(),
+        team: (gameUI.myTeam === 'red' ? 'RED' : gameUI.myTeam === 'blue' ? 'BLUE' : 'SPEC'),
+        sender: gameUI.nickname || 'Player',
+        isHost: gameUI.isHost,
+        text
+      };
+      gameUI.chatMessages.push(newMsg);
+      if (gameUI.onChatSent) {
+        gameUI.onChatSent(text);
+      }
     }
     chatMessage = '';
     isChatInputActive = false;
@@ -105,11 +104,14 @@
   }
 
   function handleChatKeyDown(e: KeyboardEvent) {
-    if (e.key === 'Enter') {
+    if (e.key === 'Enter' || e.code === 'NumpadEnter') {
       e.preventDefault();
+      e.stopPropagation();
       handleSendChat();
     } else if (e.key === 'Escape') {
       e.preventDefault();
+      e.stopPropagation();
+      chatMessage = '';
       isChatInputActive = false;
       chatInputEl?.blur();
     }
@@ -130,7 +132,7 @@
   function toggleRoomMenu() {
     soundFX.playUIClick();
     if (gameUI.activeModal === 'TEAM_MANAGEMENT' || gameUI.activeModal === 'teamSelect') {
-      gameUI.closeOverlay();
+      gameUI.clearModalStack();
     } else {
       gameUI.openOverlay('TEAM_MANAGEMENT');
     }
@@ -170,13 +172,18 @@
 
 <svelte:window
   onkeydown={(e) => {
-    // Si presiona Enter y no está escribiendo en otro input, activa el chat del HUD
-    if (e.key === 'Enter' && !isChatInputActive) {
+    // Si presiona Enter o NumpadEnter y no está escribiendo en el chat ni en otro input
+    if (e.key === 'Enter' || e.code === 'NumpadEnter') {
       const activeEl = document.activeElement;
-      const isInputFocused = activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA');
-      if (!isInputFocused && gameUI.activeModal === 'NONE') {
-        e.preventDefault();
-        focusChat();
+      if (activeEl === chatInputEl) {
+        return;
+      }
+      const isOtherInputFocused = activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA');
+      if (!isOtherInputFocused) {
+        if (gameUI.activeModal === 'NONE' || gameUI.activeModal === 'TEAM_MANAGEMENT' || gameUI.activeModal === 'teamSelect') {
+          e.preventDefault();
+          focusChat();
+        }
       }
     }
   }}
@@ -200,20 +207,20 @@
     <!-- B) Cartucho Central: Marcador y Reloj -->
     <div class="top-card top-card-center">
       <div class="scoreboard-main-row">
-        <!-- Bloque RED -->
-        <div class="team-score-block red-team">
-          <span
-            class="team-tag-badge red-badge"
-            style="
-              background: linear-gradient(90deg, {redKitPrimary} 50%, {redKitSecondary} 50%);
-              border-color: {redKitTertiary};
-              color: {redKitTertiary};
-            "
-          >
-            {gameUI.redTeamKit?.tag || 'RED'}
-          </span>
-          <span class="team-score-number" id="hud-score-red">{gameUI.redScore}</span>
+        <!-- Tarjeta de Siglas RED (Total y continua, sin cajas anidadas) -->
+        <div
+          class="team-acronym-card red-acronym"
+          style="
+            background: linear-gradient(90deg, {redKitPrimary} 50%, {redKitSecondary} 50%);
+            border: 1.5px solid {redKitTertiary};
+            color: {redKitTertiary};
+          "
+        >
+          {gameUI.redTeamKit?.tag || 'RED'}
         </div>
+
+        <!-- Goles RED (Blanco puro tabular) -->
+        <span class="team-score-number" id="hud-score-red">{gameUI.redScore}</span>
 
         <!-- Reloj Central -->
         <div class="timer-center-block">
@@ -224,19 +231,19 @@
           {/if}
         </div>
 
-        <!-- Bloque BLUE -->
-        <div class="team-score-block blue-team">
-          <span class="team-score-number" id="hud-score-blue">{gameUI.blueScore}</span>
-          <span
-            class="team-tag-badge blue-badge"
-            style="
-              background: linear-gradient(90deg, {blueKitPrimary} 50%, {blueKitSecondary} 50%);
-              border-color: {blueKitTertiary};
-              color: {blueKitTertiary};
-            "
-          >
-            {gameUI.blueTeamKit?.tag || 'BLUE'}
-          </span>
+        <!-- Goles BLUE (Blanco puro tabular) -->
+        <span class="team-score-number" id="hud-score-blue">{gameUI.blueScore}</span>
+
+        <!-- Tarjeta de Siglas BLUE (Total y continua, sin cajas anidadas) -->
+        <div
+          class="team-acronym-card blue-acronym"
+          style="
+            background: linear-gradient(90deg, {blueKitPrimary} 50%, {blueKitSecondary} 50%);
+            border: 1.5px solid {blueKitTertiary};
+            color: {blueKitTertiary};
+          "
+        >
+          {gameUI.blueTeamKit?.tag || 'BLUE'}
         </div>
       </div>
     </div>
@@ -355,7 +362,7 @@
         {#each gameUI.chatMessages as msg (msg.id)}
           <div class="chat-line">
             <span class="chat-sender {msg.team.toLowerCase()}">
-              {#if msg.isHost}👑{/if} [{msg.team}] {msg.sender}:
+              {#if msg.isHost}👑 {/if}{msg.sender}:
             </span>
             <span class="chat-text">{msg.text}</span>
           </div>
@@ -510,57 +517,34 @@
     width: 100%;
   }
 
-  .team-score-block {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    padding: 0.25rem 0.65rem;
-    border-radius: 0.5rem;
-  }
-
-  .team-score-block.red-team {
-    background: rgba(255, 51, 102, 0.12);
-    border: 1px solid rgba(255, 51, 102, 0.35);
-  }
-
-  .team-score-block.blue-team {
-    background: rgba(0, 229, 255, 0.12);
-    border: 1px solid rgba(0, 229, 255, 0.35);
-  }
-
-  .team-tag-badge {
+  .team-acronym-card {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    padding: 0.15rem 0.55rem;
-    border-radius: 0.35rem;
+    padding: 0.25rem 0.65rem;
+    min-width: 50px;
+    height: 28px;
+    border-radius: 0.375rem;
     font-family: 'Space Grotesk', system-ui, sans-serif;
-    font-size: 0.75rem;
+    font-size: 0.8rem;
     font-weight: 900;
-    letter-spacing: 0.1em;
-    border-width: 1px;
-    border-style: solid;
-    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.95), 0 0 4px rgba(0, 0, 0, 0.85);
-    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.5);
+    letter-spacing: 0.08em;
     user-select: none;
-    line-height: 1.2;
-    transition: all 0.2s ease;
-  }
-
-  .red-team .team-score-number {
-    color: #ff3366;
-  }
-
-  .blue-team .team-score-number {
-    color: #00e5ff;
+    line-height: 1;
+    text-shadow: none !important;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.5);
+    box-sizing: border-box;
   }
 
   .team-score-number {
     font-family: 'JetBrains Mono', monospace;
-    font-size: 1.25rem;
+    font-size: 1.35rem;
     font-weight: 900;
-    min-width: 20px;
+    font-variant-numeric: tabular-nums;
+    min-width: 24px;
     text-align: center;
+    color: #ffffff !important;
+    text-shadow: 0 2px 4px rgba(0, 0, 0, 0.6);
   }
 
   .timer-center-block {
@@ -659,7 +643,7 @@
     position: fixed;
     bottom: 12px;
     left: 16px;
-    z-index: 100;
+    z-index: 105;
     display: flex;
     align-items: center;
     gap: 0.45rem;
@@ -695,11 +679,11 @@
     pointer-events: auto;
     position: fixed;
     bottom: 12px;
-    left: calc(var(--telemetry-width, 140px) + 16px);
+    left: calc(var(--telemetry-width, 140px) + 28px);
     right: calc(var(--minimap-width, 220px) + 16px);
     width: auto;
     height: var(--chat-height, 160px);
-    z-index: 100;
+    z-index: 105;
     background: rgba(10, 16, 26, var(--chat-opacity, 0.95));
     border: 1px solid rgba(0, 229, 255, 0.3);
     border-radius: 0.75rem;
@@ -724,10 +708,12 @@
     touch-action: none;
     flex-shrink: 0;
     transition: background 0.15s ease;
+    outline: none;
   }
 
   .chat-resize-handle:hover,
-  .chat-resize-handle:active {
+  .chat-resize-handle:active,
+  .chat-resize-handle:focus {
     background: rgba(0, 229, 255, 0.15);
   }
 
@@ -740,7 +726,8 @@
   }
 
   .chat-resize-handle:hover .resize-handle-bar,
-  .chat-resize-handle:active .resize-handle-bar {
+  .chat-resize-handle:active .resize-handle-bar,
+  .chat-resize-handle:focus .resize-handle-bar {
     background: #00e5ff;
     box-shadow: 0 0 6px #00e5ff;
     width: 48px;

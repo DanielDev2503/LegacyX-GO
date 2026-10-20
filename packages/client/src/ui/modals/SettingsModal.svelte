@@ -1562,7 +1562,6 @@
                   {/if}
 
                   <span class="captain-badge" style="color: {currentKit.tertiaryColor || '#ffffff'};">10</span>
-                  <div class="disc-pip" style="background-color: {currentKit.tertiaryColor || '#ffffff'};"></div>
                 </div>
               </div>
             </div>
@@ -3008,18 +3007,6 @@
     font-weight: 900;
     letter-spacing: -0.04em;
     text-shadow: 0 2px 4px rgba(0, 0, 0, 0.8);
-  }
-
-  .disc-pip {
-    position: absolute;
-    top: 50%;
-    right: 3px;
-    transform: translateY(-50%);
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
-    z-index: 3;
-    box-shadow: 0 0 4px rgba(0, 0, 0, 0.8);
   }
 
   /* SECTION 5: AVATAR Y EMOTES */

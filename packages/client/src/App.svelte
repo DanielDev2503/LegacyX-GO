@@ -207,6 +207,17 @@
 
       // Interpolación lineal libre en Canvas 2D
       const alpha = Math.max(0, Math.min(1.0, accumulatedTime / FIXED_DT_MS));
+
+      // Sincronizar ajustes reactivos del minimapa y chat en el renderer
+      const sz = gameUI.settings.minimapSize;
+      const minimapPxWidth =
+        sz === 'small' || sz === 160 ? 160 : sz === 'large' || sz === 280 || sz === 240 ? 280 : 220;
+      renderer.minimapEnabled = gameUI.settings.minimapEnabled;
+      renderer.minimapOpacity = (gameUI.settings.minimapOpacity ?? 60) / 100;
+      renderer.minimapSize = minimapPxWidth;
+      renderer.minimapCameraFrustum = gameUI.settings.minimapCameraFrustum;
+      renderer.chatHeight = gameUI.chatHeight;
+
       renderer.render(prevSnapshot, currSnapshot, alpha, 1);
 
       // Actualizar telemetría reactiva en UI

@@ -93,6 +93,14 @@
       gameUI.activeRoom.maxPlayers = next;
     }
   }
+
+  function formatTimeLimit(val: number): string {
+    return val === 0 ? '0 (Sin límite)' : `${val} min`;
+  }
+
+  function formatGoalsLimit(val: number): string {
+    return val === 0 ? '0 (Sin límite)' : `${val} ${val === 1 ? 'gol' : 'goles'}`;
+  }
 </script>
 
 <div
@@ -185,52 +193,54 @@
       <!-- ======================================== -->
       <aside class="col-settings-panel">
         <div class="col-settings-scroll custom-scrollbar">
-          <!-- 1. Selectores de Configuración de Partida -->
+          <!-- 1. Selectores de Configuración de Partida (0 a 15) -->
           <div class="rules-2col-grid">
             <div class="field-item">
               <label for="select-time-limit">Duración</label>
-              <select
-                id="select-time-limit"
-                value={gameUI.timeLimitMinutes}
-                disabled={(!gameUI.isAdmin && !gameUI.isHost) || gameUI.isMatchActive}
-                onchange={(e) => {
-                  const val = Number((e.currentTarget as HTMLSelectElement).value);
-                  gameUI.timeLimitMinutes = val;
-                  gameUI.physicsModifiers.timeLimit = val;
-                }}
-              >
-                <option value={1}>⏱ 1 min</option>
-                <option value={2}>⏱ 2 min</option>
-                <option value={3}>⏱ 3 min</option>
-                <option value={5}>⏱ 5 min</option>
-                <option value={7}>⏱ 7 min</option>
-                <option value={10}>⏱ 10 min</option>
-                <option value={15}>⏱ 15 min</option>
-                <option value={0}>⏱ Sin límite</option>
-              </select>
+              <div class="styled-select-wrap">
+                <span class="select-icon">⏱</span>
+                <select
+                  id="select-time-limit"
+                  value={gameUI.timeLimitMinutes}
+                  disabled={(!gameUI.isAdmin && !gameUI.isHost) || gameUI.isMatchActive}
+                  onchange={(e) => {
+                    const val = Number((e.currentTarget as HTMLSelectElement).value);
+                    soundFX.playUIClick();
+                    gameUI.timeLimitMinutes = val;
+                    gameUI.physicsModifiers.timeLimit = val;
+                    if (gameUI.activeRoom) gameUI.activeRoom.timeLimit = val;
+                  }}
+                >
+                  {#each Array.from({ length: 16 }, (_, i) => i) as t}
+                    <option value={t}>{formatTimeLimit(t)}</option>
+                  {/each}
+                </select>
+                <span class="select-caret">▾</span>
+              </div>
             </div>
 
             <div class="field-item">
               <label for="select-goal-limit">Límite Gol</label>
-              <select
-                id="select-goal-limit"
-                value={gameUI.scoreLimitGoals}
-                disabled={(!gameUI.isAdmin && !gameUI.isHost) || gameUI.isMatchActive}
-                onchange={(e) => {
-                  const val = Number((e.currentTarget as HTMLSelectElement).value);
-                  gameUI.scoreLimitGoals = val;
-                  gameUI.physicsModifiers.scoreLimit = val;
-                }}
-              >
-                <option value={1}>⚽ 1 gol</option>
-                <option value={2}>⚽ 2 goles</option>
-                <option value={3}>⚽ 3 goles</option>
-                <option value={5}>⚽ 5 goles</option>
-                <option value={7}>⚽ 7 goles</option>
-                <option value={10}>⚽ 10 goles</option>
-                <option value={15}>⚽ 15 goles</option>
-                <option value={0}>⚽ Ilimitado</option>
-              </select>
+              <div class="styled-select-wrap">
+                <span class="select-icon">⚽</span>
+                <select
+                  id="select-goal-limit"
+                  value={gameUI.scoreLimitGoals}
+                  disabled={(!gameUI.isAdmin && !gameUI.isHost) || gameUI.isMatchActive}
+                  onchange={(e) => {
+                    const val = Number((e.currentTarget as HTMLSelectElement).value);
+                    soundFX.playUIClick();
+                    gameUI.scoreLimitGoals = val;
+                    gameUI.physicsModifiers.scoreLimit = val;
+                    if (gameUI.activeRoom) gameUI.activeRoom.scoreLimit = val;
+                  }}
+                >
+                  {#each Array.from({ length: 16 }, (_, i) => i) as g}
+                    <option value={g}>{formatGoalsLimit(g)}</option>
+                  {/each}
+                </select>
+                <span class="select-caret">▾</span>
+              </div>
             </div>
           </div>
 
@@ -242,11 +252,18 @@
               class="teams-lock-toggle"
               class:is-locked={gameUI.teamsLocked}
               disabled={(!gameUI.isAdmin && !gameUI.isHost) || gameUI.isMatchActive}
-              onclick={() => gameUI.toggleTeamsLock()}
+              onclick={() => {
+                soundFX.playUIClick();
+                gameUI.toggleTeamsLock();
+              }}
+              title="Bloquear equipos para que solo los administradores puedan mover jugadores"
             >
-              <span class="lock-label">
-                {gameUI.teamsLocked ? 'Eq. Bloqueados 🔒' : 'Eq. Libres 🔓'}
-              </span>
+              <div class="lock-toggle-meta">
+                <span class="lock-label">
+                  {gameUI.teamsLocked ? '🔒 Bloqueados' : '🔓 Libres'}
+                </span>
+                <span class="admin-badge">{gameUI.teamsLocked ? 'SOLO ADMINS' : 'LIBRES'}</span>
+              </div>
               <span class="toggle-switch-indicator"></span>
             </button>
 
@@ -255,7 +272,7 @@
               id="btn-open-physics-modifiers"
               class="btn-modifiers-trigger"
               disabled={(!gameUI.isAdmin && !gameUI.isHost) || gameUI.isMatchActive}
-              onclick={() => gameUI.openModal('physics')}
+              onclick={() => gameUI.openOverlay('PHYSICS_MODIFIERS')}
             >
               <span class="mod-icon">⚡</span>
               <span>MODIFIERS (19)</span>
@@ -270,7 +287,7 @@
               id="btn-pick-stadium"
               class="stadium-select-trigger"
               disabled={(!gameUI.isAdmin && !gameUI.isHost) || gameUI.isMatchActive}
-              onclick={() => gameUI.openModal('stadiumSelect')}
+              onclick={() => gameUI.openOverlay('STADIUM_SELECT')}
             >
               <span class="stadium-name-text">🏟 {gameUI.selectedStadium || 'AF 3v3 Official'}</span>
               <span class="caret-glyph">▼</span>
@@ -283,11 +300,11 @@
               tabindex="0"
               onclick={() => {
                 if ((gameUI.isAdmin || gameUI.isHost) && !gameUI.isMatchActive) {
-                  gameUI.openModal('stadiumSelect');
+                  gameUI.openOverlay('STADIUM_SELECT');
                 }
               }}
               onkeydown={(e) => {
-                if (e.key === 'Enter') gameUI.openModal('stadiumSelect');
+                if (e.key === 'Enter') gameUI.openOverlay('STADIUM_SELECT');
               }}
             >
               <div class="pitch-mini-canvas">
@@ -833,20 +850,50 @@
     letter-spacing: 0.05em;
   }
 
-  .field-item select {
+  .styled-select-wrap {
+    position: relative;
+    display: flex;
+    align-items: center;
     background: #161c26;
     border: 1px solid rgba(0, 229, 255, 0.3);
     border-radius: 0.375rem;
-    padding: 0.35rem 0.5rem;
+    padding: 0 0.5rem;
+    transition: all 0.15s ease;
+  }
+
+  .styled-select-wrap:focus-within,
+  .styled-select-wrap:hover {
+    border-color: #00e5ff;
+    box-shadow: 0 0 8px rgba(0, 229, 255, 0.25);
+  }
+
+  .select-icon {
+    font-size: 0.75rem;
+    margin-right: 0.35rem;
+  }
+
+  .styled-select-wrap select {
+    flex: 1;
+    background: transparent;
+    border: none;
+    padding: 0.35rem 0;
     font-family: 'JetBrains Mono', monospace;
     font-size: 0.75rem;
     color: #00e5ff;
     outline: none;
-    transition: border-color 0.15s ease;
+    cursor: pointer;
   }
 
-  .field-item select:focus {
-    border-color: #00e5ff;
+  .styled-select-wrap select option {
+    background: #080e18;
+    color: #dde2f1;
+  }
+
+  .select-caret {
+    font-size: 0.65rem;
+    color: #849396;
+    pointer-events: none;
+    margin-left: 0.25rem;
   }
 
   /* Toggle Equipos */
@@ -854,7 +901,7 @@
     background: #161c26;
     border: 1px solid rgba(0, 229, 255, 0.25);
     border-radius: 0.375rem;
-    padding: 0.45rem 0.6rem;
+    padding: 0.4rem 0.6rem;
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -864,6 +911,14 @@
 
   .teams-lock-toggle:hover {
     border-color: #00e5ff;
+    box-shadow: 0 0 8px rgba(0, 229, 255, 0.25);
+  }
+
+  .lock-toggle-meta {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.1rem;
   }
 
   .lock-label {
@@ -871,6 +926,14 @@
     font-weight: 700;
     color: #dde2f1;
     text-transform: uppercase;
+  }
+
+  .admin-badge {
+    font-size: 0.55rem;
+    font-family: 'JetBrains Mono', monospace;
+    font-weight: 700;
+    color: #ffb703;
+    letter-spacing: 0.05em;
   }
 
   .toggle-switch-indicator {

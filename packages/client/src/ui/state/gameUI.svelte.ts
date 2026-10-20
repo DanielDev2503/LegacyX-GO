@@ -293,6 +293,8 @@ export interface RoomInfo {
   ping: number;
   isPrivate: boolean;
   stadium: string;
+  timeLimit?: number;
+  scoreLimit?: number;
 }
 
 export interface RosterPlayer {
@@ -1002,7 +1004,7 @@ class GameUIStore {
   }
 
   public toggleTeamsLock(): void {
-    if (!this.isHost) return;
+    if (!this.isHost && !this.isAdmin) return;
     soundFX.playUIClick();
     this.teamsLocked = !this.teamsLocked;
   }
@@ -1027,7 +1029,7 @@ class GameUIStore {
 
   public leaveRoom(): void {
     soundFX.playUIClick();
-    this.closeModal();
+    this.clearModalStack();
     this.navigateTo('LOBBY');
   }
 
@@ -1091,21 +1093,36 @@ class GameUIStore {
     this.currentScreen = screen;
   }
 
-  public openModal(modal: ModalType): void {
-    soundFX.playUIClick();
+  private modalStack: ModalType[] = [];
+
+  private resolveModalType(modal: ModalType | string): ModalType {
     const map: Record<string, ModalType> = {
       settings: 'SETTINGS',
+      SETTINGS: 'SETTINGS',
       keybinds: 'KEYBINDS',
+      KEYBINDS: 'KEYBINDS',
       physics: 'PHYSICS_MODIFIERS',
       MODIFIERS: 'PHYSICS_MODIFIERS',
+      PHYSICS_MODIFIERS: 'PHYSICS_MODIFIERS',
       teamSelect: 'TEAM_MANAGEMENT',
       TEAM_SELECT: 'TEAM_MANAGEMENT',
+      TEAM_MANAGEMENT: 'TEAM_MANAGEMENT',
       stadiumSelect: 'STADIUM_SELECTOR',
       STADIUM_SELECT: 'STADIUM_SELECTOR',
+      STADIUM_SELECTOR: 'STADIUM_SELECTOR',
       stats: 'STATS',
       STATS: 'STATS'
     };
-    this.activeModal = map[modal] ?? modal;
+    return map[modal] ?? (modal as ModalType);
+  }
+
+  public openModal(modal: ModalType): void {
+    soundFX.playUIClick();
+    const resolved = this.resolveModalType(modal);
+    if (this.activeModal !== 'NONE' && this.activeModal !== resolved) {
+      this.modalStack.push(this.activeModal);
+    }
+    this.activeModal = resolved;
   }
 
   public openOverlay(modal: ModalType): void {
@@ -1113,11 +1130,22 @@ class GameUIStore {
   }
 
   public closeOverlay(): void {
-    this.closeModal();
+    soundFX.playUIClick();
+    if (this.modalStack.length > 0) {
+      this.activeModal = this.modalStack.pop() as ModalType;
+    } else {
+      this.activeModal = 'NONE';
+    }
+    this.pendingPasswordRoom = null;
+    this.pendingPasswordInput = '';
   }
 
   public closeModal(): void {
-    soundFX.playUIClick();
+    this.closeOverlay();
+  }
+
+  public clearModalStack(): void {
+    this.modalStack = [];
     this.activeModal = 'NONE';
     this.pendingPasswordRoom = null;
     this.pendingPasswordInput = '';
