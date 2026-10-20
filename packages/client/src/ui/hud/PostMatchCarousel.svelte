@@ -9,6 +9,17 @@
   let specPlayers = $derived(gameUI.players.filter((p) => p.team === 'spectator'));
   let bluePlayers = $derived(gameUI.players.filter((p) => p.team === 'blue'));
 
+  let redCaptain = $derived(redPlayers[0]);
+  let blueCaptain = $derived(bluePlayers[0]);
+
+  let redTeamName = $derived(redCaptain?.kit?.name || gameUI.redTeamKit?.name || 'Equipo Rojo');
+  let redPrimaryColor = $derived(redCaptain?.kit?.primaryColor || gameUI.redTeamKit?.primaryColor || '#e74c3c');
+  let redSecondaryColor = $derived(redCaptain?.kit?.secondaryColor || gameUI.redTeamKit?.secondaryColor || '#b02a1c');
+
+  let blueTeamName = $derived(blueCaptain?.kit?.name || gameUI.blueTeamKit?.name || 'Equipo Azul');
+  let bluePrimaryColor = $derived(blueCaptain?.kit?.primaryColor || gameUI.blueTeamKit?.primaryColor || '#3498db');
+  let blueSecondaryColor = $derived(blueCaptain?.kit?.secondaryColor || gameUI.blueTeamKit?.secondaryColor || '#217dbb');
+
   let isMatchStopped = $derived(gameUI.fsmPhase === 'STOPPED' || gameUI.matchPhase === 0);
 
   function toggleAccordion(id: string) {
@@ -101,12 +112,12 @@
         <button
           type="button"
           id="btn-goto-menu"
-          class="floating-nav-btn right-btn"
+          class="external-nav-tab floating-nav-btn right-btn right-tab"
           aria-label="Ir a Menú de Sala"
           onclick={() => goToSlide(1)}
         >
-          <span>Menú</span>
-          <span class="nav-chevron">▶</span>
+          <span id="stats-to-menu-btn">Menú</span>
+          <span class="nav-chevron">&gt;</span>
         </button>
 
         <!-- Tarjeta Central de Stats (Regla canónica ** Invariant) -->
@@ -142,46 +153,25 @@
               <span class="mvp-title">MVP: {gameUI.mvp.nickname}</span>
               <span class="mvp-points-chip">({gameUI.mvp.points} pts)</span>
             </div>
-
-            <!-- Botón CTA Volver a la Sala -->
-            <button
-              type="button"
-              id="stats-to-menu-btn"
-              class="btn-return-room"
-              onclick={handleReturnToRoom}
-            >
-              Volver a la Sala
-            </button>
           </div>
 
-          <!-- Barra de Posesión en Vivo (4px) -->
-          <div class="possession-bar-section">
-            <div class="possession-legend-row">
-              <span class="pos-txt red">{gameUI.redPossession}% RED</span>
-              <span class="pos-title">POSESIÓN EN VIVO</span>
-              <span class="pos-txt blue">{gameUI.bluePossession}% BLUE</span>
-            </div>
-            <div
-              class="possession-track"
-              title="Posesión: {gameUI.redPossession}% RED - {gameUI.bluePossession}% BLUE"
-            >
-              <div class="pos-segment red" style="width: {gameUI.redPossession}%;"></div>
-              <div class="pos-segment blue" style="width: {gameUI.bluePossession}%;"></div>
-            </div>
-          </div>
-
-          <!-- Tablas Duales Paralelas RED y BLUE -->
+          <!-- Tablas Duales Paralelas RED y BLUE con Cabeceras Bicolor 50/50 -->
           <div class="tables-parallel-grid">
             <!-- TABLA RED -->
             <div class="team-table-box red-box">
-              <div class="table-header red-header">
-                <span class="col-player">Jugador</span>
-                <span class="col-pts">Pts</span>
-                <span class="col-stat">G</span>
-                <span class="col-stat">A</span>
-                <span class="col-stat">P</span>
-                <span class="col-stat">S</span>
-                <span class="col-arrow"></span>
+              <div
+                class="table-header red-header captain-bicolor-header"
+                style="background: linear-gradient(90deg, {redPrimaryColor} 50%, {redSecondaryColor} 50%);"
+              >
+                <span class="col-team-name-hdr">{redTeamName}</span>
+                <div class="col-headers-right">
+                  <span class="col-pts">Pts</span>
+                  <span class="col-stat">G</span>
+                  <span class="col-stat">A</span>
+                  <span class="col-stat">P</span>
+                  <span class="col-stat">S</span>
+                  <span class="col-arrow"></span>
+                </div>
               </div>
               <div class="table-scroll-body custom-scrollbar">
                 {#each gameUI.redTeamStats as player}
@@ -243,14 +233,19 @@
 
             <!-- TABLA BLUE -->
             <div class="team-table-box blue-box">
-              <div class="table-header blue-header">
-                <span class="col-player">Jugador</span>
-                <span class="col-pts">Pts</span>
-                <span class="col-stat">G</span>
-                <span class="col-stat">A</span>
-                <span class="col-stat">P</span>
-                <span class="col-stat">S</span>
-                <span class="col-arrow"></span>
+              <div
+                class="table-header blue-header captain-bicolor-header"
+                style="background: linear-gradient(90deg, {bluePrimaryColor} 50%, {blueSecondaryColor} 50%);"
+              >
+                <span class="col-team-name-hdr">{blueTeamName}</span>
+                <div class="col-headers-right">
+                  <span class="col-pts">Pts</span>
+                  <span class="col-stat">G</span>
+                  <span class="col-stat">A</span>
+                  <span class="col-stat">P</span>
+                  <span class="col-stat">S</span>
+                  <span class="col-arrow"></span>
+                </div>
               </div>
               <div class="table-scroll-body custom-scrollbar">
                 {#each gameUI.blueTeamStats as player}
@@ -332,12 +327,12 @@
         <button
           type="button"
           id="btn-goto-stats"
-          class="floating-nav-btn left-btn"
+          class="external-nav-tab floating-nav-btn left-btn left-tab"
           aria-label="Volver a Stats"
           onclick={() => goToSlide(0)}
         >
-          <span class="nav-chevron">◀</span>
-          <span>STATS</span>
+          <span class="nav-chevron">&lt;</span>
+          <span id="lobby-to-stats-btn">STATS</span>
         </button>
 
         <!-- Tarjeta Central del Menú de Sala (Regla canónica ** Invariant) -->
@@ -873,74 +868,6 @@
     border-radius: 0.2rem;
   }
 
-  .btn-return-room {
-    padding: 0.4rem 0.85rem;
-    background: rgba(0, 229, 255, 0.12);
-    border: 1px solid #00e5ff;
-    color: #00e5ff;
-    font-family: 'Chivo', system-ui, sans-serif;
-    font-size: 0.75rem;
-    font-weight: 800;
-    letter-spacing: 0.05em;
-    border-radius: 0.375rem;
-    cursor: pointer;
-    transition: all 0.15s ease;
-  }
-
-  .btn-return-room:hover {
-    background: #00e5ff;
-    color: #00363d;
-    box-shadow: 0 0 12px rgba(0, 229, 255, 0.5);
-  }
-
-  /* Posesión */
-  .possession-bar-section {
-    display: flex;
-    flex-direction: column;
-    gap: 0.3rem;
-    flex-shrink: 0;
-  }
-
-  .possession-legend-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 0.75rem;
-    font-weight: 700;
-  }
-
-  .pos-txt.red { color: #ff4757; }
-  .pos-txt.blue { color: #00e5ff; }
-
-  .pos-title {
-    font-family: 'Space Grotesk', system-ui, sans-serif;
-    font-size: 0.7rem;
-    letter-spacing: 0.08em;
-    color: #849396;
-  }
-
-  .possession-track {
-    width: 100%;
-    height: 4px;
-    background: #080e18;
-    border-radius: 9999px;
-    overflow: hidden;
-    display: flex;
-    box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.8);
-  }
-
-  .pos-segment.red {
-    background: #ff4757;
-    height: 100%;
-    transition: width 0.3s ease;
-  }
-
-  .pos-segment.blue {
-    background: #00e5ff;
-    height: 100%;
-    transition: width 0.3s ease;
-  }
 
   /* Tablas Duales */
   .tables-parallel-grid {
@@ -977,6 +904,33 @@
     letter-spacing: 0.08em;
     text-transform: uppercase;
     flex-shrink: 0;
+  }
+
+  .captain-bicolor-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.5rem 0.75rem;
+    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9), 0 0 6px rgba(0, 0, 0, 0.8);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.15);
+  }
+
+  .col-team-name-hdr {
+    font-family: 'Space Grotesk', system-ui, sans-serif;
+    font-size: 0.8rem;
+    font-weight: 800;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: #ffffff;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    flex: 1;
+  }
+
+  .col-headers-right {
+    display: flex;
+    align-items: center;
   }
 
   .table-header.red-header {

@@ -1302,7 +1302,7 @@ class GameUIStore {
   }
 
   public movePlayerToTeam(playerId: number, team: 'red' | 'blue' | 'spectator'): boolean {
-    if (!this.isHost && (this.teamsLocked || playerId !== this.localPlayerId)) {
+    if (!this.isHost && !this.isAdmin && (this.teamsLocked || playerId !== this.localPlayerId)) {
       return false;
     }
     const p = this.rosterPlayers.find((item) => item.id === playerId);
@@ -1340,11 +1340,21 @@ class GameUIStore {
     });
   }
 
+  public togglePlayerAdmin(playerId: number): boolean {
+    if (!this.isHost && !this.isAdmin) return false;
+    const target = this.rosterPlayers.find((p) => p.id === playerId);
+    if (!target || target.isHost) return false;
+    target.isAdmin = !target.isAdmin;
+    return true;
+  }
+
   public kickOrBanPlayer(targetPlayerId: number, _ban: boolean = false): boolean {
-    if (!this.isHost) return false;
+    if (!this.isHost && !this.isAdmin) return false;
     const target = this.rosterPlayers.find((p) => p.id === targetPlayerId);
-    // Host admin immutability: Host cannot kick or ban themselves
-    if (!target || target.isHost || target.isAdmin) return false;
+    // Host admin immutability: Host cannot kick or ban themselves, non-host admin cannot kick host or other admin
+    if (!target || target.isHost) return false;
+    if (!this.isHost && target.isAdmin) return false;
+    if (target.id === this.localPlayerId) return false;
     this.rosterPlayers = this.rosterPlayers.filter((p) => p.id !== targetPlayerId);
     return true;
   }

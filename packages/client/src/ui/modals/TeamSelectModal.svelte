@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { gameUI, type TeamSlot } from '../state/gameUI.svelte';
+  import { gameUI, type TeamSlot, type RosterPlayer } from '../state/gameUI.svelte';
   import { soundFX } from '../../audio/SoundFX';
 
   let {
@@ -16,20 +16,28 @@
     onTeamChange?: (playerId: number, team: TeamSlot) => void;
   } = $props();
 
-  // Modo de visualización: MANAGEMENT (Menú de Sala) vs STATS (Estadísticas Post-Partido)
-  let viewMode = $state<'MANAGEMENT' | 'STATS'>(
-    gameUI.activeModal === 'STATS' || gameUI.activeModal === 'stats' || gameUI.fsmPhase === 'STATS'
-      ? 'STATS'
-      : 'MANAGEMENT'
+  // Diapositiva del corredor deslizante: 0 = STATS, 1 = LOBBY / MENÚ DE SALA
+  let currentSlide = $state<0 | 1>(
+    gameUI.activeModal === 'STATS' || gameUI.activeModal === 'stats' || gameUI.fsmPhase === 'STATS' ? 0 : 1
   );
 
   $effect(() => {
     if (gameUI.activeModal === 'STATS' || gameUI.activeModal === 'stats' || gameUI.fsmPhase === 'STATS') {
-      viewMode = 'STATS';
+      currentSlide = 0;
     } else if (gameUI.activeModal === 'TEAM_MANAGEMENT' || gameUI.activeModal === 'TEAM_SELECT') {
-      viewMode = 'MANAGEMENT';
+      currentSlide = 1;
     }
   });
+
+  function goToSlide(slide: 0 | 1) {
+    soundFX.playUIClick();
+    currentSlide = slide;
+    if (slide === 0) {
+      gameUI.activeModal = 'STATS';
+    } else {
+      gameUI.activeModal = 'TEAM_MANAGEMENT';
+    }
+  }
 
   let expandedPlayerId = $state<string | null>(null);
 
@@ -38,23 +46,22 @@
     expandedPlayerId = expandedPlayerId === id ? null : id;
   }
 
-  function goToManagement() {
-    soundFX.playUIClick();
-    viewMode = 'MANAGEMENT';
-    gameUI.activeModal = 'TEAM_MANAGEMENT';
-  }
-
-  function goToStats() {
-    soundFX.playUIClick();
-    viewMode = 'STATS';
-    gameUI.activeModal = 'STATS';
-  }
-
   let copyStatus = $state<'idle' | 'copied'>('idle');
 
   let redPlayers = $derived(gameUI.players.filter((p) => p.team === 'red'));
   let specPlayers = $derived(gameUI.players.filter((p) => p.team === 'spectator'));
   let bluePlayers = $derived(gameUI.players.filter((p) => p.team === 'blue'));
+
+  let redCaptain = $derived(redPlayers[0]);
+  let blueCaptain = $derived(bluePlayers[0]);
+
+  let redTeamName = $derived(redCaptain?.kit?.name || gameUI.redTeamKit?.name || 'Equipo Rojo');
+  let redPrimaryColor = $derived(redCaptain?.kit?.primaryColor || gameUI.redTeamKit?.primaryColor || '#e74c3c');
+  let redSecondaryColor = $derived(redCaptain?.kit?.secondaryColor || gameUI.redTeamKit?.secondaryColor || '#b02a1c');
+
+  let blueTeamName = $derived(blueCaptain?.kit?.name || gameUI.blueTeamKit?.name || 'Equipo Azul');
+  let bluePrimaryColor = $derived(blueCaptain?.kit?.primaryColor || gameUI.blueTeamKit?.primaryColor || '#3498db');
+  let blueSecondaryColor = $derived(blueCaptain?.kit?.secondaryColor || gameUI.blueTeamKit?.secondaryColor || '#217dbb');
 
   let isMatchStopped = $derived(
     gameUI.fsmPhase === 'STOPPED' ||
@@ -68,21 +75,122 @@
   let isRoomPublic = $state(gameUI.activeRoom ? !gameUI.activeRoom.isPrivate : true);
   let roomPassword = $state(gameUI.activeRoom?.password || '');
 
-  function joinTeam(team: TeamSlot) {
-    soundFX.playUIClick();
-    if (gameUI.changeTeam(gameUI.localPlayerId, team)) {
-      onTeamChange(gameUI.localPlayerId, team);
+  // ==========================================
+  // DRAG & DROP Y MENÚ CONTEXTUAL DE ADMIN
+  // ==========================================
+  let draggedPlayerId = $state<number | null>(null);
+  let dragOverTeam = $state<TeamSlot | null>(null);
+  let wasDragged = $state(false);
+  let dragStartTime = 0;
+
+  function canDragPlayer(player: RosterPlayer): boolean {
+    if (gameUI.isAdmin || gameUI.isHost) return true;
+    if (!gameUI.teamsLocked && player.id === gameUI.localPlayerId) return true;
+    return false;
+  }
+
+  function handleDragStart(e: DragEvent, player: RosterPlayer) {
+    if (!canDragPlayer(player)) {
+      e.preventDefault();
+      return;
+    }
+    draggedPlayerId = player.id;
+    wasDragged = true;
+    dragStartTime = Date.now();
+    if (e.dataTransfer) {
+      e.dataTransfer.setData('text/plain', String(player.id));
+      e.dataTransfer.effectAllowed = 'move';
     }
   }
 
-  function movePlayer(playerId: number, team: TeamSlot) {
+  function handleDragEnd() {
+    draggedPlayerId = null;
+    dragOverTeam = null;
+    setTimeout(() => {
+      wasDragged = false;
+    }, 150);
+  }
+
+  function handleDragOver(e: DragEvent, team: TeamSlot) {
+    e.preventDefault();
+    if (e.dataTransfer) {
+      e.dataTransfer.dropEffect = 'move';
+    }
+    dragOverTeam = team;
+  }
+
+  function handleDragLeave(e: DragEvent, team: TeamSlot) {
+    if (dragOverTeam === team) {
+      dragOverTeam = null;
+    }
+  }
+
+  function handleDrop(e: DragEvent, targetTeam: TeamSlot) {
+    e.preventDefault();
+    const idStr = e.dataTransfer?.getData('text/plain');
+    const playerId = idStr ? Number(idStr) : draggedPlayerId;
+    dragOverTeam = null;
+    draggedPlayerId = null;
+    if (playerId !== null && !isNaN(playerId)) {
+      soundFX.playUIClick();
+      if (gameUI.changeTeam(playerId, targetTeam)) {
+        onTeamChange(playerId, targetTeam);
+      }
+    }
+    setTimeout(() => {
+      wasDragged = false;
+    }, 150);
+  }
+
+  // Menú contextual flotante
+  let contextMenu = $state<{
+    visible: boolean;
+    x: number;
+    y: number;
+    player: RosterPlayer | null;
+  }>({
+    visible: false,
+    x: 0,
+    y: 0,
+    player: null
+  });
+
+  function handlePlayerCardClick(e: MouseEvent, player: RosterPlayer) {
+    if (wasDragged || Date.now() - dragStartTime < 200) return;
     if (!gameUI.isAdmin && !gameUI.isHost) return;
+
+    e.stopPropagation();
     soundFX.playUIClick();
-    if (gameUI.changeTeam(playerId, team)) {
-      onTeamChange(playerId, team);
+
+    const menuWidth = 175;
+    const menuHeight = 145;
+    let x = e.clientX;
+    let y = e.clientY;
+
+    if (typeof window !== 'undefined') {
+      if (x + menuWidth > window.innerWidth - 12) {
+        x = window.innerWidth - menuWidth - 12;
+      }
+      if (y + menuHeight > window.innerHeight - 12) {
+        y = window.innerHeight - menuHeight - 12;
+      }
     }
+
+    contextMenu = {
+      visible: true,
+      x,
+      y,
+      player
+    };
   }
 
+  function closeContextMenu() {
+    contextMenu.visible = false;
+  }
+
+  // ==========================================
+  // CONTROLES FSM Y OPERACIÓN DE SALA
+  // ==========================================
   function handleStartMatch() {
     if (!gameUI.isAdmin && !gameUI.isHost) return;
     soundFX.playUIClick();
@@ -172,796 +280,804 @@
     if (e.key === 'Escape' && canClose) handleClose();
   }}
 >
-  <!-- Contenedor Central Unificado (Idéntica Geometría en Menú y Estadísticas) -->
-  <div class="team-modal-card">
-    {#if viewMode === 'STATS'}
-      <!-- ======================================== -->
-      <!-- VISTA: ESTADÍSTICAS POST-PARTIDO         -->
-      <!-- ======================================== -->
-      <header class="stats-header-row">
-        <!-- Marcador Simétrico -->
-        <div class="match-score-block">
-          <span class="team-brand red">RED</span>
-          <div class="score-capsule">
-            <span class="score-digit red" id="post-score-red">{gameUI.redScore}</span>
-            <span class="score-dash">-</span>
-            <span class="score-digit blue" id="post-score-blue">{gameUI.blueScore}</span>
-          </div>
-          <span class="team-brand blue">BLUE</span>
-        </div>
-
-        <!-- Badge de Victoria y Reloj -->
-        <div class="match-status-meta">
-          {#if gameUI.redScore > gameUI.blueScore}
-            <span class="badge-victory red">VICTORIA RED</span>
-          {:else if gameUI.blueScore > gameUI.redScore}
-            <span class="badge-victory blue">VICTORIA BLUE</span>
-          {:else}
-            <span class="badge-victory draw">EMPATE</span>
-          {/if}
-          <span class="match-time-chip">⏱ {gameUI.matchTimeFormatted}</span>
-        </div>
-
-        <!-- Placa Dorada Destacada MVP -->
-        <div class="mvp-golden-plaque">
-          <span class="crown-icon">👑</span>
-          <span class="mvp-title">MVP: {gameUI.mvp.nickname}</span>
-          <span class="mvp-points-chip">({gameUI.mvp.points} pts)</span>
-        </div>
-
-        <!-- Acciones: Volver a la Sala / Menú -->
-        <div class="stats-actions">
-          <button
-            type="button"
-            id="stats-to-menu-btn"
-            class="btn-return-room"
-            onclick={goToManagement}
-          >
-            <span>Volver a la Sala</span>
-          </button>
+  <!-- Viewport del Corredor Deslizante -->
+  <div class="corridor-viewport">
+    <div
+      class="corridor-track"
+      style="transform: translateX(-{currentSlide * 50}%);"
+    >
+      <!-- ======================================================== -->
+      <!-- DIAPOSITIVA 0: ESTADÍSTICAS Y MVP (CORREDOR DESLIZANTE)  -->
+      <!-- ======================================================== -->
+      <div class="corridor-slide-item" id="slide-stats">
+        <div class="card-with-external-tab-wrapper">
+          <!-- Pestaña exterior lateral DERECHA: Menú > -->
           <button
             type="button"
             id="btn-goto-menu"
-            class="btn-goto-menu"
-            onclick={goToManagement}
-            title="Ir al menú de gestión"
+            class="external-nav-tab right-tab"
+            aria-label="Ir a Menú de Sala"
+            onclick={() => goToSlide(1)}
           >
-            <span>Menú</span>
-            <span class="nav-chevron">▶</span>
+            <span id="stats-to-menu-btn">Menú</span>
+            <span class="nav-chevron">&gt;</span>
           </button>
-        </div>
-      </header>
 
-      <!-- Barra de Posesión en Vivo (4px) -->
-      <div class="possession-bar-section">
-        <div class="possession-legend-row">
-          <span class="pos-txt red">{gameUI.redPossession}% RED</span>
-          <span class="pos-title">POSESIÓN EN VIVO</span>
-          <span class="pos-txt blue">{gameUI.bluePossession}% BLUE</span>
-        </div>
-        <div
-          class="possession-track"
-          title="Posesión: {gameUI.redPossession}% RED - {gameUI.bluePossession}% BLUE"
-        >
-          <div class="pos-segment red" style="width: {gameUI.redPossession}%;"></div>
-          <div class="pos-segment blue" style="width: {gameUI.bluePossession}%;"></div>
+          <!-- Tarjeta Central de Estadísticas -->
+          <div class="team-modal-card stats-modal-card">
+            <!-- Header de Estadísticas -->
+            <header class="stats-header-row">
+              <div class="match-score-block">
+                <span class="team-brand red">RED</span>
+                <div class="score-capsule">
+                  <span class="score-digit red" id="post-score-red">{gameUI.redScore}</span>
+                  <span class="score-dash">-</span>
+                  <span class="score-digit blue" id="post-score-blue">{gameUI.blueScore}</span>
+                </div>
+                <span class="team-brand blue">BLUE</span>
+              </div>
+
+              <div class="match-status-meta">
+                {#if gameUI.redScore > gameUI.blueScore}
+                  <span class="badge-victory red">VICTORIA RED</span>
+                {:else if gameUI.blueScore > gameUI.redScore}
+                  <span class="badge-victory blue">VICTORIA BLUE</span>
+                {:else}
+                  <span class="badge-victory draw">EMPATE</span>
+                {/if}
+                <span class="match-time-chip">⏱ {gameUI.matchTimeFormatted}</span>
+              </div>
+
+              <div class="mvp-golden-plaque">
+                <span class="crown-icon">👑</span>
+                <span class="mvp-title">MVP: {gameUI.mvp.nickname}</span>
+                <span class="mvp-points-chip">({gameUI.mvp.points} pts)</span>
+              </div>
+            </header>
+
+            <!-- Tablas Duales Paralelas RED y BLUE con Cabeceras Bicolor 50/50 y Nombres de Capitán -->
+            <div class="tables-parallel-grid">
+              <!-- TABLA RED -->
+              <div class="team-table-box red-box">
+                <div
+                  class="table-header red-header captain-bicolor-header"
+                  style="background: linear-gradient(90deg, {redPrimaryColor} 50%, {redSecondaryColor} 50%);"
+                >
+                  <span class="col-team-name-hdr">{redTeamName}</span>
+                  <div class="col-headers-right">
+                    <span class="col-pts">Pts</span>
+                    <span class="col-stat">G</span>
+                    <span class="col-stat">A</span>
+                    <span class="col-stat">P</span>
+                    <span class="col-stat">S</span>
+                    <span class="col-arrow"></span>
+                  </div>
+                </div>
+
+                <div class="table-scroll-body custom-scrollbar-red">
+                  {#each gameUI.redTeamStats as player}
+                    {@const isExpanded = expandedPlayerId === player.nickname}
+                    <div class="player-stat-row" class:row-expanded={isExpanded}>
+                      <div
+                        class="row-summary accordion-trigger"
+                        role="button"
+                        tabindex="0"
+                        onclick={() => toggleAccordion(player.nickname)}
+                        onkeydown={(e) => {
+                          if (e.key === 'Enter' || e.key === ' ') {
+                            e.preventDefault();
+                            toggleAccordion(player.nickname);
+                          }
+                        }}
+                      >
+                        <span class="col-player bold">
+                          {#if player.isCaptain}
+                            <span class="badge-cap red">©</span>
+                          {/if}
+                          {player.nickname}
+                        </span>
+                        <span class="col-pts red-txt">{player.points}</span>
+                        <span class="col-stat">{player.goals}</span>
+                        <span class="col-stat">{player.assists}</span>
+                        <span class="col-stat">{player.passes}</span>
+                        <span class="col-stat">{player.shots}</span>
+                        <span class="col-arrow chevron-icon">{isExpanded ? '▲' : '▼'}</span>
+                      </div>
+
+                      {#if isExpanded}
+                        <div class="accordion-drawer">
+                          <div class="drawer-grid">
+                            <div class="drawer-chip">
+                              <span class="chip-label">Toques</span>
+                              <span class="chip-val text-cyan">+{(player.touches ?? 14) * 2}</span>
+                            </div>
+                            <div class="drawer-chip">
+                              <span class="chip-label">Pases</span>
+                              <span class="chip-val text-cyan">+{player.passes * 10}</span>
+                            </div>
+                            <div class="drawer-chip">
+                              <span class="chip-label">Tiros</span>
+                              <span class="chip-val text-cyan">+{player.shots * 20}</span>
+                            </div>
+                            <div class="drawer-chip">
+                              <span class="chip-label">Goles</span>
+                              <span class="chip-val text-green">+{player.goals * 100}</span>
+                            </div>
+                            <div class="drawer-chip">
+                              <span class="chip-label">Autogol</span>
+                              <span class="chip-val text-error">-{player.ownGoals ? player.ownGoals * 50 : 0}</span>
+                            </div>
+                          </div>
+                        </div>
+                      {/if}
+                    </div>
+                  {/each}
+                </div>
+              </div>
+
+              <!-- TABLA BLUE -->
+              <div class="team-table-box blue-box">
+                <div
+                  class="table-header blue-header captain-bicolor-header"
+                  style="background: linear-gradient(90deg, {bluePrimaryColor} 50%, {blueSecondaryColor} 50%);"
+                >
+                  <span class="col-team-name-hdr">{blueTeamName}</span>
+                  <div class="col-headers-right">
+                    <span class="col-pts">Pts</span>
+                    <span class="col-stat">G</span>
+                    <span class="col-stat">A</span>
+                    <span class="col-stat">P</span>
+                    <span class="col-stat">S</span>
+                    <span class="col-arrow"></span>
+                  </div>
+                </div>
+
+                <div class="table-scroll-body custom-scrollbar">
+                  {#each gameUI.blueTeamStats as player}
+                    {@const isExpanded = expandedPlayerId === player.nickname}
+                    <div
+                      class="player-stat-row"
+                      class:is-mvp={player.isMvp}
+                      class:row-expanded={isExpanded}
+                    >
+                      <div
+                        class="row-summary accordion-trigger"
+                        role="button"
+                        tabindex="0"
+                        onclick={() => toggleAccordion(player.nickname)}
+                        onkeydown={(e) => {
+                          if (e.key === 'Enter' || e.key === ' ') {
+                            e.preventDefault();
+                            toggleAccordion(player.nickname);
+                          }
+                        }}
+                      >
+                        <span class="col-player bold" class:gold-player={player.isMvp}>
+                          {#if player.isMvp}
+                            <span class="crown-sm">👑</span>
+                          {:else if player.isCaptain}
+                            <span class="badge-cap blue">©</span>
+                          {/if}
+                          {player.nickname}
+                          {#if player.isHost}
+                            <span class="host-tag">(Host)</span>
+                          {/if}
+                        </span>
+                        <span class="col-pts" class:gold-txt={player.isMvp} class:blue-txt={!player.isMvp}>
+                          {player.points}
+                        </span>
+                        <span class="col-stat" class:gold-stat={player.isMvp}>{player.goals}</span>
+                        <span class="col-stat">{player.assists}</span>
+                        <span class="col-stat">{player.passes}</span>
+                        <span class="col-stat">{player.shots}</span>
+                        <span class="col-arrow chevron-icon">{isExpanded ? '▲' : '▼'}</span>
+                      </div>
+
+                      {#if isExpanded}
+                        <div class="accordion-drawer">
+                          <div class="drawer-grid">
+                            <div class="drawer-chip">
+                              <span class="chip-label">Toques</span>
+                              <span class="chip-val text-cyan">+{(player.touches ?? 14) * 2}</span>
+                            </div>
+                            <div class="drawer-chip">
+                              <span class="chip-label">Pases</span>
+                              <span class="chip-val text-cyan">+{player.passes * 10}</span>
+                            </div>
+                            <div class="drawer-chip">
+                              <span class="chip-label">Tiros</span>
+                              <span class="chip-val text-cyan">+{player.shots * 20}</span>
+                            </div>
+                            <div class="drawer-chip">
+                              <span class="chip-label">Goles</span>
+                              <span class="chip-val text-gold">+{player.goals * 100}</span>
+                            </div>
+                            <div class="drawer-chip">
+                              <span class="chip-label">Autogol</span>
+                              <span class="chip-val text-muted">0</span>
+                            </div>
+                          </div>
+                        </div>
+                      {/if}
+                    </div>
+                  {/each}
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
 
-      <!-- Tablas Duales Paralelas RED y BLUE -->
-      <div class="tables-parallel-grid">
-        <!-- TABLA RED -->
-        <div class="team-table-box red-box">
-          <div class="table-header red-header">
-            <span class="col-player">Jugador</span>
-            <span class="col-pts">Pts</span>
-            <span class="col-stat">G</span>
-            <span class="col-stat">A</span>
-            <span class="col-stat">P</span>
-            <span class="col-stat">S</span>
-            <span class="col-arrow"></span>
-          </div>
-          <div class="table-scroll-body custom-scrollbar-red">
-            {#each gameUI.redTeamStats as player}
-              {@const isExpanded = expandedPlayerId === player.nickname}
-              <div class="player-stat-row" class:row-expanded={isExpanded}>
-                <div
-                  class="row-summary accordion-trigger"
-                  role="button"
-                  tabindex="0"
-                  onclick={() => toggleAccordion(player.nickname)}
-                  onkeydown={(e) => {
-                    if (e.key === 'Enter' || e.key === ' ') {
-                      e.preventDefault();
-                      toggleAccordion(player.nickname);
-                    }
-                  }}
-                >
-                  <span class="col-player bold">
-                    {#if player.isCaptain}
-                      <span class="badge-cap red">©</span>
-                    {/if}
-                    {player.nickname}
-                  </span>
-                  <span class="col-pts red-txt">{player.points}</span>
-                  <span class="col-stat">{player.goals}</span>
-                  <span class="col-stat">{player.assists}</span>
-                  <span class="col-stat">{player.passes}</span>
-                  <span class="col-stat">{player.shots}</span>
-                  <span class="col-arrow chevron-icon">{isExpanded ? '▲' : '▼'}</span>
-                </div>
-
-                {#if isExpanded}
-                  <div class="accordion-drawer">
-                    <div class="drawer-grid">
-                      <div class="drawer-chip">
-                        <span class="chip-label">Toques</span>
-                        <span class="chip-val text-cyan">+{(player.touches ?? 14) * 2}</span>
-                      </div>
-                      <div class="drawer-chip">
-                        <span class="chip-label">Pases</span>
-                        <span class="chip-val text-cyan">+{player.passes * 10}</span>
-                      </div>
-                      <div class="drawer-chip">
-                        <span class="chip-label">Tiros</span>
-                        <span class="chip-val text-cyan">+{player.shots * 20}</span>
-                      </div>
-                      <div class="drawer-chip">
-                        <span class="chip-label">Goles</span>
-                        <span class="chip-val text-green">+{player.goals * 100}</span>
-                      </div>
-                      <div class="drawer-chip">
-                        <span class="chip-label">Autogol</span>
-                        <span class="chip-val text-error">-{player.ownGoals ? player.ownGoals * 50 : 0}</span>
-                      </div>
-                    </div>
-                  </div>
-                {/if}
-              </div>
-            {/each}
-          </div>
-        </div>
-
-        <!-- TABLA BLUE -->
-        <div class="team-table-box blue-box">
-          <div class="table-header blue-header">
-            <span class="col-player">Jugador</span>
-            <span class="col-pts">Pts</span>
-            <span class="col-stat">G</span>
-            <span class="col-stat">A</span>
-            <span class="col-stat">P</span>
-            <span class="col-stat">S</span>
-            <span class="col-arrow"></span>
-          </div>
-          <div class="table-scroll-body custom-scrollbar">
-            {#each gameUI.blueTeamStats as player}
-              {@const isExpanded = expandedPlayerId === player.nickname}
-              <div
-                class="player-stat-row"
-                class:is-mvp={player.isMvp}
-                class:row-expanded={isExpanded}
-              >
-                <div
-                  class="row-summary accordion-trigger"
-                  role="button"
-                  tabindex="0"
-                  onclick={() => toggleAccordion(player.nickname)}
-                  onkeydown={(e) => {
-                    if (e.key === 'Enter' || e.key === ' ') {
-                      e.preventDefault();
-                      toggleAccordion(player.nickname);
-                    }
-                  }}
-                >
-                  <span class="col-player bold" class:gold-player={player.isMvp}>
-                    {#if player.isMvp}
-                      <span class="crown-sm">👑</span>
-                    {:else if player.isCaptain}
-                      <span class="badge-cap blue">©</span>
-                    {/if}
-                    {player.nickname}
-                    {#if player.isHost}
-                      <span class="host-tag">(Host)</span>
-                    {/if}
-                  </span>
-                  <span class="col-pts" class:gold-txt={player.isMvp} class:blue-txt={!player.isMvp}>
-                    {player.points}
-                  </span>
-                  <span class="col-stat" class:gold-stat={player.isMvp}>{player.goals}</span>
-                  <span class="col-stat">{player.assists}</span>
-                  <span class="col-stat">{player.passes}</span>
-                  <span class="col-stat">{player.shots}</span>
-                  <span class="col-arrow chevron-icon">{isExpanded ? '▲' : '▼'}</span>
-                </div>
-
-                {#if isExpanded}
-                  <div class="accordion-drawer">
-                    <div class="drawer-grid">
-                      <div class="drawer-chip">
-                        <span class="chip-label">Toques</span>
-                        <span class="chip-val text-cyan">+{(player.touches ?? 14) * 2}</span>
-                      </div>
-                      <div class="drawer-chip">
-                        <span class="chip-label">Pases</span>
-                        <span class="chip-val text-cyan">+{player.passes * 10}</span>
-                      </div>
-                      <div class="drawer-chip">
-                        <span class="chip-label">Tiros</span>
-                        <span class="chip-val text-cyan">+{player.shots * 20}</span>
-                      </div>
-                      <div class="drawer-chip">
-                        <span class="chip-label">Goles</span>
-                        <span class="chip-val text-gold">+{player.goals * 100}</span>
-                      </div>
-                      <div class="drawer-chip">
-                        <span class="chip-label">Autogol</span>
-                        <span class="chip-val text-muted">0</span>
-                      </div>
-                    </div>
-                  </div>
-                {/if}
-              </div>
-            {/each}
-          </div>
-        </div>
-      </div>
-    {:else}
-      <!-- ======================================== -->
-      <!-- VISTA: GESTIÓN DE SALA Y BANQUILLOS      -->
-      <!-- ======================================== -->
-      <header class="modal-header">
-        <div class="room-identity">
-          <span class="room-icon">⚽</span>
-          <h2 class="room-title">SALA: {gameUI.activeRoomName || 'TORNEO NOCTURNO #12'}</h2>
-          <span class="header-divider">|</span>
-          <span class="room-id-badge">ID: {gameUI.matchId || gameUI.activeRoom?.id || 'CTNYRS'}</span>
-        </div>
-
-        <div class="header-actions">
-          <button
-            type="button"
-            id="btn-header-copy-link"
-            class="btn-copy-link"
-            onclick={handleCopyLink}
-            title="Copiar enlace directo a la sala"
-          >
-            <svg class="header-btn-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
-              <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
-            </svg>
-            <span>{copyStatus === 'copied' ? '¡COPIADO!' : 'COPIAR LINK'}</span>
-          </button>
-
+      <!-- ======================================================== -->
+      <!-- SLIDE 1: MENÚ DE SALA (CORREDOR DESLIZANTE)              -->
+      <!-- ======================================================== -->
+      <div class="corridor-slide-item" id="slide-lobby">
+        <div class="card-with-external-tab-wrapper">
+          <!-- Pestaña exterior lateral IZQUIERDA: < STATS -->
           {#if gameUI.hasCompletedMatch || (gameUI.lastMatchStats && gameUI.lastMatchStats.length > 0)}
             <button
               type="button"
-              id="lobby-to-stats-btn"
-              class="btn-stats-link"
-              onclick={goToStats}
-              title="Ver estadísticas del último partido"
+              id="btn-goto-stats"
+              class="external-nav-tab left-tab"
+              aria-label="Ir a Estadísticas"
+              onclick={() => goToSlide(0)}
             >
-              <span>📊 STATS</span>
+              <span class="nav-chevron">&lt;</span>
+              <span id="lobby-to-stats-btn">STATS</span>
             </button>
           {/if}
 
+          <!-- Tarjeta Central del Menú de Sala -->
+          <div class="team-modal-card lobby-modal-card">
+            <!-- 1. Cabecera Limpia (Sin prefijos 'SALA:' ni emojis) -->
+            <header class="modal-header">
+              <div class="room-identity">
+                <h2 class="room-title">{gameUI.activeRoomName || 'TORNEO NOCTURNO #12'}</h2>
+                <span class="header-divider">|</span>
+                <span class="room-id-badge">ID: {gameUI.matchId || gameUI.activeRoom?.id || 'CTNYRS'}</span>
+              </div>
+
+              <div class="header-actions">
+                <button
+                  type="button"
+                  id="btn-header-copy-link"
+                  class="btn-copy-link"
+                  onclick={handleCopyLink}
+                  title="Copiar enlace directo a la sala"
+                >
+                  <svg class="header-btn-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
+                    <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
+                  </svg>
+                  <span>{copyStatus === 'copied' ? '¡COPIADO!' : 'COPIAR LINK'}</span>
+                </button>
+
+                <!-- Botón Abandonar -->
+                <button
+                  type="button"
+                  id="btn-quick-close"
+                  class="btn-leave"
+                  onclick={handleLeave}
+                  title="Abandonar la sala"
+                >
+                  <svg class="header-btn-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path>
+                    <polyline points="16 17 21 12 16 7"></polyline>
+                    <line x1="21" y1="12" x2="9" y2="12"></line>
+                  </svg>
+                  <span>ABANDONAR</span>
+                </button>
+
+                {#if canClose}
+                  <button
+                    type="button"
+                    id="menu-close-btn"
+                    class="btn-close-x"
+                    onclick={handleClose}
+                    aria-label="Cerrar menú"
+                  >
+                    ✕
+                  </button>
+                {/if}
+              </div>
+            </header>
+
+            <!-- 2. Cuerpo en 4 Columnas: Panel Izquierdo (Reglas/Ajustes/FSM) + 3 Banquillos -->
+            <div class="modal-body-layout">
+              <!-- ======================================== -->
+              <!-- COLUMNA 1 (1/3: AJUSTES, REGLAS Y FSM)   -->
+              <!-- ======================================== -->
+              <aside class="col-settings-panel">
+                <div class="col-settings-scroll custom-scrollbar">
+                  <!-- Reglas 2x2 Grid con altura 40px y 100% Hitbox -->
+                  <div class="rules-4btn-grid">
+                    <!-- Tiempo -->
+                    <div class="rule-cartouche" title="Tiempo de partido">
+                      <span class="rule-cartouche-content">
+                        <span class="rule-icon">⏱</span>
+                        <span class="rule-value">{formatTimeLimit(gameUI.timeLimitMinutes)}</span>
+                      </span>
+                      <span class="rule-arrow">▾</span>
+                      <select
+                        id="select-time-limit"
+                        class="rule-select-overlay"
+                        value={gameUI.timeLimitMinutes}
+                        disabled={(!gameUI.isAdmin && !gameUI.isHost) || gameUI.isMatchActive}
+                        onchange={(e) => {
+                          const val = Number((e.currentTarget as HTMLSelectElement).value);
+                          soundFX.playUIClick();
+                          gameUI.timeLimitMinutes = val;
+                          gameUI.physicsModifiers.timeLimit = val;
+                          if (gameUI.activeRoom) gameUI.activeRoom.timeLimit = val;
+                        }}
+                      >
+                        {#each Array.from({ length: 16 }, (_, i) => i) as t}
+                          <option value={t}>{formatTimeLimit(t)}</option>
+                        {/each}
+                      </select>
+                    </div>
+
+                    <!-- Goles -->
+                    <div class="rule-cartouche" title="Límite de goles">
+                      <span class="rule-cartouche-content">
+                        <span class="rule-icon">⚽</span>
+                        <span class="rule-value">{formatGoalsLimit(gameUI.scoreLimitGoals)}</span>
+                      </span>
+                      <span class="rule-arrow">▾</span>
+                      <select
+                        id="select-goal-limit"
+                        class="rule-select-overlay"
+                        value={gameUI.scoreLimitGoals}
+                        disabled={(!gameUI.isAdmin && !gameUI.isHost) || gameUI.isMatchActive}
+                        onchange={(e) => {
+                          const val = Number((e.currentTarget as HTMLSelectElement).value);
+                          soundFX.playUIClick();
+                          gameUI.scoreLimitGoals = val;
+                          gameUI.physicsModifiers.scoreLimit = val;
+                          if (gameUI.activeRoom) gameUI.activeRoom.scoreLimit = val;
+                        }}
+                      >
+                        {#each Array.from({ length: 16 }, (_, i) => i) as g}
+                          <option value={g}>{formatGoalsLimit(g)}</option>
+                        {/each}
+                      </select>
+                    </div>
+
+                    <!-- Bloqueo de Equipos -->
+                    <button
+                      type="button"
+                      id="btn-lock-teams"
+                      class="rule-cartouche-btn lock-teams-btn"
+                      class:active-locked={gameUI.teamsLocked}
+                      disabled={(!gameUI.isAdmin && !gameUI.isHost) || gameUI.isMatchActive}
+                      title="Bloquear equipos para que solo los administradores puedan mover jugadores"
+                      onclick={() => {
+                        soundFX.playUIClick();
+                        gameUI.toggleTeamsLock();
+                      }}
+                    >
+                      <span class="lock-label">{gameUI.teamsLocked ? '🔒 Bloqueados' : '🔓 Libres'}</span>
+                      <span class="lock-tag">{gameUI.teamsLocked ? 'SOLO ADMINS' : 'TODOS'}</span>
+                    </button>
+
+                    <!-- Modifiers -->
+                    <button
+                      type="button"
+                      id="btn-open-physics-modifiers"
+                      class="rule-cartouche-btn btn-modifiers"
+                      disabled={(!gameUI.isAdmin && !gameUI.isHost) || gameUI.isMatchActive}
+                      onclick={() => gameUI.openOverlay('MODIFIERS')}
+                      title="Abrir panel de modificadores de física"
+                    >
+                      <span>⚡ Modifiers</span>
+                    </button>
+                  </div>
+
+                  <!-- Escoger estadio -->
+                  <div class="stadium-section w-full">
+                    <div class="param-label-row">
+                      <span class="param-name">Escoger estadio</span>
+                    </div>
+
+                    <div
+                      class="stadium-preview-box"
+                      tabindex="0"
+                      role="button"
+                      onmouseenter={() => soundFX.playUIHover()}
+                      onclick={() => {
+                        if ((gameUI.isAdmin || gameUI.isHost) && !gameUI.isMatchActive) {
+                          soundFX.playUIClick();
+                          gameUI.openOverlay('STADIUM_SELECT');
+                        }
+                      }}
+                      onkeydown={(e) => {
+                        if ((e.key === 'Enter' || e.key === ' ') && (gameUI.isAdmin || gameUI.isHost) && !gameUI.isMatchActive) {
+                          e.preventDefault();
+                          soundFX.playUIClick();
+                          gameUI.openOverlay('STADIUM_SELECT');
+                        }
+                      }}
+                      title="Dar click para cambiar de estadio"
+                    >
+                      <svg class="stadium-svg" viewBox="0 0 300 150" preserveAspectRatio="none">
+                        <rect x="4" y="4" width="292" height="142" rx="4" fill="#092215" stroke="#00e5ff" stroke-opacity="0.45" stroke-width="1.5" />
+                        <line x1="150" y1="4" x2="150" y2="146" stroke="#00e5ff" stroke-opacity="0.4" stroke-width="1.5" />
+                        <circle cx="150" cy="75" r="32" fill="none" stroke="#00e5ff" stroke-opacity="0.4" stroke-width="1.5" />
+                        <circle cx="150" cy="75" r="3" fill="#00e5ff" />
+                        <rect x="4" y="40" width="36" height="70" fill="none" stroke="#00e5ff" stroke-opacity="0.35" stroke-width="1.2" />
+                        <rect x="1" y="58" width="5" height="34" fill="rgba(0, 229, 255, 0.35)" stroke="#00e5ff" stroke-width="1" />
+                        <rect x="260" y="40" width="36" height="70" fill="none" stroke="#00e5ff" stroke-opacity="0.35" stroke-width="1.2" />
+                        <rect x="294" y="58" width="5" height="34" fill="rgba(0, 229, 255, 0.35)" stroke="#00e5ff" stroke-width="1" />
+                      </svg>
+
+                      <div class="stadium-overlay">
+                        <span class="stadium-name">{gameUI.activeStadiumName || 'Mediano'}</span>
+                        <span class="stadium-action-text">Dar click para cambiar de estadio</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <!-- Ajustes Avanzados de Sala con Toggle Pública/Privada y Contraseña Condicional -->
+                  <div class="advanced-settings-card w-full">
+                    <span class="card-micro-title">⚙️ AJUSTES DE SALA</span>
+
+                    <div class="adv-row">
+                      <label for="room-name-input">Nombre de Sala</label>
+                      <input
+                        id="room-name-input"
+                        type="text"
+                        maxlength="50"
+                        class="styled-adv-input"
+                        bind:value={gameUI.activeRoomName}
+                        disabled={(!gameUI.isAdmin && !gameUI.isHost) || gameUI.isMatchActive}
+                      />
+                    </div>
+
+                    <div class="adv-capacity-row">
+                      <span class="adv-label">Capacidad Jugadores:</span>
+                      <div class="cap-stepper">
+                        <button
+                          type="button"
+                          id="btn-cap-minus"
+                          class="cap-step-btn"
+                          disabled={(!gameUI.isAdmin && !gameUI.isHost) || gameUI.isMatchActive}
+                          onclick={() => changeCapacity(-1)}
+                        >
+                          -
+                        </button>
+                        <span id="capacity-value" class="cap-num-val">{roomCapacity}</span>
+                        <button
+                          type="button"
+                          id="btn-cap-plus"
+                          class="cap-step-btn"
+                          disabled={(!gameUI.isAdmin && !gameUI.isHost) || gameUI.isMatchActive}
+                          onclick={() => changeCapacity(1)}
+                        >
+                          +
+                        </button>
+                      </div>
+                    </div>
+
+                    <div class="toggle-row">
+                      <span class="toggle-label">{isRoomPublic ? '🌐 Sala pública' : '🔒 Sala privada'}</span>
+                      <label class="switch">
+                        <input
+                          type="checkbox"
+                          bind:checked={isRoomPublic}
+                          disabled={(!gameUI.isAdmin && !gameUI.isHost) || gameUI.isMatchActive}
+                          onchange={() => {
+                            soundFX.playUIClick();
+                            if (isRoomPublic) {
+                              roomPassword = '';
+                              if (gameUI.activeRoom) {
+                                gameUI.activeRoom.isPrivate = false;
+                                gameUI.activeRoom.password = '';
+                              }
+                            } else {
+                              if (gameUI.activeRoom) {
+                                gameUI.activeRoom.isPrivate = true;
+                              }
+                            }
+                          }}
+                        />
+                        <span class="slider"></span>
+                      </label>
+                    </div>
+
+                    {#if !isRoomPublic}
+                      <div class="adv-row password-row">
+                        <label for="room-password-input">Contraseña de Sala</label>
+                        <input
+                          id="room-password-input"
+                          type="text"
+                          maxlength="30"
+                          placeholder="Escribe la clave de acceso..."
+                          class="styled-adv-input"
+                          bind:value={roomPassword}
+                          disabled={(!gameUI.isAdmin && !gameUI.isHost) || gameUI.isMatchActive}
+                          oninput={(e) => {
+                            const val = (e.currentTarget as HTMLInputElement).value;
+                            roomPassword = val;
+                            if (gameUI.activeRoom) gameUI.activeRoom.password = val;
+                          }}
+                        />
+                      </div>
+                    {/if}
+                  </div>
+                </div>
+
+                <!-- Footer FSM -->
+                <div class="fsm-footer-controls">
+                  {#if isMatchStopped}
+                    <button
+                      type="button"
+                      id="btn-match-toggle"
+                      class="btn-start-match btn btn-success btn-match-toggle"
+                      disabled={!gameUI.isAdmin && !gameUI.isHost}
+                      onclick={handleStartMatch}
+                    >
+                      <span>▶ INICIAR PARTIDO</span>
+                    </button>
+                  {:else}
+                    <div class="fsm-running-grid">
+                      <button
+                        type="button"
+                        id="btn-match-toggle"
+                        class="btn-stop-match btn btn-danger btn-match-toggle"
+                        disabled={!gameUI.isAdmin && !gameUI.isHost}
+                        onclick={handleStopMatch}
+                      >
+                        <span>■ DETENER PARTIDO</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        id="btn-fsm-pause"
+                        class="btn-pause-match btn btn-warning"
+                        class:is-resuming={isMatchPaused}
+                        disabled={!gameUI.isAdmin && !gameUI.isHost}
+                        onclick={handlePauseToggle}
+                      >
+                        <span>{isMatchPaused ? '▶ REANUDAR' : '⏸ PAUSAR'}</span>
+                      </button>
+                    </div>
+                  {/if}
+                </div>
+              </aside>
+
+              <!-- ======================================== -->
+              <!-- COLUMNAS 2, 3, 4 (2/3: BANQUILLOS)       -->
+              <!-- ======================================== -->
+              <main class="col-benches-grid">
+                <!-- 1. EQUIPO ROJO (LOCAL) -->
+                <div
+                  class="bench-card red-bench"
+                  role="region"
+                  aria-label="Banquillo Equipo Rojo"
+                  class:is-drag-over={dragOverTeam === 'red'}
+                  ondragover={(e) => handleDragOver(e, 'red')}
+                  ondragleave={(e) => handleDragLeave(e, 'red')}
+                  ondrop={(e) => handleDrop(e, 'red')}
+                >
+                  <div
+                    class="bench-card-header red-header captain-bicolor-header"
+                    style="background: linear-gradient(90deg, {redPrimaryColor} 50%, {redSecondaryColor} 50%);"
+                  >
+                    <span class="team-name">{redTeamName}</span>
+                  </div>
+
+                  <div id="redPlayersList" class="bench-players-list custom-scrollbar-red">
+                    {#each redPlayers as p (p.id)}
+                      {@const isCaptain = p.id === redCaptain?.id}
+                      {@const isDraggable = canDragPlayer(p)}
+                      <div
+                        class="player-slot-card red-slot"
+                        role="button"
+                        tabindex="0"
+                        class:cursor-grab={isDraggable}
+                        class:cursor-not-allowed={!isDraggable}
+                        class:is-dragging={draggedPlayerId === p.id}
+                        draggable={isDraggable}
+                        ondragstart={(e) => handleDragStart(e, p)}
+                        ondragend={handleDragEnd}
+                        onclick={(e) => handlePlayerCardClick(e, p)}
+                        onkeydown={(e) => {
+                          if (e.key === 'Enter' || e.key === ' ') {
+                            e.preventDefault();
+                            handlePlayerCardClick(e as unknown as MouseEvent, p);
+                          }
+                        }}
+                      >
+                        <!-- 1. Avatar Circular de 32px -->
+                        <div class="slot-avatar red">{p.avatar || p.number || '1'}</div>
+                        <!-- 2. Nombre del Jugador en Chivo -->
+                        <span class="slot-nickname">{p.name || p.nickname}</span>
+                        <!-- 3. Cintilla de Capitán "C" -->
+                        {#if isCaptain}
+                          <span
+                            class="captain-ribbon"
+                            style="background-color: {redPrimaryColor};"
+                            title="Capitán del equipo"
+                          >
+                            C
+                          </span>
+                        {/if}
+                      </div>
+                    {:else}
+                      <div class="empty-bench-state">Sin jugadores en Rojo</div>
+                    {/each}
+                  </div>
+                </div>
+
+                <!-- 2. ESPECTADORES (SPEC) -->
+                <div
+                  class="bench-card spec-bench"
+                  role="region"
+                  aria-label="Banquillo Espectadores"
+                  class:is-drag-over={dragOverTeam === 'spectator'}
+                  ondragover={(e) => handleDragOver(e, 'spectator')}
+                  ondragleave={(e) => handleDragLeave(e, 'spectator')}
+                  ondrop={(e) => handleDrop(e, 'spectator')}
+                >
+                  <div class="bench-card-header spec-header">
+                    <span class="team-name">Espectadores</span>
+                  </div>
+
+                  <div id="specPlayersList" class="bench-players-list custom-scrollbar">
+                    {#each specPlayers as p (p.id)}
+                      {@const isDraggable = canDragPlayer(p)}
+                      <div
+                        class="player-slot-card spec-slot"
+                        role="button"
+                        tabindex="0"
+                        class:cursor-grab={isDraggable}
+                        class:cursor-not-allowed={!isDraggable}
+                        class:is-dragging={draggedPlayerId === p.id}
+                        draggable={isDraggable}
+                        ondragstart={(e) => handleDragStart(e, p)}
+                        ondragend={handleDragEnd}
+                        onclick={(e) => handlePlayerCardClick(e, p)}
+                        onkeydown={(e) => {
+                          if (e.key === 'Enter' || e.key === ' ') {
+                            e.preventDefault();
+                            handlePlayerCardClick(e as unknown as MouseEvent, p);
+                          }
+                        }}
+                      >
+                        <div class="slot-avatar spec">{p.avatar || p.number || '👁'}</div>
+                        <span class="slot-nickname">{p.name || p.nickname}</span>
+                      </div>
+                    {:else}
+                      <div class="empty-bench-state">Sin espectadores</div>
+                    {/each}
+                  </div>
+                </div>
+
+                <!-- 3. EQUIPO AZUL (VISITANTE) -->
+                <div
+                  class="bench-card blue-bench"
+                  role="region"
+                  aria-label="Banquillo Equipo Azul"
+                  class:is-drag-over={dragOverTeam === 'blue'}
+                  ondragover={(e) => handleDragOver(e, 'blue')}
+                  ondragleave={(e) => handleDragLeave(e, 'blue')}
+                  ondrop={(e) => handleDrop(e, 'blue')}
+                >
+                  <div
+                    class="bench-card-header blue-header captain-bicolor-header"
+                    style="background: linear-gradient(90deg, {bluePrimaryColor} 50%, {blueSecondaryColor} 50%);"
+                  >
+                    <span class="team-name">{blueTeamName}</span>
+                  </div>
+
+                  <div id="bluePlayersList" class="bench-players-list custom-scrollbar">
+                    {#each bluePlayers as p (p.id)}
+                      {@const isCaptain = p.id === blueCaptain?.id}
+                      {@const isDraggable = canDragPlayer(p)}
+                      <div
+                        class="player-slot-card blue-slot"
+                        role="button"
+                        tabindex="0"
+                        class:cursor-grab={isDraggable}
+                        class:cursor-not-allowed={!isDraggable}
+                        class:is-dragging={draggedPlayerId === p.id}
+                        draggable={isDraggable}
+                        ondragstart={(e) => handleDragStart(e, p)}
+                        ondragend={handleDragEnd}
+                        onclick={(e) => handlePlayerCardClick(e, p)}
+                        onkeydown={(e) => {
+                          if (e.key === 'Enter' || e.key === ' ') {
+                            e.preventDefault();
+                            handlePlayerCardClick(e as unknown as MouseEvent, p);
+                          }
+                        }}
+                      >
+                        <div class="slot-avatar blue">{p.avatar || p.number || '2'}</div>
+                        <span class="slot-nickname">{p.name || p.nickname}</span>
+                        {#if isCaptain}
+                          <span
+                            class="captain-ribbon"
+                            style="background-color: {bluePrimaryColor};"
+                            title="Capitán del equipo"
+                          >
+                            C
+                          </span>
+                        {/if}
+                      </div>
+                    {:else}
+                      <div class="empty-bench-state">Sin jugadores en Azul</div>
+                    {/each}
+                  </div>
+                </div>
+              </main>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Menú Contextual de Administrador (Clic Directo con Disociación de Drag) -->
+  {#if contextMenu.visible && contextMenu.player}
+    <div
+      class="context-menu-backdrop"
+      role="button"
+      tabindex="-1"
+      aria-label="Cerrar menú contextual"
+      onclick={closeContextMenu}
+      onkeydown={(e) => { if (e.key === 'Escape') closeContextMenu(); }}
+      oncontextmenu={(e) => { e.preventDefault(); closeContextMenu(); }}
+    ></div>
+    <div
+      class="admin-context-menu"
+      style="left: {contextMenu.x}px; top: {contextMenu.y}px;"
+    >
+      <div class="menu-target-header">
+        <span class="target-name">{contextMenu.player.name || contextMenu.player.nickname}</span>
+      </div>
+      {#if !contextMenu.player.isHost}
+        <button
+          type="button"
+          class="context-menu-item"
+          onclick={() => {
+            soundFX.playUIClick();
+            gameUI.togglePlayerAdmin(contextMenu.player!.id);
+            closeContextMenu();
+          }}
+        >
+          <span>{contextMenu.player.isAdmin ? '✕ Quitar Admin' : '★ Dar Admin'}</span>
+        </button>
+        {#if contextMenu.player.id !== gameUI.localPlayerId}
           <button
             type="button"
-            id="btn-quick-close"
-            class="btn-leave"
-            onclick={handleLeave}
-            title="Abandonar la sala"
+            class="context-menu-item item-danger"
+            onclick={() => {
+              soundFX.playUIClick();
+              gameUI.kickPlayer(contextMenu.player!.id);
+              closeContextMenu();
+            }}
           >
-            <svg class="header-btn-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path>
-              <polyline points="16 17 21 12 16 7"></polyline>
-              <line x1="21" y1="12" x2="9" y2="12"></line>
-            </svg>
-            <span>ABANDONAR</span>
+            <span>Expulsar (Kick)</span>
           </button>
-
-          {#if canClose}
-            <button
-              type="button"
-              id="menu-close-btn"
-              class="btn-close-x"
-              onclick={handleClose}
-              aria-label="Cerrar menú"
-            >
-              ✕
-            </button>
-          {/if}
+          <button
+            type="button"
+            class="context-menu-item item-danger"
+            onclick={() => {
+              soundFX.playUIClick();
+              gameUI.banPlayer(contextMenu.player!.id);
+              closeContextMenu();
+            }}
+          >
+            <span>Banear (Ban)</span>
+          </button>
+        {/if}
+      {:else}
+        <div class="context-menu-item disabled">
+          <span>👑 Anfitrión (Inmutable)</span>
         </div>
-      </header>
-
-      <!-- CUERPO EN PROPORCIÓN 1/3 (Izquierda) y 2/3 (Derecha) = 4 Columnas -->
-      <div class="modal-body-layout">
-        <!-- ======================================== -->
-        <!-- COLUMNA 1 (1/3: AJUSTES, REGLAS Y FSM)   -->
-        <!-- ======================================== -->
-        <aside class="col-settings-panel">
-          <div class="col-settings-scroll custom-scrollbar">
-            <!-- 1. Cuadrícula 2x2 de Reglas con altura fija 40px (h-10) y 100% Hitbox en Selects -->
-            <div class="rules-4btn-grid">
-              <!-- TIEMPO -->
-              <div class="rule-cartouche" title="Tiempo de partido">
-                <span class="rule-cartouche-content">
-                  <span class="rule-icon">⏱</span>
-                  <span class="rule-value">{formatTimeLimit(gameUI.timeLimitMinutes)}</span>
-                </span>
-                <span class="rule-arrow">▾</span>
-                <select
-                  id="select-time-limit"
-                  class="rule-select-overlay"
-                  value={gameUI.timeLimitMinutes}
-                  disabled={(!gameUI.isAdmin && !gameUI.isHost) || gameUI.isMatchActive}
-                  onchange={(e) => {
-                    const val = Number((e.currentTarget as HTMLSelectElement).value);
-                    soundFX.playUIClick();
-                    gameUI.timeLimitMinutes = val;
-                    gameUI.physicsModifiers.timeLimit = val;
-                    if (gameUI.activeRoom) gameUI.activeRoom.timeLimit = val;
-                  }}
-                >
-                  {#each Array.from({ length: 16 }, (_, i) => i) as t}
-                    <option value={t}>{formatTimeLimit(t)}</option>
-                  {/each}
-                </select>
-              </div>
-
-              <!-- GOLES -->
-              <div class="rule-cartouche" title="Límite de goles">
-                <span class="rule-cartouche-content">
-                  <span class="rule-icon">⚽</span>
-                  <span class="rule-value">{formatGoalsLimit(gameUI.scoreLimitGoals)}</span>
-                </span>
-                <span class="rule-arrow">▾</span>
-                <select
-                  id="select-goal-limit"
-                  class="rule-select-overlay"
-                  value={gameUI.scoreLimitGoals}
-                  disabled={(!gameUI.isAdmin && !gameUI.isHost) || gameUI.isMatchActive}
-                  onchange={(e) => {
-                    const val = Number((e.currentTarget as HTMLSelectElement).value);
-                    soundFX.playUIClick();
-                    gameUI.scoreLimitGoals = val;
-                    gameUI.physicsModifiers.scoreLimit = val;
-                    if (gameUI.activeRoom) gameUI.activeRoom.scoreLimit = val;
-                  }}
-                >
-                  {#each Array.from({ length: 16 }, (_, i) => i) as g}
-                    <option value={g}>{formatGoalsLimit(g)}</option>
-                  {/each}
-                </select>
-              </div>
-
-              <!-- BLOQUEAR EQUIPOS -->
-              <button
-                type="button"
-                id="btn-lock-teams"
-                class="rule-cartouche-btn lock-teams-btn"
-                class:active-locked={gameUI.teamsLocked}
-                disabled={(!gameUI.isAdmin && !gameUI.isHost) || gameUI.isMatchActive}
-                title="Bloquear equipos para que solo los administradores puedan mover jugadores"
-                onclick={() => {
-                  soundFX.playUIClick();
-                  gameUI.toggleTeamsLock();
-                }}
-              >
-                <span class="lock-label">{gameUI.teamsLocked ? '🔒 Bloqueados' : '🔓 Libres'}</span>
-                <span class="lock-tag">{gameUI.teamsLocked ? 'SOLO ADMINS' : 'TODOS'}</span>
-              </button>
-
-              <!-- MODIFIERS -->
-              <button
-                type="button"
-                id="btn-open-physics-modifiers"
-                class="rule-cartouche-btn btn-modifiers"
-                disabled={(!gameUI.isAdmin && !gameUI.isHost) || gameUI.isMatchActive}
-                onclick={() => gameUI.openOverlay('MODIFIERS')}
-                title="Abrir panel de modificadores de física"
-              >
-                <span>⚡ Modifiers</span>
-              </button>
-            </div>
-
-            <!-- 2. Escoger estadio con previsualización vectorial 2:1 (Paridad RoomCreator) -->
-            <div class="stadium-section w-full">
-              <div class="param-label-row">
-                <span class="param-name">Escoger estadio</span>
-              </div>
-
-              <div
-                class="stadium-preview-box"
-                tabindex="0"
-                role="button"
-                onmouseenter={() => soundFX.playUIHover()}
-                onclick={() => {
-                  if ((gameUI.isAdmin || gameUI.isHost) && !gameUI.isMatchActive) {
-                    soundFX.playUIClick();
-                    gameUI.openOverlay('STADIUM_SELECT');
-                  }
-                }}
-                onkeydown={(e) => {
-                  if ((e.key === 'Enter' || e.key === ' ') && (gameUI.isAdmin || gameUI.isHost) && !gameUI.isMatchActive) {
-                    e.preventDefault();
-                    soundFX.playUIClick();
-                    gameUI.openOverlay('STADIUM_SELECT');
-                  }
-                }}
-                title="Dar click para cambiar de estadio"
-              >
-                <!-- Tactical Pitch SVG in 2:1 ratio -->
-                <svg class="stadium-svg" viewBox="0 0 300 150" preserveAspectRatio="none">
-                  <rect x="4" y="4" width="292" height="142" rx="4" fill="#092215" stroke="#00e5ff" stroke-opacity="0.45" stroke-width="1.5" />
-                  <line x1="150" y1="4" x2="150" y2="146" stroke="#00e5ff" stroke-opacity="0.4" stroke-width="1.5" />
-                  <circle cx="150" cy="75" r="32" fill="none" stroke="#00e5ff" stroke-opacity="0.4" stroke-width="1.5" />
-                  <circle cx="150" cy="75" r="3" fill="#00e5ff" />
-                  <!-- Left penalty & goal area -->
-                  <rect x="4" y="40" width="36" height="70" fill="none" stroke="#00e5ff" stroke-opacity="0.35" stroke-width="1.2" />
-                  <rect x="1" y="58" width="5" height="34" fill="rgba(0, 229, 255, 0.35)" stroke="#00e5ff" stroke-width="1" />
-                  <!-- Right penalty & goal area -->
-                  <rect x="260" y="40" width="36" height="70" fill="none" stroke="#00e5ff" stroke-opacity="0.35" stroke-width="1.2" />
-                  <rect x="294" y="58" width="5" height="34" fill="rgba(0, 229, 255, 0.35)" stroke="#00e5ff" stroke-width="1" />
-                </svg>
-
-                <!-- Superimposed overlay info -->
-                <div class="stadium-overlay">
-                  <span class="stadium-name">{gameUI.activeStadiumName || 'Mediano'}</span>
-                  <span class="stadium-action-text">Dar click para cambiar de estadio</span>
-                </div>
-              </div>
-            </div>
-
-            <!-- 3. Ajustes Avanzados de Sala con Toggle Pública/Privada y Contraseña Condicional -->
-            <div class="advanced-settings-card w-full">
-              <span class="card-micro-title">⚙️ AJUSTES DE SALA</span>
-
-              <div class="adv-row">
-                <label for="room-name-input">Nombre de Sala</label>
-                <input
-                  id="room-name-input"
-                  type="text"
-                  maxlength="50"
-                  class="styled-adv-input"
-                  bind:value={gameUI.activeRoomName}
-                  disabled={(!gameUI.isAdmin && !gameUI.isHost) || gameUI.isMatchActive}
-                />
-              </div>
-
-              <!-- Selector de Capacidad de Jugadores -->
-              <div class="adv-capacity-row">
-                <span class="adv-label">Capacidad Jugadores:</span>
-                <div class="cap-stepper">
-                  <button
-                    type="button"
-                    id="btn-cap-minus"
-                    class="cap-step-btn"
-                    disabled={(!gameUI.isAdmin && !gameUI.isHost) || gameUI.isMatchActive}
-                    onclick={() => changeCapacity(-1)}
-                  >
-                    -
-                  </button>
-                  <span id="capacity-value" class="cap-num-val">{roomCapacity}</span>
-                  <button
-                    type="button"
-                    id="btn-cap-plus"
-                    class="cap-step-btn"
-                    disabled={(!gameUI.isAdmin && !gameUI.isHost) || gameUI.isMatchActive}
-                    onclick={() => changeCapacity(1)}
-                  >
-                    +
-                  </button>
-                </div>
-              </div>
-
-              <!-- Toggle Sala Pública / Privada -->
-              <div class="toggle-row">
-                <span class="toggle-label">{isRoomPublic ? '🌐 Sala pública' : '🔒 Sala privada'}</span>
-                <label class="switch">
-                  <input
-                    type="checkbox"
-                    bind:checked={isRoomPublic}
-                    disabled={(!gameUI.isAdmin && !gameUI.isHost) || gameUI.isMatchActive}
-                    onchange={() => {
-                      soundFX.playUIClick();
-                      if (isRoomPublic) {
-                        roomPassword = '';
-                        if (gameUI.activeRoom) {
-                          gameUI.activeRoom.isPrivate = false;
-                          gameUI.activeRoom.password = '';
-                        }
-                      } else {
-                        if (gameUI.activeRoom) {
-                          gameUI.activeRoom.isPrivate = true;
-                        }
-                      }
-                    }}
-                  />
-                  <span class="slider"></span>
-                </label>
-              </div>
-
-              <!-- Campo de Contraseña solo cuando la sala es privada -->
-              {#if !isRoomPublic}
-                <div class="adv-row password-row">
-                  <label for="room-password-input">Contraseña de Sala</label>
-                  <input
-                    id="room-password-input"
-                    type="text"
-                    maxlength="30"
-                    placeholder="Escribe la clave de acceso..."
-                    class="styled-adv-input"
-                    bind:value={roomPassword}
-                    disabled={(!gameUI.isAdmin && !gameUI.isHost) || gameUI.isMatchActive}
-                    oninput={(e) => {
-                      const val = (e.currentTarget as HTMLInputElement).value;
-                      roomPassword = val;
-                      if (gameUI.activeRoom) gameUI.activeRoom.password = val;
-                    }}
-                  />
-                </div>
-              {/if}
-            </div>
-          </div>
-
-          <!-- PARTE INFERIOR FIJA: MÁQUINA DE ESTADOS FSM -->
-          <div class="fsm-footer-controls">
-            {#if isMatchStopped}
-              <button
-                type="button"
-                id="btn-match-toggle"
-                class="btn-start-match btn btn-success btn-match-toggle"
-                disabled={!gameUI.isAdmin && !gameUI.isHost}
-                onclick={handleStartMatch}
-              >
-                <span>▶ INICIAR PARTIDO</span>
-              </button>
-            {:else}
-              <div class="fsm-running-grid">
-                <button
-                  type="button"
-                  id="btn-match-toggle"
-                  class="btn-stop-match btn btn-danger btn-match-toggle"
-                  disabled={!gameUI.isAdmin && !gameUI.isHost}
-                  onclick={handleStopMatch}
-                >
-                  <span>■ DETENER PARTIDO</span>
-                </button>
-
-                <button
-                  type="button"
-                  id="btn-fsm-pause"
-                  class="btn-pause-match btn btn-warning"
-                  class:is-resuming={isMatchPaused}
-                  disabled={!gameUI.isAdmin && !gameUI.isHost}
-                  onclick={handlePauseToggle}
-                >
-                  <span>{isMatchPaused ? '▶ REANUDAR' : '⏸ PAUSAR'}</span>
-                </button>
-              </div>
-            {/if}
-          </div>
-        </aside>
-
-        <!-- ======================================== -->
-        <!-- COLUMNAS 2, 3, 4 (2/3: BANQUILLOS)       -->
-        <!-- ======================================== -->
-        <main class="col-benches-grid">
-          <!-- 1. EQUIPO ROJO (RED) -->
-          <section class="bench-card red-bench">
-            <div class="bench-card-header red-header">
-              <div class="team-meta">
-                <span class="team-dot red"></span>
-                <span class="team-name">EQUIPO ROJO</span>
-                <span id="redCount" class="count-pill">{redPlayers.length}</span>
-              </div>
-              <button
-                type="button"
-                id="joinRedBtn"
-                class="btn-join-team red"
-                disabled={gameUI.teamsLocked && !gameUI.isAdmin && !gameUI.isHost}
-                onclick={() => joinTeam('red')}
-              >
-                UNIRSE
-              </button>
-            </div>
-
-            <div id="redPlayersList" class="bench-players-list custom-scrollbar-red">
-              {#each redPlayers as p (p.id)}
-                <div class="player-slot-card red-slot">
-                  <div class="slot-main-info">
-                    <div class="slot-avatar red">{p.avatar || p.number}</div>
-                    <div class="slot-text-col">
-                      <span class="slot-nickname">{p.name}</span>
-                      <span class="slot-role red">
-                        {#if p.isHost}👑 Anfitrión
-                        {:else if p.isAdmin}Capitán ©
-                        {:else}Player #{p.number || 1}
-                        {/if}
-                      </span>
-                    </div>
-                  </div>
-
-                  <div class="slot-actions">
-                    {#if (gameUI.isAdmin || gameUI.isHost) && p.id !== gameUI.localPlayerId}
-                      <button
-                        type="button"
-                        class="btn-slot-action"
-                        title="Mover a Espectadores"
-                        onclick={() => movePlayer(p.id, 'spectator')}
-                      >
-                        ▶
-                      </button>
-                      {#if !p.isHost}
-                        <button
-                          type="button"
-                          class="btn-slot-kick"
-                          title="Expulsar"
-                          onclick={() => gameUI.kickPlayer(p.id)}
-                        >
-                          ✕
-                        </button>
-                      {/if}
-                    {:else if gameUI.isAdmin || gameUI.isHost}
-                      <button
-                        type="button"
-                        class="btn-slot-action"
-                        title="Mover a Espectadores"
-                        onclick={() => movePlayer(p.id, 'spectator')}
-                      >
-                        ▶
-                      </button>
-                    {/if}
-                  </div>
-                </div>
-              {:else}
-                <div class="empty-bench-state">Sin jugadores en Rojo</div>
-              {/each}
-            </div>
-          </section>
-
-          <!-- 2. ESPECTADORES (SPEC) -->
-          <section class="bench-card spec-bench">
-            <div class="bench-card-header spec-header">
-              <div class="team-meta">
-                <span class="team-dot spec"></span>
-                <span class="team-name">ESPECTADORES</span>
-                <span id="specCount" class="count-pill">{specPlayers.length}</span>
-              </div>
-              <button
-                type="button"
-                id="joinSpecBtn"
-                class="btn-join-team spec"
-                disabled={gameUI.teamsLocked && !gameUI.isAdmin && !gameUI.isHost}
-                onclick={() => joinTeam('spectator')}
-              >
-                MIRAR
-              </button>
-            </div>
-
-            <div id="specPlayersList" class="bench-players-list custom-scrollbar">
-              {#each specPlayers as p (p.id)}
-                <div class="player-slot-card spec-slot">
-                  {#if gameUI.isAdmin || gameUI.isHost}
-                    <button
-                      type="button"
-                      class="btn-slot-arrow"
-                      title="Mover a Rojo"
-                      onclick={() => movePlayer(p.id, 'red')}
-                    >
-                      ◀
-                    </button>
-                  {/if}
-
-                  <div class="slot-main-info">
-                    <div class="slot-avatar spec">{p.avatar || p.number}</div>
-                    <div class="slot-text-col">
-                      <span class="slot-nickname">{p.name}</span>
-                      <span class="slot-role spec">
-                        {#if p.isHost}👑 Anfitrión
-                        {:else}Espectador
-                        {/if}
-                      </span>
-                    </div>
-                  </div>
-
-                  <div class="slot-actions">
-                    {#if gameUI.isAdmin || gameUI.isHost}
-                      <button
-                        type="button"
-                        class="btn-slot-arrow"
-                        title="Mover a Azul"
-                        onclick={() => movePlayer(p.id, 'blue')}
-                      >
-                        ▶
-                      </button>
-                      {#if !p.isHost && p.id !== gameUI.localPlayerId}
-                        <button
-                          type="button"
-                          class="btn-slot-kick"
-                          title="Expulsar"
-                          onclick={() => gameUI.kickPlayer(p.id)}
-                        >
-                          ✕
-                        </button>
-                      {/if}
-                    {/if}
-                  </div>
-                </div>
-              {:else}
-                <div class="empty-bench-state">Sin espectadores</div>
-              {/each}
-            </div>
-          </section>
-
-          <!-- 3. EQUIPO AZUL (BLUE) -->
-          <section class="bench-card blue-bench">
-            <div class="bench-card-header blue-header">
-              <div class="team-meta">
-                <span class="team-dot blue"></span>
-                <span class="team-name">EQUIPO AZUL</span>
-                <span id="blueCount" class="count-pill">{bluePlayers.length}</span>
-              </div>
-              <button
-                type="button"
-                id="joinBlueBtn"
-                class="btn-join-team blue"
-                disabled={gameUI.teamsLocked && !gameUI.isAdmin && !gameUI.isHost}
-                onclick={() => joinTeam('blue')}
-              >
-                UNIRSE
-              </button>
-            </div>
-
-            <div id="bluePlayersList" class="bench-players-list custom-scrollbar">
-              {#each bluePlayers as p (p.id)}
-                <div class="player-slot-card blue-slot">
-                  {#if gameUI.isAdmin || gameUI.isHost}
-                    <button
-                      type="button"
-                      class="btn-slot-action"
-                      title="Mover a Espectadores"
-                      onclick={() => movePlayer(p.id, 'spectator')}
-                    >
-                      ◀
-                    </button>
-                  {/if}
-
-                  <div class="slot-main-info">
-                    <div class="slot-avatar blue">{p.avatar || p.number}</div>
-                    <div class="slot-text-col">
-                      <span class="slot-nickname">{p.name}</span>
-                      <span class="slot-role blue">
-                        {#if p.isHost}👑 Anfitrión
-                        {:else if p.isAdmin}Capitán ©
-                        {:else}Player #{p.number || 1}
-                        {/if}
-                      </span>
-                    </div>
-                  </div>
-
-                  <div class="slot-actions">
-                    {#if (gameUI.isAdmin || gameUI.isHost) && !p.isHost && p.id !== gameUI.localPlayerId}
-                      <button
-                        type="button"
-                        class="btn-slot-kick"
-                        title="Expulsar"
-                        onclick={() => gameUI.kickPlayer(p.id)}
-                      >
-                        ✕
-                      </button>
-                    {/if}
-                  </div>
-                </div>
-              {:else}
-                <div class="empty-bench-state">Sin jugadores en Azul</div>
-              {/each}
-            </div>
-          </section>
-        </main>
-      </div>
-    {/if}
-  </div>
+      {/if}
+    </div>
+  {/if}
 </div>
 
 <style>
@@ -978,14 +1094,56 @@
     user-select: none;
   }
 
-  .team-modal-card {
+  /* Viewport y Riel Deslizante del Corredor */
+  .corridor-viewport {
     position: fixed;
-    top: 50px;
-    bottom: calc(var(--chat-height, 160px) + 16px);
-    left: 50%;
-    transform: translateX(-50%);
-    width: min(94vw, 920px);
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    pointer-events: none;
+    z-index: 30;
+  }
+
+  .corridor-track {
+    display: flex;
+    width: 200%;
+    height: 100%;
+    transition: transform 0.4s cubic-bezier(0.2, 0.8, 0.2, 1);
+    will-change: transform;
+    pointer-events: none;
+  }
+
+  .corridor-slide-item {
+    width: 50%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+    flex-shrink: 0;
+    box-sizing: border-box;
+    pointer-events: none;
+  }
+
+  .card-with-external-tab-wrapper {
+    position: relative;
+    width: min(96vw, 1140px);
+    max-width: 1140px;
+    height: calc(100vh - var(--chat-height, 160px) - 72px);
     max-height: calc(100vh - var(--chat-height, 160px) - 72px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none;
+  }
+
+  /* Tarjeta Central Ampliada a min(96vw, 1140px) */
+  .team-modal-card {
+    width: 100%;
+    height: 100%;
+    max-height: 100%;
     background: rgba(10, 16, 26, 0.96);
     border: 1px solid rgba(0, 229, 255, 0.45);
     border-radius: 1rem;
@@ -997,7 +1155,66 @@
     box-shadow: 0 0 35px rgba(0, 229, 255, 0.22), 0 10px 30px rgba(0, 0, 0, 0.8);
     font-family: 'Chivo', system-ui, sans-serif;
     pointer-events: auto;
-    z-index: 30;
+  }
+
+  /* Pestañas Flotantes Exteriores Laterales */
+  .external-nav-tab {
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    z-index: 40;
+    height: 48px;
+    padding: 0 1rem;
+    background: rgba(10, 16, 26, 0.96);
+    border: 1px solid rgba(0, 229, 255, 0.5);
+    color: #00e5ff;
+    font-family: 'Space Grotesk', system-ui, sans-serif;
+    font-size: 0.82rem;
+    font-weight: 800;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    border-radius: 0.5rem;
+    box-shadow: 0 0 20px rgba(0, 229, 255, 0.35);
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    outline: none;
+    white-space: nowrap;
+    pointer-events: auto;
+  }
+
+  .external-nav-tab:hover {
+    background: #00e5ff;
+    color: #050811;
+    box-shadow: 0 0 25px rgba(0, 229, 255, 0.7);
+    transform: translateY(-50%) scale(1.05);
+  }
+
+  .external-nav-tab:active {
+    transform: translateY(-50%) scale(0.96);
+  }
+
+  .right-tab {
+    right: -58px;
+  }
+
+  .left-tab {
+    left: -66px;
+  }
+
+  .nav-chevron {
+    font-size: 0.85rem;
+  }
+
+  @media (max-width: 1280px) {
+    .right-tab {
+      right: 12px;
+    }
+    .left-tab {
+      left: 12px;
+    }
   }
 
   /* HEADER GENERAL DE SALA */
@@ -1018,19 +1235,15 @@
     gap: 0.65rem;
   }
 
-  .room-icon {
-    font-size: 1.1rem;
-  }
-
   .room-title {
     font-family: 'Space Grotesk', system-ui, sans-serif;
-    font-size: 0.95rem;
-    font-weight: 800;
-    letter-spacing: 0.06em;
+    font-size: 1.1rem;
+    font-weight: 700;
+    letter-spacing: 0.05em;
     color: #ffffff;
     text-transform: uppercase;
     margin: 0;
-    max-width: 380px;
+    max-width: 480px;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -1059,7 +1272,6 @@
   }
 
   .btn-copy-link,
-  .btn-stats-link,
   .btn-leave,
   .btn-close-x {
     padding: 0.35rem 0.75rem;
@@ -1094,17 +1306,6 @@
     box-shadow: 0 0 10px rgba(0, 229, 255, 0.3);
   }
 
-  .btn-stats-link {
-    background: #161c26;
-    border: 1px solid rgba(255, 215, 0, 0.35);
-    color: #ffd700;
-  }
-
-  .btn-stats-link:hover {
-    background: rgba(255, 215, 0, 0.15);
-    box-shadow: 0 0 10px rgba(255, 215, 0, 0.3);
-  }
-
   .btn-leave {
     background: rgba(255, 51, 102, 0.12);
     border: 1px solid rgba(255, 51, 102, 0.4);
@@ -1130,16 +1331,18 @@
     border-color: #ffffff;
   }
 
-  /* BODY LAYOUT (1/3 - 2/3) */
+  /* BODY LAYOUT (4 Columnas Holgadas) */
   .modal-body-layout {
     display: flex;
     flex: 1;
     min-height: 0;
   }
 
-  /* COLUMNA 1 (1/3: AJUSTES & FSM) */
+  /* COLUMNA 1 (REGLAS Y AJUSTES) */
   .col-settings-panel {
-    width: 35%;
+    width: 330px;
+    min-width: 320px;
+    max-width: 350px;
     height: 100%;
     background: rgba(8, 14, 24, 0.55);
     border-right: 1px solid rgba(0, 229, 255, 0.2);
@@ -1148,6 +1351,7 @@
     padding: 0.85rem;
     box-sizing: border-box;
     overflow-x: hidden;
+    flex-shrink: 0;
   }
 
   .col-settings-scroll {
@@ -1301,7 +1505,7 @@
     box-shadow: 0 0 16px rgba(251, 191, 36, 0.3);
   }
 
-  /* ESTADIO (2:1 Proporción Paridad RoomCreator) */
+  /* ESTADIO (2:1 Proporción) */
   .stadium-section {
     display: flex;
     flex-direction: column;
@@ -1634,14 +1838,14 @@
     box-shadow: 0 0 12px rgba(0, 229, 255, 0.4);
   }
 
-  /* COLUMNAS 2, 3, 4 (2/3: BANQUILLOS) */
+  /* COLUMNAS 2, 3, 4: BANQUILLOS HOLGADOS */
   .col-benches-grid {
-    width: 65%;
+    flex: 1;
     height: 100%;
     padding: 0.85rem;
     box-sizing: border-box;
     display: grid;
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 0.75rem;
     min-height: 0;
     background: rgba(10, 16, 26, 0.7);
@@ -1655,6 +1859,7 @@
     display: flex;
     flex-direction: column;
     min-height: 0;
+    transition: border-color 0.15s, box-shadow 0.15s, background 0.15s;
   }
 
   .red-bench {
@@ -1672,112 +1877,46 @@
     box-shadow: 0 0 14px rgba(0, 229, 255, 0.12);
   }
 
-  /* Bench Header */
+  .bench-card.is-drag-over {
+    border-color: #00e5ff !important;
+    box-shadow: 0 0 20px rgba(0, 229, 255, 0.4) !important;
+    background: rgba(0, 229, 255, 0.08) !important;
+  }
+
+  /* Bench Headers */
   .bench-card-header {
-    height: 38px;
-    padding: 0 0.65rem;
+    height: 40px;
+    padding: 0 0.75rem;
     display: flex;
     align-items: center;
-    justify-content: space-between;
+    justify-content: center;
     flex-shrink: 0;
   }
 
-  .red-header {
-    background: rgba(255, 51, 102, 0.2);
-    border-bottom: 1px solid rgba(255, 51, 102, 0.4);
+  .captain-bicolor-header {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9), 0 0 6px rgba(0, 0, 0, 0.8);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.15);
   }
 
   .spec-header {
-    background: rgba(59, 73, 76, 0.35);
+    background: rgba(30, 38, 50, 0.85);
     border-bottom: 1px solid rgba(132, 147, 150, 0.4);
   }
 
-  .blue-header {
-    background: rgba(0, 229, 255, 0.2);
-    border-bottom: 1px solid rgba(0, 229, 255, 0.4);
-  }
-
-  .team-meta {
-    display: flex;
-    align-items: center;
-    gap: 0.4rem;
-  }
-
-  .team-dot {
-    width: 0.45rem;
-    height: 0.45rem;
-    border-radius: 9999px;
-  }
-
-  .team-dot.red { background: #ff3366; box-shadow: 0 0 6px #ff3366; }
-  .team-dot.spec { background: #849396; }
-  .team-dot.blue { background: #00e5ff; box-shadow: 0 0 6px #00e5ff; }
-
   .team-name {
     font-family: 'Space Grotesk', system-ui, sans-serif;
-    font-size: 0.72rem;
-    font-weight: 900;
-    letter-spacing: 0.05em;
-    text-transform: uppercase;
-  }
-
-  .red-header .team-name { color: #ff3366; }
-  .spec-header .team-name { color: #bac9cc; }
-  .blue-header .team-name { color: #00e5ff; }
-
-  .count-pill {
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 0.65rem;
-    font-weight: 700;
-    padding: 0.1rem 0.35rem;
-    border-radius: 9999px;
-    background: rgba(8, 14, 24, 0.8);
-  }
-
-  .btn-join-team {
-    padding: 0.2rem 0.55rem;
-    border-radius: 0.25rem;
-    font-family: 'Chivo', system-ui, sans-serif;
-    font-size: 0.65rem;
+    font-size: 0.8rem;
     font-weight: 800;
+    letter-spacing: 0.06em;
     text-transform: uppercase;
-    cursor: pointer;
-    transition: all 0.15s ease;
-  }
-
-  .btn-join-team.red {
-    background: transparent;
-    border: 1px solid rgba(255, 51, 102, 0.4);
-    color: #ff3366;
-  }
-
-  .btn-join-team.red:hover:not(:disabled) {
-    background: rgba(255, 51, 102, 0.25);
-  }
-
-  .btn-join-team.spec {
-    background: transparent;
-    border: 1px solid rgba(132, 147, 150, 0.4);
-    color: #bac9cc;
-  }
-
-  .btn-join-team.spec:hover:not(:disabled) {
-    background: rgba(59, 73, 76, 0.4);
-  }
-
-  .btn-join-team.blue {
-    background: transparent;
-    border: 1px solid rgba(0, 229, 255, 0.4);
-    color: #00e5ff;
-  }
-
-  .btn-join-team.blue:hover:not(:disabled) {
-    background: rgba(0, 229, 255, 0.25);
-  }
-
-  .btn-join-team:disabled {
-    opacity: 0.4;
-    cursor: not-allowed;
+    color: #ffffff;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    text-align: center;
   }
 
   /* Lista de Jugadores */
@@ -1791,15 +1930,34 @@
     min-height: 0;
   }
 
+  /* TARJETA DE JUGADOR (3 ELEMENTOS: AVATAR, NOMBRE, CINTILLA C) */
   .player-slot-card {
-    background: rgba(19, 27, 40, 0.8);
+    background: rgba(19, 27, 40, 0.85);
     border-radius: 0.5rem;
-    padding: 0.45rem 0.55rem;
+    padding: 0.45rem 0.65rem;
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    gap: 0.4rem;
+    gap: 0.65rem;
     transition: all 0.15s ease;
+    user-select: none;
+    border: 1px solid transparent;
+  }
+
+  .player-slot-card.cursor-grab {
+    cursor: grab;
+  }
+
+  .player-slot-card.cursor-grab:active {
+    cursor: grabbing;
+  }
+
+  .player-slot-card.cursor-not-allowed {
+    cursor: not-allowed;
+  }
+
+  .player-slot-card.is-dragging {
+    opacity: 0.4;
+    transform: scale(0.98);
   }
 
   .player-slot-card.red-slot {
@@ -1814,23 +1972,22 @@
     border-left: 3px solid #00e5ff;
   }
 
-  .slot-main-info {
-    display: flex;
-    align-items: center;
-    gap: 0.45rem;
-    min-width: 0;
-    flex: 1;
+  .player-slot-card:hover {
+    background: rgba(30, 42, 60, 0.9);
+    border-color: rgba(0, 229, 255, 0.3);
   }
 
+  /* 1. Avatar Circular de 32px */
   .slot-avatar {
-    width: 1.65rem;
-    height: 1.65rem;
+    width: 32px;
+    height: 32px;
+    min-width: 32px;
     border-radius: 9999px;
     display: flex;
     align-items: center;
     justify-content: center;
     font-family: 'Space Grotesk', system-ui, sans-serif;
-    font-size: 0.65rem;
+    font-size: 0.75rem;
     font-weight: 800;
     flex-shrink: 0;
   }
@@ -1852,66 +2009,31 @@
     box-shadow: 0 0 6px rgba(0, 229, 255, 0.5);
   }
 
-  .slot-text-col {
-    display: flex;
-    flex-direction: column;
-    min-width: 0;
-  }
-
+  /* 2. Nombre del Jugador en Chivo */
   .slot-nickname {
-    font-size: 0.75rem;
-    font-weight: 700;
+    font-family: 'Chivo', system-ui, sans-serif;
+    font-size: 0.85rem;
+    font-weight: 500;
     color: #ffffff;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+    flex: 1;
   }
 
-  .slot-role {
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 0.6rem;
-    font-weight: 600;
-  }
-
-  .slot-role.red { color: #ff3366; }
-  .slot-role.spec { color: #849396; }
-  .slot-role.blue { color: #00e5ff; }
-
-  .slot-actions {
-    display: flex;
-    align-items: center;
-    gap: 0.25rem;
-    flex-shrink: 0;
-  }
-
-  .btn-slot-action,
-  .btn-slot-arrow,
-  .btn-slot-kick {
-    width: 1.25rem;
-    height: 1.25rem;
+  /* 3. Cintilla de Capitán "C" */
+  .captain-ribbon {
+    padding: 0.15rem 0.5rem;
     border-radius: 0.25rem;
-    background: rgba(36, 42, 53, 0.8);
-    border: 1px solid rgba(132, 147, 150, 0.3);
-    color: #bac9cc;
-    font-size: 0.6rem;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    transition: all 0.15s ease;
-  }
-
-  .btn-slot-action:hover,
-  .btn-slot-arrow:hover {
-    background: #00e5ff;
-    color: #050811;
-    border-color: #00e5ff;
-  }
-
-  .btn-slot-kick:hover {
-    background: #ff3366;
+    font-family: 'Space Grotesk', system-ui, sans-serif;
+    font-size: 0.75rem;
+    font-weight: 800;
     color: #ffffff;
-    border-color: #ff3366;
+    letter-spacing: 0.05em;
+    box-shadow: 0 0 8px rgba(0, 0, 0, 0.6);
+    flex-shrink: 0;
+    line-height: 1;
+    margin-left: auto;
   }
 
   .empty-bench-state {
@@ -1923,7 +2045,83 @@
   }
 
   /* ======================================================== */
-  /* ESTILOS DE LA VISTA DE ESTADÍSTICAS POST-PARTIDO (STATS) */
+  /* MENÚ CONTEXTUAL DE ADMINISTRADOR (CLIC DIRECTO)          */
+  /* ======================================================== */
+  .context-menu-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 9998;
+    background: transparent;
+    pointer-events: auto;
+  }
+
+  .admin-context-menu {
+    position: fixed;
+    z-index: 9999;
+    background: rgba(10, 16, 26, 0.98);
+    border: 1px solid rgba(0, 229, 255, 0.4);
+    border-radius: 0.5rem;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.8), 0 0 16px rgba(0, 229, 255, 0.25);
+    min-width: 170px;
+    padding: 0.4rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    font-family: 'Chivo', system-ui, sans-serif;
+    pointer-events: auto;
+  }
+
+  .menu-target-header {
+    padding: 0.35rem 0.5rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    font-family: 'Space Grotesk', system-ui, sans-serif;
+    font-size: 0.75rem;
+    font-weight: 800;
+    color: #00e5ff;
+    letter-spacing: 0.05em;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .context-menu-item {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.45rem 0.65rem;
+    border-radius: 0.35rem;
+    background: transparent;
+    border: none;
+    color: #dde2f1;
+    font-family: 'Chivo', system-ui, sans-serif;
+    font-size: 0.75rem;
+    font-weight: 700;
+    cursor: pointer;
+    text-align: left;
+    transition: all 0.12s ease;
+  }
+
+  .context-menu-item:hover:not(.disabled) {
+    background: rgba(0, 229, 255, 0.15);
+    color: #00e5ff;
+  }
+
+  .context-menu-item.item-danger {
+    color: #ff4757;
+  }
+
+  .context-menu-item.item-danger:hover {
+    background: rgba(255, 71, 87, 0.18);
+    color: #ff6b81;
+  }
+
+  .context-menu-item.disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  /* ======================================================== */
+  /* VISTA DE ESTADÍSTICAS POST-PARTIDO                       */
   /* ======================================================== */
   .stats-header-row {
     padding: 0.85rem 1.25rem;
@@ -2056,112 +2254,6 @@
     border-radius: 0.2rem;
   }
 
-  .stats-actions {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-  }
-
-  .btn-return-room {
-    padding: 0.4rem 0.85rem;
-    background: rgba(0, 229, 255, 0.12);
-    border: 1px solid #00e5ff;
-    color: #00e5ff;
-    font-family: 'Chivo', system-ui, sans-serif;
-    font-size: 0.75rem;
-    font-weight: 800;
-    letter-spacing: 0.05em;
-    border-radius: 0.375rem;
-    cursor: pointer;
-    transition: all 0.15s ease;
-  }
-
-  .btn-return-room:hover {
-    background: #00e5ff;
-    color: #00363d;
-    box-shadow: 0 0 12px rgba(0, 229, 255, 0.5);
-  }
-
-  .btn-goto-menu {
-    height: 32px;
-    padding: 0 0.75rem;
-    background: rgba(10, 16, 26, 0.94);
-    border: 1px solid #00e5ff;
-    color: #00e5ff;
-    font-family: 'Chivo', system-ui, sans-serif;
-    font-size: 0.75rem;
-    font-weight: 800;
-    letter-spacing: 0.05em;
-    text-transform: uppercase;
-    border-radius: 0.375rem;
-    box-shadow: 0 0 12px rgba(0, 229, 255, 0.25);
-    display: flex;
-    align-items: center;
-    gap: 0.35rem;
-    cursor: pointer;
-    transition: all 0.15s ease;
-  }
-
-  .btn-goto-menu:hover {
-    background: #00e5ff;
-    color: #00363d;
-    box-shadow: 0 0 16px rgba(0, 229, 255, 0.5);
-  }
-
-  .nav-chevron {
-    font-size: 0.75rem;
-  }
-
-  /* Posesión */
-  .possession-bar-section {
-    display: flex;
-    flex-direction: column;
-    gap: 0.3rem;
-    padding: 0.75rem 1.25rem 0.25rem 1.25rem;
-    flex-shrink: 0;
-  }
-
-  .possession-legend-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 0.75rem;
-    font-weight: 700;
-  }
-
-  .pos-txt.red { color: #ff4757; }
-  .pos-txt.blue { color: #00e5ff; }
-
-  .pos-title {
-    font-family: 'Space Grotesk', system-ui, sans-serif;
-    font-size: 0.7rem;
-    letter-spacing: 0.08em;
-    color: #849396;
-  }
-
-  .possession-track {
-    width: 100%;
-    height: 4px;
-    background: #080e18;
-    border-radius: 9999px;
-    overflow: hidden;
-    display: flex;
-    box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.8);
-  }
-
-  .pos-segment.red {
-    background: #ff4757;
-    height: 100%;
-    transition: width 0.3s ease;
-  }
-
-  .pos-segment.blue {
-    background: #00e5ff;
-    height: 100%;
-    transition: width 0.3s ease;
-  }
-
   /* Tablas Duales */
   .tables-parallel-grid {
     display: grid;
@@ -2201,16 +2293,22 @@
     flex-shrink: 0;
   }
 
-  .table-header.red-header {
-    background: rgba(255, 71, 87, 0.2);
-    border-bottom: 1px solid rgba(255, 71, 87, 0.4);
-    color: #ff4757;
+  .col-team-name-hdr {
+    font-family: 'Space Grotesk', system-ui, sans-serif;
+    font-size: 0.8rem;
+    font-weight: 800;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: #ffffff;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    flex: 1;
   }
 
-  .table-header.blue-header {
-    background: rgba(0, 229, 255, 0.2);
-    border-bottom: 1px solid rgba(0, 229, 255, 0.4);
-    color: #00e5ff;
+  .col-headers-right {
+    display: flex;
+    align-items: center;
   }
 
   .col-player { flex: 1; text-align: left; }
@@ -2290,7 +2388,6 @@
     color: #849396;
   }
 
-  /* Acordeón Interactivo de Desglose */
   .accordion-drawer {
     padding: 0.45rem 0.65rem;
     background: rgba(8, 14, 24, 0.95);
