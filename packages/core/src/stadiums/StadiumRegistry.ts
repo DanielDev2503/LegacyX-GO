@@ -6,6 +6,7 @@ export type StadiumId =
   | 'small'
   | 'classic'
   | 'medium'
+  | 'mediano'
   | 'big'
   | '1v1'
   | '2v2'
@@ -154,6 +155,8 @@ export const STADIUM_PRESETS: Record<string, StadiumPreset> = {
   '2v2': STADIUM_SMALL,
   classic: STADIUM_CLASSIC,
   medium: STADIUM_CLASSIC,
+  mediano: STADIUM_CLASSIC,
+  Mediano: STADIUM_CLASSIC,
   '3v3': STADIUM_CLASSIC,
   big: STADIUM_BIG,
   '4v4': STADIUM_BIG
@@ -161,7 +164,7 @@ export const STADIUM_PRESETS: Record<string, StadiumPreset> = {
 
 export const StadiumRegistry: Record<string, StadiumPreset> = STADIUM_PRESETS;
 
-export const DEFAULT_STADIUM_ID: StadiumId = 'classic';
+export const DEFAULT_STADIUM_ID: StadiumId = 'mediano';
 
 export function createStadium(id: StadiumId | string = defaultStadium, customOptions?: Partial<StadiumOptions>): Stadium {
   let preset: StadiumPreset;
@@ -176,6 +179,7 @@ export function createStadium(id: StadiumId | string = defaultStadium, customOpt
   } else if (
     id === 'classic' ||
     id === 'medium' ||
+    id === 'mediano' ||
     id === '3v3' ||
     id === 'Mediano' ||
     id === 'Mediano (3v3)' ||
@@ -187,7 +191,7 @@ export function createStadium(id: StadiumId | string = defaultStadium, customOpt
   } else {
     const presetKey = (id in STADIUM_PRESETS)
       ? id
-      : (defaultStadium in STADIUM_PRESETS ? defaultStadium : 'classic');
+      : (defaultStadium in STADIUM_PRESETS ? defaultStadium : 'mediano');
     preset = STADIUM_PRESETS[presetKey];
   }
 

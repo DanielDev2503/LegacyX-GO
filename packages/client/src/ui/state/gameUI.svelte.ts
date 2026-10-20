@@ -33,6 +33,7 @@ export type StadiumPresetKey =
   | 'individual'
   | 'small'
   | 'medium'
+  | 'mediano'
   | 'classic'
   | 'big'
   | '1v1'
@@ -514,8 +515,8 @@ class GameUIStore {
   public teamsLocked = $state(false);
   public isTeamSelectForcedOpen = $state(false);
   public showPostMatchCarousel = $state(false);
-  public selectedStadiumId = $state<'small' | 'medium' | 'big' | 'af_3v3' | 'classic'>('classic');
-  public activeStadiumName = $state('Classic');
+  public selectedStadiumId = $state<'small' | 'medium' | 'big' | 'af_3v3' | 'classic' | 'mediano'>('mediano');
+  public activeStadiumName = $state('Mediano');
   public rosterPlayers = $state<RosterPlayer[]>([
     { id: 1, peerId: 'host', nickname: 'yami', name: 'yami', number: 10, avatar: 'YA', team: 'red', isAdmin: true, isHost: true, ping: 16 },
     { id: 2, peerId: 'peer_2', nickname: 'Rival', name: 'Rival', number: 7, avatar: '7', team: 'blue', isAdmin: false, isHost: false, ping: 28 }
@@ -526,7 +527,7 @@ class GameUIStore {
   public redScore = $state(0);
   public blueScore = $state(0);
   public matchTimeFormatted = $state('03:00');
-  public fsmPhase = $state<'STOPPED' | 'WARMUP' | 'KICKOFF' | 'PLAYING' | 'PAUSED' | 'GOAL' | 'OVERTIME' | 'STATS'>('PLAYING');
+  public fsmPhase = $state<'STOPPED' | 'WARMUP' | 'KICKOFF' | 'PLAYING' | 'PAUSED' | 'GOAL' | 'OVERTIME' | 'STATS'>('STOPPED');
   public isGoldenGoal = $state(false);
   public redPossession = $state(50);
   public bluePossession = $state(50);
@@ -1348,9 +1349,12 @@ class GameUIStore {
       maxPlayers: 1,
       ping: 0,
       isPrivate: false,
-      stadium: 'AF 3v3'
+      stadium: 'Mediano'
     };
+    this.activeStadiumName = 'Mediano';
+    this.fsmPhase = 'STOPPED';
     this.navigateTo('IN_GAME');
+    this.openOverlay('TEAM_MANAGEMENT');
     if (this.onStartPracticeMode) {
       this.onStartPracticeMode();
     }

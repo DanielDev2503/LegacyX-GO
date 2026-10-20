@@ -52,24 +52,45 @@
     if (gameUI.currentScreen !== 'IN_GAME' || !canvasRef) return;
 
     // 1. Inicializar motor matemático canónico a 60 Hz
-    const engine = new EngineInstance();
+    const engine = new EngineInstance(gameUI.selectedStadiumId || 'mediano');
     testEngine = engine;
 
     // Configurar jugadores (1 en Rojo, 1 en Azul)
     engine.addPlayer(1, 'red');
     engine.addPlayer(2, 'blue');
-    engine.startMatch();
+    engine.resetPositions();
+
+    // Inicializar siempre en 0: STOP con el menú de sala abierto
+    gameUI.fsmPhase = 'STOPPED';
+    gameUI.matchPhase = 0;
+    gameUI.openOverlay('TEAM_MANAGEMENT');
 
     // Conectar callbacks de estado UI
     gameUI.onModifiersChanged = (mods) => {
       applyModifiersToEngine(mods);
     };
 
-    gameUI.onStartPracticeMode = () => {
-      engine.ball.pos.set(0, 0);
-      engine.ball.vel.set(0, 0);
+    gameUI.onStartMatch = () => {
       engine.startMatch();
       soundFX.playWhistle();
+      gameUI.closeOverlay();
+    };
+
+    gameUI.onStopMatch = () => {
+      engine.stopMatch();
+      soundFX.playWhistle();
+      gameUI.openOverlay('TEAM_MANAGEMENT');
+    };
+
+    gameUI.onTogglePause = () => {
+      engine.togglePause();
+    };
+
+    gameUI.onStartPracticeMode = () => {
+      engine.resetPositions();
+      gameUI.fsmPhase = 'STOPPED';
+      gameUI.matchPhase = 0;
+      gameUI.openOverlay('TEAM_MANAGEMENT');
     };
 
     // Conectar eventos del motor al sintetizador procedural Web Audio API

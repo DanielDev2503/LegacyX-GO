@@ -1,4 +1,4 @@
-export const defaultStadium = 'AF 3v3 Official';
+export const defaultStadium = 'mediano';
 
 export interface GameplayConfig {
   playerMaxSpeed: number;       // min: 0.7, max: 11.2, def: 2.8 (px/tick, 0.25x - 4.0x)

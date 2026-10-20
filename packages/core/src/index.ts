@@ -290,6 +290,23 @@ export class EngineInstance {
     this.fsm.startMatch();
   }
 
+  public stopMatch(): void {
+    this.resetPositions();
+    this.fsm.stopMatch();
+  }
+
+  public pauseMatch(): void {
+    this.fsm.pauseMatch();
+  }
+
+  public resumeMatch(): void {
+    this.fsm.resumeMatch();
+  }
+
+  public togglePause(): void {
+    this.fsm.togglePause();
+  }
+
   public step(inputs: Map<number, PlayerInput>, isReplay: boolean = false): void {
     this.soundMask = 0;
     const isGameActive = this.fsm.state === MatchPhase.PLAYING || this.fsm.state === MatchPhase.KICKOFF;

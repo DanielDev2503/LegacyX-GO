@@ -361,8 +361,8 @@
       {:else}
         {#each gameUI.chatMessages as msg (msg.id)}
           <div class="chat-line">
-            <span class="chat-sender {msg.team.toLowerCase()}">
-              {#if msg.isHost}👑 {/if}{msg.sender}:
+            <span class="chat-sender {msg.team.toLowerCase()} font-bold">
+              {msg.sender}:
             </span>
             <span class="chat-text">{msg.text}</span>
           </div>

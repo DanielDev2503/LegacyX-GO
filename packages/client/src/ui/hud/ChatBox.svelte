@@ -59,7 +59,7 @@
         <div class="chat-line chat-msg chat-msg--system">{msg.text}</div>
       {:else}
         <div class="chat-line chat-msg">
-          <span class="sender {msg.senderTeam ?? 'spectator'}">{msg.sender}:</span>
+          <span class="sender font-bold {msg.senderTeam ?? 'spectator'}">{msg.sender}:</span>
           <span class="msg-body">{msg.text}</span>
         </div>
       {/if}

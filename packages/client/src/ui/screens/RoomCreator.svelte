@@ -14,8 +14,8 @@
   let selectedStadiumIndex = $state(0);
 
   const stadiums = [
+    { name: 'Mediano', dims: '55x30m', desc: 'Campo Clásico Estándar 3v3' },
     { name: 'AF 3v3 Official', dims: '60x35m', desc: 'Canónico Haxball 3v3' },
-    { name: 'Classic Pitch', dims: '55x30m', desc: 'Campo Clásico Estándar' },
     { name: 'Big Pitch', dims: '80x45m', desc: 'Gran Estadio 4v4 / 5v5' },
     { name: 'Small Field', dims: '40x22m', desc: 'Cancha Reducida 1v1 / 2v2' }
   ];
