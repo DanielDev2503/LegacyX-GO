@@ -1441,8 +1441,8 @@
                 </div>
               </div>
 
-              <!-- Fila de 3 Colores: Primario, Secundario y Terciario (Borde y Dorsal) -->
-              <div class="form-row-3col pt-2">
+              <!-- Fila de 4 Colores: Primario, Secundario, Terciario (Borde y Dorsal) y Entorno -->
+              <div class="form-row-4col pt-2">
                 <div class="color-picker-box">
                   <label for="kit-color-primary">Primario</label>
                   <div class="color-control">
@@ -1482,7 +1482,7 @@
                 </div>
 
                 <div class="color-picker-box">
-                  <label for="kit-color-tertiary">Borde y Dorsal</label>
+                  <label for="kit-color-tertiary">Borde/Dorsal</label>
                   <div class="color-control">
                     <input
                       id="kit-color-tertiary"
@@ -1502,6 +1502,49 @@
                         const val = (e.currentTarget as HTMLInputElement).value;
                         if (/^#[0-9A-Fa-f]{0,6}$/.test(val)) {
                           currentKit.tertiaryColor = val;
+                          if (val.length === 7) gameUI.saveSettings();
+                        }
+                      }}
+                    />
+                  </div>
+                </div>
+
+                <div class="color-picker-box">
+                  <label for="kit-color-outline" class="label-with-tooltip">
+                    Entorno
+                    <span
+                      class="info-tooltip-wrapper mini"
+                      tabindex="0"
+                      role="button"
+                      aria-label="Info color de entorno"
+                      use:tooltip={"Define el contorno de las letras del avatar y el borde exterior de las siglas y nombre del equipo para maximizar su contraste."}
+                    >
+                      <svg class="info-help-icon mini-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="12" cy="12" r="10"></circle>
+                        <line x1="12" y1="16" x2="12" y2="12"></line>
+                        <line x1="12" y1="8" x2="12.01" y2="8"></line>
+                      </svg>
+                    </span>
+                  </label>
+                  <div class="color-control">
+                    <input
+                      id="kit-color-outline"
+                      type="color"
+                      value={currentKit.outlineColor || '#000000'}
+                      oninput={(e) => {
+                        currentKit.outlineColor = (e.currentTarget as HTMLInputElement).value;
+                        gameUI.saveSettings();
+                      }}
+                    />
+                    <input
+                      type="text"
+                      class="hex-mini-input"
+                      maxlength="7"
+                      value={currentKit.outlineColor || '#000000'}
+                      oninput={(e) => {
+                        const val = (e.currentTarget as HTMLInputElement).value;
+                        if (/^#[0-9A-Fa-f]{0,6}$/.test(val)) {
+                          currentKit.outlineColor = val;
                           if (val.length === 7) gameUI.saveSettings();
                         }
                       }}
@@ -1561,7 +1604,14 @@
                     <div class="live-pattern-overlay diagonal-checks-stripes" style="--c1: {currentKit.primaryColor}; --c2: {currentKit.secondaryColor};"></div>
                   {/if}
 
-                  <span class="captain-badge" style="color: {currentKit.tertiaryColor || '#ffffff'};">10</span>
+                  <span
+                    class="captain-badge"
+                    style="
+                      color: {currentKit.tertiaryColor || '#ffffff'};
+                      -webkit-text-stroke: 1.5px {currentKit.outlineColor || '#000000'};
+                      text-shadow: -1px -1px 0 {currentKit.outlineColor || '#000000'}, 1px -1px 0 {currentKit.outlineColor || '#000000'}, -1px 1px 0 {currentKit.outlineColor || '#000000'}, 1px 1px 0 {currentKit.outlineColor || '#000000'};
+                    "
+                  >10</span>
                 </div>
               </div>
             </div>
@@ -2766,10 +2816,11 @@
     font-weight: 700;
   }
 
-  .form-row-3col {
+  .form-row-3col,
+  .form-row-4col {
     display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 0.5rem;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 0.45rem;
   }
 
   .input-group {

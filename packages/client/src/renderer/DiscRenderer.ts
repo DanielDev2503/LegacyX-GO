@@ -3,6 +3,8 @@ import type { DiscSnapshot, CompactDiscState } from '@legacyx/core';
 export interface PlayerVisualInfo {
   nickname?: string;
   number?: number | string;
+  outlineColor?: string;
+  tertiaryColor?: string;
 }
 
 const TURBO_TRAIL_CAPACITY = 16;
@@ -353,7 +355,7 @@ export class DiscRenderer {
     }
 
     this.renderStaminaBar(ctx, s);
-    this.renderPlayerDisc(ctx, s, isLocalPlayer, false, info?.nickname);
+    this.renderPlayerDisc(ctx, s, isLocalPlayer, false, info?.nickname, info);
   }
 
   private recordRibbonPoint(disc: DiscSnapshot): void {
@@ -823,7 +825,8 @@ export class DiscRenderer {
     disc: DiscSnapshot,
     isLocal: boolean,
     renderStamina: boolean = true,
-    nickname?: string
+    nickname?: string,
+    visualInfo?: PlayerVisualInfo
   ): void {
     const radius = disc.radius || this.playerRadius;
     const { x, y, team, avatar, kicking } = disc;
@@ -907,12 +910,13 @@ export class DiscRenderer {
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
 
-      ctx.strokeStyle = 'rgba(15, 23, 42, 0.7)';
+      const strokeCol = visualInfo?.outlineColor || 'rgba(15, 23, 42, 0.7)';
+      ctx.strokeStyle = strokeCol;
       ctx.lineWidth = 2.5;
       if (typeof ctx.strokeText === 'function') {
         ctx.strokeText(avatar, x, y + 1);
       }
-      ctx.fillStyle = '#FFFFFF';
+      ctx.fillStyle = visualInfo?.tertiaryColor || '#FFFFFF';
       ctx.fillText(avatar, x, y + 1);
       ctx.restore();
     }

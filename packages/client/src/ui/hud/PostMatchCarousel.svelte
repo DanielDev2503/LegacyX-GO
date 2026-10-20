@@ -13,12 +13,18 @@
   let blueCaptain = $derived(bluePlayers[0]);
 
   let redTeamName = $derived(redCaptain?.kit?.name || gameUI.redTeamKit?.name || 'Equipo Rojo');
+  let redTeamTag = $derived(redCaptain?.kit?.tag || gameUI.redTeamKit?.tag || 'RED');
   let redPrimaryColor = $derived(redCaptain?.kit?.primaryColor || gameUI.redTeamKit?.primaryColor || '#e74c3c');
   let redSecondaryColor = $derived(redCaptain?.kit?.secondaryColor || gameUI.redTeamKit?.secondaryColor || '#b02a1c');
+  let redKitTertiary = $derived(redCaptain?.kit?.tertiaryColor || gameUI.redTeamKit?.tertiaryColor || '#ffffff');
+  let redOutlineColor = $derived(redCaptain?.kit?.outlineColor || gameUI.redTeamKit?.outlineColor || '#000000');
 
   let blueTeamName = $derived(blueCaptain?.kit?.name || gameUI.blueTeamKit?.name || 'Equipo Azul');
+  let blueTeamTag = $derived(blueCaptain?.kit?.tag || gameUI.blueTeamKit?.tag || 'BLUE');
   let bluePrimaryColor = $derived(blueCaptain?.kit?.primaryColor || gameUI.blueTeamKit?.primaryColor || '#3498db');
   let blueSecondaryColor = $derived(blueCaptain?.kit?.secondaryColor || gameUI.blueTeamKit?.secondaryColor || '#217dbb');
+  let blueKitTertiary = $derived(blueCaptain?.kit?.tertiaryColor || gameUI.blueTeamKit?.tertiaryColor || '#ffffff');
+  let blueOutlineColor = $derived(blueCaptain?.kit?.outlineColor || gameUI.blueTeamKit?.outlineColor || '#000000');
 
   let isMatchStopped = $derived(gameUI.fsmPhase === 'STOPPED' || gameUI.matchPhase === 0);
 
@@ -124,15 +130,33 @@
         <div class="stats-card team-modal-card">
           <!-- Cabecera de Stats & Marcador Final -->
           <div class="stats-header-row">
-            <!-- Marcador Simétrico -->
-            <div class="match-score-block">
-              <span class="team-brand red">RED</span>
-              <div class="score-capsule">
-                <span class="score-digit red" id="post-score-red">{gameUI.redScore}</span>
-                <span class="score-dash">-</span>
-                <span class="score-digit blue" id="post-score-blue">{gameUI.blueScore}</span>
+            <!-- Marcador Homologado con HUD y Colores del Capitán -->
+            <div class="stats-scoreboard-banner">
+              <div
+                class="stats-acronym-badge red-acronym"
+                style="
+                  background: linear-gradient(90deg, {redPrimaryColor} 0%, {redPrimaryColor} 30%, {redSecondaryColor} 70%, {redSecondaryColor} 100%);
+                  border: 1.5px solid {redKitTertiary};
+                  color: {redKitTertiary};
+                  text-shadow: -1px -1px 0 {redOutlineColor}, 1px -1px 0 {redOutlineColor}, -1px 1px 0 {redOutlineColor}, 1px 1px 0 {redOutlineColor};
+                "
+              >
+                {redTeamTag}
               </div>
-              <span class="team-brand blue">BLUE</span>
+              <span class="stats-score-num" id="post-score-red">{gameUI.redScore}</span>
+              <span class="stats-score-sep">-</span>
+              <span class="stats-score-num" id="post-score-blue">{gameUI.blueScore}</span>
+              <div
+                class="stats-acronym-badge blue-acronym"
+                style="
+                  background: linear-gradient(90deg, {bluePrimaryColor} 0%, {bluePrimaryColor} 30%, {blueSecondaryColor} 70%, {blueSecondaryColor} 100%);
+                  border: 1.5px solid {blueKitTertiary};
+                  color: {blueKitTertiary};
+                  text-shadow: -1px -1px 0 {blueOutlineColor}, 1px -1px 0 {blueOutlineColor}, -1px 1px 0 {blueOutlineColor}, 1px 1px 0 {blueOutlineColor};
+                "
+              >
+                {blueTeamTag}
+              </div>
             </div>
 
             <!-- Badge de Victoria y Reloj -->
@@ -155,15 +179,21 @@
             </div>
           </div>
 
-          <!-- Tablas Duales Paralelas RED y BLUE con Cabeceras Bicolor 50/50 -->
+          <!-- Tablas Duales Paralelas RED y BLUE con Cabeceras Bicolor Suave y Nombres de Capitán -->
           <div class="tables-parallel-grid">
             <!-- TABLA RED -->
-            <div class="team-table-box red-box">
+            <div
+              class="team-table-box red-box"
+              style="--captain-local-primary: {redPrimaryColor}; --captain-local-glow: {redPrimaryColor}40;"
+            >
               <div
                 class="table-header red-header captain-bicolor-header"
-                style="background: linear-gradient(90deg, {redPrimaryColor} 50%, {redSecondaryColor} 50%);"
+                style="background: linear-gradient(90deg, {redPrimaryColor} 0%, {redPrimaryColor} 30%, {redSecondaryColor} 70%, {redSecondaryColor} 100%);"
               >
-                <span class="col-team-name-hdr">{redTeamName}</span>
+                <span
+                  class="col-team-name-hdr"
+                  style="text-shadow: -1px -1px 0 {redOutlineColor}, 1px -1px 0 {redOutlineColor}, -1px 1px 0 {redOutlineColor}, 1px 1px 0 {redOutlineColor};"
+                >{redTeamName}</span>
                 <div class="col-headers-right">
                   <span class="col-pts">Pts</span>
                   <span class="col-stat">G</span>
@@ -232,12 +262,18 @@
             </div>
 
             <!-- TABLA BLUE -->
-            <div class="team-table-box blue-box">
+            <div
+              class="team-table-box blue-box"
+              style="--captain-visitor-primary: {bluePrimaryColor}; --captain-visitor-glow: {bluePrimaryColor}40;"
+            >
               <div
                 class="table-header blue-header captain-bicolor-header"
-                style="background: linear-gradient(90deg, {bluePrimaryColor} 50%, {blueSecondaryColor} 50%);"
+                style="background: linear-gradient(90deg, {bluePrimaryColor} 0%, {bluePrimaryColor} 30%, {blueSecondaryColor} 70%, {blueSecondaryColor} 100%);"
               >
-                <span class="col-team-name-hdr">{blueTeamName}</span>
+                <span
+                  class="col-team-name-hdr"
+                  style="text-shadow: -1px -1px 0 {blueOutlineColor}, 1px -1px 0 {blueOutlineColor}, -1px 1px 0 {blueOutlineColor}, 1px 1px 0 {blueOutlineColor};"
+                >{blueTeamName}</span>
                 <div class="col-headers-right">
                   <span class="col-pts">Pts</span>
                   <span class="col-stat">G</span>
@@ -667,37 +703,37 @@
     padding: 1rem;
   }
 
-  /* Botones Flotantes Exteriores */
+  /* Botones Flotantes Exteriores en Amarillo Neón (#ffd700) */
   .floating-nav-btn {
     position: absolute;
     top: 50%;
     transform: translateY(-50%);
     z-index: 30;
-    height: 50px;
-    padding: 0 1.25rem;
-    background: rgba(10, 16, 26, 0.94);
-    border: 1px solid #00e5ff;
-    color: #00e5ff;
-    font-family: 'Chivo', system-ui, sans-serif;
-    font-size: 0.8rem;
-    font-weight: 800;
-    letter-spacing: 0.08em;
+    padding: 14px 12px;
+    background: rgba(255, 215, 0, 0.12);
+    border: 1.5px solid rgba(255, 215, 0, 0.6);
+    color: #ffd700;
+    font-family: 'Space Grotesk', system-ui, sans-serif;
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 0.05em;
     text-transform: uppercase;
-    border-radius: 0.5rem;
-    box-shadow: 0 0 16px rgba(0, 229, 255, 0.35);
+    border-radius: 8px;
+    box-shadow: 0 0 14px rgba(255, 215, 0, 0.25);
     display: flex;
     align-items: center;
-    gap: 0.5rem;
+    gap: 0.4rem;
     cursor: pointer;
     transition: all 0.2s ease;
     outline: none;
+    white-space: nowrap;
+    pointer-events: auto;
   }
 
   .floating-nav-btn:hover {
-    background: #00e5ff;
-    color: #00363d;
-    box-shadow: 0 0 20px rgba(0, 229, 255, 0.6);
-    transform: translateY(-50%) scale(1.04);
+    background: rgba(255, 215, 0, 0.25);
+    box-shadow: 0 0 20px rgba(255, 215, 0, 0.5);
+    transform: translateY(-50%) scale(1.05);
   }
 
   .floating-nav-btn:active {
@@ -748,46 +784,48 @@
     gap: 0.75rem;
   }
 
-  .match-score-block {
+  /* Banner Homologado de Marcador de Estadísticas */
+  .stats-scoreboard-banner {
     display: flex;
     align-items: center;
-    gap: 0.75rem;
+    gap: 0.65rem;
+    background: rgba(10, 16, 26, 0.9);
+    border: 1px solid rgba(0, 229, 255, 0.35);
+    border-radius: 0.5rem;
+    padding: 0.25rem 0.65rem;
+    box-shadow: 0 0 12px rgba(0, 229, 255, 0.15);
   }
 
-  .team-brand {
+  .stats-acronym-badge {
+    height: 26px;
+    padding: 0 0.55rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 0.35rem;
     font-family: 'Space Grotesk', system-ui, sans-serif;
-    font-size: 1.35rem;
+    font-size: 0.78rem;
     font-weight: 900;
     letter-spacing: 0.05em;
+    box-shadow: 0 0 8px rgba(0, 0, 0, 0.6);
   }
 
-  .team-brand.red { color: #ff4757; }
-  .team-brand.blue { color: #00e5ff; }
-
-  .score-capsule {
-    background: #080e18;
-    border: 1px solid rgba(0, 229, 255, 0.3);
-    padding: 0.25rem 0.85rem;
-    border-radius: 0.375rem;
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    box-shadow: 0 0 12px rgba(0, 229, 255, 0.18);
-  }
-
-  .score-digit {
+  .stats-score-num {
     font-family: 'JetBrains Mono', monospace;
-    font-size: 1.5rem;
-    font-weight: 900;
+    font-size: 1.35rem;
+    font-weight: 800;
+    color: #ffffff;
+    min-width: 1.2rem;
+    text-align: center;
+    line-height: 1;
   }
 
-  .score-digit.red { color: #ff4757; }
-  .score-digit.blue { color: #00e5ff; }
-
-  .score-dash {
-    color: #849396;
-    font-size: 1.15rem;
+  .stats-score-sep {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 1rem;
     font-weight: 700;
+    color: #849396;
+    line-height: 1;
   }
 
   .match-status-meta {
@@ -887,11 +925,13 @@
   }
 
   .team-table-box.red-box {
-    border: 1px solid rgba(255, 71, 87, 0.35);
+    border: 1px solid var(--captain-local-primary, #e74c3c);
+    box-shadow: 0 0 16px var(--captain-local-glow, rgba(231, 76, 60, 0.25));
   }
 
   .team-table-box.blue-box {
-    border: 1px solid rgba(0, 229, 255, 0.35);
+    border: 1px solid var(--captain-visitor-primary, #3498db);
+    box-shadow: 0 0 16px var(--captain-visitor-glow, rgba(52, 152, 219, 0.25));
   }
 
   .table-header {

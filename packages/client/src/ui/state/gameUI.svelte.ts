@@ -81,6 +81,7 @@ export interface KitConfig {
   secondaryColor: string;
   pattern: PatternType;
   tertiaryColor?: string;
+  outlineColor?: string;
 }
 
 export interface TeamKitConfig {
@@ -90,6 +91,7 @@ export interface TeamKitConfig {
   secondaryColor: string;
   pattern: PatternType;
   tertiaryColor?: string;
+  outlineColor?: string;
 }
 
 export interface EmoteTrigger {
@@ -236,6 +238,7 @@ export const DEFAULT_SETTINGS: SettingsConfig = {
     primaryColor: '#e74c3c',
     secondaryColor: '#ffffff',
     tertiaryColor: '#ffffff',
+    outlineColor: '#000000',
     pattern: 'solid'
   },
   visitorKit: {
@@ -244,6 +247,7 @@ export const DEFAULT_SETTINGS: SettingsConfig = {
     primaryColor: '#00e5ff',
     secondaryColor: '#ffffff',
     tertiaryColor: '#ffffff',
+    outlineColor: '#000000',
     pattern: 'solid'
   },
 
@@ -471,12 +475,14 @@ class GameUIStore {
     primaryColor: '#e74c3c',
     secondaryColor: '#ffffff',
     tertiaryColor: '#ffffff',
+    outlineColor: '#000000',
     pattern: 'solid'
   });
   public blueKit = $state<KitConfig>({
     primaryColor: '#3498db',
     secondaryColor: '#00e5ff',
     tertiaryColor: '#ffffff',
+    outlineColor: '#000000',
     pattern: 'solid'
   });
 
@@ -792,12 +798,14 @@ class GameUIStore {
       this.redKit.primaryColor = this.settings.localKit.primaryColor;
       this.redKit.secondaryColor = this.settings.localKit.secondaryColor;
       this.redKit.tertiaryColor = this.settings.localKit.tertiaryColor || '#ffffff';
+      this.redKit.outlineColor = this.settings.localKit.outlineColor || '#000000';
       this.redKit.pattern = this.settings.localKit.pattern;
     }
     if (this.settings.visitorKit) {
       this.blueKit.primaryColor = this.settings.visitorKit.primaryColor;
       this.blueKit.secondaryColor = this.settings.visitorKit.secondaryColor;
       this.blueKit.tertiaryColor = this.settings.visitorKit.tertiaryColor || '#ffffff';
+      this.blueKit.outlineColor = this.settings.visitorKit.outlineColor || '#000000';
       this.blueKit.pattern = this.settings.visitorKit.pattern;
     }
 

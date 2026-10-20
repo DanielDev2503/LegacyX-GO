@@ -56,12 +56,18 @@
   let blueCaptain = $derived(bluePlayers[0]);
 
   let redTeamName = $derived(redCaptain?.kit?.name || gameUI.redTeamKit?.name || 'Equipo Rojo');
+  let redTeamTag = $derived(redCaptain?.kit?.tag || gameUI.redTeamKit?.tag || 'RED');
   let redPrimaryColor = $derived(redCaptain?.kit?.primaryColor || gameUI.redTeamKit?.primaryColor || '#e74c3c');
   let redSecondaryColor = $derived(redCaptain?.kit?.secondaryColor || gameUI.redTeamKit?.secondaryColor || '#b02a1c');
+  let redKitTertiary = $derived(redCaptain?.kit?.tertiaryColor || gameUI.redTeamKit?.tertiaryColor || '#ffffff');
+  let redOutlineColor = $derived(redCaptain?.kit?.outlineColor || gameUI.redTeamKit?.outlineColor || '#000000');
 
   let blueTeamName = $derived(blueCaptain?.kit?.name || gameUI.blueTeamKit?.name || 'Equipo Azul');
+  let blueTeamTag = $derived(blueCaptain?.kit?.tag || gameUI.blueTeamKit?.tag || 'BLUE');
   let bluePrimaryColor = $derived(blueCaptain?.kit?.primaryColor || gameUI.blueTeamKit?.primaryColor || '#3498db');
   let blueSecondaryColor = $derived(blueCaptain?.kit?.secondaryColor || gameUI.blueTeamKit?.secondaryColor || '#217dbb');
+  let blueKitTertiary = $derived(blueCaptain?.kit?.tertiaryColor || gameUI.blueTeamKit?.tertiaryColor || '#ffffff');
+  let blueOutlineColor = $derived(blueCaptain?.kit?.outlineColor || gameUI.blueTeamKit?.outlineColor || '#000000');
 
   let isMatchStopped = $derived(
     gameUI.fsmPhase === 'STOPPED' ||
@@ -282,66 +288,94 @@
 >
   <!-- Viewport del Corredor Deslizante -->
   <div class="corridor-viewport">
-    <div
-      class="corridor-track"
-      style="transform: translateX(-{currentSlide * 50}%);"
-    >
+    <div class="corridor-container">
       <!-- ======================================================== -->
       <!-- DIAPOSITIVA 0: ESTADÍSTICAS Y MVP (CORREDOR DESLIZANTE)  -->
       <!-- ======================================================== -->
-      <div class="corridor-slide-item" id="slide-stats">
-        <div class="card-with-external-tab-wrapper">
-          <!-- Pestaña exterior lateral DERECHA: Menú > -->
-          <button
-            type="button"
-            id="btn-goto-menu"
-            class="external-nav-tab right-tab"
-            aria-label="Ir a Menú de Sala"
-            onclick={() => goToSlide(1)}
-          >
-            <span id="stats-to-menu-btn">Menú</span>
-            <span class="nav-chevron">&gt;</span>
-          </button>
+      <div
+        class="corridor-slide slide-stats"
+        class:is-active={currentSlide === 0}
+        class:slide-out-left={currentSlide === 1}
+        id="slide-stats"
+      >
+        <!-- Pestaña exterior lateral DERECHA: MENÚ > -->
+        <button
+          type="button"
+          id="btn-goto-menu"
+          class="external-nav-tab right-tab"
+          aria-label="Ir a Menú de Sala"
+          onclick={() => goToSlide(1)}
+        >
+          <span id="stats-to-menu-btn">MENÚ</span>
+          <span class="nav-chevron">&gt;</span>
+        </button>
 
-          <!-- Tarjeta Central de Estadísticas -->
-          <div class="team-modal-card stats-modal-card">
-            <!-- Header de Estadísticas -->
-            <header class="stats-header-row">
-              <div class="match-score-block">
-                <span class="team-brand red">RED</span>
-                <div class="score-capsule">
-                  <span class="score-digit red" id="post-score-red">{gameUI.redScore}</span>
-                  <span class="score-dash">-</span>
-                  <span class="score-digit blue" id="post-score-blue">{gameUI.blueScore}</span>
-                </div>
-                <span class="team-brand blue">BLUE</span>
+        <!-- Tarjeta Central de Estadísticas -->
+        <div class="team-modal-card stats-modal-card">
+          <!-- Header de Estadísticas -->
+          <header class="stats-header-row">
+            <!-- Marcador Homologado con HUD y Colores del Capitán -->
+            <div class="stats-scoreboard-banner">
+              <div
+                class="stats-acronym-badge red-acronym"
+                style="
+                  background: linear-gradient(90deg, {redPrimaryColor} 0%, {redPrimaryColor} 30%, {redSecondaryColor} 70%, {redSecondaryColor} 100%);
+                  border: 1.5px solid {redKitTertiary};
+                  color: {redKitTertiary};
+                  text-shadow: -1px -1px 0 {redOutlineColor}, 1px -1px 0 {redOutlineColor}, -1px 1px 0 {redOutlineColor}, 1px 1px 0 {redOutlineColor};
+                "
+              >
+                {redTeamTag}
               </div>
-
-              <div class="match-status-meta">
-                {#if gameUI.redScore > gameUI.blueScore}
-                  <span class="badge-victory red">VICTORIA RED</span>
-                {:else if gameUI.blueScore > gameUI.redScore}
-                  <span class="badge-victory blue">VICTORIA BLUE</span>
-                {:else}
-                  <span class="badge-victory draw">EMPATE</span>
-                {/if}
-                <span class="match-time-chip">⏱ {gameUI.matchTimeFormatted}</span>
+              <span class="stats-score-num" id="post-score-red">{gameUI.redScore}</span>
+              <span class="stats-score-sep">-</span>
+              <span class="stats-score-num" id="post-score-blue">{gameUI.blueScore}</span>
+              <div
+                class="stats-acronym-badge blue-acronym"
+                style="
+                  background: linear-gradient(90deg, {bluePrimaryColor} 0%, {bluePrimaryColor} 30%, {blueSecondaryColor} 70%, {blueSecondaryColor} 100%);
+                  border: 1.5px solid {blueKitTertiary};
+                  color: {blueKitTertiary};
+                  text-shadow: -1px -1px 0 {blueOutlineColor}, 1px -1px 0 {blueOutlineColor}, -1px 1px 0 {blueOutlineColor}, 1px 1px 0 {blueOutlineColor};
+                "
+              >
+                {blueTeamTag}
               </div>
+            </div>
 
-              <div class="mvp-golden-plaque">
-                <span class="crown-icon">👑</span>
-                <span class="mvp-title">MVP: {gameUI.mvp.nickname}</span>
-                <span class="mvp-points-chip">({gameUI.mvp.points} pts)</span>
-              </div>
-            </header>
+            <div class="match-status-meta">
+              {#if gameUI.redScore > gameUI.blueScore}
+                <span class="badge-victory red">VICTORIA RED</span>
+              {:else if gameUI.blueScore > gameUI.redScore}
+                <span class="badge-victory blue">VICTORIA BLUE</span>
+              {:else}
+                <span class="badge-victory draw">EMPATE</span>
+              {/if}
+              <span class="match-time-chip">⏱ {gameUI.matchTimeFormatted}</span>
+            </div>
 
-            <!-- Tablas Duales Paralelas RED y BLUE con Cabeceras Bicolor 50/50 y Nombres de Capitán -->
-            <div class="tables-parallel-grid">
-              <!-- TABLA RED -->
-              <div class="team-table-box red-box">
-                <div
-                  class="table-header red-header captain-bicolor-header"
-                  style="background: linear-gradient(90deg, {redPrimaryColor} 50%, {redSecondaryColor} 50%);"
+            <div class="mvp-golden-plaque">
+              <span class="crown-icon">👑</span>
+              <span class="mvp-title">MVP: {gameUI.mvp.nickname}</span>
+              <span class="mvp-points-chip">({gameUI.mvp.points} pts)</span>
+            </div>
+          </header>
+
+          <!-- Tablas Duales Paralelas RED y BLUE con Cabeceras Bicolor Suave y Nombres de Capitán -->
+          <div class="tables-parallel-grid">
+            <!-- TABLA RED -->
+            <div
+              class="team-table-box red-box"
+              style="--captain-local-primary: {redPrimaryColor}; --captain-local-glow: {redPrimaryColor}40;"
+            >
+              <div
+                class="table-header red-header captain-bicolor-header"
+                style="background: linear-gradient(90deg, {redPrimaryColor} 0%, {redPrimaryColor} 30%, {redSecondaryColor} 70%, {redSecondaryColor} 100%);"
+              >
+                <span
+                  class="col-team-name-hdr"
+                  style="text-shadow: -1px -1px 0 {redOutlineColor}, 1px -1px 0 {redOutlineColor}, -1px 1px 0 {redOutlineColor}, 1px 1px 0 {redOutlineColor};"
+                >{redTeamName}</span>
                 >
                   <span class="col-team-name-hdr">{redTeamName}</span>
                   <div class="col-headers-right">
@@ -416,12 +450,18 @@
               </div>
 
               <!-- TABLA BLUE -->
-              <div class="team-table-box blue-box">
+              <div
+                class="team-table-box blue-box"
+                style="--captain-visitor-primary: {bluePrimaryColor}; --captain-visitor-glow: {bluePrimaryColor}40;"
+              >
                 <div
                   class="table-header blue-header captain-bicolor-header"
-                  style="background: linear-gradient(90deg, {bluePrimaryColor} 50%, {blueSecondaryColor} 50%);"
+                  style="background: linear-gradient(90deg, {bluePrimaryColor} 0%, {bluePrimaryColor} 30%, {blueSecondaryColor} 70%, {blueSecondaryColor} 100%);"
                 >
-                  <span class="col-team-name-hdr">{blueTeamName}</span>
+                  <span
+                    class="col-team-name-hdr"
+                    style="text-shadow: -1px -1px 0 {blueOutlineColor}, 1px -1px 0 {blueOutlineColor}, -1px 1px 0 {blueOutlineColor}, 1px 1px 0 {blueOutlineColor};"
+                  >{blueTeamName}</span>
                   <div class="col-headers-right">
                     <span class="col-pts">Pts</span>
                     <span class="col-stat">G</span>
@@ -506,29 +546,32 @@
             </div>
           </div>
         </div>
-      </div>
 
       <!-- ======================================================== -->
       <!-- SLIDE 1: MENÚ DE SALA (CORREDOR DESLIZANTE)              -->
       <!-- ======================================================== -->
-      <div class="corridor-slide-item" id="slide-lobby">
-        <div class="card-with-external-tab-wrapper">
-          <!-- Pestaña exterior lateral IZQUIERDA: < STATS -->
-          {#if gameUI.hasCompletedMatch || (gameUI.lastMatchStats && gameUI.lastMatchStats.length > 0)}
-            <button
-              type="button"
-              id="btn-goto-stats"
-              class="external-nav-tab left-tab"
-              aria-label="Ir a Estadísticas"
-              onclick={() => goToSlide(0)}
-            >
-              <span class="nav-chevron">&lt;</span>
-              <span id="lobby-to-stats-btn">STATS</span>
-            </button>
-          {/if}
+      <div
+        class="corridor-slide slide-menu"
+        class:is-active={currentSlide === 1}
+        class:slide-out-right={currentSlide === 0}
+        id="slide-lobby"
+      >
+        <!-- Pestaña exterior lateral IZQUIERDA: < STATS -->
+        {#if gameUI.hasCompletedMatch || (gameUI.lastMatchStats && gameUI.lastMatchStats.length > 0)}
+          <button
+            type="button"
+            id="btn-goto-stats"
+            class="external-nav-tab left-tab"
+            aria-label="Ir a Estadísticas"
+            onclick={() => goToSlide(0)}
+          >
+            <span class="nav-chevron">&lt;</span>
+            <span id="lobby-to-stats-btn">STATS</span>
+          </button>
+        {/if}
 
-          <!-- Tarjeta Central del Menú de Sala -->
-          <div class="team-modal-card lobby-modal-card">
+        <!-- Tarjeta Central del Menú de Sala -->
+        <div class="team-modal-card lobby-modal-card">
             <!-- 1. Cabecera Limpia (Sin prefijos 'SALA:' ni emojis) -->
             <header class="modal-header">
               <div class="room-identity">
@@ -854,6 +897,7 @@
                   class="bench-card red-bench"
                   role="region"
                   aria-label="Banquillo Equipo Rojo"
+                  style="--captain-local-primary: {redPrimaryColor}; --captain-local-glow: {redPrimaryColor}40;"
                   class:is-drag-over={dragOverTeam === 'red'}
                   ondragover={(e) => handleDragOver(e, 'red')}
                   ondragleave={(e) => handleDragLeave(e, 'red')}
@@ -861,9 +905,12 @@
                 >
                   <div
                     class="bench-card-header red-header captain-bicolor-header"
-                    style="background: linear-gradient(90deg, {redPrimaryColor} 50%, {redSecondaryColor} 50%);"
+                    style="background: linear-gradient(90deg, {redPrimaryColor} 0%, {redPrimaryColor} 30%, {redSecondaryColor} 70%, {redSecondaryColor} 100%);"
                   >
-                    <span class="team-name">{redTeamName}</span>
+                    <span
+                      class="team-name"
+                      style="text-shadow: -1px -1px 0 {redOutlineColor}, 1px -1px 0 {redOutlineColor}, -1px 1px 0 {redOutlineColor}, 1px 1px 0 {redOutlineColor};"
+                    >{redTeamName}</span>
                   </div>
 
                   <div id="redPlayersList" class="bench-players-list custom-scrollbar-red">
@@ -892,15 +939,22 @@
                         <div class="slot-avatar red">{p.avatar || p.number || '1'}</div>
                         <!-- 2. Nombre del Jugador en Chivo -->
                         <span class="slot-nickname">{p.name || p.nickname}</span>
-                        <!-- 3. Cintilla de Capitán "C" -->
-                        {#if isCaptain}
-                          <span
-                            class="captain-ribbon"
-                            style="background-color: {redPrimaryColor};"
-                            title="Capitán del equipo"
-                          >
-                            C
-                          </span>
+                        <!-- 3. Insignias: Corona Admin y Cintilla de Capitán -->
+                        {#if p.isAdmin || p.isHost || isCaptain}
+                          <div class="card-badges-cluster">
+                            {#if p.isAdmin || p.isHost}
+                              <span class="admin-crown-badge" title={p.isHost ? 'Anfitrión de la sala' : 'Administrador'}>👑</span>
+                            {/if}
+                            {#if isCaptain}
+                              <span
+                                class="captain-ribbon"
+                                style="background-color: {redPrimaryColor};"
+                                title="Capitán del equipo"
+                              >
+                                C
+                              </span>
+                            {/if}
+                          </div>
                         {/if}
                       </div>
                     {:else}
@@ -946,6 +1000,11 @@
                       >
                         <div class="slot-avatar spec">{p.avatar || p.number || '👁'}</div>
                         <span class="slot-nickname">{p.name || p.nickname}</span>
+                        {#if p.isAdmin || p.isHost}
+                          <div class="card-badges-cluster">
+                            <span class="admin-crown-badge" title={p.isHost ? 'Anfitrión de la sala' : 'Administrador'}>👑</span>
+                          </div>
+                        {/if}
                       </div>
                     {:else}
                       <div class="empty-bench-state">Sin espectadores</div>
@@ -958,6 +1017,7 @@
                   class="bench-card blue-bench"
                   role="region"
                   aria-label="Banquillo Equipo Azul"
+                  style="--captain-visitor-primary: {bluePrimaryColor}; --captain-visitor-glow: {bluePrimaryColor}40;"
                   class:is-drag-over={dragOverTeam === 'blue'}
                   ondragover={(e) => handleDragOver(e, 'blue')}
                   ondragleave={(e) => handleDragLeave(e, 'blue')}
@@ -965,9 +1025,12 @@
                 >
                   <div
                     class="bench-card-header blue-header captain-bicolor-header"
-                    style="background: linear-gradient(90deg, {bluePrimaryColor} 50%, {blueSecondaryColor} 50%);"
+                    style="background: linear-gradient(90deg, {bluePrimaryColor} 0%, {bluePrimaryColor} 30%, {blueSecondaryColor} 70%, {blueSecondaryColor} 100%);"
                   >
-                    <span class="team-name">{blueTeamName}</span>
+                    <span
+                      class="team-name"
+                      style="text-shadow: -1px -1px 0 {blueOutlineColor}, 1px -1px 0 {blueOutlineColor}, -1px 1px 0 {blueOutlineColor}, 1px 1px 0 {blueOutlineColor};"
+                    >{blueTeamName}</span>
                   </div>
 
                   <div id="bluePlayersList" class="bench-players-list custom-scrollbar">
@@ -994,14 +1057,21 @@
                       >
                         <div class="slot-avatar blue">{p.avatar || p.number || '2'}</div>
                         <span class="slot-nickname">{p.name || p.nickname}</span>
-                        {#if isCaptain}
-                          <span
-                            class="captain-ribbon"
-                            style="background-color: {bluePrimaryColor};"
-                            title="Capitán del equipo"
-                          >
-                            C
-                          </span>
+                        {#if p.isAdmin || p.isHost || isCaptain}
+                          <div class="card-badges-cluster">
+                            {#if p.isAdmin || p.isHost}
+                              <span class="admin-crown-badge" title={p.isHost ? 'Anfitrión de la sala' : 'Administrador'}>👑</span>
+                            {/if}
+                            {#if isCaptain}
+                              <span
+                                class="captain-ribbon"
+                                style="background-color: {bluePrimaryColor};"
+                                title="Capitán del equipo"
+                              >
+                                C
+                              </span>
+                            {/if}
+                          </div>
                         {/if}
                       </div>
                     {:else}
@@ -1015,7 +1085,6 @@
         </div>
       </div>
     </div>
-  </div>
 
   <!-- Menú Contextual de Administrador (Clic Directo con Disociación de Drag) -->
   {#if contextMenu.visible && contextMenu.player}
@@ -1094,49 +1163,64 @@
     user-select: none;
   }
 
-  /* Viewport y Riel Deslizante del Corredor */
+  /* Viewport y Contenedor Centralizado del Corredor */
   .corridor-viewport {
     position: fixed;
     inset: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    overflow: hidden;
     pointer-events: none;
     z-index: 30;
+    overflow: hidden;
   }
 
-  .corridor-track {
-    display: flex;
-    width: 200%;
-    height: 100%;
-    transition: transform 0.4s cubic-bezier(0.2, 0.8, 0.2, 1);
-    will-change: transform;
-    pointer-events: none;
-  }
-
-  .corridor-slide-item {
-    width: 50%;
-    height: 100%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    position: relative;
-    flex-shrink: 0;
-    box-sizing: border-box;
-    pointer-events: none;
-  }
-
-  .card-with-external-tab-wrapper {
-    position: relative;
+  .corridor-container {
+    position: fixed;
+    top: 50px;
+    bottom: calc(var(--chat-height, 160px) + 16px);
+    left: 50%;
+    transform: translateX(-50%);
     width: min(96vw, 1140px);
-    max-width: 1140px;
-    height: calc(100vh - var(--chat-height, 160px) - 72px);
     max-height: calc(100vh - var(--chat-height, 160px) - 72px);
+    pointer-events: none;
+  }
+
+  .corridor-slide {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
     display: flex;
     align-items: center;
     justify-content: center;
     pointer-events: none;
+    transition: transform 0.35s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.25s ease;
+  }
+
+  /* Diapositiva Activa MENU */
+  .slide-menu.is-active {
+    transform: translateX(0);
+    opacity: 1;
+    pointer-events: auto;
+    z-index: 30;
+  }
+  .slide-stats.slide-out-left {
+    transform: translateX(-115%);
+    opacity: 0;
+    pointer-events: none;
+    z-index: 20;
+  }
+
+  /* Diapositiva Activa STATS */
+  .slide-stats.is-active {
+    transform: translateX(0);
+    opacity: 1;
+    pointer-events: auto;
+    z-index: 30;
+  }
+  .slide-menu.slide-out-right {
+    transform: translateX(115%);
+    opacity: 0;
+    pointer-events: none;
+    z-index: 20;
   }
 
   /* Tarjeta Central Ampliada a min(96vw, 1140px) */
@@ -1157,38 +1241,32 @@
     pointer-events: auto;
   }
 
-  /* Pestañas Flotantes Exteriores Laterales */
+  /* Pestañas Flotantes Exteriores en Amarillo Neón (#ffd700) */
   .external-nav-tab {
-    position: absolute;
-    top: 50%;
-    transform: translateY(-50%);
-    z-index: 40;
-    height: 48px;
-    padding: 0 1rem;
-    background: rgba(10, 16, 26, 0.96);
-    border: 1px solid rgba(0, 229, 255, 0.5);
-    color: #00e5ff;
+    background: rgba(255, 215, 0, 0.12);
+    border: 1.5px solid rgba(255, 215, 0, 0.6);
+    color: #ffd700;
+    border-radius: 8px;
+    padding: 14px 12px;
     font-family: 'Space Grotesk', system-ui, sans-serif;
-    font-size: 0.82rem;
-    font-weight: 800;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-    border-radius: 0.5rem;
-    box-shadow: 0 0 20px rgba(0, 229, 255, 0.35);
+    font-weight: 700;
+    font-size: 13px;
+    letter-spacing: 0.05em;
+    box-shadow: 0 0 14px rgba(255, 215, 0, 0.25);
+    transition: all 0.2s ease;
+    cursor: pointer;
+    pointer-events: auto;
+    white-space: nowrap;
     display: flex;
     align-items: center;
     gap: 0.4rem;
-    cursor: pointer;
-    transition: all 0.15s ease;
+    z-index: 40;
     outline: none;
-    white-space: nowrap;
-    pointer-events: auto;
   }
 
   .external-nav-tab:hover {
-    background: #00e5ff;
-    color: #050811;
-    box-shadow: 0 0 25px rgba(0, 229, 255, 0.7);
+    background: rgba(255, 215, 0, 0.25);
+    box-shadow: 0 0 20px rgba(255, 215, 0, 0.5);
     transform: translateY(-50%) scale(1.05);
   }
 
@@ -1197,24 +1275,22 @@
   }
 
   .right-tab {
-    right: -58px;
+    position: absolute;
+    right: -68px;
+    top: 50%;
+    transform: translateY(-50%);
   }
 
   .left-tab {
-    left: -66px;
+    position: absolute;
+    left: -68px;
+    top: 50%;
+    transform: translateY(-50%);
   }
 
   .nav-chevron {
     font-size: 0.85rem;
-  }
-
-  @media (max-width: 1280px) {
-    .right-tab {
-      right: 12px;
-    }
-    .left-tab {
-      left: 12px;
-    }
+    font-weight: 800;
   }
 
   /* HEADER GENERAL DE SALA */
@@ -1816,26 +1892,29 @@
 
   .btn-pause-match {
     padding: 0.6rem;
-    background: #ffb703;
-    border: none;
+    border: 1.5px solid rgba(0, 229, 255, 0.6);
+    background: rgba(0, 229, 255, 0.15);
+    color: #00e5ff;
     border-radius: 0.5rem;
     font-family: 'Space Grotesk', system-ui, sans-serif;
     font-size: 0.75rem;
     font-weight: 900;
-    color: #050811;
     letter-spacing: 0.05em;
     cursor: pointer;
-    box-shadow: 0 0 12px rgba(255, 183, 3, 0.4);
+    box-shadow: 0 0 12px rgba(0, 229, 255, 0.3);
     transition: all 0.15s ease;
   }
 
   .btn-pause-match:hover:not(:disabled) {
-    background: #e0a200;
+    background: rgba(0, 229, 255, 0.3);
+    box-shadow: 0 0 16px rgba(0, 229, 255, 0.5);
+    color: #ffffff;
   }
 
   .btn-pause-match.is-resuming {
-    background: #00e5ff;
-    box-shadow: 0 0 12px rgba(0, 229, 255, 0.4);
+    background: rgba(0, 229, 255, 0.25);
+    box-shadow: 0 0 16px rgba(0, 229, 255, 0.5);
+    color: #ffffff;
   }
 
   /* COLUMNAS 2, 3, 4: BANQUILLOS HOLGADOS */
@@ -1863,8 +1942,8 @@
   }
 
   .red-bench {
-    border: 1px solid rgba(255, 51, 102, 0.4);
-    box-shadow: 0 0 14px rgba(255, 51, 102, 0.12);
+    border: 1px solid var(--captain-local-primary, #e74c3c);
+    box-shadow: 0 0 16px var(--captain-local-glow, rgba(231, 76, 60, 0.25));
   }
 
   .spec-bench {
@@ -1873,8 +1952,8 @@
   }
 
   .blue-bench {
-    border: 1px solid rgba(0, 229, 255, 0.4);
-    box-shadow: 0 0 14px rgba(0, 229, 255, 0.12);
+    border: 1px solid var(--captain-visitor-primary, #3498db);
+    box-shadow: 0 0 16px var(--captain-visitor-glow, rgba(52, 152, 219, 0.25));
   }
 
   .bench-card.is-drag-over {
@@ -2021,7 +2100,26 @@
     flex: 1;
   }
 
-  /* 3. Cintilla de Capitán "C" */
+  /* 3. Insignias: Corona Admin y Cintilla de Capitán */
+  .card-badges-cluster {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    margin-left: auto;
+    flex-shrink: 0;
+  }
+
+  .admin-crown-badge {
+    font-size: 0.85rem;
+    line-height: 1;
+    filter: drop-shadow(0 0 6px rgba(255, 215, 0, 0.6));
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: default;
+    user-select: none;
+  }
+
   .captain-ribbon {
     padding: 0.15rem 0.5rem;
     border-radius: 0.25rem;
@@ -2033,7 +2131,6 @@
     box-shadow: 0 0 8px rgba(0, 0, 0, 0.6);
     flex-shrink: 0;
     line-height: 1;
-    margin-left: auto;
   }
 
   .empty-bench-state {
@@ -2135,46 +2232,48 @@
     flex-wrap: wrap;
   }
 
-  .match-score-block {
+  /* Banner Homologado de Marcador de Estadísticas */
+  .stats-scoreboard-banner {
     display: flex;
     align-items: center;
-    gap: 0.75rem;
+    gap: 0.65rem;
+    background: rgba(10, 16, 26, 0.9);
+    border: 1px solid rgba(0, 229, 255, 0.35);
+    border-radius: 0.5rem;
+    padding: 0.25rem 0.65rem;
+    box-shadow: 0 0 12px rgba(0, 229, 255, 0.15);
   }
 
-  .team-brand {
+  .stats-acronym-badge {
+    height: 26px;
+    padding: 0 0.55rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 0.35rem;
     font-family: 'Space Grotesk', system-ui, sans-serif;
-    font-size: 1.35rem;
+    font-size: 0.78rem;
     font-weight: 900;
     letter-spacing: 0.05em;
+    box-shadow: 0 0 8px rgba(0, 0, 0, 0.6);
   }
 
-  .team-brand.red { color: #ff4757; }
-  .team-brand.blue { color: #00e5ff; }
-
-  .score-capsule {
-    background: #080e18;
-    border: 1px solid rgba(0, 229, 255, 0.3);
-    padding: 0.25rem 0.85rem;
-    border-radius: 0.375rem;
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    box-shadow: 0 0 12px rgba(0, 229, 255, 0.18);
-  }
-
-  .score-digit {
+  .stats-score-num {
     font-family: 'JetBrains Mono', monospace;
-    font-size: 1.5rem;
-    font-weight: 900;
+    font-size: 1.35rem;
+    font-weight: 800;
+    color: #ffffff;
+    min-width: 1.2rem;
+    text-align: center;
+    line-height: 1;
   }
 
-  .score-digit.red { color: #ff4757; }
-  .score-digit.blue { color: #00e5ff; }
-
-  .score-dash {
-    color: #849396;
-    font-size: 1.15rem;
+  .stats-score-sep {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 1rem;
     font-weight: 700;
+    color: #849396;
+    line-height: 1;
   }
 
   .match-status-meta {
@@ -2274,11 +2373,13 @@
   }
 
   .team-table-box.red-box {
-    border: 1px solid rgba(255, 71, 87, 0.35);
+    border: 1px solid var(--captain-local-primary, #e74c3c);
+    box-shadow: 0 0 16px var(--captain-local-glow, rgba(231, 76, 60, 0.25));
   }
 
   .team-table-box.blue-box {
-    border: 1px solid rgba(0, 229, 255, 0.35);
+    border: 1px solid var(--captain-visitor-primary, #3498db);
+    box-shadow: 0 0 16px var(--captain-visitor-glow, rgba(52, 152, 219, 0.25));
   }
 
   .table-header {

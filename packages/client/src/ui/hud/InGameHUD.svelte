@@ -27,6 +27,9 @@
   let redKitTertiary = $derived(
     redCaptain?.kit?.tertiaryColor || gameUI.redTeamKit?.tertiaryColor || '#ffffff'
   );
+  let redKitOutline = $derived(
+    redCaptain?.kit?.outlineColor || gameUI.redTeamKit?.outlineColor || '#000000'
+  );
 
   let blueKitPrimary = $derived(
     blueCaptain?.kit?.primaryColor || gameUI.blueTeamKit?.primaryColor || '#00e5ff'
@@ -36,6 +39,9 @@
   );
   let blueKitTertiary = $derived(
     blueCaptain?.kit?.tertiaryColor || gameUI.blueTeamKit?.tertiaryColor || '#ffffff'
+  );
+  let blueKitOutline = $derived(
+    blueCaptain?.kit?.outlineColor || gameUI.blueTeamKit?.outlineColor || '#000000'
   );
 
   // Ancho dinámico del minimapa (0px si está desactivado)
@@ -210,6 +216,7 @@
             background: linear-gradient(90deg, {redKitPrimary} 50%, {redKitSecondary} 50%);
             border: 1.5px solid {redKitTertiary};
             color: {redKitTertiary};
+            text-shadow: -1px -1px 0 {redKitOutline}, 1px -1px 0 {redKitOutline}, -1px 1px 0 {redKitOutline}, 1px 1px 0 {redKitOutline};
           "
         >
           {gameUI.redTeamKit?.tag || 'RED'}
@@ -237,6 +244,7 @@
             background: linear-gradient(90deg, {blueKitPrimary} 50%, {blueKitSecondary} 50%);
             border: 1.5px solid {blueKitTertiary};
             color: {blueKitTertiary};
+            text-shadow: -1px -1px 0 {blueKitOutline}, 1px -1px 0 {blueKitOutline}, -1px 1px 0 {blueKitOutline}, 1px 1px 0 {blueKitOutline};
           "
         >
           {gameUI.blueTeamKit?.tag || 'BLUE'}
