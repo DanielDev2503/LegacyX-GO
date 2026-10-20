@@ -21,6 +21,35 @@
   let activeKitTab = $state<'local' | 'visitor'>('local');
   let currentKit = $derived(activeKitTab === 'local' ? gameUI.settings.localKit : gameUI.settings.visitorKit);
 
+  // Unificación de Identidad (Nombre y Siglas aplicables universalmente)
+  let unifiedTeamName = $state(gameUI.settings.localKit.name || 'RED');
+  let unifiedTeamTag = $state(gameUI.settings.localKit.tag || 'RED');
+
+  function handleTeamNameChange() {
+    gameUI.settings.localKit.name = unifiedTeamName;
+    gameUI.settings.visitorKit.name = unifiedTeamName;
+    gameUI.saveSettings();
+  }
+
+  function handleTeamTagChange(e: Event) {
+    const val = (e.currentTarget as HTMLInputElement).value.toUpperCase();
+    unifiedTeamTag = val;
+    gameUI.settings.localKit.tag = val;
+    gameUI.settings.visitorKit.tag = val;
+    gameUI.saveSettings();
+  }
+
+  // Contorno Negro (Checkbox: #000000 vs none)
+  let hasOutline = $derived(
+    currentKit.outlineColor !== 'none' && currentKit.outlineColor !== '' && currentKit.outlineColor !== undefined
+  );
+
+  function handleOutlineToggle(e: Event) {
+    const target = e.target as HTMLInputElement;
+    currentKit.outlineColor = target.checked ? '#000000' : 'none';
+    gameUI.saveSettings();
+  }
+
   // Avatar state
   let initialsInput = $state(gameUI.avatarMode === 'letters' ? gameUI.avatarValue : '10');
   let selectedEmoji = $state(gameUI.avatarMode === 'emoji' ? gameUI.avatarValue : '⚽');
@@ -34,13 +63,13 @@
 
   const PATTERNS_LIST = [
     { id: 'solid', name: 'Liso' },
-    { id: 'vertical', name: 'Rayas verticales' },
+    { id: 'vertical', name: 'Franjas verticales' },
     { id: 'hoop', name: 'Franja horizontal' },
+    { id: 'vertical_stripe', name: 'Franja vertical' },
+    { id: 'diagonal_right', name: 'Franja diagonal derecha' },
+    { id: 'diagonal_left', name: 'Franja diagonal izquierda' },
     { id: 'halves', name: 'Mitades' },
-    { id: 'diagonal', name: 'Diagonal' },
-    { id: 'cross', name: 'Cruz' },
-    { id: 'chevrons', name: 'Chevrones' },
-    { id: 'diagonal_checks', name: 'Cuadros diagonales' }
+    { id: 'checkerboard', name: 'Cuadros' }
   ] as const;
 
   function switchTab(tab: SettingsTab) {
@@ -1388,6 +1417,33 @@
             </h3>
           </div>
 
+          <!-- Bloque Superior de Identidad (Unificado) -->
+          <div class="team-identity-block">
+            <div class="input-group team-name-group">
+              <label for="team-name-input">Nombre del Equipo</label>
+              <input
+                id="team-name-input"
+                type="text"
+                maxlength="25"
+                bind:value={unifiedTeamName}
+                oninput={handleTeamNameChange}
+                placeholder="RED"
+              />
+            </div>
+
+            <div class="input-group team-tag-group">
+              <label for="team-tag-input">Siglas</label>
+              <input
+                id="team-tag-input"
+                type="text"
+                maxlength="4"
+                value={unifiedTeamTag}
+                oninput={handleTeamTagChange}
+                placeholder="RED"
+              />
+            </div>
+          </div>
+
           <!-- Tabs Local / Visitante -->
           <div class="team-filter-tabs">
             <button
@@ -1409,40 +1465,10 @@
           </div>
 
           <div class="kits-layout-grid">
-            <!-- Columna Izquierda: Nombres, Siglas, Colores y Patrones -->
+            <!-- Columna Izquierda: Colores, Contorno y Patrones -->
             <div class="kits-controls-col">
-              <!-- Fila simétrica: Nombre de equipo y Siglas (80px) -->
-              <div class="team-name-tag-row">
-                <div class="input-group team-name-group">
-                  <label for="team-name-input">Nombre del Equipo</label>
-                  <input
-                    id="team-name-input"
-                    type="text"
-                    maxlength="25"
-                    bind:value={currentKit.name}
-                    oninput={() => gameUI.saveSettings()}
-                    placeholder={activeKitTab === 'local' ? 'RED' : 'BLUE'}
-                  />
-                </div>
-
-                <div class="input-group team-tag-group">
-                  <label for="team-tag-input">Siglas</label>
-                  <input
-                    id="team-tag-input"
-                    type="text"
-                    maxlength="4"
-                    value={currentKit.tag}
-                    oninput={(e) => {
-                      currentKit.tag = (e.currentTarget as HTMLInputElement).value.toUpperCase();
-                      gameUI.saveSettings();
-                    }}
-                    placeholder={activeKitTab === 'local' ? 'RED' : 'BLUE'}
-                  />
-                </div>
-              </div>
-
-              <!-- Fila de 4 Colores: Primario, Secundario, Terciario (Borde y Dorsal) y Entorno -->
-              <div class="form-row-4col pt-2">
+              <!-- Fila de 3 Colores: Primario, Secundario, Terciario (Borde y Dorsal) -->
+              <div class="form-row-3col">
                 <div class="color-picker-box">
                   <label for="kit-color-primary">Primario</label>
                   <div class="color-control">
@@ -1508,53 +1534,24 @@
                     />
                   </div>
                 </div>
+              </div>
 
-                <div class="color-picker-box">
-                  <label for="kit-color-outline" class="label-with-tooltip">
-                    Entorno
-                    <span
-                      class="info-tooltip-wrapper mini"
-                      tabindex="0"
-                      role="button"
-                      aria-label="Info color de entorno"
-                      use:tooltip={"Define el contorno de las letras del avatar y el borde exterior de las siglas y nombre del equipo para maximizar su contraste."}
-                    >
-                      <svg class="info-help-icon mini-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <circle cx="12" cy="12" r="10"></circle>
-                        <line x1="12" y1="16" x2="12" y2="12"></line>
-                        <line x1="12" y1="8" x2="12.01" y2="8"></line>
-                      </svg>
-                    </span>
-                  </label>
-                  <div class="color-control">
-                    <input
-                      id="kit-color-outline"
-                      type="color"
-                      value={currentKit.outlineColor || '#000000'}
-                      oninput={(e) => {
-                        currentKit.outlineColor = (e.currentTarget as HTMLInputElement).value;
-                        gameUI.saveSettings();
-                      }}
-                    />
-                    <input
-                      type="text"
-                      class="hex-mini-input"
-                      maxlength="7"
-                      value={currentKit.outlineColor || '#000000'}
-                      oninput={(e) => {
-                        const val = (e.currentTarget as HTMLInputElement).value;
-                        if (/^#[0-9A-Fa-f]{0,6}$/.test(val)) {
-                          currentKit.outlineColor = val;
-                          if (val.length === 7) gameUI.saveSettings();
-                        }
-                      }}
-                    />
-                  </div>
-                </div>
+              <!-- Casilla Checkbox: Contorno Negro en Textos y Números -->
+              <div class="checkbox-option-box">
+                <label class="checkbox-label" for="kit-outline-checkbox">
+                  <input
+                    type="checkbox"
+                    id="kit-outline-checkbox"
+                    checked={hasOutline}
+                    onchange={handleOutlineToggle}
+                  />
+                  <span class="checkbox-custom"></span>
+                  <span class="checkbox-text">Activar contorno negro en textos y números</span>
+                </label>
               </div>
 
               <!-- Rejilla de 8 Patrones Visuales (sin etiquetas de texto) -->
-              <span class="group-subtitle pt-3">Patrón de Camiseta</span>
+              <span class="group-subtitle pt-1">Patrón de Camiseta</span>
               <div class="patterns-grid">
                 {#each PATTERNS_LIST as pattern}
                   <button
@@ -1577,41 +1574,64 @@
               </div>
             </div>
 
-            <!-- Columna Derecha: Previsualización en Vivo 1:1 Scale con Disco y Capitán 'C' -->
+            <!-- Columna Derecha: Previsualización en Vivo de Cancha (Disco + Marcador) -->
             <div class="kits-preview-col">
               <span class="preview-title">Previsualización</span>
               <div class="tactical-pitch-box">
                 <div class="tactical-pitch-lines"></div>
 
                 <!-- Disco del Jugador Capitán -->
-                <div
-                  class="kit-live-disc"
-                  style="background-color: {currentKit.primaryColor}; border-color: {currentKit.tertiaryColor || currentKit.secondaryColor};"
-                >
-                  {#if currentKit.pattern === 'vertical'}
-                    <div class="live-pattern-overlay vertical-stripes" style="--c1: {currentKit.primaryColor}; --c2: {currentKit.secondaryColor};"></div>
-                  {:else if currentKit.pattern === 'hoop'}
-                    <div class="live-pattern-overlay hoop-stripes" style="--c1: {currentKit.primaryColor}; --c2: {currentKit.secondaryColor};"></div>
-                  {:else if currentKit.pattern === 'halves'}
-                    <div class="live-pattern-overlay halves-stripes" style="--c1: {currentKit.primaryColor}; --c2: {currentKit.secondaryColor};"></div>
-                  {:else if currentKit.pattern === 'diagonal'}
-                    <div class="live-pattern-overlay diagonal-stripes" style="--c1: {currentKit.primaryColor}; --c2: {currentKit.secondaryColor};"></div>
-                  {:else if currentKit.pattern === 'cross'}
-                    <div class="live-pattern-overlay cross-stripes" style="--c1: {currentKit.primaryColor}; --c2: {currentKit.secondaryColor};"></div>
-                  {:else if currentKit.pattern === 'chevrons'}
-                    <div class="live-pattern-overlay chevrons-stripes" style="--c1: {currentKit.primaryColor}; --c2: {currentKit.secondaryColor};"></div>
-                  {:else if currentKit.pattern === 'diagonal_checks'}
-                    <div class="live-pattern-overlay diagonal-checks-stripes" style="--c1: {currentKit.primaryColor}; --c2: {currentKit.secondaryColor};"></div>
-                  {/if}
+                <div class="pitch-preview-cell">
+                  <span class="pitch-preview-label">Camiseta</span>
+                  <div
+                    class="kit-live-disc"
+                    style="background-color: {currentKit.primaryColor}; border-color: {currentKit.tertiaryColor || currentKit.secondaryColor};"
+                  >
+                    {#if currentKit.pattern === 'vertical'}
+                      <div class="live-pattern-overlay vertical-stripes" style="--c1: {currentKit.primaryColor}; --c2: {currentKit.secondaryColor};"></div>
+                    {:else if currentKit.pattern === 'hoop'}
+                      <div class="live-pattern-overlay hoop-stripes" style="--c1: {currentKit.primaryColor}; --c2: {currentKit.secondaryColor};"></div>
+                    {:else if currentKit.pattern === 'vertical_stripe'}
+                      <div class="live-pattern-overlay vertical-stripe-center" style="--c1: {currentKit.primaryColor}; --c2: {currentKit.secondaryColor};"></div>
+                    {:else if currentKit.pattern === 'diagonal_right' || currentKit.pattern === 'diagonal'}
+                      <div class="live-pattern-overlay diagonal-right-stripes" style="--c1: {currentKit.primaryColor}; --c2: {currentKit.secondaryColor};"></div>
+                    {:else if currentKit.pattern === 'diagonal_left'}
+                      <div class="live-pattern-overlay diagonal-left-stripes" style="--c1: {currentKit.primaryColor}; --c2: {currentKit.secondaryColor};"></div>
+                    {:else if currentKit.pattern === 'halves'}
+                      <div class="live-pattern-overlay halves-stripes" style="--c1: {currentKit.primaryColor}; --c2: {currentKit.secondaryColor};"></div>
+                    {:else if currentKit.pattern === 'checkerboard' || currentKit.pattern === 'diagonal_checks'}
+                      <div class="live-pattern-overlay checkerboard-pattern" style="--c1: {currentKit.primaryColor}; --c2: {currentKit.secondaryColor};"></div>
+                    {:else if currentKit.pattern === 'cross'}
+                      <div class="live-pattern-overlay cross-stripes" style="--c1: {currentKit.primaryColor}; --c2: {currentKit.secondaryColor};"></div>
+                    {:else if currentKit.pattern === 'chevrons'}
+                      <div class="live-pattern-overlay chevrons-stripes" style="--c1: {currentKit.primaryColor}; --c2: {currentKit.secondaryColor};"></div>
+                    {/if}
 
-                  <span
-                    class="captain-badge"
+                    <span
+                      class="captain-badge"
+                      style="
+                        color: {currentKit.tertiaryColor || '#ffffff'};
+                        -webkit-text-stroke: {hasOutline ? '1.5px #000000' : 'none'};
+                        text-shadow: {hasOutline ? '-1px -1px 0 #000000, 1px -1px 0 #000000, -1px 1px 0 #000000, 1px 1px 0 #000000' : 'none'};
+                      "
+                    >10</span>
+                  </div>
+                </div>
+
+                <!-- Miniatura de Marcador -->
+                <div class="pitch-preview-cell">
+                  <span class="pitch-preview-label">Marcador</span>
+                  <div
+                    class="scoreboard-preview-badge"
                     style="
+                      background: linear-gradient(90deg, {currentKit.primaryColor} 50%, {currentKit.secondaryColor} 50%);
+                      border: 1.5px solid {currentKit.tertiaryColor || '#ffffff'};
                       color: {currentKit.tertiaryColor || '#ffffff'};
-                      -webkit-text-stroke: 1.5px {currentKit.outlineColor || '#000000'};
-                      text-shadow: -1px -1px 0 {currentKit.outlineColor || '#000000'}, 1px -1px 0 {currentKit.outlineColor || '#000000'}, -1px 1px 0 {currentKit.outlineColor || '#000000'}, 1px 1px 0 {currentKit.outlineColor || '#000000'};
+                      text-shadow: {hasOutline ? '-1px -1px 0 #000000, 1px -1px 0 #000000, -1px 1px 0 #000000, 1px 1px 0 #000000' : 'none'};
                     "
-                  >10</span>
+                  >
+                    {currentKit.tag || unifiedTeamTag || 'RED'}
+                  </div>
                 </div>
               </div>
             </div>
@@ -2783,6 +2803,10 @@
     display: grid;
     grid-template-columns: 1fr 280px;
     gap: 1.25rem;
+    width: 100%;
+    max-width: 100%;
+    overflow-x: hidden;
+    box-sizing: border-box;
   }
 
   .kits-controls-col {
@@ -2793,6 +2817,24 @@
     background: #080e18;
     border: 1px solid rgba(0, 229, 255, 0.2);
     border-radius: 0.5rem;
+    min-width: 0;
+    max-width: 100%;
+    overflow-x: hidden;
+    box-sizing: border-box;
+  }
+
+  .team-identity-block {
+    display: flex;
+    gap: 0.75rem;
+    align-items: flex-end;
+    padding: 0.85rem 1rem;
+    background: #080e18;
+    border: 1px solid rgba(0, 229, 255, 0.2);
+    border-radius: 0.5rem;
+    box-sizing: border-box;
+    width: 100%;
+    max-width: 100%;
+    overflow-x: hidden;
   }
 
   .team-name-tag-row {
@@ -2816,7 +2858,75 @@
     font-weight: 700;
   }
 
-  .form-row-3col,
+  .form-row-3col {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 0.65rem;
+    width: 100%;
+    box-sizing: border-box;
+  }
+
+  /* Checkbox Contorno */
+  .checkbox-option-box {
+    padding: 0.4rem 0.15rem;
+  }
+
+  .checkbox-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.6rem;
+    cursor: pointer;
+    user-select: none;
+  }
+
+  .checkbox-label input[type="checkbox"] {
+    position: absolute;
+    opacity: 0;
+    cursor: pointer;
+    height: 0;
+    width: 0;
+  }
+
+  .checkbox-custom {
+    width: 18px;
+    height: 18px;
+    background: #0b111e;
+    border: 1.5px solid rgba(0, 229, 255, 0.45);
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.15s ease;
+    flex-shrink: 0;
+  }
+
+  .checkbox-label input[type="checkbox"]:checked ~ .checkbox-custom {
+    background: #00e5ff;
+    border-color: #00e5ff;
+    box-shadow: 0 0 10px rgba(0, 229, 255, 0.4);
+  }
+
+  .checkbox-custom::after {
+    content: "";
+    display: none;
+    width: 4px;
+    height: 8px;
+    border: solid #050811;
+    border-width: 0 2px 2px 0;
+    transform: rotate(45deg);
+    margin-bottom: 2px;
+  }
+
+  .checkbox-label input[type="checkbox"]:checked ~ .checkbox-custom::after {
+    display: block;
+  }
+
+  .checkbox-text {
+    font-size: 0.8rem;
+    color: #e2e8f0;
+    font-weight: 600;
+  }
+
   .form-row-4col {
     display: grid;
     grid-template-columns: repeat(4, 1fr);
@@ -2920,17 +3030,35 @@
   }
 
   .pattern-sample.vertical {
-    background: repeating-linear-gradient(90deg, var(--c1) 0, var(--c1) 6px, var(--c2) 6px, var(--c2) 12px);
+    background: repeating-linear-gradient(90deg, var(--c1) 0, var(--c1) 5px, var(--c2) 5px, var(--c2) 10px);
   }
 
   .pattern-sample.hoop {
-    background: repeating-linear-gradient(0deg, var(--c1) 0, var(--c1) 6px, var(--c2) 6px, var(--c2) 12px);
+    background: linear-gradient(180deg, var(--c1) 0%, var(--c1) 32%, var(--c2) 32%, var(--c2) 68%, var(--c1) 68%, var(--c1) 100%);
+  }
+
+  .pattern-sample.vertical_stripe {
+    background: linear-gradient(90deg, var(--c1) 0%, var(--c1) 32%, var(--c2) 32%, var(--c2) 68%, var(--c1) 68%, var(--c1) 100%);
+  }
+
+  .pattern-sample.diagonal_right {
+    background: linear-gradient(45deg, var(--c1) 0%, var(--c1) 32%, var(--c2) 32%, var(--c2) 68%, var(--c1) 68%, var(--c1) 100%);
+  }
+
+  .pattern-sample.diagonal_left {
+    background: linear-gradient(135deg, var(--c1) 0%, var(--c1) 32%, var(--c2) 32%, var(--c2) 68%, var(--c1) 68%, var(--c1) 100%);
   }
 
   .pattern-sample.halves {
     background: linear-gradient(90deg, var(--c1) 50%, var(--c2) 50%);
   }
 
+  .pattern-sample.checkerboard {
+    background-image: conic-gradient(var(--c1) 90deg, var(--c2) 90deg 180deg, var(--c1) 180deg 270deg, var(--c2) 270deg);
+    background-size: 16px 16px;
+  }
+
+  /* Legacy fallback patterns */
   .pattern-sample.diagonal {
     background: linear-gradient(45deg, var(--c1) 50%, var(--c2) 50%);
   }
@@ -2960,6 +3088,10 @@
     border: 1px solid rgba(0, 229, 255, 0.2);
     border-radius: 0.5rem;
     justify-content: center;
+    min-width: 0;
+    max-width: 100%;
+    overflow-x: hidden;
+    box-sizing: border-box;
   }
 
   .preview-title {
@@ -2979,9 +3111,40 @@
     position: relative;
     display: flex;
     align-items: center;
-    justify-content: center;
+    justify-content: space-evenly;
     overflow: hidden;
     box-shadow: inset 0 0 30px rgba(0, 0, 0, 0.6);
+  }
+
+  .pitch-preview-cell {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.45rem;
+    z-index: 2;
+  }
+
+  .pitch-preview-label {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.65rem;
+    color: rgba(255, 255, 255, 0.7);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  .scoreboard-preview-badge {
+    min-width: 48px;
+    height: 28px;
+    padding: 0 0.65rem;
+    border-radius: 4px;
+    font-family: 'Space Grotesk', system-ui, sans-serif;
+    font-weight: 700;
+    font-size: 0.85rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    letter-spacing: 0.05em;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.6);
   }
 
   .tactical-pitch-lines {
@@ -3021,15 +3184,32 @@
   }
 
   .live-pattern-overlay.vertical-stripes {
-    background: repeating-linear-gradient(90deg, var(--c1) 0, var(--c1) 10px, var(--c2) 10px, var(--c2) 20px);
+    background: repeating-linear-gradient(90deg, var(--c1) 0, var(--c1) 8px, var(--c2) 8px, var(--c2) 16px);
   }
 
   .live-pattern-overlay.hoop-stripes {
-    background: repeating-linear-gradient(0deg, var(--c1) 0, var(--c1) 10px, var(--c2) 10px, var(--c2) 20px);
+    background: linear-gradient(180deg, var(--c1) 0%, var(--c1) 32%, var(--c2) 32%, var(--c2) 68%, var(--c1) 68%, var(--c1) 100%);
+  }
+
+  .live-pattern-overlay.vertical-stripe-center {
+    background: linear-gradient(90deg, var(--c1) 0%, var(--c1) 32%, var(--c2) 32%, var(--c2) 68%, var(--c1) 68%, var(--c1) 100%);
+  }
+
+  .live-pattern-overlay.diagonal-right-stripes {
+    background: linear-gradient(45deg, var(--c1) 0%, var(--c1) 32%, var(--c2) 32%, var(--c2) 68%, var(--c1) 68%, var(--c1) 100%);
+  }
+
+  .live-pattern-overlay.diagonal-left-stripes {
+    background: linear-gradient(135deg, var(--c1) 0%, var(--c1) 32%, var(--c2) 32%, var(--c2) 68%, var(--c1) 68%, var(--c1) 100%);
   }
 
   .live-pattern-overlay.halves-stripes {
     background: linear-gradient(90deg, var(--c1) 50%, var(--c2) 50%);
+  }
+
+  .live-pattern-overlay.checkerboard-pattern {
+    background-image: conic-gradient(var(--c1) 90deg, var(--c2) 90deg 180deg, var(--c1) 180deg 270deg, var(--c2) 270deg);
+    background-size: 24px 24px;
   }
 
   .live-pattern-overlay.diagonal-stripes {

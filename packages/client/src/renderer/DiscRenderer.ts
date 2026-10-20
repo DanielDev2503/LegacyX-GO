@@ -910,10 +910,10 @@ export class DiscRenderer {
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
 
-      const strokeCol = visualInfo?.outlineColor || 'rgba(15, 23, 42, 0.7)';
-      ctx.strokeStyle = strokeCol;
-      ctx.lineWidth = 2.5;
-      if (typeof ctx.strokeText === 'function') {
+      const hasOutline = visualInfo?.outlineColor !== 'none' && visualInfo?.outlineColor !== 'transparent';
+      if (hasOutline && typeof ctx.strokeText === 'function') {
+        ctx.strokeStyle = visualInfo?.outlineColor || '#000000';
+        ctx.lineWidth = 2.5;
         ctx.strokeText(avatar, x, y + 1);
       }
       ctx.fillStyle = visualInfo?.tertiaryColor || '#FFFFFF';

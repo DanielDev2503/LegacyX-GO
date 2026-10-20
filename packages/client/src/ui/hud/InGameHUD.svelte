@@ -30,6 +30,9 @@
   let redKitOutline = $derived(
     redCaptain?.kit?.outlineColor || gameUI.redTeamKit?.outlineColor || '#000000'
   );
+  let redHasOutline = $derived(
+    redKitOutline !== 'none' && redKitOutline !== 'transparent' && redKitOutline !== ''
+  );
 
   let blueKitPrimary = $derived(
     blueCaptain?.kit?.primaryColor || gameUI.blueTeamKit?.primaryColor || '#00e5ff'
@@ -42,6 +45,9 @@
   );
   let blueKitOutline = $derived(
     blueCaptain?.kit?.outlineColor || gameUI.blueTeamKit?.outlineColor || '#000000'
+  );
+  let blueHasOutline = $derived(
+    blueKitOutline !== 'none' && blueKitOutline !== 'transparent' && blueKitOutline !== ''
   );
 
   // Ancho dinámico del minimapa (0px si está desactivado)
@@ -199,7 +205,6 @@
     <!-- A) Cartucho Izquierdo: Únicamente Nombre de Sala -->
     <div class="top-card top-card-left">
       <div class="room-title-block">
-        <span class="pulse-dot"></span>
         <h1 class="room-title">
           {gameUI.activeRoomName || 'TORNEO NOCTURNO #12'}
         </h1>
@@ -216,7 +221,7 @@
             background: linear-gradient(90deg, {redKitPrimary} 50%, {redKitSecondary} 50%);
             border: 1.5px solid {redKitTertiary};
             color: {redKitTertiary};
-            text-shadow: -1px -1px 0 {redKitOutline}, 1px -1px 0 {redKitOutline}, -1px 1px 0 {redKitOutline}, 1px 1px 0 {redKitOutline};
+            text-shadow: {redHasOutline ? '-1px -1px 0 #000000, 1px -1px 0 #000000, -1px 1px 0 #000000, 1px 1px 0 #000000' : 'none'};
           "
         >
           {gameUI.redTeamKit?.tag || 'RED'}
@@ -244,7 +249,7 @@
             background: linear-gradient(90deg, {blueKitPrimary} 50%, {blueKitSecondary} 50%);
             border: 1.5px solid {blueKitTertiary};
             color: {blueKitTertiary};
-            text-shadow: -1px -1px 0 {blueKitOutline}, 1px -1px 0 {blueKitOutline}, -1px 1px 0 {blueKitOutline}, 1px 1px 0 {blueKitOutline};
+            text-shadow: {blueHasOutline ? '-1px -1px 0 #000000, 1px -1px 0 #000000, -1px 1px 0 #000000, 1px 1px 0 #000000' : 'none'};
           "
         >
           {gameUI.blueTeamKit?.tag || 'BLUE'}
@@ -412,7 +417,7 @@
   .hud-root {
     position: fixed;
     inset: 0;
-    z-index: 10;
+    z-index: 40;
     width: 100%;
     height: 100%;
     pointer-events: none;
@@ -423,13 +428,13 @@
   /* TOP BAR */
   .top-bar-container {
     position: fixed;
-    top: 0.5rem;
+    top: 0;
     left: 1.5rem;
     right: 1.5rem;
     display: flex;
     align-items: center;
     justify-content: space-between;
-    z-index: 100;
+    z-index: 40;
     pointer-events: none;
   }
 
@@ -437,7 +442,8 @@
     pointer-events: auto;
     background: rgba(10, 16, 26, 0.95);
     border: 1px solid rgba(0, 229, 255, 0.3);
-    border-radius: 0.75rem;
+    border-top: none;
+    border-radius: 0 0 0.75rem 0.75rem;
     box-shadow: 0 4px 20px rgba(0, 0, 0, 0.6);
   }
 
@@ -453,20 +459,6 @@
     display: flex;
     align-items: center;
     gap: 0.5rem;
-  }
-
-  .pulse-dot {
-    width: 0.5rem;
-    height: 0.5rem;
-    border-radius: 9999px;
-    background: #00e5ff;
-    box-shadow: 0 0 8px #00e5ff;
-    animation: pulseGlow 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
-  }
-
-  @keyframes pulseGlow {
-    0%, 100% { opacity: 1; transform: scale(1); }
-    50% { opacity: 0.45; transform: scale(0.85); }
   }
 
   .room-title {

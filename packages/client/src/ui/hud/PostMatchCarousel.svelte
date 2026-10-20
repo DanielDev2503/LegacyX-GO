@@ -18,6 +18,7 @@
   let redSecondaryColor = $derived(redCaptain?.kit?.secondaryColor || gameUI.redTeamKit?.secondaryColor || '#b02a1c');
   let redKitTertiary = $derived(redCaptain?.kit?.tertiaryColor || gameUI.redTeamKit?.tertiaryColor || '#ffffff');
   let redOutlineColor = $derived(redCaptain?.kit?.outlineColor || gameUI.redTeamKit?.outlineColor || '#000000');
+  let redHasOutline = $derived(redOutlineColor !== 'none' && redOutlineColor !== 'transparent' && redOutlineColor !== '');
 
   let blueTeamName = $derived(blueCaptain?.kit?.name || gameUI.blueTeamKit?.name || 'Equipo Azul');
   let blueTeamTag = $derived(blueCaptain?.kit?.tag || gameUI.blueTeamKit?.tag || 'BLUE');
@@ -25,6 +26,7 @@
   let blueSecondaryColor = $derived(blueCaptain?.kit?.secondaryColor || gameUI.blueTeamKit?.secondaryColor || '#217dbb');
   let blueKitTertiary = $derived(blueCaptain?.kit?.tertiaryColor || gameUI.blueTeamKit?.tertiaryColor || '#ffffff');
   let blueOutlineColor = $derived(blueCaptain?.kit?.outlineColor || gameUI.blueTeamKit?.outlineColor || '#000000');
+  let blueHasOutline = $derived(blueOutlineColor !== 'none' && blueOutlineColor !== 'transparent' && blueOutlineColor !== '');
 
   let isMatchStopped = $derived(gameUI.fsmPhase === 'STOPPED' || gameUI.matchPhase === 0);
 
@@ -138,7 +140,7 @@
                   background: linear-gradient(90deg, {redPrimaryColor} 0%, {redPrimaryColor} 30%, {redSecondaryColor} 70%, {redSecondaryColor} 100%);
                   border: 1.5px solid {redKitTertiary};
                   color: {redKitTertiary};
-                  text-shadow: -1px -1px 0 {redOutlineColor}, 1px -1px 0 {redOutlineColor}, -1px 1px 0 {redOutlineColor}, 1px 1px 0 {redOutlineColor};
+                  text-shadow: {redHasOutline ? '-1px -1px 0 #000000, 1px -1px 0 #000000, -1px 1px 0 #000000, 1px 1px 0 #000000' : 'none'};
                 "
               >
                 {redTeamTag}
@@ -152,7 +154,7 @@
                   background: linear-gradient(90deg, {bluePrimaryColor} 0%, {bluePrimaryColor} 30%, {blueSecondaryColor} 70%, {blueSecondaryColor} 100%);
                   border: 1.5px solid {blueKitTertiary};
                   color: {blueKitTertiary};
-                  text-shadow: -1px -1px 0 {blueOutlineColor}, 1px -1px 0 {blueOutlineColor}, -1px 1px 0 {blueOutlineColor}, 1px 1px 0 {blueOutlineColor};
+                  text-shadow: {blueHasOutline ? '-1px -1px 0 #000000, 1px -1px 0 #000000, -1px 1px 0 #000000, 1px 1px 0 #000000' : 'none'};
                 "
               >
                 {blueTeamTag}
@@ -192,7 +194,7 @@
               >
                 <span
                   class="col-team-name-hdr"
-                  style="text-shadow: -1px -1px 0 {redOutlineColor}, 1px -1px 0 {redOutlineColor}, -1px 1px 0 {redOutlineColor}, 1px 1px 0 {redOutlineColor};"
+                  style="color: {redKitTertiary}; text-shadow: {redHasOutline ? '-1px -1px 0 #000000, 1px -1px 0 #000000, -1px 1px 0 #000000, 1px 1px 0 #000000' : 'none'};"
                 >{redTeamName}</span>
                 <div class="col-headers-right">
                   <span class="col-pts">Pts</span>
@@ -272,7 +274,7 @@
               >
                 <span
                   class="col-team-name-hdr"
-                  style="text-shadow: -1px -1px 0 {blueOutlineColor}, 1px -1px 0 {blueOutlineColor}, -1px 1px 0 {blueOutlineColor}, 1px 1px 0 {blueOutlineColor};"
+                  style="color: {blueKitTertiary}; text-shadow: {blueHasOutline ? '-1px -1px 0 #000000, 1px -1px 0 #000000, -1px 1px 0 #000000, 1px 1px 0 #000000' : 'none'};"
                 >{blueTeamName}</span>
                 <div class="col-headers-right">
                   <span class="col-pts">Pts</span>
@@ -703,26 +705,22 @@
     padding: 1rem;
   }
 
-  /* Botones Flotantes Exteriores en Amarillo Neón (#ffd700) */
+  /* Botones Flotantes Exteriores Sólidos Desacoplados */
   .floating-nav-btn {
     position: absolute;
     top: 50%;
     transform: translateY(-50%);
-    z-index: 30;
-    padding: 14px 12px;
-    background: rgba(255, 215, 0, 0.12);
-    border: 1.5px solid rgba(255, 215, 0, 0.6);
-    color: #ffd700;
+    z-index: 40;
+    padding: 14px 14px;
     font-family: 'Space Grotesk', system-ui, sans-serif;
     font-size: 13px;
-    font-weight: 700;
+    font-weight: 800;
     letter-spacing: 0.05em;
     text-transform: uppercase;
     border-radius: 8px;
-    box-shadow: 0 0 14px rgba(255, 215, 0, 0.25);
     display: flex;
     align-items: center;
-    gap: 0.4rem;
+    gap: 0.45rem;
     cursor: pointer;
     transition: all 0.2s ease;
     outline: none;
@@ -730,22 +728,36 @@
     pointer-events: auto;
   }
 
-  .floating-nav-btn:hover {
-    background: rgba(255, 215, 0, 0.25);
-    box-shadow: 0 0 20px rgba(255, 215, 0, 0.5);
-    transform: translateY(-50%) scale(1.05);
-  }
-
   .floating-nav-btn:active {
     transform: translateY(-50%) scale(0.96);
   }
 
   .right-btn {
-    right: 1.5rem;
+    right: -85px;
+    background: #00e5ff;
+    color: #0a101a;
+    border: 2px solid #a5f3fc;
+    box-shadow: 0 0 20px rgba(0, 229, 255, 0.65), 0 0 40px rgba(0, 229, 255, 0.35);
+  }
+
+  .right-btn:hover {
+    background: #38bdf8;
+    box-shadow: 0 0 25px rgba(0, 229, 255, 0.85), 0 0 50px rgba(0, 229, 255, 0.5);
+    transform: translateY(-50%) scale(1.05);
   }
 
   .left-btn {
-    left: 1.5rem;
+    left: -85px;
+    background: #ffd700;
+    color: #0a101a;
+    border: 2px solid #fff275;
+    box-shadow: 0 0 20px rgba(255, 215, 0, 0.65), 0 0 40px rgba(255, 215, 0, 0.35);
+  }
+
+  .left-btn:hover {
+    background: #ffe033;
+    box-shadow: 0 0 25px rgba(255, 215, 0, 0.85), 0 0 50px rgba(255, 215, 0, 0.5);
+    transform: translateY(-50%) scale(1.05);
   }
 
   .nav-chevron {

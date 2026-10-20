@@ -61,6 +61,7 @@
   let redSecondaryColor = $derived(redCaptain?.kit?.secondaryColor || gameUI.redTeamKit?.secondaryColor || '#b02a1c');
   let redKitTertiary = $derived(redCaptain?.kit?.tertiaryColor || gameUI.redTeamKit?.tertiaryColor || '#ffffff');
   let redOutlineColor = $derived(redCaptain?.kit?.outlineColor || gameUI.redTeamKit?.outlineColor || '#000000');
+  let redHasOutline = $derived(redOutlineColor !== 'none' && redOutlineColor !== 'transparent' && redOutlineColor !== '');
 
   let blueTeamName = $derived(blueCaptain?.kit?.name || gameUI.blueTeamKit?.name || 'Equipo Azul');
   let blueTeamTag = $derived(blueCaptain?.kit?.tag || gameUI.blueTeamKit?.tag || 'BLUE');
@@ -68,6 +69,7 @@
   let blueSecondaryColor = $derived(blueCaptain?.kit?.secondaryColor || gameUI.blueTeamKit?.secondaryColor || '#217dbb');
   let blueKitTertiary = $derived(blueCaptain?.kit?.tertiaryColor || gameUI.blueTeamKit?.tertiaryColor || '#ffffff');
   let blueOutlineColor = $derived(blueCaptain?.kit?.outlineColor || gameUI.blueTeamKit?.outlineColor || '#000000');
+  let blueHasOutline = $derived(blueOutlineColor !== 'none' && blueOutlineColor !== 'transparent' && blueOutlineColor !== '');
 
   let isMatchStopped = $derived(
     gameUI.fsmPhase === 'STOPPED' ||
@@ -322,7 +324,7 @@
                   background: linear-gradient(90deg, {redPrimaryColor} 0%, {redPrimaryColor} 30%, {redSecondaryColor} 70%, {redSecondaryColor} 100%);
                   border: 1.5px solid {redKitTertiary};
                   color: {redKitTertiary};
-                  text-shadow: -1px -1px 0 {redOutlineColor}, 1px -1px 0 {redOutlineColor}, -1px 1px 0 {redOutlineColor}, 1px 1px 0 {redOutlineColor};
+                  text-shadow: {redHasOutline ? '-1px -1px 0 #000000, 1px -1px 0 #000000, -1px 1px 0 #000000, 1px 1px 0 #000000' : 'none'};
                 "
               >
                 {redTeamTag}
@@ -336,7 +338,7 @@
                   background: linear-gradient(90deg, {bluePrimaryColor} 0%, {bluePrimaryColor} 30%, {blueSecondaryColor} 70%, {blueSecondaryColor} 100%);
                   border: 1.5px solid {blueKitTertiary};
                   color: {blueKitTertiary};
-                  text-shadow: -1px -1px 0 {blueOutlineColor}, 1px -1px 0 {blueOutlineColor}, -1px 1px 0 {blueOutlineColor}, 1px 1px 0 {blueOutlineColor};
+                  text-shadow: {blueHasOutline ? '-1px -1px 0 #000000, 1px -1px 0 #000000, -1px 1px 0 #000000, 1px 1px 0 #000000' : 'none'};
                 "
               >
                 {blueTeamTag}
@@ -374,19 +376,17 @@
               >
                 <span
                   class="col-team-name-hdr"
-                  style="text-shadow: -1px -1px 0 {redOutlineColor}, 1px -1px 0 {redOutlineColor}, -1px 1px 0 {redOutlineColor}, 1px 1px 0 {redOutlineColor};"
+                  style="color: {redKitTertiary}; text-shadow: {redHasOutline ? '-1px -1px 0 #000000, 1px -1px 0 #000000, -1px 1px 0 #000000, 1px 1px 0 #000000' : 'none'};"
                 >{redTeamName}</span>
-                >
-                  <span class="col-team-name-hdr">{redTeamName}</span>
-                  <div class="col-headers-right">
-                    <span class="col-pts">Pts</span>
-                    <span class="col-stat">G</span>
-                    <span class="col-stat">A</span>
-                    <span class="col-stat">P</span>
-                    <span class="col-stat">S</span>
-                    <span class="col-arrow"></span>
-                  </div>
+                <div class="col-headers-right">
+                  <span class="col-pts">Pts</span>
+                  <span class="col-stat">G</span>
+                  <span class="col-stat">A</span>
+                  <span class="col-stat">P</span>
+                  <span class="col-stat">S</span>
+                  <span class="col-arrow"></span>
                 </div>
+              </div>
 
                 <div class="table-scroll-body custom-scrollbar-red">
                   {#each gameUI.redTeamStats as player}
@@ -460,7 +460,7 @@
                 >
                   <span
                     class="col-team-name-hdr"
-                    style="text-shadow: -1px -1px 0 {blueOutlineColor}, 1px -1px 0 {blueOutlineColor}, -1px 1px 0 {blueOutlineColor}, 1px 1px 0 {blueOutlineColor};"
+                    style="color: {blueKitTertiary}; text-shadow: {blueHasOutline ? '-1px -1px 0 #000000, 1px -1px 0 #000000, -1px 1px 0 #000000, 1px 1px 0 #000000' : 'none'};"
                   >{blueTeamName}</span>
                   <div class="col-headers-right">
                     <span class="col-pts">Pts</span>
@@ -897,7 +897,7 @@
                   class="bench-card red-bench"
                   role="region"
                   aria-label="Banquillo Equipo Rojo"
-                  style="--captain-local-primary: {redPrimaryColor}; --captain-local-glow: {redPrimaryColor}40;"
+                  style="--captain-local-primary: {redPrimaryColor}; --captain-local-glow: {redPrimaryColor}40; --bench-team-primary: {redPrimaryColor};"
                   class:is-drag-over={dragOverTeam === 'red'}
                   ondragover={(e) => handleDragOver(e, 'red')}
                   ondragleave={(e) => handleDragLeave(e, 'red')}
@@ -909,7 +909,7 @@
                   >
                     <span
                       class="team-name"
-                      style="text-shadow: -1px -1px 0 {redOutlineColor}, 1px -1px 0 {redOutlineColor}, -1px 1px 0 {redOutlineColor}, 1px 1px 0 {redOutlineColor};"
+                      style="color: {redKitTertiary}; text-shadow: {redHasOutline ? '-1px -1px 0 #000000, 1px -1px 0 #000000, -1px 1px 0 #000000, 1px 1px 0 #000000' : 'none'};"
                     >{redTeamName}</span>
                   </div>
 
@@ -1007,7 +1007,7 @@
                         {/if}
                       </div>
                     {:else}
-                      <div class="empty-bench-state">Sin espectadores</div>
+                      <div class="empty-bench-state"></div>
                     {/each}
                   </div>
                 </div>
@@ -1017,7 +1017,7 @@
                   class="bench-card blue-bench"
                   role="region"
                   aria-label="Banquillo Equipo Azul"
-                  style="--captain-visitor-primary: {bluePrimaryColor}; --captain-visitor-glow: {bluePrimaryColor}40;"
+                  style="--captain-visitor-primary: {bluePrimaryColor}; --captain-visitor-glow: {bluePrimaryColor}40; --bench-team-primary: {bluePrimaryColor};"
                   class:is-drag-over={dragOverTeam === 'blue'}
                   ondragover={(e) => handleDragOver(e, 'blue')}
                   ondragleave={(e) => handleDragLeave(e, 'blue')}
@@ -1029,7 +1029,7 @@
                   >
                     <span
                       class="team-name"
-                      style="text-shadow: -1px -1px 0 {blueOutlineColor}, 1px -1px 0 {blueOutlineColor}, -1px 1px 0 {blueOutlineColor}, 1px 1px 0 {blueOutlineColor};"
+                      style="color: {blueKitTertiary}; text-shadow: {blueHasOutline ? '-1px -1px 0 #000000, 1px -1px 0 #000000, -1px 1px 0 #000000, 1px 1px 0 #000000' : 'none'};"
                     >{blueTeamName}</span>
                   </div>
 
@@ -1241,33 +1241,23 @@
     pointer-events: auto;
   }
 
-  /* Pestañas Flotantes Exteriores en Amarillo Neón (#ffd700) */
+  /* Pestañas Flotantes Exteriores Sólidas Desacopladas */
   .external-nav-tab {
-    background: rgba(255, 215, 0, 0.12);
-    border: 1.5px solid rgba(255, 215, 0, 0.6);
-    color: #ffd700;
     border-radius: 8px;
-    padding: 14px 12px;
+    padding: 14px 14px;
     font-family: 'Space Grotesk', system-ui, sans-serif;
-    font-weight: 700;
+    font-weight: 800;
     font-size: 13px;
     letter-spacing: 0.05em;
-    box-shadow: 0 0 14px rgba(255, 215, 0, 0.25);
     transition: all 0.2s ease;
     cursor: pointer;
     pointer-events: auto;
     white-space: nowrap;
     display: flex;
     align-items: center;
-    gap: 0.4rem;
+    gap: 0.45rem;
     z-index: 40;
     outline: none;
-  }
-
-  .external-nav-tab:hover {
-    background: rgba(255, 215, 0, 0.25);
-    box-shadow: 0 0 20px rgba(255, 215, 0, 0.5);
-    transform: translateY(-50%) scale(1.05);
   }
 
   .external-nav-tab:active {
@@ -1276,16 +1266,36 @@
 
   .right-tab {
     position: absolute;
-    right: -68px;
+    right: -85px;
     top: 50%;
     transform: translateY(-50%);
+    background: #00e5ff;
+    color: #0a101a;
+    border: 2px solid #a5f3fc;
+    box-shadow: 0 0 20px rgba(0, 229, 255, 0.65), 0 0 40px rgba(0, 229, 255, 0.35);
+  }
+
+  .right-tab:hover {
+    background: #38bdf8;
+    box-shadow: 0 0 25px rgba(0, 229, 255, 0.85), 0 0 50px rgba(0, 229, 255, 0.5);
+    transform: translateY(-50%) scale(1.05);
   }
 
   .left-tab {
     position: absolute;
-    left: -68px;
+    left: -85px;
     top: 50%;
     transform: translateY(-50%);
+    background: #ffd700;
+    color: #0a101a;
+    border: 2px solid #fff275;
+    box-shadow: 0 0 20px rgba(255, 215, 0, 0.65), 0 0 40px rgba(255, 215, 0, 0.35);
+  }
+
+  .left-tab:hover {
+    background: #ffe033;
+    box-shadow: 0 0 25px rgba(255, 215, 0, 0.85), 0 0 50px rgba(255, 215, 0, 0.5);
+    transform: translateY(-50%) scale(1.05);
   }
 
   .nav-chevron {
@@ -1892,28 +1902,30 @@
 
   .btn-pause-match {
     padding: 0.6rem;
-    border: 1.5px solid rgba(0, 229, 255, 0.6);
-    background: rgba(0, 229, 255, 0.15);
-    color: #00e5ff;
+    border: 1.5px solid #38bdf8;
+    background: #0284c7;
+    color: #ffffff;
     border-radius: 0.5rem;
     font-family: 'Space Grotesk', system-ui, sans-serif;
     font-size: 0.75rem;
-    font-weight: 900;
+    font-weight: bold;
     letter-spacing: 0.05em;
     cursor: pointer;
-    box-shadow: 0 0 12px rgba(0, 229, 255, 0.3);
+    box-shadow: 0 0 16px rgba(14, 165, 233, 0.45);
     transition: all 0.15s ease;
   }
 
   .btn-pause-match:hover:not(:disabled) {
-    background: rgba(0, 229, 255, 0.3);
-    box-shadow: 0 0 16px rgba(0, 229, 255, 0.5);
+    background: #0369a1;
+    border-color: #7dd3fc;
+    box-shadow: 0 0 20px rgba(14, 165, 233, 0.65);
     color: #ffffff;
   }
 
   .btn-pause-match.is-resuming {
-    background: rgba(0, 229, 255, 0.25);
-    box-shadow: 0 0 16px rgba(0, 229, 255, 0.5);
+    background: #0284c7;
+    border-color: #38bdf8;
+    box-shadow: 0 0 16px rgba(14, 165, 233, 0.45);
     color: #ffffff;
   }
 
@@ -2040,7 +2052,7 @@
   }
 
   .player-slot-card.red-slot {
-    border-left: 3px solid #ff3366;
+    border-left: 3.5px solid var(--bench-team-primary, #e74c3c);
   }
 
   .player-slot-card.spec-slot {
@@ -2048,7 +2060,7 @@
   }
 
   .player-slot-card.blue-slot {
-    border-left: 3px solid #00e5ff;
+    border-left: 3.5px solid var(--bench-team-primary, #00e5ff);
   }
 
   .player-slot-card:hover {
@@ -2072,9 +2084,9 @@
   }
 
   .slot-avatar.red {
-    background: #ff3366;
+    background: var(--bench-team-primary, #e74c3c);
     color: #ffffff;
-    box-shadow: 0 0 6px rgba(255, 51, 102, 0.5);
+    box-shadow: 0 0 8px var(--bench-team-primary, rgba(231, 76, 60, 0.5));
   }
 
   .slot-avatar.spec {
@@ -2083,9 +2095,9 @@
   }
 
   .slot-avatar.blue {
-    background: #00e5ff;
-    color: #050811;
-    box-shadow: 0 0 6px rgba(0, 229, 255, 0.5);
+    background: var(--bench-team-primary, #00e5ff);
+    color: #ffffff;
+    box-shadow: 0 0 8px var(--bench-team-primary, rgba(0, 229, 255, 0.5));
   }
 
   /* 2. Nombre del Jugador en Chivo */
