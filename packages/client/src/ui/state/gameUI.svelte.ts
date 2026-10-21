@@ -319,6 +319,7 @@ export interface RosterPlayer {
   isHost: boolean;
   ping: number;
   kit?: TeamKitConfig;
+  activeEmote?: { emoji: string; timer: number };
 }
 
 export interface ChatEntry {
@@ -529,8 +530,7 @@ class GameUIStore {
   public selectedStadiumId = $state<'small' | 'medium' | 'big' | 'af_3v3' | 'classic' | 'mediano'>('mediano');
   public activeStadiumName = $state('Mediano');
   public rosterPlayers = $state<RosterPlayer[]>([
-    { id: 1, peerId: 'host', nickname: 'yami', name: 'yami', number: 10, avatar: 'YA', team: 'red', isAdmin: true, isHost: true, ping: 16 },
-    { id: 2, peerId: 'peer_2', nickname: 'Rival', name: 'Rival', number: 7, avatar: '7', team: 'blue', isAdmin: false, isHost: false, ping: 28 }
+    { id: 1, peerId: 'host', nickname: 'Jugador', name: 'Jugador', number: 10, avatar: '1', team: 'red', isAdmin: true, isHost: true, ping: 16 }
   ]);
 
   // Match HUD Telemetry
@@ -598,6 +598,15 @@ class GameUIStore {
   public onSettingsChanged: ((settings: SettingsConfig) => void) | null = null;
   public onChatSent: ((text: string) => void) | null = null;
   public onTeamChanged: ((playerId: number, team: 'red' | 'blue' | 'spectator') => void) | null = null;
+  public onPlayerEmote: ((playerId: number, emoji: string) => void) | null = null;
+
+  public triggerPlayerEmote(playerId: number, emoji: string): void {
+    const player = this.rosterPlayers.find((p) => p.id === playerId);
+    if (player) {
+      player.activeEmote = { emoji, timer: 120 };
+    }
+    this.onPlayerEmote?.(playerId, emoji);
+  }
 
   constructor() {
     this.loadPersistedState();
@@ -654,12 +663,21 @@ class GameUIStore {
     if (typeof localStorage === 'undefined') return;
     try {
       const savedNick = localStorage.getItem(LEGACYX_PLAYER_NAME_KEY) ?? localStorage.getItem('haxball_nickname');
-      if (savedNick !== null) {
+      if (savedNick) {
         this.nickname = savedNick;
+        const hostEntry = this.rosterPlayers.find((p) => p.id === this.localPlayerId);
+        if (hostEntry) {
+          hostEntry.nickname = savedNick;
+          hostEntry.name = savedNick;
+        }
       }
       const savedAvatar = localStorage.getItem(LEGACYX_PLAYER_AVATAR_KEY) ?? localStorage.getItem('haxball_avatar');
-      if (savedAvatar !== null) {
+      if (savedAvatar) {
         this.avatarValue = savedAvatar;
+        const hostEntry = this.rosterPlayers.find((p) => p.id === this.localPlayerId);
+        if (hostEntry) {
+          hostEntry.avatar = savedAvatar;
+        }
       }
       const savedAvatarType = localStorage.getItem(LEGACYX_AVATAR_TYPE_KEY);
       if (savedAvatarType === 'emoji') {
@@ -692,6 +710,12 @@ class GameUIStore {
         };
         this.isAudioMuted = this.settings.isMuted;
         this.masterVolume = this.settings.masterVolume;
+
+        soundFX.setMuted(this.settings.isMuted);
+        soundFX.setMasterVolume(this.settings.masterVolume);
+        soundFX.setChatVolume(this.settings.chatVolume);
+        soundFX.setSfxVolume(this.settings.sfxVolume);
+        soundFX.setEnvVolume(this.settings.envVolume);
       }
       const rawKeybinds = localStorage.getItem(KEYBINDS_STORAGE_KEY);
       if (currentVersion < SETTINGS_VERSION || !rawKeybinds) {

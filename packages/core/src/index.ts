@@ -266,6 +266,22 @@ export class EngineInstance {
     }
   }
 
+  public setPlayerTeam(id: number, team: 'red' | 'blue' | 'spec' | 'spectator'): void {
+    if (team === 'spec' || team === 'spectator') {
+      this.removePlayer(id);
+      return;
+    }
+    const isRed = team === 'red';
+    const player = this.players.get(id);
+    if (player) {
+      this.playerTeams.set(id, team);
+      player.cGroup = isRed ? COLLISION_GROUP_RED : COLLISION_GROUP_BLUE;
+      player.color = isRed ? '#e74c3c' : '#3498db';
+    } else {
+      this.addPlayer(id, team);
+    }
+  }
+
   public resetPositions(): void {
     this.ball.pos.set(0, 0);
     this.ball.prevPos.set(0, 0);
@@ -332,23 +348,49 @@ export class EngineInstance {
           iy /= inputLen;
         }
 
-        const accel = 2.4;
+        const accelBase = (this.modifiers as any).playerAcceleration !== undefined
+          ? ((this.modifiers as any).playerAcceleration / 0.11) * 2.4
+          : 2.4;
+        const isTurboRequested = Boolean(input.inputMask && (input.inputMask & INPUT_FLAG_TURBO));
+        const turboMultiplier = (this.modifiers as any).boostMultiplier ?? (this.modifiers as any).turboMultiplier ?? 2.0;
+        let accel = accelBase;
+
+        if (isTurboRequested && inputLen > 0.1 && player.stamina > 0) {
+          accel *= Math.max(1.8, turboMultiplier * 1.2);
+          player.stamina = Math.max(0, player.stamina - 0.6); // Gasto continuo de estamina
+          player.isTurbo = true;
+        } else {
+          player.isTurbo = false;
+        }
+
         player.vel.x += ix * accel;
         player.vel.y += iy * accel;
 
+        const maxSpeedBase = (this.modifiers as any).playerSpeed ? (this.modifiers as any).playerSpeed * 60 : 168.0;
+        const currentMaxSpeed = player.isTurbo ? maxSpeedBase * turboMultiplier : maxSpeedBase;
+        const curSpeed = player.vel.len();
+        if (curSpeed > currentMaxSpeed) {
+          player.vel.x = (player.vel.x / curSpeed) * currentMaxSpeed;
+          player.vel.y = (player.vel.y / curSpeed) * currentMaxSpeed;
+        }
+
         const isDashRequested = Boolean(input.dash || (input.inputMask && (input.inputMask & INPUT_FLAG_DASH)));
-        if (isDashRequested && player.stamina >= 25) {
-          player.stamina -= 25;
-          const dashDirX = inputLen > 0.1 ? ix : (player.vel.len() > 0.1 ? player.vel.x / player.vel.len() : 1);
-          const dashDirY = inputLen > 0.1 ? iy : (player.vel.len() > 0.1 ? player.vel.y / player.vel.len() : 0);
-          player.vel.x += dashDirX * this.modifiers.dashPower;
-          player.vel.y += dashDirY * this.modifiers.dashPower;
+        const dashesPerFullBar = (this.modifiers as any).dashesPerFullBar ?? 4;
+        const dashCost = 100 / Math.max(1, Math.min(6, dashesPerFullBar));
+
+        if (isDashRequested && !player.isDashing && player.stamina >= dashCost) {
+          player.stamina = Math.max(0, player.stamina - dashCost);
+          const dashDirX = inputLen > 0.1 ? ix : (curSpeed > 0.1 ? player.vel.x / curSpeed : 1);
+          const dashDirY = inputLen > 0.1 ? iy : (curSpeed > 0.1 ? player.vel.y / curSpeed : 0);
+          const power = this.modifiers.dashPower ?? 280;
+          player.vel.x += dashDirX * power;
+          player.vel.y += dashDirY * power;
           player.isDashing = true;
-        } else {
+        } else if (!isDashRequested) {
           player.isDashing = false;
         }
 
-        if (player.stamina < 100) {
+        if (inputLen === 0 && !player.isTurbo && !player.isDashing && player.stamina < 100) {
           player.stamina = Math.min(100, player.stamina + 0.35);
         }
 
@@ -360,8 +402,9 @@ export class EngineInstance {
           const nx = dx / dist;
           const ny = dy / dist;
 
-          this.ball.vel.x = nx * this.modifiers.baseKickStrength;
-          this.ball.vel.y = ny * this.modifiers.baseKickStrength;
+          const strength = this.modifiers.baseKickStrength ?? 450.0;
+          this.ball.vel.x = nx * strength;
+          this.ball.vel.y = ny * strength;
           this.ball.lastKickerDiscId = player.id;
           this.ball.isCurvingAllowed = true;
 
@@ -375,6 +418,17 @@ export class EngineInstance {
           this.emit('kick', { player, ball: this.ball });
 
           if (this.fsm.state === MatchPhase.KICKOFF) {
+            this.fsm.startPlaying();
+          }
+        }
+
+        // Si el balón entra en movimiento durante saque por contacto o patada, liberar barrera
+        if (this.fsm.state === MatchPhase.KICKOFF) {
+          const ballVelSq = this.ball.vel.x * this.ball.vel.x + this.ball.vel.y * this.ball.vel.y;
+          const touchDist = this.ball.radius + player.radius;
+          const bdx = this.ball.pos.x - player.pos.x;
+          const bdy = this.ball.pos.y - player.pos.y;
+          if (ballVelSq > 0.1 || (bdx * bdx + bdy * bdy <= touchDist * touchDist + 1.0)) {
             this.fsm.startPlaying();
           }
         }
@@ -483,16 +537,22 @@ export class EngineInstance {
     return BinaryProtocol.encodeSnapshot(this.getState());
   }
 
-  public applyModifiers(modifiers: Partial<PhysicsModifiers>): void {
+  public applyModifiers(modifiers: Partial<PhysicsModifiers> | any): void {
     this.modifiers = { ...this.modifiers, ...modifiers };
 
-    this.ball.radius = this.modifiers.ballRadius;
-    this.ball.setMass(this.modifiers.ballMass);
-    this.ball.damping = this.modifiers.pitchFriction;
-    this.world.magnusCoefficient = this.modifiers.magnusCoefficient;
-    this.fsm.celebrationDurationTicks = Math.round(this.modifiers.goalCelebrationDuration * 60);
-    this.fsm.scoreLimit = this.modifiers.goalLimit;
-    this.fsm.goldenGoal = this.modifiers.goldenGoalOvertime;
+    if (this.modifiers.ballRadius !== undefined) this.ball.radius = this.modifiers.ballRadius;
+    if (this.modifiers.ballMass !== undefined) this.ball.setMass(this.modifiers.ballMass);
+    if (this.modifiers.pitchFriction !== undefined) this.ball.damping = this.modifiers.pitchFriction;
+    if (this.modifiers.magnusCoefficient !== undefined) this.world.magnusCoefficient = this.modifiers.magnusCoefficient;
+    if (this.modifiers.goalCelebrationDuration !== undefined) this.fsm.celebrationDurationTicks = Math.round(this.modifiers.goalCelebrationDuration * 60);
+    if (this.modifiers.goalLimit !== undefined) this.fsm.scoreLimit = this.modifiers.goalLimit;
+    if (this.modifiers.goldenGoalOvertime !== undefined) this.fsm.goldenGoal = this.modifiers.goldenGoalOvertime;
+
+    for (const player of this.players.values()) {
+      if (this.modifiers.playerRadius !== undefined) player.radius = this.modifiers.playerRadius;
+      if (this.modifiers.playerMass !== undefined) player.setMass(this.modifiers.playerMass);
+      if (this.modifiers.pitchFriction !== undefined) player.damping = this.modifiers.pitchFriction;
+    }
   }
 
   public loadStadium(stadiumId: string): void {

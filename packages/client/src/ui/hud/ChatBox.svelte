@@ -1,5 +1,6 @@
 <script lang="ts">
   import { gameUI } from '../state/gameUI.svelte';
+  import { soundFX } from '../../audio/SoundFX.js';
 
   let {
     onSendChat = (_text: string) => {}
@@ -22,7 +23,19 @@
   function sendChat() {
     const text = chatInput.trim();
     if (text.length > 0) {
-      onSendChat(text);
+      const triggers = gameUI.settings.emoteTriggers || [];
+      const lower = text.toLowerCase();
+      const matched = triggers.find((t) => t.trigger.toLowerCase() === lower);
+
+      if (gameUI.settings.showPitchEmotes !== false && matched) {
+        soundFX.playPitchEmoteSound();
+        gameUI.triggerPlayerEmote(gameUI.localPlayerId, matched.emoji);
+        if (gameUI.onChatSent) {
+          gameUI.onChatSent(text);
+        }
+      } else {
+        onSendChat(text);
+      }
     }
     chatInput = '';
     gameUI.isChatFocused = false;

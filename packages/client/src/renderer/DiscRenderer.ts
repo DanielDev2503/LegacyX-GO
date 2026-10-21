@@ -3,8 +3,13 @@ import type { DiscSnapshot, CompactDiscState } from '@legacyx/core';
 export interface PlayerVisualInfo {
   nickname?: string;
   number?: number | string;
+  avatar?: string;
+  avatarType?: 'emoji' | 'text' | 'letters';
   outlineColor?: string;
+  hasOutline?: boolean;
   tertiaryColor?: string;
+  kit?: any;
+  activeEmote?: { emoji: string; timer: number };
 }
 
 const TURBO_TRAIL_CAPACITY = 16;
@@ -61,7 +66,12 @@ export class DiscRenderer {
   public ballRadius: number = 5.8;
   public playerRadius: number = 15;
   public ballSkin: 'classic' | 'retro' | 'neon' = 'classic';
+  public ballMode: 'texture' | 'color' = 'texture';
+  public ballCustomColor: string = '#ffffff';
   public theme: 'dark' | 'light' = 'dark';
+  public redKit?: any;
+  public blueKit?: any;
+  public playerInfos: Map<number, PlayerVisualInfo> = new Map();
   private ballRollAngleX: number = 0;
   private ballRollAngleY: number = 0;
 
@@ -273,7 +283,8 @@ export class DiscRenderer {
     for (const disc of discs) {
       if (disc.team !== 0) {
         const renderD = this.getRenderDisc(disc, true);
-        this.renderPlayerDisc(ctx, renderD, disc.id === localDiscId, false);
+        const info = this.playerInfos.get(disc.id);
+        this.renderPlayerDisc(ctx, renderD, disc.id === localDiscId, false, info?.nickname, info);
       }
     }
 
@@ -642,7 +653,20 @@ export class DiscRenderer {
     const cosY = Math.cos(rotY);
     const sinY = Math.sin(rotY);
 
-    if (skin === 'retro') {
+    if (this.ballMode === 'color') {
+      ctx.fillStyle = this.ballCustomColor || '#ffffff';
+      ctx.fill();
+
+      if (typeof ctx.createRadialGradient === 'function') {
+        const shine = ctx.createRadialGradient(x - radius * 0.35, y - radius * 0.35, radius * 0.05, x, y, radius);
+        shine.addColorStop(0, 'rgba(255, 255, 255, 0.55)');
+        shine.addColorStop(0.35, 'rgba(255, 255, 255, 0.15)');
+        shine.addColorStop(0.7, 'rgba(0, 0, 0, 0.05)');
+        shine.addColorStop(1, 'rgba(0, 0, 0, 0.35)');
+        ctx.fillStyle = shine;
+        ctx.fill();
+      }
+    } else if (skin === 'retro') {
       if (typeof ctx.createRadialGradient === 'function') {
         const baseGrad = ctx.createRadialGradient(x - radius * 0.35, y - radius * 0.35, radius * 0.05, x, y, radius);
         baseGrad.addColorStop(0, '#D97706');
@@ -858,29 +882,91 @@ export class DiscRenderer {
     ctx.arc(x + 2, y + 3, radius, 0, Math.PI * 2);
     ctx.fill();
 
-    // 3. Radial Enamel Sphere Gradient
-    if (typeof ctx.createRadialGradient === 'function') {
-      const grad = ctx.createRadialGradient(x - radius * 0.35, y - radius * 0.35, radius * 0.05, x, y, radius);
-      if (isRed) {
-        grad.addColorStop(0, '#FFFFFF');
-        grad.addColorStop(0.2, '#FF4D88');
-        grad.addColorStop(0.65, '#FF0055');
-        grad.addColorStop(1, '#990033');
-      } else {
-        grad.addColorStop(0, '#FFFFFF');
-        grad.addColorStop(0.2, '#4DEFFF');
-        grad.addColorStop(0.65, '#00E5FF');
-        grad.addColorStop(1, '#007A99');
-      }
-      ctx.fillStyle = grad;
-    } else {
-      ctx.fillStyle = neonColor;
-    }
+    // 3. Jersey Pattern Inside Disc (Circular Clip)
+    const kit = (isRed ? this.redKit : this.blueKit) ?? visualInfo?.kit;
+    const primaryColor = kit?.primaryColor || (isRed ? '#e74c3c' : '#00e5ff');
+    const secondaryColor = kit?.secondaryColor || '#ffffff';
+    const tertiaryColor = kit?.tertiaryColor || visualInfo?.tertiaryColor || '#ffffff';
+    const pattern = kit?.pattern || 'solid';
+
+    ctx.save();
     ctx.beginPath();
     ctx.arc(x, y, radius, 0, Math.PI * 2);
-    ctx.fill();
+    if (typeof ctx.clip === 'function') {
+      ctx.clip();
+    }
 
-    // 4. Outer Neon Ring
+    // Base fill con color primario
+    ctx.fillStyle = primaryColor;
+    ctx.fillRect?.(x - radius, y - radius, radius * 2, radius * 2);
+
+    // Trazado vectorial de patrones reglamentarios
+    switch (pattern) {
+      case 'vertical':
+      case 'vertical_stripe': {
+        ctx.fillStyle = secondaryColor;
+        const stripeW = radius * 0.42;
+        ctx.fillRect?.(x - stripeW * 1.5, y - radius, stripeW, radius * 2);
+        ctx.fillRect?.(x + stripeW * 0.5, y - radius, stripeW, radius * 2);
+        break;
+      }
+      case 'hoop': {
+        ctx.fillStyle = secondaryColor;
+        const stripeH = radius * 0.55;
+        ctx.fillRect?.(x - radius, y - stripeH * 0.5, radius * 2, stripeH);
+        break;
+      }
+      case 'diagonal':
+      case 'diagonal_right': {
+        ctx.save();
+        ctx.translate?.(x, y);
+        ctx.rotate?.(Math.PI / 4);
+        ctx.fillStyle = secondaryColor;
+        const bandW = radius * 0.55;
+        ctx.fillRect?.(-radius * 1.5, -bandW * 0.5, radius * 3, bandW);
+        ctx.restore();
+        break;
+      }
+      case 'diagonal_left': {
+        ctx.save();
+        ctx.translate?.(x, y);
+        ctx.rotate?.(-Math.PI / 4);
+        ctx.fillStyle = secondaryColor;
+        const bandW = radius * 0.55;
+        ctx.fillRect?.(-radius * 1.5, -bandW * 0.5, radius * 3, bandW);
+        ctx.restore();
+        break;
+      }
+      case 'halves': {
+        ctx.fillStyle = secondaryColor;
+        ctx.fillRect?.(x, y - radius, radius, radius * 2);
+        break;
+      }
+      case 'checkerboard':
+      case 'diagonal_checks': {
+        ctx.fillStyle = secondaryColor;
+        ctx.fillRect?.(x, y - radius, radius, radius);
+        ctx.fillRect?.(x - radius, y, radius, radius);
+        break;
+      }
+      case 'solid':
+      default:
+        break;
+    }
+
+    // Gradiente esférico esmaltado para profundidad y volumen
+    if (typeof ctx.createRadialGradient === 'function') {
+      const gloss = ctx.createRadialGradient(x - radius * 0.35, y - radius * 0.35, radius * 0.05, x, y, radius);
+      gloss.addColorStop(0, 'rgba(255, 255, 255, 0.4)');
+      gloss.addColorStop(0.3, 'rgba(255, 255, 255, 0.08)');
+      gloss.addColorStop(0.7, 'rgba(0, 0, 0, 0.05)');
+      gloss.addColorStop(1, 'rgba(0, 0, 0, 0.35)');
+      ctx.fillStyle = gloss;
+      ctx.fillRect?.(x - radius, y - radius, radius * 2, radius * 2);
+    }
+    ctx.restore();
+
+    // 4. Outer Ring (Trazo de 2px con kit.tertiaryColor o primario si no hay terciario)
     ctx.save();
     if (this.playerGlowEnabled) {
       ctx.strokeStyle = neonGlow;
@@ -889,35 +975,44 @@ export class DiscRenderer {
       ctx.arc(x, y, radius - 0.6, 0, Math.PI * 2);
       ctx.stroke();
     }
-    ctx.strokeStyle = neonColor;
-    ctx.lineWidth = 2.4;
+    ctx.strokeStyle = tertiaryColor || primaryColor || neonColor;
+    ctx.lineWidth = 2.0;
     ctx.beginPath();
     ctx.arc(x, y, radius - 0.6, 0, Math.PI * 2);
     ctx.stroke();
     ctx.restore();
 
     // 5. Inner White Ring
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.9)';
-    ctx.lineWidth = 1.2;
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.65)';
+    ctx.lineWidth = 1.0;
     ctx.beginPath();
     ctx.arc(x, y, radius - 2.8, 0, Math.PI * 2);
     ctx.stroke();
 
-    // 6. Avatar / Jersey Dorsal
-    if (avatar && typeof ctx.fillText === 'function') {
+    // 6. Avatar Real en Cancha
+    const av = visualInfo?.avatar || avatar;
+    if (av && typeof ctx.fillText === 'function') {
       ctx.save();
-      ctx.font = `bold ${Math.round(radius * 0.88)}px "Zen Dots", "Inter", sans-serif`;
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
+      const isEmoji = visualInfo?.avatarType === 'emoji' || /[\p{Emoji_Presentation}\p{Extended_Pictographic}]/u.test(av);
+      if (isEmoji) {
+        ctx.font = '16px "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(av, x, y + 1);
+      } else {
+        ctx.font = `bold ${Math.round(radius * 0.88)}px "Chivo", "Space Grotesk", sans-serif`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
 
-      const hasOutline = visualInfo?.outlineColor !== 'none' && visualInfo?.outlineColor !== 'transparent';
-      if (hasOutline && typeof ctx.strokeText === 'function') {
-        ctx.strokeStyle = visualInfo?.outlineColor || '#000000';
-        ctx.lineWidth = 2.5;
-        ctx.strokeText(avatar, x, y + 1);
+        const hasOutline = visualInfo?.hasOutline ?? (visualInfo?.outlineColor !== 'none' && visualInfo?.outlineColor !== 'transparent' && visualInfo?.outlineColor !== '');
+        if (hasOutline && typeof ctx.strokeText === 'function') {
+          ctx.strokeStyle = '#000000';
+          ctx.lineWidth = 2.5;
+          ctx.strokeText(av, x, y + 1);
+        }
+        ctx.fillStyle = tertiaryColor || '#FFFFFF';
+        ctx.fillText(av, x, y + 1);
       }
-      ctx.fillStyle = visualInfo?.tertiaryColor || '#FFFFFF';
-      ctx.fillText(avatar, x, y + 1);
       ctx.restore();
     }
 
@@ -961,6 +1056,46 @@ export class DiscRenderer {
     // 9. Typing Speech Bubble
     if (disc.isTyping) {
       this.renderTypingBubble(ctx, disc);
+    }
+
+    // 10. Emote Bubble Flotante en Cancha (duración: 120 frames / 2s)
+    if (visualInfo?.activeEmote && visualInfo.activeEmote.timer > 0) {
+      const bubbleW = 34;
+      const bubbleH = 26;
+      const bounce = Math.sin((120 - visualInfo.activeEmote.timer) * 0.1) * 2;
+      const bx = x - bubbleW / 2;
+      const by = y - radius - 24 + bounce;
+
+      ctx.save();
+      ctx.fillStyle = 'rgba(10, 16, 26, 0.95)';
+      ctx.strokeStyle = 'rgba(0, 229, 255, 0.5)';
+      ctx.lineWidth = 1.0;
+
+      const br = 5;
+      ctx.beginPath();
+      ctx.moveTo(bx + br, by);
+      ctx.lineTo(bx + bubbleW - br, by);
+      ctx.quadraticCurveTo(bx + bubbleW, by, bx + bubbleW, by + br);
+      ctx.lineTo(bx + bubbleW, by + bubbleH - br);
+      ctx.quadraticCurveTo(bx + bubbleW, by + bubbleH, bx + bubbleW - br, by + bubbleH);
+      ctx.lineTo(x + 4, by + bubbleH);
+      ctx.lineTo(x, by + bubbleH + 4);
+      ctx.lineTo(x - 4, by + bubbleH);
+      ctx.lineTo(bx + br, by + bubbleH);
+      ctx.quadraticCurveTo(bx, by + bubbleH, bx, by + bubbleH - br);
+      ctx.lineTo(bx, by + br);
+      ctx.quadraticCurveTo(bx, by, bx + br, by);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+
+      ctx.font = '18px "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(visualInfo.activeEmote.emoji, x, by + bubbleH / 2);
+
+      visualInfo.activeEmote.timer--;
+      ctx.restore();
     }
 
     ctx.restore();

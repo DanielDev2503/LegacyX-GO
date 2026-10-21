@@ -908,17 +908,23 @@ export class GameEngine {
     }
 
     if (this.kickoffState.active) {
-      for (const [playerId, player] of this.players.entries()) {
-        if (player.team === 'spec') continue;
-        const disc = this.playerDiscs.get(playerId);
-        if (!disc) continue;
-        const touchDist = this.ball.radius + disc.radius;
-        const dx = this.ball.pos.x - disc.pos.x;
-        const dy = this.ball.pos.y - disc.pos.y;
-        if (dx * dx + dy * dy <= touchDist * touchDist + 1.0) {
-          this.kickoffState.active = false;
-          this.updatePhysicsKickoffContext();
-          break;
+      const bSpeedSq = this.ball.vel.x * this.ball.vel.x + this.ball.vel.y * this.ball.vel.y;
+      if (bSpeedSq > 0.1) {
+        this.kickoffState.active = false;
+        this.updatePhysicsKickoffContext();
+      } else {
+        for (const [playerId, player] of this.players.entries()) {
+          if (player.team === 'spec') continue;
+          const disc = this.playerDiscs.get(playerId);
+          if (!disc) continue;
+          const touchDist = this.ball.radius + disc.radius;
+          const dx = this.ball.pos.x - disc.pos.x;
+          const dy = this.ball.pos.y - disc.pos.y;
+          if (dx * dx + dy * dy <= touchDist * touchDist + 1.0) {
+            this.kickoffState.active = false;
+            this.updatePhysicsKickoffContext();
+            break;
+          }
         }
       }
     }

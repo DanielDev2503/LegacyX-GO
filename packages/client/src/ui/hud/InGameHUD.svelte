@@ -98,16 +98,30 @@
     const text = chatMessage.trim();
     if (text) {
       soundFX.playUIClick();
-      const newMsg: ChatEntry = {
-        id: Date.now(),
-        team: (gameUI.myTeam === 'red' ? 'RED' : gameUI.myTeam === 'blue' ? 'BLUE' : 'SPEC'),
-        sender: gameUI.nickname || 'Player',
-        isHost: gameUI.isHost,
-        text
-      };
-      gameUI.chatMessages.push(newMsg);
-      if (gameUI.onChatSent) {
-        gameUI.onChatSent(text);
+
+      const triggers = gameUI.settings.emoteTriggers || [];
+      const lower = text.toLowerCase();
+      const matched = triggers.find((t) => t.trigger.toLowerCase() === lower);
+
+      if (gameUI.settings.showPitchEmotes !== false && matched) {
+        // Activación silenciosa: no se imprime la cadena en el feed del chat
+        soundFX.playPitchEmoteSound();
+        gameUI.triggerPlayerEmote(gameUI.localPlayerId, matched.emoji);
+        if (gameUI.onChatSent) {
+          gameUI.onChatSent(text);
+        }
+      } else {
+        const newMsg: ChatEntry = {
+          id: Date.now(),
+          team: (gameUI.myTeam === 'red' ? 'RED' : gameUI.myTeam === 'blue' ? 'BLUE' : 'SPEC'),
+          sender: gameUI.nickname || 'Jugador',
+          isHost: gameUI.isHost,
+          text
+        };
+        gameUI.chatMessages.push(newMsg);
+        if (gameUI.onChatSent) {
+          gameUI.onChatSent(text);
+        }
       }
     }
     chatMessage = '';

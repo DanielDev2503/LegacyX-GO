@@ -19,7 +19,8 @@ export type WorkerCommand =
   | { type: 'TOGGLE_PAUSE' }
   | { type: 'INPUT'; id: number; inputMask: number; tick?: number }
   | { type: 'APPLY_SNAPSHOT'; buffer: ArrayBuffer; localDiscId?: number }
-  | { type: 'SET_MODIFIERS'; modifiers: Partial<PhysicsModifiers> };
+  | { type: 'SET_MODIFIERS'; modifiers: Partial<PhysicsModifiers> }
+  | { type: 'UPDATE_CONFIG'; config: Partial<PhysicsModifiers> };
 
 export type WorkerEvent =
   | {
@@ -199,6 +200,12 @@ self.onmessage = (e: MessageEvent<WorkerCommand>) => {
 
     case 'SET_MODIFIERS': {
       engine.applyModifiers(cmd.modifiers);
+      break;
+    }
+
+    case 'UPDATE_CONFIG': {
+      engine.applyModifiers(cmd.config);
+      broadcastSnapshot();
       break;
     }
   }

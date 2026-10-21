@@ -10,6 +10,7 @@
     INPUT_FLAG_LEFT,
     INPUT_FLAG_RIGHT,
     INPUT_FLAG_KICK,
+    INPUT_FLAG_TURBO,
     INPUT_FLAG_DASH,
     INPUT_FLAG_MAGNUS_LEFT,
     INPUT_FLAG_MAGNUS_RIGHT
@@ -38,15 +39,7 @@
 
   function applyModifiersToEngine(modifiers: PhysicsModifiers): void {
     if (!testEngine) return;
-    testEngine.ball.radius = modifiers.ballRadius;
-    testEngine.ball.mass = modifiers.ballMass;
-    testEngine.ball.damping = modifiers.pitchFriction;
-    testEngine.world.magnusCoefficient = modifiers.magnusCoefficient;
-    testEngine.modifiers = { ...testEngine.modifiers, ...modifiers };
-    for (const player of testEngine.players.values()) {
-      player.radius = modifiers.playerRadius;
-      player.mass = modifiers.playerMass;
-    }
+    testEngine.applyModifiers(modifiers);
   }
 
   $effect(() => {
@@ -61,9 +54,9 @@
     const engine = new EngineInstance(gameUI.selectedStadiumId || 'mediano');
     testEngine = engine;
 
-    // Configurar jugadores (1 en Rojo, 1 en Azul)
-    engine.addPlayer(1, 'red');
-    engine.addPlayer(2, 'blue');
+    // Configurar jugador local exclusivamente (sin bots/rivales simulados)
+    const localTeam = gameUI.myTeam === 'blue' ? 'blue' : 'red';
+    engine.addPlayer(1, localTeam);
     engine.resetPositions();
 
     // Inicializar siempre en 0: STOP con el menú de sala abierto
@@ -101,6 +94,18 @@
       gameUI.enforceStopMenu();
     };
 
+    gameUI.onTeamChanged = (playerId: number, team: 'red' | 'blue' | 'spectator') => {
+      engine.setPlayerTeam(playerId, team);
+      engine.resetPositions();
+    };
+
+    gameUI.onPlayerEmote = (playerId: number, emoji: string) => {
+      const visual = renderer.playerInfos.get(playerId);
+      if (visual) {
+        visual.activeEmote = { emoji, timer: 120 };
+      }
+    };
+
     // Conectar eventos del motor al sintetizador procedural Web Audio API
     engine.on('goal', () => {
       soundFX.playGoalHorn();
@@ -127,8 +132,18 @@
     const renderer = new GameRenderer(canvasEl, {
       stadium: engine.stadium,
       playerInfos: new Map([
-        [1, { nickname: gameUI.nickname || 'Host (Red)', number: 10 }],
-        [2, { nickname: 'Rival (Blue)', number: 7 }]
+        [
+          1,
+          {
+            nickname: gameUI.nickname || 'Jugador',
+            number: 10,
+            avatar: gameUI.avatarValue || '1',
+            avatarType: gameUI.avatarMode,
+            hasOutline: gameUI.settings.localKit?.outlineColor !== 'none' && gameUI.settings.localKit?.outlineColor !== '',
+            tertiaryColor: gameUI.settings.localKit?.tertiaryColor || '#ffffff',
+            kit: gameUI.settings.localKit
+          }
+        ]
       ])
     });
     rendererInstance = renderer;
@@ -143,6 +158,7 @@
 
     // 3. Captura y enrutamiento de inputs
     const keyState = new Map<string, boolean>();
+    let dashTriggered = false;
 
     const onKeyDown = (e: KeyboardEvent) => {
       // Activar contexto de audio con la primera interacción del usuario
@@ -180,10 +196,17 @@
         return;
       }
 
+      if (e.code === 'ArrowUp' && !e.repeat) {
+        dashTriggered = true;
+      }
+
       keyState.set(e.code, true);
     };
 
     const onKeyUp = (e: KeyboardEvent) => {
+      if (e.code === 'ArrowUp') {
+        dashTriggered = false;
+      }
       keyState.set(e.code, false);
     };
 
@@ -207,21 +230,34 @@
       lastTimestamp = currentTime;
       accumulatedTime += deltaMs;
 
-      // Inputs del jugador local (Player 1)
+      // Inputs canónicos del jugador local (Player 1)
       let mask = 0;
       const isInputActive = gameUI.currentScreen === 'IN_GAME' && gameUI.activeModal === 'NONE';
       const activeEl = document.activeElement;
       const isTyping = activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA');
 
       if (isInputActive && !isTyping) {
-        if (keyState.get('ArrowUp') || keyState.get('KeyW')) mask |= INPUT_FLAG_UP;
-        if (keyState.get('ArrowDown') || keyState.get('KeyS')) mask |= INPUT_FLAG_DOWN;
-        if (keyState.get('ArrowLeft') || keyState.get('KeyA')) mask |= INPUT_FLAG_LEFT;
-        if (keyState.get('ArrowRight') || keyState.get('KeyD')) mask |= INPUT_FLAG_RIGHT;
+        // Movimiento: WASD
+        if (keyState.get('KeyW')) mask |= INPUT_FLAG_UP;
+        if (keyState.get('KeyS')) mask |= INPUT_FLAG_DOWN;
+        if (keyState.get('KeyA')) mask |= INPUT_FLAG_LEFT;
+        if (keyState.get('KeyD')) mask |= INPUT_FLAG_RIGHT;
+
+        // Patear / Chutar: Space / KeyX
         if (keyState.get('Space') || keyState.get('KeyX')) mask |= INPUT_FLAG_KICK;
-        if (keyState.get('ShiftLeft') || keyState.get('ShiftRight')) mask |= INPUT_FLAG_DASH;
-        if (keyState.get('KeyQ') || keyState.get('KeyZ')) mask |= INPUT_FLAG_MAGNUS_LEFT;
-        if (keyState.get('KeyE') || keyState.get('KeyC')) mask |= INPUT_FLAG_MAGNUS_RIGHT;
+
+        // Turbo / Sprint: ShiftLeft / ShiftRight
+        if (keyState.get('ShiftLeft') || keyState.get('ShiftRight')) mask |= INPUT_FLAG_TURBO;
+
+        // Dash: ArrowUp (flanco ascendente / edge-trigger)
+        if (dashTriggered) {
+          mask |= INPUT_FLAG_DASH;
+          dashTriggered = false;
+        }
+
+        // Curva Magnus: ArrowLeft / ArrowRight (y KeyQ/KeyZ / KeyE/KeyC)
+        if (keyState.get('ArrowLeft') || keyState.get('KeyQ') || keyState.get('KeyZ')) mask |= INPUT_FLAG_MAGNUS_LEFT;
+        if (keyState.get('ArrowRight') || keyState.get('KeyE') || keyState.get('KeyC')) mask |= INPUT_FLAG_MAGNUS_RIGHT;
       }
 
       const inputs = new Map<number, PlayerInput>();
@@ -238,15 +274,44 @@
       // Interpolación lineal libre en Canvas 2D
       const alpha = Math.max(0, Math.min(1.0, accumulatedTime / FIXED_DT_MS));
 
+      // Sincronizar cámara, zoom y proyección 2D
+      renderer.camera.setZoom(gameUI.settings.cameraZoom || 1.0);
+      renderer.scale = renderer.camera.zoom;
+
       // Sincronizar ajustes reactivos del minimapa y chat en el renderer
       const sz = gameUI.settings.minimapSize;
       const minimapPxWidth =
         sz === 'small' || sz === 160 ? 160 : sz === 'large' || sz === 280 || sz === 240 ? 280 : 220;
-      renderer.minimapEnabled = gameUI.settings.minimapEnabled;
+      renderer.minimapEnabled = gameUI.settings.minimapEnabled !== false;
       renderer.minimapOpacity = (gameUI.settings.minimapOpacity ?? 60) / 100;
       renderer.minimapSize = minimapPxWidth;
       renderer.minimapCameraFrustum = gameUI.settings.minimapCameraFrustum;
       renderer.chatHeight = gameUI.chatHeight;
+      renderer.screenShakeEnabled = gameUI.settings.screenShakeEnabled !== false;
+
+      // Sincronizar equipaciones, balón y VFX en tiempo real
+      renderer.discRenderer.redKit = gameUI.settings.localKit;
+      renderer.discRenderer.blueKit = gameUI.settings.visitorKit;
+      renderer.discRenderer.ballSkin = gameUI.settings.ballSkin as any;
+      renderer.discRenderer.ballMode = gameUI.settings.ballMode;
+      renderer.discRenderer.ballCustomColor = gameUI.settings.ballCustomColor;
+      renderer.discRenderer.playerGlowEnabled = gameUI.settings.playerGlowEnabled !== false;
+      renderer.discRenderer.ballTrailEnabled = gameUI.settings.ballTrailEnabled !== false;
+
+      renderer.vfx.magnusTrailEnabled = gameUI.settings.magnusTrailEnabled !== false;
+      renderer.vfx.fireTrailEnabled = gameUI.settings.fireShotEnabled !== false;
+      renderer.vfx.floatingPointsEnabled = gameUI.settings.floatingPointsEnabled !== false;
+
+      // Sincronizar telemetría visual del jugador local
+      const localVisual = renderer.playerInfos.get(1);
+      if (localVisual) {
+        localVisual.nickname = gameUI.nickname || 'Jugador';
+        localVisual.avatar = gameUI.avatarValue || '1';
+        localVisual.avatarType = gameUI.avatarMode;
+        localVisual.hasOutline = gameUI.settings.localKit?.outlineColor !== 'none' && gameUI.settings.localKit?.outlineColor !== '';
+        localVisual.tertiaryColor = gameUI.settings.localKit?.tertiaryColor || '#ffffff';
+        localVisual.kit = gameUI.settings.localKit;
+      }
 
       renderer.render(prevSnapshot, currSnapshot, alpha, 1);
 

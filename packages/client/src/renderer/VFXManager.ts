@@ -31,6 +31,10 @@ export class VFXManager {
   private particles: Particle[];
   private floatingTexts: FloatingText[];
 
+  public magnusTrailEnabled: boolean = true;
+  public fireTrailEnabled: boolean = true;
+  public floatingPointsEnabled: boolean = true;
+
   constructor() {
     // Pre-alocación de pool de partículas para garantizar Zero-GC
     this.particles = new Array(MAX_PARTICLES);
@@ -89,6 +93,7 @@ export class VFXManager {
    * Estela luminosa/neón para trayectorias curvas generadas por el efecto Magnus
    */
   public emitMagnusTrail(x: number, y: number, color: string = '#00e5ff', radius: number = 8): void {
+    if (!this.magnusTrailEnabled) return;
     const p = this.allocParticle();
     if (!p) return;
 
@@ -109,6 +114,7 @@ export class VFXManager {
    * Partículas ardientes cuando la velocidad del balón supera 950 px/s
    */
   public emitFireTrail(x: number, y: number, vx: number, vy: number): void {
+    if (!this.fireTrailEnabled) return;
     for (let i = 0; i < 2; i++) {
       const p = this.allocParticle();
       if (!p) return;
@@ -157,6 +163,7 @@ export class VFXManager {
    * Textos flotantes efímeros para goles o transiciones de juego
    */
   public showFloatingText(text: string, color: string = '#ffd32a', x: number = 0, y: number = -60, durationSec: number = 2.0): void {
+    if (!this.floatingPointsEnabled) return;
     const t = this.allocText();
     if (!t) return;
 

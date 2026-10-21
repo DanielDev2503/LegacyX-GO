@@ -23,8 +23,13 @@ export class Camera {
   public targetY: number = 0;
   public zoom: number = 1.0;
   public scale: number = 1.0;
-  public minScale: number = 0.6;
-  public maxScale: number = 1.4;
+  public minScale: number = 0.7;
+  public maxScale: number = 1.5;
+
+  public setZoom(z: number): void {
+    this.zoom = clamp(z, 0.7, 1.5);
+    this.scale = this.zoom;
+  }
   public readonly lerpFactor: number = 0.12;
   public smoothing: number = 0.12;
 

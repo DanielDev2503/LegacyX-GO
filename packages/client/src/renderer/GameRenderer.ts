@@ -69,6 +69,7 @@ export class GameRenderer {
   public netDeformationEnabled: boolean = true;
   public offscreenIndicatorsEnabled: boolean = true;
   public goalShakeEnabled: boolean = true;
+  public screenShakeEnabled: boolean = true;
 
   // Minimap settings
   public minimapEnabled: boolean = true;
@@ -232,7 +233,7 @@ export class GameRenderer {
   }
 
   public triggerShake(intensity: number, durationMs: number = 150): void {
-    if (!this.goalShakeEnabled) return;
+    if (!this.goalShakeEnabled || !this.screenShakeEnabled) return;
     this.camera.triggerShake(intensity, durationMs);
   }
 
@@ -466,7 +467,8 @@ export class GameRenderer {
 
     ctx.save();
     ctx.translate(cx + this.camera.shakeOffsetX, cy + this.camera.shakeOffsetY);
-    ctx.scale(this.scale, this.scale);
+    const renderScale = this.camera.scale || this.scale || 1.0;
+    ctx.scale(renderScale, renderScale);
     ctx.translate(-this.camera.x, -this.camera.y);
 
     // 1. Pitch
@@ -479,6 +481,7 @@ export class GameRenderer {
     }
 
     // 3-6. Trails, Stamina Rings, Players, Ball
+    this.discRenderer.playerInfos = this.playerInfos;
     this.discRenderer.render(ctx, this.scratchDiscSnapshots, localPlayerId);
 
     // 7. Posts
