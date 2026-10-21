@@ -1,6 +1,8 @@
 <script lang="ts">
   import { gameUI, type RoomInfo } from '../state/gameUI.svelte.js';
   import { soundFX } from '../../audio/SoundFX.js';
+  import { sharedSignaling } from '../../net/SignalingClient.js';
+  import { gameApp } from '../../net/GameApp.js';
 
   let passwordInput = $state('');
   let passwordError = $state('');
@@ -13,6 +15,10 @@
   function handleRefreshRooms() {
     soundFX.playUIClick();
     isRefreshing = true;
+    void sharedSignaling.ensureConnected().then(() => {
+      sharedSignaling.send({ type: 'get_rooms' });
+      sharedSignaling.send({ type: 'ROOM_LIST' });
+    });
     gameUI.refreshRooms();
     setTimeout(() => {
       isRefreshing = false;
@@ -20,29 +26,64 @@
   }
 
   $effect(() => {
+    void sharedSignaling.ensureConnected().then(() => {
+      sharedSignaling.send({ type: 'get_rooms' });
+      sharedSignaling.send({ type: 'ROOM_LIST' });
+    });
     gameUI.refreshRooms();
+
+    const onRoomList = (data: { rooms?: Array<any>; onlineCount?: number }) => {
+      if (Array.isArray(data.rooms)) {
+        gameUI.rooms = data.rooms.map((r: any) => ({
+          id: r.id || `R-${Math.random().toString(36).substring(2, 6)}`,
+          name: r.name || 'Sala Pública',
+          playersCount: r.playerCount ?? r.playersCount ?? 1,
+          maxPlayers: r.maxPlayers ?? 12,
+          ping: gameUI.realPing ?? 20,
+          isPrivate: Boolean(r.isPrivate ?? r.hasPassword),
+          stadium: r.stadiumId || r.stadium || 'AF 3v3'
+        }));
+      }
+      if (typeof data.onlineCount === 'number') {
+        gameUI.onlineUsersCount = data.onlineCount;
+      }
+    };
+
+    sharedSignaling.on('room_list', onRoomList);
+    sharedSignaling.on('ROOM_LIST', onRoomList);
+
+    return () => {
+      sharedSignaling.off('room_list', onRoomList);
+      sharedSignaling.off('ROOM_LIST', onRoomList);
+    };
   });
 
-  function handleJoinRoom(room: RoomInfo) {
+  async function handleJoinRoom(room: RoomInfo) {
     if (room.isPrivate) {
       gameUI.pendingPasswordRoom = room;
       passwordInput = '';
       passwordError = '';
       gameUI.openModal('PASSWORD_PROMPT');
     } else {
+      soundFX.playUIClick();
+      await gameApp.joinRoom(room.id);
       gameUI.joinRoomDirectly(room);
+      gameUI.openModal('TEAM_SELECT');
     }
   }
 
-  function handleConfirmPassword() {
+  async function handleConfirmPassword() {
     if (!passwordInput.trim()) {
       passwordError = 'Ingresa una contraseña válida';
       return;
     }
     soundFX.playUIClick();
     if (gameUI.pendingPasswordRoom) {
-      gameUI.joinRoomDirectly(gameUI.pendingPasswordRoom);
+      const room = gameUI.pendingPasswordRoom;
+      await gameApp.joinRoom(room.id, passwordInput.trim());
+      gameUI.joinRoomDirectly(room);
       gameUI.closeModal();
+      gameUI.openModal('TEAM_SELECT');
     }
   }
 </script>
@@ -148,7 +189,7 @@
         {:else}
           <div class="empty-rooms">
             <div class="empty-icon">🏟️</div>
-            <p class="empty-title">No hay salas disponibles en este momento</p>
+            <p class="empty-title">No hay salas públicas disponibles. ¡Crea una para comenzar!</p>
             <p class="empty-subtitle">¡Sé el primero en crear una sala y desafiar a otros jugadores!</p>
           </div>
         {/each}

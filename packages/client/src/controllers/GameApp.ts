@@ -13,3 +13,5 @@ export function canChangeTeam(
   if (teamsLocked) return false;
   return senderPeerId === targetPlayerId;
 }
+
+export * from '../net/GameApp.js';

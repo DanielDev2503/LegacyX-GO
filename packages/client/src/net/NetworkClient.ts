@@ -78,6 +78,12 @@ export class NetworkClient {
       },
       onConnected: () => {
         this.peer?.sendReliable({
+          type: 'CLIENT_HELLO',
+          name: this.nickname,
+          nickname: this.nickname,
+          number: this.number
+        });
+        this.peer?.sendReliable({
           type: 'SET_PROFILE',
           nickname: this.nickname,
           number: this.number
@@ -90,14 +96,21 @@ export class NetworkClient {
   }
 
   private handleReliableMessage(msg: Record<string, unknown>): void {
-    if (msg.type === 'ASSIGN_ID') {
-      this.localPlayerId = msg.playerId as number;
-      this.players = (msg.players as PlayerInfo[]) || [];
-      this.teamsLocked = Boolean(msg.teamsLocked);
+    if (msg.type === 'INITIAL_STATE_PACKET' || msg.type === 'ASSIGN_ID') {
+      const assignedId = (msg.assignedPlayerId ?? msg.playerId) as number;
+      if (typeof assignedId === 'number') {
+        this.localPlayerId = assignedId;
+      }
+      this.players = ((msg.playersList ?? msg.players) as PlayerInfo[]) || [];
+      if (typeof msg.teamsLocked === 'boolean') {
+        this.teamsLocked = msg.teamsLocked;
+      }
       this.onPlayerListUpdated?.(this.players);
-      this.onConnected?.(this.localPlayerId);
+      if (this.localPlayerId !== null) {
+        this.onConnected?.(this.localPlayerId);
+      }
     } else if (msg.type === 'PLAYER_LIST') {
-      this.players = (msg.players as PlayerInfo[]) || [];
+      this.players = ((msg.playersList ?? msg.players) as PlayerInfo[]) || [];
       if (typeof msg.teamsLocked === 'boolean') {
         this.teamsLocked = msg.teamsLocked;
       }

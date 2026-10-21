@@ -10,6 +10,8 @@ export interface PlayerInfo {
   team: 'red' | 'blue' | 'spectator';
   number: number;
   isAdmin: boolean;
+  avatar?: string;
+  avatarType?: 'letters' | 'emoji' | string;
 }
 
 export class NetworkHost {
@@ -114,16 +116,32 @@ export class NetworkHost {
         this.players.set(playerId, playerInfo);
         this.onPlayerJoined?.(playerInfo);
 
+        const playersList = Array.from(this.players.values());
+
+        // Handshake canónico P2P: INITIAL_STATE_PACKET
+        peer.sendReliable({
+          type: 'INITIAL_STATE_PACKET',
+          assignedPlayerId: playerId,
+          playerId,
+          playersList,
+          players: playersList,
+          teamsLocked: this.teamsLocked,
+          roomConfig: {
+            teamsLocked: this.teamsLocked
+          },
+          matchPhase: 0
+        });
+
         peer.sendReliable({
           type: 'ASSIGN_ID',
           playerId,
-          players: Array.from(this.players.values()),
+          players: playersList,
           teamsLocked: this.teamsLocked
         });
 
         this.broadcastReliable({
           type: 'PLAYER_LIST',
-          players: Array.from(this.players.values()),
+          players: playersList,
           teamsLocked: this.teamsLocked
         });
       },
@@ -142,9 +160,15 @@ export class NetworkHost {
     const player = this.players.get(playerId);
     if (!player) return;
 
-    if (msg.type === 'SET_PROFILE') {
-      player.nickname = String(msg.nickname || player.nickname).slice(0, 16);
+    if (msg.type === 'SET_PROFILE' || msg.type === 'CLIENT_HELLO') {
+      player.nickname = String(msg.name || msg.nickname || player.nickname).slice(0, 16);
       player.number = Number(msg.number || player.number) % 100;
+      if (msg.avatar) {
+        player.avatar = String(msg.avatar);
+      }
+      if (msg.avatarType) {
+        player.avatarType = String(msg.avatarType);
+      }
       this.broadcastReliable({
         type: 'PLAYER_LIST',
         players: Array.from(this.players.values()),

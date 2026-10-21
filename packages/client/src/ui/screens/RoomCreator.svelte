@@ -2,6 +2,7 @@
   import { gameUI } from '../state/gameUI.svelte.js';
   import { soundFX } from '../../audio/SoundFX.js';
   import { tooltip } from '../actions/tooltip.js';
+  import { gameApp } from '../../net/GameApp.js';
 
   let roomName = $state(`${gameUI.nickname || 'Player'}'s room`);
   let playerCount = $state(12);
@@ -12,6 +13,7 @@
   let selectedTimeMinutes = $state(3);
   let selectedGoalsLimit = $state(3);
   let selectedStadiumIndex = $state(0);
+  let isCreating = $state(false);
 
   const stadiums = [
     { name: 'Mediano', dims: '55x30m', desc: 'Campo Clásico Estándar 3v3' },
@@ -49,19 +51,30 @@
     return val === 0 ? '0 (Sin límite)' : `${val} ${val === 1 ? 'gol' : 'goles'}`;
   }
 
-  function handleCreateRoom() {
+  async function handleCreateRoom() {
+    isCreating = true;
     soundFX.playUIClick();
     const activeStadium = gameUI.activeStadiumName || stadiums[selectedStadiumIndex].name;
-    gameUI.createRoomAndLaunch(
-      roomName,
-      activeStadium,
-      playerCount,
-      isPasswordProtected,
-      teamsLocked,
-      roomPassword,
-      selectedTimeMinutes,
-      selectedGoalsLimit
-    );
+    try {
+      const success = await gameApp.createRoom({
+        name: roomName.trim() || `${gameUI.nickname || 'Player'}'s room`,
+        stadium: activeStadium || 'mediano',
+        isPublic: !isPasswordProtected,
+        password: isPasswordProtected ? roomPassword : undefined,
+        maxPlayers: playerCount || 12,
+        timeLimit: selectedTimeMinutes,
+        scoreLimit: selectedGoalsLimit,
+        teamsLocked: teamsLocked
+      });
+      if (success) {
+        gameUI.currentScreen = 'IN_GAME';
+        gameUI.activeModal = 'TEAM_SELECT';
+      }
+    } catch (err) {
+      console.error('Error al crear sala:', err);
+    } finally {
+      isCreating = false;
+    }
   }
 </script>
 
@@ -308,10 +321,11 @@
       <button
         type="button"
         class="launch-btn"
+        disabled={isCreating}
         onmouseenter={() => soundFX.playUIHover()}
         onclick={handleCreateRoom}
       >
-        <span>CREAR SALA</span>
+        <span>{isCreating ? 'CREANDO...' : 'CREAR SALA'}</span>
       </button>
     </div>
   </main>

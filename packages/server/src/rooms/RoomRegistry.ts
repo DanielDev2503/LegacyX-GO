@@ -123,14 +123,26 @@ export class RoomRegistry {
     return id ? this.rooms.get(id) : undefined;
   }
 
-  public getPublicRooms(activePeerIds?: Set<string>): RoomSummary[] {
+  public getPublicRooms(activePeerIds?: Set<string>): any[] {
     if (activePeerIds) {
       this.purgeInactiveRooms(activePeerIds);
     }
     return [...this.rooms.values()]
       .filter((r) => !r.isLocked)
       .map(({ id, name, stadiumId, maxPlayers, currentPlayers, hasPassword, isLocked, isDedicated, createdAt }) => ({
-        id, name, stadiumId, maxPlayers, currentPlayers, hasPassword, isLocked, isDedicated, createdAt
+        id,
+        name,
+        stadiumId,
+        stadium: stadiumId,
+        maxPlayers,
+        currentPlayers,
+        playerCount: currentPlayers,
+        playersCount: currentPlayers,
+        hasPassword,
+        isPrivate: hasPassword,
+        isLocked,
+        isDedicated,
+        createdAt
       }));
   }
 }

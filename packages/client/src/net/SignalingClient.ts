@@ -70,6 +70,19 @@ export interface SignalingMessage {
 
 type EventCallback = (payload: any) => void;
 
+export function getDefaultSignalingUrl(): string {
+  if (typeof window === 'undefined') return 'ws://localhost:8080';
+  const envUrl = (import.meta as unknown as { env?: Record<string, string | undefined> }).env?.VITE_SIGNALING_URL;
+  if (envUrl) return envUrl;
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  // Si estamos en Vite dev server (puerto 5173), apunta al backend (8080)
+  if (window.location.port === '5173') {
+    return `${protocol}//${window.location.hostname}:8080`;
+  }
+  // En producción (Railway / Docker), el mismo host y puerto atienden HTTP y WS
+  return `${protocol}//${window.location.host}`;
+}
+
 export class SignalingClient {
   public ws: WebSocket | null = null;
   public peerId: string = 'peer_' + Math.random().toString(36).substring(2, 9);
@@ -88,18 +101,21 @@ export class SignalingClient {
   private resolveIceConfig!: (servers: RTCIceServer[]) => void;
   public isIceReady: boolean = false;
 
-  constructor(url?: string) {
-    if (url) {
-      this.url = url;
-    } else if (typeof window !== 'undefined') {
-      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const host = window.location.hostname || 'localhost';
-      const envUrl = (import.meta as unknown as { env?: Record<string, string | undefined> }).env?.VITE_SIGNALING_URL;
-      this.url = envUrl || `${protocol}//${host}:8080`;
-    } else {
-      this.url = 'ws://localhost:8080';
-    }
+  constructor(url?: string, autoConnect: boolean = true) {
+    this.url = url || getDefaultSignalingUrl();
     this.resetIcePromise();
+    if (autoConnect && typeof window !== 'undefined') {
+      Promise.resolve().then(() => {
+        if (!this.isConnected && !this.ws) {
+          this.connect();
+        }
+      });
+    }
+  }
+
+  public async ensureConnected(): Promise<void> {
+    if (this.isOpen()) return;
+    return this.connect();
   }
 
   private resetIcePromise(): void {
@@ -202,11 +218,12 @@ export class SignalingClient {
             if (this.onMessage) {
               this.onMessage(msg);
             }
-            this.emit(msg.type, msg);
-            if (msg.type === 'ROOM_LIST') {
-              this.emit('room_list', msg);
-            } else if (msg.type === 'room_list') {
-              this.emit('ROOM_LIST', msg);
+            if (msg.type) {
+              this.emit(msg.type, msg);
+              const lower = msg.type.toLowerCase();
+              const upper = msg.type.toUpperCase();
+              if (lower !== msg.type) this.emit(lower, msg);
+              if (upper !== msg.type) this.emit(upper, msg);
             }
           } catch (err) {
             console.error('Invalid signaling message:', err);
