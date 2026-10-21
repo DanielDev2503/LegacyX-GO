@@ -8,7 +8,7 @@
     "dev": "npm run dev --workspaces --if-present",
     "dev:client": "npm run dev -w @legacyx/client",
     "dev:server": "npm run dev -w @legacyx/server",
-    "build": "npm run build --workspaces --if-present",
+    "build": "npm run build -w @legacyx/core && npm run build -w @legacyx/server && npm run build -w @legacyx/client --if-present",
     "check": "npm run check --workspaces --if-present",
     "test": "npm run test --workspaces --if-present"
   },

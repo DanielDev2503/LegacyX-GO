@@ -1,54 +1,61 @@
 # ==========================================
-# Stage 1: Build & Compilation (Builder)
+# STAGE 1: Builder
 # ==========================================
 FROM node:20-alpine AS builder
 
 WORKDIR /app
 
-# Install build essentials if required by native addons
-RUN apk add --no-cache python3 make g++
+# Asegurar que devDependencies (como TypeScript) se instalen
+ENV NODE_ENV=development
 
-# Copy monorepo workspace package manifests
-COPY package.json package-lock.json tsconfig.base.json ./
+# Copiar manifiestos de workspaces y dependencias
+COPY package.json package-lock.json* tsconfig.base.json ./
 COPY packages/core/package.json ./packages/core/
-COPY packages/core/tsconfig.json ./packages/core/
 COPY packages/server/package.json ./packages/server/
-COPY packages/server/tsconfig.json ./packages/server/
+COPY packages/client/package.json ./packages/client/
 
-# Install all dependencies (including devDependencies needed for compiling TypeScript)
+# Instalar todas las dependencias en la raíz del workspace
 RUN npm ci
 
-# Copy TypeScript source code
-COPY packages/core/src ./packages/core/src
-COPY packages/server/src ./packages/server/src
+# Copiar código fuente completo
+COPY packages/core ./packages/core
+COPY packages/server ./packages/server
+COPY packages/client ./packages/client
 
-# Compile Core and Server in dependency order
+# Compilar core primero y luego server (y cliente si aplica)
 RUN npm run build -w @legacyx/core
 RUN npm run build -w @legacyx/server
+RUN npm run build -w @legacyx/client --if-present
+
+# Verificar físicamente que el archivo de salida exista antes de pasar a producción
+RUN test -f /app/packages/server/dist/index.js || (echo "ERROR: packages/server/dist/index.js no fue generado" && exit 1)
 
 # ==========================================
-# Stage 2: Minimal Production Runtime (Runner)
+# STAGE 2: Runner
 # ==========================================
 FROM node:20-alpine AS runner
 
 WORKDIR /app
 
 ENV NODE_ENV=production
-ENV PORT=8080
 
-# Copy workspace package manifests for production install
-COPY package.json package-lock.json ./
+# Copiar manifiestos y dependencias de producción
+COPY package.json package-lock.json* ./
 COPY packages/core/package.json ./packages/core/
 COPY packages/server/package.json ./packages/server/
+COPY packages/client/package.json ./packages/client/
 
-# Install only production dependencies
-RUN npm ci --omit=dev && npm cache clean --force
+RUN npm ci --omit=dev
 
-# Copy compiled JavaScript distributions from builder
+# Copiar los dist compilados preservando exactamente la estructura de carpetas
 COPY --from=builder /app/packages/core/dist ./packages/core/dist
 COPY --from=builder /app/packages/server/dist ./packages/server/dist
+COPY --from=builder /app/packages/client/dist ./packages/client/dist
 
-# Secure unprivileged user
+# Si server utiliza archivos de configuración json o estáticos adicionales, copiarlos:
+COPY packages/server/room.config.json* ./packages/server/
+
+# Configuración de usuario no-root para seguridad
 USER node
 
 EXPOSE 8080
