@@ -138,8 +138,10 @@
                 class="stats-acronym-badge red-acronym"
                 style="
                   background: linear-gradient(90deg, {redPrimaryColor} 0%, {redPrimaryColor} 30%, {redSecondaryColor} 70%, {redSecondaryColor} 100%);
-                  border: 1.5px solid {redKitTertiary};
+                  border: {redHasOutline ? '1.5px solid #000000' : `1.5px solid ${redKitTertiary}`};
+                  box-shadow: {redHasOutline ? '0 0 0 1.5px #000000' : 'none'};
                   color: {redKitTertiary};
+                  -webkit-text-stroke: {redHasOutline ? '1px #000000' : 'none'};
                   text-shadow: {redHasOutline ? '-1px -1px 0 #000000, 1px -1px 0 #000000, -1px 1px 0 #000000, 1px 1px 0 #000000' : 'none'};
                 "
               >
@@ -152,8 +154,10 @@
                 class="stats-acronym-badge blue-acronym"
                 style="
                   background: linear-gradient(90deg, {bluePrimaryColor} 0%, {bluePrimaryColor} 30%, {blueSecondaryColor} 70%, {blueSecondaryColor} 100%);
-                  border: 1.5px solid {blueKitTertiary};
+                  border: {blueHasOutline ? '1.5px solid #000000' : `1.5px solid ${blueKitTertiary}`};
+                  box-shadow: {blueHasOutline ? '0 0 0 1.5px #000000' : 'none'};
                   color: {blueKitTertiary};
+                  -webkit-text-stroke: {blueHasOutline ? '1px #000000' : 'none'};
                   text-shadow: {blueHasOutline ? '-1px -1px 0 #000000, 1px -1px 0 #000000, -1px 1px 0 #000000, 1px 1px 0 #000000' : 'none'};
                 "
               >
@@ -186,7 +190,7 @@
             <!-- TABLA RED -->
             <div
               class="team-table-box red-box"
-              style="--captain-local-primary: {redPrimaryColor}; --captain-local-glow: {redPrimaryColor}40;"
+              style="--captain-local-primary: {redPrimaryColor}; --captain-local-glow: {redPrimaryColor}40; --captain-local-tertiary: {redKitTertiary};"
             >
               <div
                 class="table-header red-header captain-bicolor-header"
@@ -196,7 +200,7 @@
                   class="col-team-name-hdr"
                   style="color: {redKitTertiary}; text-shadow: {redHasOutline ? '-1px -1px 0 #000000, 1px -1px 0 #000000, -1px 1px 0 #000000, 1px 1px 0 #000000' : 'none'};"
                 >{redTeamName}</span>
-                <div class="col-headers-right">
+                <div class="col-headers-right" style="color: {redKitTertiary};">
                   <span class="col-pts">Pts</span>
                   <span class="col-stat">G</span>
                   <span class="col-stat">A</span>
@@ -266,7 +270,7 @@
             <!-- TABLA BLUE -->
             <div
               class="team-table-box blue-box"
-              style="--captain-visitor-primary: {bluePrimaryColor}; --captain-visitor-glow: {bluePrimaryColor}40;"
+              style="--captain-visitor-primary: {bluePrimaryColor}; --captain-visitor-glow: {bluePrimaryColor}40; --captain-visitor-tertiary: {blueKitTertiary};"
             >
               <div
                 class="table-header blue-header captain-bicolor-header"
@@ -276,7 +280,7 @@
                   class="col-team-name-hdr"
                   style="color: {blueKitTertiary}; text-shadow: {blueHasOutline ? '-1px -1px 0 #000000, 1px -1px 0 #000000, -1px 1px 0 #000000, 1px 1px 0 #000000' : 'none'};"
                 >{blueTeamName}</span>
-                <div class="col-headers-right">
+                <div class="col-headers-right" style="color: {blueKitTertiary};">
                   <span class="col-pts">Pts</span>
                   <span class="col-stat">G</span>
                   <span class="col-stat">A</span>
@@ -983,6 +987,14 @@
   .col-headers-right {
     display: flex;
     align-items: center;
+  }
+
+  .red-header .col-headers-right {
+    color: var(--captain-local-tertiary, #ffffff);
+  }
+
+  .blue-header .col-headers-right {
+    color: var(--captain-visitor-tertiary, #ffffff);
   }
 
   .table-header.red-header {

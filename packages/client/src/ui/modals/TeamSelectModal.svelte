@@ -322,8 +322,10 @@
                 class="stats-acronym-badge red-acronym"
                 style="
                   background: linear-gradient(90deg, {redPrimaryColor} 0%, {redPrimaryColor} 30%, {redSecondaryColor} 70%, {redSecondaryColor} 100%);
-                  border: 1.5px solid {redKitTertiary};
+                  border: {redHasOutline ? '1.5px solid #000000' : `1.5px solid ${redKitTertiary}`};
+                  box-shadow: {redHasOutline ? '0 0 0 1.5px #000000' : 'none'};
                   color: {redKitTertiary};
+                  -webkit-text-stroke: {redHasOutline ? '1px #000000' : 'none'};
                   text-shadow: {redHasOutline ? '-1px -1px 0 #000000, 1px -1px 0 #000000, -1px 1px 0 #000000, 1px 1px 0 #000000' : 'none'};
                 "
               >
@@ -336,8 +338,10 @@
                 class="stats-acronym-badge blue-acronym"
                 style="
                   background: linear-gradient(90deg, {bluePrimaryColor} 0%, {bluePrimaryColor} 30%, {blueSecondaryColor} 70%, {blueSecondaryColor} 100%);
-                  border: 1.5px solid {blueKitTertiary};
+                  border: {blueHasOutline ? '1.5px solid #000000' : `1.5px solid ${blueKitTertiary}`};
+                  box-shadow: {blueHasOutline ? '0 0 0 1.5px #000000' : 'none'};
                   color: {blueKitTertiary};
+                  -webkit-text-stroke: {blueHasOutline ? '1px #000000' : 'none'};
                   text-shadow: {blueHasOutline ? '-1px -1px 0 #000000, 1px -1px 0 #000000, -1px 1px 0 #000000, 1px 1px 0 #000000' : 'none'};
                 "
               >
@@ -368,7 +372,7 @@
             <!-- TABLA RED -->
             <div
               class="team-table-box red-box"
-              style="--captain-local-primary: {redPrimaryColor}; --captain-local-glow: {redPrimaryColor}40;"
+              style="--captain-local-primary: {redPrimaryColor}; --captain-local-glow: {redPrimaryColor}40; --captain-local-tertiary: {redKitTertiary};"
             >
               <div
                 class="table-header red-header captain-bicolor-header"
@@ -378,7 +382,7 @@
                   class="col-team-name-hdr"
                   style="color: {redKitTertiary}; text-shadow: {redHasOutline ? '-1px -1px 0 #000000, 1px -1px 0 #000000, -1px 1px 0 #000000, 1px 1px 0 #000000' : 'none'};"
                 >{redTeamName}</span>
-                <div class="col-headers-right">
+                <div class="col-headers-right" style="color: {redKitTertiary};">
                   <span class="col-pts">Pts</span>
                   <span class="col-stat">G</span>
                   <span class="col-stat">A</span>
@@ -452,7 +456,7 @@
               <!-- TABLA BLUE -->
               <div
                 class="team-table-box blue-box"
-                style="--captain-visitor-primary: {bluePrimaryColor}; --captain-visitor-glow: {bluePrimaryColor}40;"
+                style="--captain-visitor-primary: {bluePrimaryColor}; --captain-visitor-glow: {bluePrimaryColor}40; --captain-visitor-tertiary: {blueKitTertiary};"
               >
                 <div
                   class="table-header blue-header captain-bicolor-header"
@@ -462,7 +466,7 @@
                     class="col-team-name-hdr"
                     style="color: {blueKitTertiary}; text-shadow: {blueHasOutline ? '-1px -1px 0 #000000, 1px -1px 0 #000000, -1px 1px 0 #000000, 1px 1px 0 #000000' : 'none'};"
                   >{blueTeamName}</span>
-                  <div class="col-headers-right">
+                  <div class="col-headers-right" style="color: {blueKitTertiary};">
                     <span class="col-pts">Pts</span>
                     <span class="col-stat">G</span>
                     <span class="col-stat">A</span>
@@ -897,7 +901,7 @@
                   class="bench-card red-bench"
                   role="region"
                   aria-label="Banquillo Equipo Rojo"
-                  style="--captain-local-primary: {redPrimaryColor}; --captain-local-glow: {redPrimaryColor}40; --bench-team-primary: {redPrimaryColor};"
+                  style="--captain-local-primary: {redPrimaryColor}; --captain-local-glow: {redPrimaryColor}40; --bench-team-primary: {redPrimaryColor}; --captain-local-tertiary: {redKitTertiary};"
                   class:is-drag-over={dragOverTeam === 'red'}
                   ondragover={(e) => handleDragOver(e, 'red')}
                   ondragleave={(e) => handleDragLeave(e, 'red')}
@@ -936,7 +940,7 @@
                         }}
                       >
                         <!-- 1. Avatar Circular de 32px -->
-                        <div class="slot-avatar red">{p.avatar || p.number || '1'}</div>
+                        <div class="slot-avatar red" style="color: {redKitTertiary};">{p.avatar || p.number || '1'}</div>
                         <!-- 2. Nombre del Jugador en Chivo -->
                         <span class="slot-nickname">{p.name || p.nickname}</span>
                         <!-- 3. Insignias: Corona Admin y Cintilla de Capitán -->
@@ -948,7 +952,7 @@
                             {#if isCaptain}
                               <span
                                 class="captain-ribbon"
-                                style="background-color: {redPrimaryColor};"
+                                style="background-color: {redPrimaryColor}; color: {redKitTertiary}; font-weight: 800;"
                                 title="Capitán del equipo"
                               >
                                 C
@@ -957,8 +961,6 @@
                           </div>
                         {/if}
                       </div>
-                    {:else}
-                      <div class="empty-bench-state">Sin jugadores en Rojo</div>
                     {/each}
                   </div>
                 </div>
@@ -1006,8 +1008,6 @@
                           </div>
                         {/if}
                       </div>
-                    {:else}
-                      <div class="empty-bench-state"></div>
                     {/each}
                   </div>
                 </div>
@@ -1017,7 +1017,7 @@
                   class="bench-card blue-bench"
                   role="region"
                   aria-label="Banquillo Equipo Azul"
-                  style="--captain-visitor-primary: {bluePrimaryColor}; --captain-visitor-glow: {bluePrimaryColor}40; --bench-team-primary: {bluePrimaryColor};"
+                  style="--captain-visitor-primary: {bluePrimaryColor}; --captain-visitor-glow: {bluePrimaryColor}40; --bench-team-primary: {bluePrimaryColor}; --captain-visitor-tertiary: {blueKitTertiary};"
                   class:is-drag-over={dragOverTeam === 'blue'}
                   ondragover={(e) => handleDragOver(e, 'blue')}
                   ondragleave={(e) => handleDragLeave(e, 'blue')}
@@ -1055,7 +1055,7 @@
                           }
                         }}
                       >
-                        <div class="slot-avatar blue">{p.avatar || p.number || '2'}</div>
+                        <div class="slot-avatar blue" style="color: {blueKitTertiary};">{p.avatar || p.number || '2'}</div>
                         <span class="slot-nickname">{p.name || p.nickname}</span>
                         {#if p.isAdmin || p.isHost || isCaptain}
                           <div class="card-badges-cluster">
@@ -1065,7 +1065,7 @@
                             {#if isCaptain}
                               <span
                                 class="captain-ribbon"
-                                style="background-color: {bluePrimaryColor};"
+                                style="background-color: {bluePrimaryColor}; color: {blueKitTertiary}; font-weight: 800;"
                                 title="Capitán del equipo"
                               >
                                 C
@@ -1074,8 +1074,6 @@
                           </div>
                         {/if}
                       </div>
-                    {:else}
-                      <div class="empty-bench-state">Sin jugadores en Azul</div>
                     {/each}
                   </div>
                 </div>
@@ -2085,7 +2083,7 @@
 
   .slot-avatar.red {
     background: var(--bench-team-primary, #e74c3c);
-    color: #ffffff;
+    color: var(--captain-local-tertiary, #ffffff);
     box-shadow: 0 0 8px var(--bench-team-primary, rgba(231, 76, 60, 0.5));
   }
 
@@ -2096,7 +2094,7 @@
 
   .slot-avatar.blue {
     background: var(--bench-team-primary, #00e5ff);
-    color: #ffffff;
+    color: var(--captain-visitor-tertiary, #ffffff);
     box-shadow: 0 0 8px var(--bench-team-primary, rgba(0, 229, 255, 0.5));
   }
 
@@ -2138,19 +2136,10 @@
     font-family: 'Space Grotesk', system-ui, sans-serif;
     font-size: 0.75rem;
     font-weight: 800;
-    color: #ffffff;
     letter-spacing: 0.05em;
     box-shadow: 0 0 8px rgba(0, 0, 0, 0.6);
     flex-shrink: 0;
     line-height: 1;
-  }
-
-  .empty-bench-state {
-    font-size: 0.72rem;
-    color: #849396;
-    text-align: center;
-    padding: 1.5rem 0.5rem;
-    font-style: italic;
   }
 
   /* ======================================================== */
@@ -2422,6 +2411,14 @@
   .col-headers-right {
     display: flex;
     align-items: center;
+  }
+
+  .red-header .col-headers-right {
+    color: var(--captain-local-tertiary, #ffffff);
+  }
+
+  .blue-header .col-headers-right {
+    color: var(--captain-visitor-tertiary, #ffffff);
   }
 
   .col-player { flex: 1; text-align: left; }

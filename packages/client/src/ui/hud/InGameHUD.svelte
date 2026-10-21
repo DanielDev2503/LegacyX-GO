@@ -219,8 +219,10 @@
           class="team-acronym-card red-acronym"
           style="
             background: linear-gradient(90deg, {redKitPrimary} 50%, {redKitSecondary} 50%);
-            border: 1.5px solid {redKitTertiary};
+            border: {redHasOutline ? '1.5px solid #000000' : `1.5px solid ${redKitTertiary}`};
+            box-shadow: {redHasOutline ? '0 0 0 1.5px #000000, 0 2px 6px rgba(0, 0, 0, 0.5)' : '0 2px 6px rgba(0, 0, 0, 0.5)'};
             color: {redKitTertiary};
+            -webkit-text-stroke: {redHasOutline ? '1px #000000' : 'none'};
             text-shadow: {redHasOutline ? '-1px -1px 0 #000000, 1px -1px 0 #000000, -1px 1px 0 #000000, 1px 1px 0 #000000' : 'none'};
           "
         >
@@ -247,8 +249,10 @@
           class="team-acronym-card blue-acronym"
           style="
             background: linear-gradient(90deg, {blueKitPrimary} 50%, {blueKitSecondary} 50%);
-            border: 1.5px solid {blueKitTertiary};
+            border: {blueHasOutline ? '1.5px solid #000000' : `1.5px solid ${blueKitTertiary}`};
+            box-shadow: {blueHasOutline ? '0 0 0 1.5px #000000, 0 2px 6px rgba(0, 0, 0, 0.5)' : '0 2px 6px rgba(0, 0, 0, 0.5)'};
             color: {blueKitTertiary};
+            -webkit-text-stroke: {blueHasOutline ? '1px #000000' : 'none'};
             text-shadow: {blueHasOutline ? '-1px -1px 0 #000000, 1px -1px 0 #000000, -1px 1px 0 #000000, 1px 1px 0 #000000' : 'none'};
           "
         >
@@ -425,34 +429,40 @@
     overflow: hidden;
   }
 
-  /* TOP BAR */
+  /* TOP BAR - Pestañas Colgantes Ancladas a top: 0 */
   .top-bar-container {
     position: fixed;
     top: 0;
-    left: 1.5rem;
-    right: 1.5rem;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    z-index: 40;
+    left: 0;
+    right: 0;
     pointer-events: none;
+    z-index: 40;
   }
 
   .top-card {
     pointer-events: auto;
     background: rgba(10, 16, 26, 0.95);
-    border: 1px solid rgba(0, 229, 255, 0.3);
+    border: 1px solid rgba(0, 229, 255, 0.25);
     border-top: none;
-    border-radius: 0 0 0.75rem 0.75rem;
+    border-radius: 0 0 8px 8px;
     box-shadow: 0 4px 20px rgba(0, 0, 0, 0.6);
+    box-sizing: border-box;
   }
 
-  /* Cartucho Izquierdo */
+  /* 1. Nombre de Sala (Superior Izquierda) */
   .top-card-left {
-    padding: 0.5rem 1rem;
+    position: fixed;
+    top: 0;
+    left: 16px;
+    z-index: 40;
+    height: 44px;
+    padding: 0 1rem;
     display: flex;
     align-items: center;
     gap: 0.75rem;
+    border-top: 0;
+    border-top-left-radius: 0;
+    border-top-right-radius: 0;
   }
 
   .room-title-block {
@@ -489,19 +499,22 @@
   .text-crimson { color: #ff3366; }
   .text-cyan { color: #00e5ff; }
 
-  /* Cartucho Central */
+  /* 2. Marcador y Tiempo (Superior Centro) */
   .top-card-center {
     position: fixed;
-    top: 0.5rem;
+    top: 0;
     left: 50%;
     transform: translateX(-50%);
-    padding: 0.45rem 1rem;
+    z-index: 40;
+    height: 44px;
+    padding: 0.35rem 1rem;
     display: flex;
-    flex-direction: column;
     align-items: center;
-    gap: 0.35rem;
+    justify-content: center;
     min-width: 290px;
-    z-index: 101;
+    border-top: 0;
+    border-top-left-radius: 0;
+    border-top-right-radius: 0;
     box-shadow: 0 0 24px rgba(0, 229, 255, 0.18), 0 4px 20px rgba(0, 0, 0, 0.6);
   }
 
@@ -527,9 +540,9 @@
     letter-spacing: 0.08em;
     user-select: none;
     line-height: 1;
-    text-shadow: none !important;
     box-shadow: 0 2px 6px rgba(0, 0, 0, 0.5);
     box-sizing: border-box;
+    transition: all 0.15s ease;
   }
 
   .team-score-number {
@@ -578,12 +591,20 @@
     animation: pulseGlow 1.5s infinite;
   }
 
-  /* Cartucho Derecho (3 Botones) */
+  /* 3. Pestaña de los 3 Botones (Superior Derecha) */
   .top-card-right {
-    padding: 0.35rem 0.65rem;
+    position: fixed;
+    top: 0;
+    right: 16px;
+    z-index: 40;
+    height: 44px;
+    padding: 0 0.65rem;
     display: flex;
     align-items: center;
     gap: 0.5rem;
+    border-top: 0;
+    border-top-left-radius: 0;
+    border-top-right-radius: 0;
   }
 
   .hud-action-btn {
