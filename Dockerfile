@@ -25,7 +25,7 @@ COPY packages/client ./packages/client
 # Compilar core primero y luego server (y cliente si aplica)
 RUN npm run build -w @legacyx/core
 RUN npm run build -w @legacyx/server
-RUN npm run build -w @legacyx/client --if-present
+RUN npm run build -w @legacyx/client
 
 # Verificar físicamente que el archivo de salida exista antes de pasar a producción
 RUN test -f /app/packages/server/dist/index.js || (echo "ERROR: packages/server/dist/index.js no fue generado" && exit 1)
