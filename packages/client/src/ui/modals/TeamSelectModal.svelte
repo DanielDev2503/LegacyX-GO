@@ -54,21 +54,23 @@
 
   let redCaptain = $derived(redPlayers[0]);
   let blueCaptain = $derived(bluePlayers[0]);
+  let redActiveKit = $derived(gameUI.redCaptainKit);
+  let blueActiveKit = $derived(gameUI.blueCaptainKit);
 
-  let redTeamName = $derived(redCaptain?.kit?.name || gameUI.redTeamKit?.name || 'Equipo Rojo');
-  let redTeamTag = $derived(redCaptain?.kit?.tag || gameUI.redTeamKit?.tag || 'RED');
-  let redPrimaryColor = $derived(redCaptain?.kit?.primaryColor || gameUI.redTeamKit?.primaryColor || '#e74c3c');
-  let redSecondaryColor = $derived(redCaptain?.kit?.secondaryColor || gameUI.redTeamKit?.secondaryColor || '#b02a1c');
-  let redKitTertiary = $derived(redCaptain?.kit?.tertiaryColor || gameUI.redTeamKit?.tertiaryColor || '#ffffff');
-  let redOutlineColor = $derived(redCaptain?.kit?.outlineColor || gameUI.redTeamKit?.outlineColor || '#000000');
+  let redTeamName = $derived(redActiveKit?.name || gameUI.redTeamKit?.name || 'Equipo Rojo');
+  let redTeamTag = $derived(redActiveKit?.tag || gameUI.redTeamKit?.tag || 'RED');
+  let redPrimaryColor = $derived(redActiveKit?.primaryColor || gameUI.redTeamKit?.primaryColor || '#e74c3c');
+  let redSecondaryColor = $derived(redActiveKit?.secondaryColor || gameUI.redTeamKit?.secondaryColor || '#b02a1c');
+  let redKitTertiary = $derived(redActiveKit?.tertiaryColor || gameUI.redTeamKit?.tertiaryColor || '#ffffff');
+  let redOutlineColor = $derived(redActiveKit?.outlineColor || gameUI.redTeamKit?.outlineColor || '#000000');
   let redHasOutline = $derived(redOutlineColor !== 'none' && redOutlineColor !== 'transparent' && redOutlineColor !== '');
 
-  let blueTeamName = $derived(blueCaptain?.kit?.name || gameUI.blueTeamKit?.name || 'Equipo Azul');
-  let blueTeamTag = $derived(blueCaptain?.kit?.tag || gameUI.blueTeamKit?.tag || 'BLUE');
-  let bluePrimaryColor = $derived(blueCaptain?.kit?.primaryColor || gameUI.blueTeamKit?.primaryColor || '#3498db');
-  let blueSecondaryColor = $derived(blueCaptain?.kit?.secondaryColor || gameUI.blueTeamKit?.secondaryColor || '#217dbb');
-  let blueKitTertiary = $derived(blueCaptain?.kit?.tertiaryColor || gameUI.blueTeamKit?.tertiaryColor || '#ffffff');
-  let blueOutlineColor = $derived(blueCaptain?.kit?.outlineColor || gameUI.blueTeamKit?.outlineColor || '#000000');
+  let blueTeamName = $derived(blueActiveKit?.name || gameUI.blueTeamKit?.name || 'Equipo Azul');
+  let blueTeamTag = $derived(blueActiveKit?.tag || gameUI.blueTeamKit?.tag || 'BLUE');
+  let bluePrimaryColor = $derived(blueActiveKit?.primaryColor || gameUI.blueTeamKit?.primaryColor || '#3498db');
+  let blueSecondaryColor = $derived(blueActiveKit?.secondaryColor || gameUI.blueTeamKit?.secondaryColor || '#217dbb');
+  let blueKitTertiary = $derived(blueActiveKit?.tertiaryColor || gameUI.blueTeamKit?.tertiaryColor || '#ffffff');
+  let blueOutlineColor = $derived(blueActiveKit?.outlineColor || gameUI.blueTeamKit?.outlineColor || '#000000');
   let blueHasOutline = $derived(blueOutlineColor !== 'none' && blueOutlineColor !== 'transparent' && blueOutlineColor !== '');
 
   let isMatchStopped = $derived(
@@ -256,13 +258,14 @@
   }
 
   function changeCapacity(delta: number) {
-    if (!gameUI.isAdmin && !gameUI.isHost) return;
+    if (!gameUI.isHost) return;
     soundFX.playUIClick();
     const next = Math.max(2, Math.min(20, roomCapacity + delta));
     roomCapacity = next;
     if (gameUI.activeRoom) {
       gameUI.activeRoom.maxPlayers = next;
     }
+    gameUI.onRoomConfigChanged?.({ maxPlayers: next });
   }
 
   function formatTimeLimit(val: number): string {
@@ -656,6 +659,7 @@
                           gameUI.timeLimitMinutes = val;
                           gameUI.physicsModifiers.timeLimit = val;
                           if (gameUI.activeRoom) gameUI.activeRoom.timeLimit = val;
+                          gameUI.onRoomConfigChanged?.({ timeLimit: val });
                         }}
                       >
                         {#each Array.from({ length: 16 }, (_, i) => i) as t}
@@ -682,6 +686,7 @@
                           gameUI.scoreLimitGoals = val;
                           gameUI.physicsModifiers.scoreLimit = val;
                           if (gameUI.activeRoom) gameUI.activeRoom.scoreLimit = val;
+                          gameUI.onRoomConfigChanged?.({ scoreLimit: val });
                         }}
                       >
                         {#each Array.from({ length: 16 }, (_, i) => i) as g}
@@ -701,20 +706,24 @@
                       onclick={() => {
                         soundFX.playUIClick();
                         gameUI.toggleTeamsLock();
+                        gameUI.onRoomConfigChanged?.({ teamsLocked: gameUI.teamsLocked });
                       }}
                     >
                       <span class="lock-label">{gameUI.teamsLocked ? '🔒 Bloqueados' : '🔓 Libres'}</span>
                       <span class="lock-tag">{gameUI.teamsLocked ? 'SOLO ADMINS' : 'TODOS'}</span>
                     </button>
 
-                    <!-- Modifiers -->
+                    <!-- Modifiers (Exclusivo Host) -->
                     <button
                       type="button"
                       id="btn-open-physics-modifiers"
                       class="rule-cartouche-btn btn-modifiers"
-                      disabled={(!gameUI.isAdmin && !gameUI.isHost) || gameUI.isMatchActive}
-                      onclick={() => gameUI.openOverlay('MODIFIERS')}
-                      title="Abrir panel de modificadores de física"
+                      disabled={!gameUI.isHost || gameUI.isMatchActive}
+                      onclick={() => {
+                        if (!gameUI.isHost) return;
+                        gameUI.openOverlay('MODIFIERS');
+                      }}
+                      title="Abrir panel de modificadores de física (Solo Host)"
                     >
                       <span>⚡ Modifiers</span>
                     </button>
@@ -764,9 +773,9 @@
                     </div>
                   </div>
 
-                  <!-- Ajustes Avanzados de Sala con Toggle Pública/Privada y Contraseña Condicional -->
+                  <!-- Ajustes Avanzados de Sala con Toggle Pública/Privada y Contraseña Condicional (Exclusivo Host) -->
                   <div class="advanced-settings-card w-full">
-                    <span class="card-micro-title">⚙️ AJUSTES DE SALA</span>
+                    <span class="card-micro-title">⚙️ AJUSTES DE SALA {#if !gameUI.isHost}<span class="text-xs text-muted">(Solo Host)</span>{/if}</span>
 
                     <div class="adv-row">
                       <label for="room-name-input">Nombre de Sala</label>
@@ -776,7 +785,8 @@
                         maxlength="50"
                         class="styled-adv-input"
                         bind:value={gameUI.activeRoomName}
-                        disabled={(!gameUI.isAdmin && !gameUI.isHost) || gameUI.isMatchActive}
+                        disabled={!gameUI.isHost || gameUI.isMatchActive}
+                        oninput={() => gameUI.onRoomConfigChanged?.({ name: gameUI.activeRoomName })}
                       />
                     </div>
 
@@ -787,7 +797,7 @@
                           type="button"
                           id="btn-cap-minus"
                           class="cap-step-btn"
-                          disabled={(!gameUI.isAdmin && !gameUI.isHost) || gameUI.isMatchActive}
+                          disabled={!gameUI.isHost || gameUI.isMatchActive}
                           onclick={() => changeCapacity(-1)}
                         >
                           -
@@ -797,7 +807,7 @@
                           type="button"
                           id="btn-cap-plus"
                           class="cap-step-btn"
-                          disabled={(!gameUI.isAdmin && !gameUI.isHost) || gameUI.isMatchActive}
+                          disabled={!gameUI.isHost || gameUI.isMatchActive}
                           onclick={() => changeCapacity(1)}
                         >
                           +
@@ -811,7 +821,7 @@
                         <input
                           type="checkbox"
                           bind:checked={isRoomPublic}
-                          disabled={(!gameUI.isAdmin && !gameUI.isHost) || gameUI.isMatchActive}
+                          disabled={!gameUI.isHost || gameUI.isMatchActive}
                           onchange={() => {
                             soundFX.playUIClick();
                             if (isRoomPublic) {
@@ -825,6 +835,10 @@
                                 gameUI.activeRoom.isPrivate = true;
                               }
                             }
+                            gameUI.onRoomConfigChanged?.({
+                              isPrivate: !isRoomPublic,
+                              password: roomPassword
+                            });
                           }}
                         />
                         <span class="slider"></span>
@@ -841,11 +855,15 @@
                           placeholder="Escribe la clave de acceso..."
                           class="styled-adv-input"
                           bind:value={roomPassword}
-                          disabled={(!gameUI.isAdmin && !gameUI.isHost) || gameUI.isMatchActive}
+                          disabled={!gameUI.isHost || gameUI.isMatchActive}
                           oninput={(e) => {
                             const val = (e.currentTarget as HTMLInputElement).value;
                             roomPassword = val;
                             if (gameUI.activeRoom) gameUI.activeRoom.password = val;
+                            gameUI.onRoomConfigChanged?.({
+                              isPrivate: true,
+                              password: val
+                            });
                           }}
                         />
                       </div>

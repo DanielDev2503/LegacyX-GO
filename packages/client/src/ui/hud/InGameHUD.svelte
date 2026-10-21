@@ -14,37 +14,37 @@
     gameUI.pingMs < 60 ? 'text-emerald' : gameUI.pingMs <= 120 ? 'text-amber' : 'text-crimson'
   );
 
-  // Colores de equipación del capitán (o de equipo)
-  let redCaptain = $derived(gameUI.players.find((p) => p.team === 'red'));
-  let blueCaptain = $derived(gameUI.players.find((p) => p.team === 'blue'));
+  // Equipación activa del capitán (RED → kit Local, BLUE → kit Visitante)
+  let redActiveKit = $derived(gameUI.redCaptainKit);
+  let blueActiveKit = $derived(gameUI.blueCaptainKit);
 
   let redKitPrimary = $derived(
-    redCaptain?.kit?.primaryColor || gameUI.redTeamKit?.primaryColor || '#e74c3c'
+    redActiveKit?.primaryColor || gameUI.redTeamKit?.primaryColor || '#e74c3c'
   );
   let redKitSecondary = $derived(
-    redCaptain?.kit?.secondaryColor || gameUI.redTeamKit?.secondaryColor || '#ffffff'
+    redActiveKit?.secondaryColor || gameUI.redTeamKit?.secondaryColor || '#ffffff'
   );
   let redKitTertiary = $derived(
-    redCaptain?.kit?.tertiaryColor || gameUI.redTeamKit?.tertiaryColor || '#ffffff'
+    redActiveKit?.tertiaryColor || gameUI.redTeamKit?.tertiaryColor || '#ffffff'
   );
   let redKitOutline = $derived(
-    redCaptain?.kit?.outlineColor || gameUI.redTeamKit?.outlineColor || '#000000'
+    redActiveKit?.outlineColor || gameUI.redTeamKit?.outlineColor || '#000000'
   );
   let redHasOutline = $derived(
     redKitOutline !== 'none' && redKitOutline !== 'transparent' && redKitOutline !== ''
   );
 
   let blueKitPrimary = $derived(
-    blueCaptain?.kit?.primaryColor || gameUI.blueTeamKit?.primaryColor || '#00e5ff'
+    blueActiveKit?.primaryColor || gameUI.blueTeamKit?.primaryColor || '#00e5ff'
   );
   let blueKitSecondary = $derived(
-    blueCaptain?.kit?.secondaryColor || gameUI.blueTeamKit?.secondaryColor || '#ffffff'
+    blueActiveKit?.secondaryColor || gameUI.blueTeamKit?.secondaryColor || '#ffffff'
   );
   let blueKitTertiary = $derived(
-    blueCaptain?.kit?.tertiaryColor || gameUI.blueTeamKit?.tertiaryColor || '#ffffff'
+    blueActiveKit?.tertiaryColor || gameUI.blueTeamKit?.tertiaryColor || '#ffffff'
   );
   let blueKitOutline = $derived(
-    blueCaptain?.kit?.outlineColor || gameUI.blueTeamKit?.outlineColor || '#000000'
+    blueActiveKit?.outlineColor || gameUI.blueTeamKit?.outlineColor || '#000000'
   );
   let blueHasOutline = $derived(
     blueKitOutline !== 'none' && blueKitOutline !== 'transparent' && blueKitOutline !== ''
@@ -240,7 +240,7 @@
             text-shadow: {redHasOutline ? '-1px -1px 0 #000000, 1px -1px 0 #000000, -1px 1px 0 #000000, 1px 1px 0 #000000' : 'none'};
           "
         >
-          {gameUI.redTeamKit?.tag || 'RED'}
+          {redActiveKit?.tag || 'RED'}
         </div>
 
         <!-- Goles RED (Blanco puro tabular) -->
@@ -249,7 +249,7 @@
         <!-- Reloj Central -->
         <div class="timer-center-block">
           <span class="timer-glyph">⏱</span>
-          <span class="timer-clock" id="hud-timer">{gameUI.matchTimeFormatted}</span>
+          <span class="timer-clock" id="hud-timer">{gameUI.matchPhase === 0 ? '00:00' : gameUI.matchTimeFormatted}</span>
           {#if gameUI.isGoldenGoal}
             <span class="golden-goal-chip">GOL DE ORO</span>
           {/if}
@@ -270,7 +270,7 @@
             text-shadow: {blueHasOutline ? '-1px -1px 0 #000000, 1px -1px 0 #000000, -1px 1px 0 #000000, 1px 1px 0 #000000' : 'none'};
           "
         >
-          {gameUI.blueTeamKit?.tag || 'BLUE'}
+          {blueActiveKit?.tag || 'BLUE'}
         </div>
       </div>
     </div>

@@ -34,6 +34,7 @@ const HEARTBEAT_INTERVAL_MS = 15_000;
 interface AliveWebSocket extends WebSocket {
   isAlive: boolean;
   peerId?: string | undefined;
+  peerIds?: Set<string>;
 }
 
 export interface RTCIceServer {
@@ -119,21 +120,77 @@ export function setupSignalingServer(wss: WebSocketServer) {
       rooms: publicRooms,
       onlineCount: wss.clients.size
     });
-    const payloadUpper = JSON.stringify({
-      type: 'ROOM_LIST',
-      rooms: publicRooms
-    });
 
     for (const client of wss.clients) {
       if (client.readyState === WebSocket.OPEN) {
         try {
           client.send(payload);
-          client.send(payloadUpper);
         } catch {
           // Ignorar sockets en proceso de cierre
         }
       }
     }
+  }
+
+  function handlePeerLeave(peerIdsToLeave: Iterable<string>, explicitRoomId?: string): boolean {
+    let anyChanged = false;
+    const processedRooms = new Set<string>();
+
+    for (const pid of peerIdsToLeave) {
+      const left = registry.leaveRoom(pid);
+      if (left && !processedRooms.has(left.room.id)) {
+        processedRooms.add(left.room.id);
+        anyChanged = true;
+        for (const notifyPeerId of left.notify) {
+          const targetSock = peerSockets.get(notifyPeerId);
+          if (targetSock) {
+            if (left.destroyed) {
+              send(targetSock, {
+                type: 'room_closed',
+                roomId: left.room.id,
+                reason: 'El anfitrión ha abandonado la sala.'
+              });
+              send(targetSock, {
+                type: 'HOST_DISCONNECT',
+                roomId: left.room.id
+              });
+            } else {
+              send(targetSock, { type: 'PEER_DISCONNECT', peerId: pid });
+              send(targetSock, { type: 'PEER_LEFT', peerId: pid });
+            }
+          }
+        }
+      }
+    }
+
+    if (explicitRoomId && !processedRooms.has(explicitRoomId)) {
+      const room = registry.getRoomById(explicitRoomId);
+      if (room) {
+        const pidSet = new Set(peerIdsToLeave);
+        if (pidSet.has(room.hostPeerId)) {
+          const removed = registry.removeRoom(explicitRoomId);
+          if (removed) {
+            anyChanged = true;
+            for (const guestId of removed.guests) {
+              const targetSock = peerSockets.get(guestId);
+              if (targetSock) {
+                send(targetSock, {
+                  type: 'room_closed',
+                  roomId: removed.id,
+                  reason: 'El anfitrión ha abandonado la sala.'
+                });
+                send(targetSock, {
+                  type: 'HOST_DISCONNECT',
+                  roomId: removed.id
+                });
+              }
+            }
+          }
+        }
+      }
+    }
+
+    return anyChanged;
   }
 
   // Heartbeat para limpiar conexiones zombi
@@ -163,6 +220,7 @@ export function setupSignalingServer(wss: WebSocketServer) {
     ws.isAlive = true;
     const initialPeerId = randomUUID().slice(0, 8);
     ws.peerId = initialPeerId;
+    ws.peerIds = new Set<string>([initialPeerId]);
 
     peerSockets.set(initialPeerId, socket);
     socketToPeerId.set(socket, initialPeerId);
@@ -209,8 +267,10 @@ export function setupSignalingServer(wss: WebSocketServer) {
           peerSockets.set(msg.peerId, socket);
           socketToPeerId.set(socket, msg.peerId);
           ws.peerId = msg.peerId;
+          ws.peerIds?.add(msg.peerId);
         }
         const effectivePeerId = ws.peerId ?? initialPeerId;
+        ws.peerIds?.add(effectivePeerId);
         const normType = String(msg.type || '').toUpperCase();
 
         switch (normType) {
@@ -225,11 +285,6 @@ export function setupSignalingServer(wss: WebSocketServer) {
           case 'PING': {
             ws.isAlive = true;
             send(ws, {
-              type: 'PONG',
-              timestamp: msg.timestamp,
-              onlineCount: wss.clients.size
-            });
-            send(ws, {
               type: 'pong',
               timestamp: msg.timestamp,
               onlineCount: wss.clients.size
@@ -243,13 +298,19 @@ export function setupSignalingServer(wss: WebSocketServer) {
           }
 
           case 'CREATE_ROOM':
-          case 'ROOM_CREATE': {
+          case 'ROOM_CREATE':
+          case 'REGISTER_HOST': {
             const config = msg.roomConfig || msg.config || {};
             const cleanName = String(msg.name || config.name || `Room #${effectivePeerId}`).slice(0, 50);
             const stadium = String(msg.stadiumId || msg.stadium || config.stadiumId || config.stadium || 'mediano');
             const maxPlayers = Math.max(2, Math.min(20, Number(msg.maxPlayers ?? config.maxPlayers ?? 12)));
             const password = String(msg.password || config.password || '');
             const isDedicated = Boolean(msg.isDedicated ?? config.isDedicated);
+
+            // Asegurar limpieza previa si el socket tenía otra sala activa
+            if (ws.peerIds) {
+              handlePeerLeave(ws.peerIds);
+            }
 
             const room = registry.createRoom(effectivePeerId, {
               name: cleanName,
@@ -261,12 +322,34 @@ export function setupSignalingServer(wss: WebSocketServer) {
 
             console.log(`[SignalingServer] Sala creada: ${room.id} (${room.name}) por Host ${effectivePeerId} (Dedicada: ${room.isDedicated ?? false})`);
 
-            // Responder al anfitrión con ambas variantes de nombres
-            send(socket, { type: 'ROOM_CREATED', roomId: room.id, roomConfig: room, config: room });
-            send(socket, { type: 'room_created', roomId: room.id, roomName: room.name, roomConfig: room, config: room });
+            send(socket, {
+              type: 'ROOM_CREATED',
+              roomId: room.id,
+              roomName: room.name,
+              roomConfig: room,
+              config: room
+            });
 
-            // Broadcast Inmediato a todos los WebSockets conectados
+            // Broadcast inmediato a todos los clientes del Lobby
             broadcastRoomList();
+            break;
+          }
+
+          case 'UPDATE_ROOM':
+          case 'UPDATE_ROOM_COUNT': {
+            const room = (msg.roomId ? registry.getRoomById(String(msg.roomId)) : undefined) ?? registry.getRoomOfPeer(effectivePeerId);
+            if (room && (room.hostPeerId === effectivePeerId || ws.peerIds?.has(room.hostPeerId))) {
+              const cfg = msg.config || msg.roomConfig || msg;
+              registry.updateRoom(room.id, {
+                name: cfg.name,
+                stadiumId: cfg.stadiumId ?? cfg.stadium,
+                maxPlayers: cfg.maxPlayers,
+                currentPlayers: msg.playerCount ?? cfg.playerCount ?? cfg.currentPlayers,
+                password: cfg.password,
+                isPrivate: cfg.isPrivate
+              });
+              broadcastRoomList();
+            }
             break;
           }
 
@@ -277,7 +360,6 @@ export function setupSignalingServer(wss: WebSocketServer) {
             const activePeerIds = new Set(peerSockets.keys());
             const publicRooms = registry.getPublicRooms(activePeerIds);
             send(socket, { type: 'room_list', rooms: publicRooms, onlineCount: wss.clients.size });
-            send(socket, { type: 'ROOM_LIST', rooms: publicRooms });
             break;
           }
 
@@ -289,45 +371,28 @@ export function setupSignalingServer(wss: WebSocketServer) {
 
             if (!result.ok) {
               send(socket, { type: 'ERROR', code: result.code, message: `Error al unirse a la sala: ${result.code}` });
-              send(socket, { type: 'error', code: result.code, message: `Error al unirse a la sala: ${result.code}` });
               return;
             }
 
             const room = result.room;
             console.log(`[SignalingServer] Peer ${effectivePeerId} ("${msg.nickname ?? 'Guest'}") se unió a sala ${room.id}`);
 
-            // Notificar al invitado que se unió con éxito
+            // Notificar al invitado que se unió con éxito (un único mensaje canónico)
             send(socket, {
               type: 'ROOM_JOINED',
-              roomId: room.id,
-              hostPeerId: room.hostPeerId,
-              stadiumId: room.stadiumId
-            });
-            send(socket, {
-              type: 'room_joined',
               roomId: room.id,
               hostId: room.hostPeerId,
               hostPeerId: room.hostPeerId,
               roomName: room.name,
-              stadiumId: room.stadiumId
-            });
-            send(socket, {
-              type: 'JOIN_SUCCESS',
-              roomId: room.id,
-              hostPeerId: room.hostPeerId,
-              stadiumId: room.stadiumId
+              stadiumId: room.stadiumId,
+              maxPlayers: room.maxPlayers
             });
 
-            // Notificar al anfitrión (Host)
+            // Notificar al anfitrión (Host) con un único mensaje canónico
             const hostSocket = peerSockets.get(room.hostPeerId);
             if (hostSocket) {
               send(hostSocket, {
                 type: 'PEER_JOINED',
-                peerId: effectivePeerId,
-                nickname: msg.nickname ?? 'Guest'
-              });
-              send(hostSocket, {
-                type: 'peer_joined',
                 peerId: effectivePeerId,
                 nickname: msg.nickname ?? 'Guest'
               });
@@ -338,22 +403,11 @@ export function setupSignalingServer(wss: WebSocketServer) {
           }
 
           case 'ROOM_LEAVE':
-          case 'LEAVE_ROOM': {
-            const left = registry.leaveRoom(effectivePeerId);
-            if (left) {
-              for (const notifyPeerId of left.notify) {
-                const targetSock = peerSockets.get(notifyPeerId);
-                if (targetSock) {
-                  send(targetSock, { type: 'PEER_DISCONNECT', peerId: effectivePeerId });
-                  send(targetSock, { type: 'peer_left', peerId: effectivePeerId });
-                  if (left.destroyed) {
-                    send(targetSock, { type: 'HOST_DISCONNECT', roomId: left.room.id } as any);
-                    send(targetSock, { type: 'host_left', roomId: left.room.id });
-                  }
-                }
-              }
-              broadcastRoomList();
-            }
+          case 'LEAVE_ROOM':
+          case 'CLOSE_ROOM': {
+            const ids = ws.peerIds ? Array.from(ws.peerIds) : [effectivePeerId];
+            handlePeerLeave(ids, msg.roomId ? String(msg.roomId) : undefined);
+            broadcastRoomList();
             break;
           }
 
@@ -416,25 +470,17 @@ export function setupSignalingServer(wss: WebSocketServer) {
       const closingPeerId = socketToPeerId.get(socket) ?? ws.peerId ?? initialPeerId;
       console.log(`[SignalingServer] Peer desconectado: ${closingPeerId}`);
 
-      peerSockets.delete(closingPeerId);
-      if (ws.peerId) peerSockets.delete(ws.peerId);
-      socketToPeerId.delete(socket);
-
-      const left = registry.leaveRoom(closingPeerId);
-      if (left) {
-        for (const notifyPeerId of left.notify) {
-          const targetSock = peerSockets.get(notifyPeerId);
-          if (targetSock) {
-            send(targetSock, { type: 'PEER_DISCONNECT', peerId: closingPeerId });
-            send(targetSock, { type: 'peer_left', peerId: closingPeerId });
-            if (left.destroyed) {
-              send(targetSock, { type: 'HOST_DISCONNECT', roomId: left.room.id } as any);
-              send(targetSock, { type: 'host_left', roomId: left.room.id });
-            }
-          }
-        }
+      const allSocketPeerIds = ws.peerIds ? Array.from(ws.peerIds) : [closingPeerId];
+      if (!allSocketPeerIds.includes(closingPeerId)) {
+        allSocketPeerIds.push(closingPeerId);
       }
 
+      for (const pid of allSocketPeerIds) {
+        peerSockets.delete(pid);
+      }
+      socketToPeerId.delete(socket);
+
+      handlePeerLeave(allSocketPeerIds);
       registry.purgeInactiveRooms(new Set(peerSockets.keys()));
       broadcastRoomList();
     });

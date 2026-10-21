@@ -191,7 +191,7 @@ export class SignalingClient {
               this.onlineCount = msg.onlineCount;
               this.emit('telemetry', { pingMs: this.pingMs, onlineCount: this.onlineCount });
             }
-            if (msg.type === 'pong') {
+            if (msg.type === 'pong' || (msg.type as string) === 'PONG') {
               if (typeof msg.timestamp === 'number') {
                 this.pingMs = Math.max(1, Math.round(Date.now() - msg.timestamp));
                 this.emit('telemetry', { pingMs: this.pingMs, onlineCount: this.onlineCount });
@@ -219,11 +219,38 @@ export class SignalingClient {
               this.onMessage(msg);
             }
             if (msg.type) {
-              this.emit(msg.type, msg);
               const lower = msg.type.toLowerCase();
               const upper = msg.type.toUpperCase();
-              if (lower !== msg.type) this.emit(lower, msg);
-              if (upper !== msg.type) this.emit(upper, msg);
+              const eventKeys = new Set<string>([msg.type, lower, upper]);
+              if (upper === 'ROOM_JOINED' || upper === 'JOIN_SUCCESS') {
+                eventKeys.add('ROOM_JOINED');
+                eventKeys.add('room_joined');
+                eventKeys.add('JOIN_SUCCESS');
+                eventKeys.add('join_success');
+              } else if (upper === 'ROOM_CLOSED' || upper === 'HOST_DISCONNECT' || upper === 'HOST_LEFT') {
+                eventKeys.add('ROOM_CLOSED');
+                eventKeys.add('room_closed');
+                eventKeys.add('HOST_DISCONNECT');
+                eventKeys.add('host_disconnected');
+                eventKeys.add('host_left');
+              } else if (upper === 'PEER_DISCONNECT' || upper === 'PEER_LEFT') {
+                eventKeys.add('PEER_LEFT');
+                eventKeys.add('peer_left');
+                eventKeys.add('PEER_DISCONNECT');
+              }
+
+              const invoked = new Set<EventCallback>();
+              for (const key of eventKeys) {
+                const set = this.listeners.get(key);
+                if (set) {
+                  for (const cb of set) {
+                    if (!invoked.has(cb)) {
+                      invoked.add(cb);
+                      cb(msg);
+                    }
+                  }
+                }
+              }
             }
           } catch (err) {
             console.error('Invalid signaling message:', err);

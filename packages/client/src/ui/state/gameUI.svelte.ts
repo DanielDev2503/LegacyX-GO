@@ -314,11 +314,14 @@ export interface RosterPlayer {
   name?: string;
   number?: number;
   avatar: string;
+  avatarType?: 'letters' | 'emoji' | string;
   team: TeamSlot;
   isAdmin: boolean;
   isHost: boolean;
   ping: number;
   kit?: TeamKitConfig;
+  localKit?: TeamKitConfig;
+  visitorKit?: TeamKitConfig;
   activeEmote?: { emoji: string; timer: number };
 }
 
@@ -474,6 +477,7 @@ class GameUIStore {
   public realRegion = $state<string>(detectUserRegion());
   public localPlayerId = $state(1);
   public isHost = $state(true);
+  private _isAdmin = $state(true);
   public clubName = $state('LegacyX Clan');
   public clubTag = $state('LEG');
   public redKit = $state<KitConfig>({
@@ -537,7 +541,7 @@ class GameUIStore {
   public matchId = $state('CTNYRS');
   public redScore = $state(0);
   public blueScore = $state(0);
-  public matchTimeFormatted = $state('03:00');
+  public matchTimeFormatted = $state('00:00');
   public fsmPhase = $state<'STOPPED' | 'WARMUP' | 'KICKOFF' | 'PLAYING' | 'PAUSED' | 'GOAL' | 'OVERTIME' | 'STATS'>('STOPPED');
   public isGoldenGoal = $state(false);
   public redPossession = $state(50);
@@ -599,6 +603,9 @@ class GameUIStore {
   public onChatSent: ((text: string) => void) | null = null;
   public onTeamChanged: ((playerId: number, team: 'red' | 'blue' | 'spectator') => void) | null = null;
   public onPlayerEmote: ((playerId: number, emoji: string) => void) | null = null;
+  public onLeaveRoom: (() => void) | null = null;
+  public onAdminAction: ((action: string, payload?: any) => void) | null = null;
+  public onRoomConfigChanged: ((patch: any) => void) | null = null;
 
   public triggerPlayerEmote(playerId: number, emoji: string): void {
     const player = this.rosterPlayers.find((p) => p.id === playerId);
@@ -717,6 +724,13 @@ class GameUIStore {
         soundFX.setSfxVolume(this.settings.sfxVolume);
         soundFX.setEnvVolume(this.settings.envVolume);
       }
+      const hostEntry = this.rosterPlayers.find((p) => p.id === this.localPlayerId);
+      if (hostEntry) {
+        hostEntry.avatarType = this.avatarMode;
+        hostEntry.kit = { ...this.settings.localKit };
+        hostEntry.localKit = { ...this.settings.localKit };
+        hostEntry.visitorKit = { ...this.settings.visitorKit };
+      }
       const rawKeybinds = localStorage.getItem(KEYBINDS_STORAGE_KEY);
       if (currentVersion < SETTINGS_VERSION || !rawKeybinds) {
         this.resetKeybinds();
@@ -735,6 +749,7 @@ class GameUIStore {
     const hostEntry = this.rosterPlayers.find((p) => p.id === this.localPlayerId);
     if (hostEntry) {
       hostEntry.nickname = name;
+      hostEntry.name = name;
     }
     if (typeof localStorage !== 'undefined') {
       try {
@@ -754,6 +769,7 @@ class GameUIStore {
     const hostEntry = this.rosterPlayers.find((p) => p.id === this.localPlayerId);
     if (hostEntry) {
       hostEntry.avatar = avatar;
+      hostEntry.avatarType = this.avatarMode;
     }
     if (typeof localStorage !== 'undefined') {
       try {
@@ -777,7 +793,9 @@ class GameUIStore {
     const hostEntry = this.rosterPlayers.find((p) => p.id === this.localPlayerId);
     if (hostEntry) {
       hostEntry.nickname = nick;
+      hostEntry.name = nick;
       hostEntry.avatar = avatar;
+      hostEntry.avatarType = this.avatarMode;
     }
     if (typeof localStorage !== 'undefined') {
       try {
@@ -835,6 +853,13 @@ class GameUIStore {
       this.blueKit.tertiaryColor = this.settings.visitorKit.tertiaryColor || '#ffffff';
       this.blueKit.outlineColor = this.settings.visitorKit.outlineColor || '#000000';
       this.blueKit.pattern = this.settings.visitorKit.pattern;
+    }
+
+    const localEntry = this.rosterPlayers.find((p) => p.id === this.localPlayerId);
+    if (localEntry) {
+      localEntry.kit = { ...this.settings.localKit };
+      localEntry.localKit = { ...this.settings.localKit };
+      localEntry.visitorKit = { ...this.settings.visitorKit };
     }
 
     if (typeof localStorage !== 'undefined') {
@@ -916,11 +941,19 @@ class GameUIStore {
   }
 
   public get isAdmin(): boolean {
-    return this.isHost;
+    return this.isHost || this._isAdmin;
   }
 
   public set isAdmin(val: boolean) {
-    this.isHost = val;
+    this._isAdmin = val;
+  }
+
+  public get matchTime(): string {
+    return this.matchTimeFormatted;
+  }
+
+  public set matchTime(val: string) {
+    this.matchTimeFormatted = val;
   }
 
   public get players(): RosterPlayer[] {
@@ -1010,6 +1043,18 @@ class GameUIStore {
     return this.settings.visitorKit;
   }
 
+  /** Equipación activa del capitán RED (índice 0): su kit Local. */
+  public get redCaptainKit(): TeamKitConfig {
+    const cap = this.rosterPlayers.find((p) => p.team === 'red');
+    return cap?.localKit || cap?.kit || this.settings.localKit;
+  }
+
+  /** Equipación activa del capitán BLUE (índice 0): su kit Visitante. */
+  public get blueCaptainKit(): TeamKitConfig {
+    const cap = this.rosterPlayers.find((p) => p.team === 'blue');
+    return cap?.visitorKit || cap?.kit || this.settings.visitorKit;
+  }
+
   public get theme(): 'dark' | 'light' {
     return this.settings.theme;
   }
@@ -1068,6 +1113,7 @@ class GameUIStore {
 
   public leaveRoom(): void {
     soundFX.playUIClick();
+    this.onLeaveRoom?.();
     this.clearModalStack();
     this.navigateTo('LOBBY');
   }
@@ -1381,17 +1427,18 @@ class GameUIStore {
     const target = this.rosterPlayers.find((p) => p.id === playerId);
     if (!target || target.isHost) return false;
     target.isAdmin = !target.isAdmin;
+    this.onAdminAction?.('TOGGLE_ADMIN', { targetPlayerId: playerId, isAdmin: target.isAdmin });
     return true;
   }
 
-  public kickOrBanPlayer(targetPlayerId: number, _ban: boolean = false): boolean {
+  public kickOrBanPlayer(targetPlayerId: number, ban: boolean = false): boolean {
     if (!this.isHost && !this.isAdmin) return false;
     const target = this.rosterPlayers.find((p) => p.id === targetPlayerId);
-    // Host admin immutability: Host cannot kick or ban themselves, non-host admin cannot kick host or other admin
+    // Host admin immutability: Host cannot kick or ban themselves, and nobody can kick/ban Host
     if (!target || target.isHost) return false;
-    if (!this.isHost && target.isAdmin) return false;
     if (target.id === this.localPlayerId) return false;
     this.rosterPlayers = this.rosterPlayers.filter((p) => p.id !== targetPlayerId);
+    this.onAdminAction?.(ban ? 'BAN' : 'KICK', { targetPlayerId });
     return true;
   }
 

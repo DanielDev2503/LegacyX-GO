@@ -78,6 +78,7 @@ export class PeerConnection {
   public onIceRestartOffer: ((offer: RTCSessionDescriptionInit) => void) | null = null;
 
   private pendingCandidates: RTCIceCandidateInit[] = [];
+  private reliableOutbox: string[] = [];
   private isSettingRemoteDescription: boolean = false;
   private iceRetryCount = 0;
   private readonly maxIceRetries = 3;
@@ -377,6 +378,7 @@ export class PeerConnection {
     channel.onopen = () => {
       this.hasEverConnected = true;
       this.linkState = 'connected';
+      this.flushReliableOutbox();
       if (this.onConnected) this.onConnected();
     };
     channel.onclose = () => {
@@ -405,6 +407,7 @@ export class PeerConnection {
 
     channel.onopen = () => {
       this.linkState = 'connected';
+      this.flushReliableOutbox();
       if (this.onConnected) this.onConnected();
     };
 
@@ -543,6 +546,25 @@ export class PeerConnection {
     return this.pendingCandidates.length;
   }
 
+  private flushReliableOutbox(): void {
+    if (this.reliableOutbox.length === 0) return;
+    const channel =
+      this.reliableChannel && this.reliableChannel.readyState === 'open'
+        ? this.reliableChannel
+        : this.dataChannel && this.dataChannel.readyState === 'open'
+          ? this.dataChannel
+          : null;
+    if (!channel) return;
+    while (this.reliableOutbox.length > 0) {
+      const msg = this.reliableOutbox.shift()!;
+      try {
+        channel.send(msg);
+      } catch {
+        break;
+      }
+    }
+  }
+
   public sendReliable(data: unknown): void {
     const payload = typeof data === 'string' ? data : JSON.stringify(data);
     if (this.reliableChannel && this.reliableChannel.readyState === 'open') {
@@ -556,10 +578,12 @@ export class PeerConnection {
     if (this.dataChannel && this.dataChannel.readyState === 'open') {
       try {
         this.dataChannel.send(payload);
+        return;
       } catch {
         // Ignore transient buffer overflow
       }
     }
+    this.reliableOutbox.push(payload);
   }
 
   public sendUnreliable(buffer: ArrayBuffer): void {

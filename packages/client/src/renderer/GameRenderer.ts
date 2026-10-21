@@ -396,7 +396,7 @@ export class GameRenderer {
       snapDisc.vx = ivx;
       snapDisc.vy = ivy;
       snapDisc.radius = d1.team === 0 ? this.discRenderer.ballRadius : this.discRenderer.playerRadius;
-      snapDisc.avatar = d1.team === 0 ? '' : String(info?.number ?? d1.id);
+      snapDisc.avatar = d1.team === 0 ? '' : (info?.avatar || String(info?.number ?? d1.id));
       snapDisc.kicking = (flags & 1) !== 0;
       snapDisc.isDashing = (flags & 2) !== 0;
       snapDisc.isSpinActive = d1.team === 0 && ((flags & 4) !== 0 || Math.abs(d1.spin ?? 0) > 0.05);

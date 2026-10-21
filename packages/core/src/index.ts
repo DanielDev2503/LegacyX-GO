@@ -196,6 +196,8 @@ export class EngineInstance {
           if (other?.isPost) {
             this.soundMask |= SOUND_POST_HIT;
             this.emit('post_hit', { ball: this.ball, post: other });
+          } else if (other && !other.isBall && this.fsm.state === MatchPhase.KICKOFF) {
+            this.fsm.startPlaying();
           }
         }
       }
@@ -330,95 +332,106 @@ export class EngineInstance {
     if (isGameActive) {
       for (const [id, player] of this.players.entries()) {
         const input = inputs.get(id);
-        if (!input) continue;
 
-        let ix = input.dirX ?? 0;
-        let iy = input.dirY ?? 0;
+        if (input) {
+          let ix = input.dirX ?? 0;
+          let iy = input.dirY ?? 0;
 
-        if (input.inputMask) {
-          if (input.inputMask & INPUT_FLAG_LEFT) ix -= 1;
-          if (input.inputMask & INPUT_FLAG_RIGHT) ix += 1;
-          if (input.inputMask & INPUT_FLAG_UP) iy -= 1;
-          if (input.inputMask & INPUT_FLAG_DOWN) iy += 1;
-        }
-
-        const inputLen = Math.hypot(ix, iy);
-        if (inputLen > 1.0) {
-          ix /= inputLen;
-          iy /= inputLen;
-        }
-
-        const accelBase = (this.modifiers as any).playerAcceleration !== undefined
-          ? ((this.modifiers as any).playerAcceleration / 0.11) * 2.4
-          : 2.4;
-        const isTurboRequested = Boolean(input.inputMask && (input.inputMask & INPUT_FLAG_TURBO));
-        const turboMultiplier = (this.modifiers as any).boostMultiplier ?? (this.modifiers as any).turboMultiplier ?? 2.0;
-        let accel = accelBase;
-
-        if (isTurboRequested && inputLen > 0.1 && player.stamina > 0) {
-          accel *= Math.max(1.8, turboMultiplier * 1.2);
-          player.stamina = Math.max(0, player.stamina - 0.6); // Gasto continuo de estamina
-          player.isTurbo = true;
-        } else {
-          player.isTurbo = false;
-        }
-
-        player.vel.x += ix * accel;
-        player.vel.y += iy * accel;
-
-        const maxSpeedBase = (this.modifiers as any).playerSpeed ? (this.modifiers as any).playerSpeed * 60 : 168.0;
-        const currentMaxSpeed = player.isTurbo ? maxSpeedBase * turboMultiplier : maxSpeedBase;
-        const curSpeed = player.vel.len();
-        if (curSpeed > currentMaxSpeed) {
-          player.vel.x = (player.vel.x / curSpeed) * currentMaxSpeed;
-          player.vel.y = (player.vel.y / curSpeed) * currentMaxSpeed;
-        }
-
-        const isDashRequested = Boolean(input.dash || (input.inputMask && (input.inputMask & INPUT_FLAG_DASH)));
-        const dashesPerFullBar = (this.modifiers as any).dashesPerFullBar ?? 4;
-        const dashCost = 100 / Math.max(1, Math.min(6, dashesPerFullBar));
-
-        if (isDashRequested && !player.isDashing && player.stamina >= dashCost) {
-          player.stamina = Math.max(0, player.stamina - dashCost);
-          const dashDirX = inputLen > 0.1 ? ix : (curSpeed > 0.1 ? player.vel.x / curSpeed : 1);
-          const dashDirY = inputLen > 0.1 ? iy : (curSpeed > 0.1 ? player.vel.y / curSpeed : 0);
-          const power = this.modifiers.dashPower ?? 280;
-          player.vel.x += dashDirX * power;
-          player.vel.y += dashDirY * power;
-          player.isDashing = true;
-        } else if (!isDashRequested) {
-          player.isDashing = false;
-        }
-
-        if (inputLen === 0 && !player.isTurbo && !player.isDashing && player.stamina < 100) {
-          player.stamina = Math.min(100, player.stamina + 0.35);
-        }
-
-        const isKickRequested = Boolean(input.kick || (input.inputMask && (input.inputMask & INPUT_FLAG_KICK)));
-        if (isKickRequested && this.world.isWithinKickDistance(player, this.ball)) {
-          const dx = this.ball.pos.x - player.pos.x;
-          const dy = this.ball.pos.y - player.pos.y;
-          const dist = Math.hypot(dx, dy) || 1;
-          const nx = dx / dist;
-          const ny = dy / dist;
-
-          const strength = this.modifiers.baseKickStrength ?? 450.0;
-          this.ball.vel.x = nx * strength;
-          this.ball.vel.y = ny * strength;
-          this.ball.lastKickerDiscId = player.id;
-          this.ball.isCurvingAllowed = true;
-
-          if (input.magnusLeft || (input.inputMask && (input.inputMask & INPUT_FLAG_MAGNUS_LEFT))) {
-            this.ball.spin = -1.2;
-          } else if (input.magnusRight || (input.inputMask && (input.inputMask & INPUT_FLAG_MAGNUS_RIGHT))) {
-            this.ball.spin = 1.2;
+          if (input.inputMask) {
+            if (input.inputMask & INPUT_FLAG_LEFT) ix -= 1;
+            if (input.inputMask & INPUT_FLAG_RIGHT) ix += 1;
+            if (input.inputMask & INPUT_FLAG_UP) iy -= 1;
+            if (input.inputMask & INPUT_FLAG_DOWN) iy += 1;
           }
 
-          this.soundMask |= SOUND_KICK;
-          this.emit('kick', { player, ball: this.ball });
+          const inputLen = Math.hypot(ix, iy);
+          if (inputLen > 1.0) {
+            ix /= inputLen;
+            iy /= inputLen;
+          }
 
-          if (this.fsm.state === MatchPhase.KICKOFF) {
-            this.fsm.startPlaying();
+          const accelBase = (this.modifiers as any).playerAcceleration !== undefined
+            ? ((this.modifiers as any).playerAcceleration / 0.11) * 2.4
+            : 2.4;
+          const isTurboRequested = Boolean(input.inputMask && (input.inputMask & INPUT_FLAG_TURBO));
+          const turboMultiplier = (this.modifiers as any).boostMultiplier ?? (this.modifiers as any).turboMultiplier ?? 2.0;
+          let accel = accelBase;
+
+          if (isTurboRequested && inputLen > 0.1 && player.stamina > 0) {
+            accel *= Math.max(1.8, turboMultiplier * 1.2);
+            player.stamina = Math.max(0, player.stamina - 0.6); // Gasto continuo de estamina
+            player.isTurbo = true;
+          } else {
+            player.isTurbo = false;
+          }
+
+          player.vel.x += ix * accel;
+          player.vel.y += iy * accel;
+
+          const maxSpeedBase = (this.modifiers as any).playerSpeed ? (this.modifiers as any).playerSpeed * 60 : 168.0;
+          const currentMaxSpeed = player.isTurbo ? maxSpeedBase * turboMultiplier : maxSpeedBase;
+          const curSpeed = player.vel.len();
+          if (curSpeed > currentMaxSpeed) {
+            player.vel.x = (player.vel.x / curSpeed) * currentMaxSpeed;
+            player.vel.y = (player.vel.y / curSpeed) * currentMaxSpeed;
+          }
+
+          const isDashRequested = Boolean(input.dash || (input.inputMask && (input.inputMask & INPUT_FLAG_DASH)));
+          const dashesPerFullBar = (this.modifiers as any).dashesPerFullBar ?? 4;
+          const dashCost = 100 / Math.max(1, Math.min(6, dashesPerFullBar));
+
+          if (isDashRequested && !player.isDashing && player.stamina >= dashCost) {
+            player.stamina = Math.max(0, player.stamina - dashCost);
+            const dashDirX = inputLen > 0.1 ? ix : (curSpeed > 0.1 ? player.vel.x / curSpeed : 1);
+            const dashDirY = inputLen > 0.1 ? iy : (curSpeed > 0.1 ? player.vel.y / curSpeed : 0);
+            const power = this.modifiers.dashPower ?? 280;
+            player.vel.x += dashDirX * power;
+            player.vel.y += dashDirY * power;
+            player.isDashing = true;
+          } else if (!isDashRequested) {
+            player.isDashing = false;
+          }
+
+          if (inputLen === 0 && !player.isTurbo && !player.isDashing && player.stamina < 100) {
+            player.stamina = Math.min(100, player.stamina + 0.35);
+          }
+
+          const isKickRequested = Boolean(input.kick || (input.inputMask && (input.inputMask & INPUT_FLAG_KICK)));
+          player.kicking = isKickRequested;
+          player.isTyping = Boolean(input.inputMask && (input.inputMask & INPUT_FLAG_TYPING));
+
+          if (isKickRequested && this.world.isWithinKickDistance(player, this.ball)) {
+            const dx = this.ball.pos.x - player.pos.x;
+            const dy = this.ball.pos.y - player.pos.y;
+            const dist = Math.hypot(dx, dy) || 1;
+            const nx = dx / dist;
+            const ny = dy / dist;
+
+            const strength = this.modifiers.baseKickStrength ?? 450.0;
+            this.ball.vel.x = nx * strength;
+            this.ball.vel.y = ny * strength;
+            this.ball.lastKickerDiscId = player.id;
+            this.ball.isCurvingAllowed = true;
+
+            if (input.magnusLeft || (input.inputMask && (input.inputMask & INPUT_FLAG_MAGNUS_LEFT))) {
+              this.ball.spin = -1.2;
+            } else if (input.magnusRight || (input.inputMask && (input.inputMask & INPUT_FLAG_MAGNUS_RIGHT))) {
+              this.ball.spin = 1.2;
+            }
+
+            this.soundMask |= SOUND_KICK;
+            this.emit('kick', { player, ball: this.ball });
+
+            if (this.fsm.state === MatchPhase.KICKOFF) {
+              this.fsm.startPlaying();
+            }
+          }
+        } else {
+          player.isTurbo = false;
+          player.isDashing = false;
+          player.kicking = false;
+          if (player.stamina < 100) {
+            player.stamina = Math.min(100, player.stamina + 0.35);
           }
         }
 
@@ -442,6 +455,13 @@ export class EngineInstance {
       }
 
       this.world.step(CORE_DT, isReplay);
+
+      if (this.fsm.state === MatchPhase.KICKOFF) {
+        const ballVelSq = this.ball.vel.x * this.ball.vel.x + this.ball.vel.y * this.ball.vel.y;
+        if (ballVelSq > 0.1) {
+          this.fsm.startPlaying();
+        }
+      }
 
       const hw = this.stadium.halfWidth;
       const gh = this.stadium.goalHalfHeight;
@@ -508,7 +528,10 @@ export class EngineInstance {
     for (const [id, p] of this.players.entries()) {
       const team = this.playerTeams.get(id);
       let flags = 0;
+      if (p.kicking) flags |= 1 << 0;
       if (p.isDashing) flags |= 1 << 1;
+      if (p.isTurbo) flags |= 1 << 4;
+      if (p.isTyping) flags |= 1 << 5;
 
       discStates.push({
         id: p.id,
@@ -522,10 +545,14 @@ export class EngineInstance {
       });
     }
 
+    const elapsedSeconds = this.fsm.state === MatchPhase.STOP
+      ? 0
+      : Math.floor(this.fsm.matchTicksElapsed / 60);
+
     return {
       tick: this.currentTick,
       phase: this.fsm.state,
-      matchTimer: Math.max(0, Math.round((this.fsm.matchTimeLimitTicks - this.fsm.matchTicksElapsed) / 60)),
+      matchTimer: elapsedSeconds,
       redScore: this.fsm.redScore,
       blueScore: this.fsm.blueScore,
       soundMask: this.soundMask,

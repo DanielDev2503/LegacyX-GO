@@ -61,7 +61,13 @@ export class RoomRegistry {
   public joinRoom(peerId: string, roomId: string, password?: string): JoinResult {
     const room = this.rooms.get(roomId);
     if (!room) return { ok: false, code: 'ROOM_NOT_FOUND' };
-    if (this.peerToRoom.has(peerId)) return { ok: false, code: 'ALREADY_IN_ROOM' };
+    const existingRoomId = this.peerToRoom.get(peerId);
+    if (existingRoomId) {
+      if (existingRoomId === roomId) {
+        return { ok: true, room };
+      }
+      this.leaveRoom(peerId);
+    }
     if (room.isLocked) return { ok: false, code: 'ROOM_LOCKED' };
     if (room.currentPlayers >= room.maxPlayers) return { ok: false, code: 'ROOM_FULL' };
     if (room.passwordHash && !verifyPassword(password ?? '', room.passwordHash)) {
@@ -102,6 +108,54 @@ export class RoomRegistry {
     this.peerToRoom.delete(room.hostPeerId);
     for (const g of room.guests) {
       this.peerToRoom.delete(g);
+    }
+    return room;
+  }
+
+  public removeRoom(roomId: string): Room | undefined {
+    return this.deleteRoom(roomId);
+  }
+
+  public updateRoom(
+    roomId: string,
+    patch: {
+      name?: string;
+      stadiumId?: string;
+      maxPlayers?: number;
+      currentPlayers?: number;
+      password?: string | null;
+      isPrivate?: boolean;
+      isLocked?: boolean;
+    }
+  ): Room | undefined {
+    const room = this.rooms.get(roomId);
+    if (!room) return undefined;
+    if (patch.name !== undefined) {
+      room.name = String(patch.name).slice(0, 50) || room.name;
+    }
+    if (patch.stadiumId !== undefined) {
+      room.stadiumId = String(patch.stadiumId);
+    }
+    if (patch.maxPlayers !== undefined) {
+      room.maxPlayers = Math.max(2, Math.min(20, Math.floor(Number(patch.maxPlayers)) || room.maxPlayers));
+    }
+    if (patch.currentPlayers !== undefined) {
+      room.currentPlayers = Math.max(1, Math.floor(Number(patch.currentPlayers)));
+    }
+    if (patch.isLocked !== undefined) {
+      room.isLocked = Boolean(patch.isLocked);
+    }
+    if (patch.isPrivate === false) {
+      room.hasPassword = false;
+      room.passwordHash = null;
+    } else if (patch.password !== undefined) {
+      if (patch.password) {
+        room.hasPassword = true;
+        room.passwordHash = hashPassword(patch.password);
+      } else {
+        room.hasPassword = false;
+        room.passwordHash = null;
+      }
     }
     return room;
   }

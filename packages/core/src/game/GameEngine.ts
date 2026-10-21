@@ -43,6 +43,11 @@ export class GameEngine {
   public redScore: number = 0;
   public blueScore: number = 0;
 
+  public get matchTime(): number {
+    if (this.fsm.currentState === MatchPhase.STOPPED) return 0;
+    return this.activePlayTicks / 60;
+  }
+
   public get scores(): { red: number; blue: number } {
     return { red: this.redScore, blue: this.blueScore };
   }
@@ -137,6 +142,11 @@ export class GameEngine {
               if (this.kickoffState.active) {
                 this.kickoffState.active = false;
                 this.updatePhysicsKickoffContext();
+              }
+              if (this.fsm.currentState === MatchPhase.KICKOFF) {
+                this.fsm.currentState = MatchPhase.PLAYING;
+                this.fsm.stateTicksRemaining = 0;
+                this.onStateChange?.(this.fsm.currentState);
               }
               break;
             }
@@ -601,14 +611,18 @@ export class GameEngine {
 
     if (this.fsm.currentState === MatchPhase.COUNTDOWN) {
       this.physicsWorld.stepNets(1 / 60);
-      const transitioned = this.fsm.tick();
-      if (transitioned) {
-        this.physicsWorld.resetNets(false);
-        if (this.onStateChange) {
-          this.onStateChange(this.fsm.currentState);
+      if (this.fsm.stateTicksRemaining > 0) {
+        const transitioned = this.fsm.tick();
+        if (transitioned) {
+          this.physicsWorld.resetNets(false);
+          if (this.onStateChange) {
+            this.onStateChange(this.fsm.currentState);
+          }
         }
       }
-      return;
+      if (inputs.size === 0) {
+        return;
+      }
     }
 
     if (this.fsm.currentState === MatchPhase.PLAYING && !this.kickoffState.active) {
@@ -812,6 +826,11 @@ export class GameEngine {
             this.kickoffState.active = false;
             this.updatePhysicsKickoffContext();
           }
+          if (this.fsm.currentState === MatchPhase.KICKOFF) {
+            this.fsm.currentState = MatchPhase.PLAYING;
+            this.fsm.stateTicksRemaining = 0;
+            this.onStateChange?.(this.fsm.currentState);
+          }
 
           this.soundMask |= SOUND_KICK;
           if (this.onKick) {
@@ -907,11 +926,16 @@ export class GameEngine {
       }
     }
 
-    if (this.kickoffState.active) {
+    if (this.kickoffState.active || this.fsm.currentState === MatchPhase.KICKOFF) {
       const bSpeedSq = this.ball.vel.x * this.ball.vel.x + this.ball.vel.y * this.ball.vel.y;
       if (bSpeedSq > 0.1) {
         this.kickoffState.active = false;
         this.updatePhysicsKickoffContext();
+        if (this.fsm.currentState === MatchPhase.KICKOFF) {
+          this.fsm.currentState = MatchPhase.PLAYING;
+          this.fsm.stateTicksRemaining = 0;
+          this.onStateChange?.(this.fsm.currentState);
+        }
       } else {
         for (const [playerId, player] of this.players.entries()) {
           if (player.team === 'spec') continue;
@@ -923,6 +947,11 @@ export class GameEngine {
           if (dx * dx + dy * dy <= touchDist * touchDist + 1.0) {
             this.kickoffState.active = false;
             this.updatePhysicsKickoffContext();
+            if (this.fsm.currentState === MatchPhase.KICKOFF) {
+              this.fsm.currentState = MatchPhase.PLAYING;
+              this.fsm.stateTicksRemaining = 0;
+              this.onStateChange?.(this.fsm.currentState);
+            }
             break;
           }
         }
@@ -1077,7 +1106,6 @@ export class GameEngine {
           possessingTeam
         };
         this.updatePhysicsKickoffContext();
-        this.activePlayTicks = 0;
         this.lastScoringTeam = null;
         this.resetPositionsForKickoff(true);
         if (this.onStateChange) {

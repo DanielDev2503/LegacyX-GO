@@ -3,6 +3,8 @@
   import {
     EngineInstance,
     MatchPhase,
+    createStadium,
+    BinaryProtocol,
     type GameStateSnapshot,
     type PlayerInput,
     INPUT_FLAG_UP,
@@ -17,8 +19,10 @@
   } from '@legacyx/core';
 
   import { GameRenderer } from './renderer/GameRenderer.js';
+  import type { PlayerVisualInfo } from './renderer/DiscRenderer.js';
   import { gameUI, type PhysicsModifiers } from './ui/state/gameUI.svelte.js';
   import { soundFX } from './audio/SoundFX.js';
+  import { gameApp } from './net/GameApp.js';
 
   import Gatekeeper from './ui/screens/Gatekeeper.svelte';
   import Lobby from './ui/screens/Lobby.svelte';
@@ -50,14 +54,15 @@
   });
 
   function mountGame(canvasEl: HTMLCanvasElement): () => void {
-    // 1. Inicializar motor matemático canónico a 60 Hz
-    const engine = new EngineInstance(gameUI.selectedStadiumId || 'mediano');
-    testEngine = engine;
+    const isHost = gameUI.isHost;
+    let engine: EngineInstance | null = null;
 
-    // Configurar jugador local exclusivamente (sin bots/rivales simulados)
-    const localTeam = gameUI.myTeam === 'blue' ? 'blue' : 'red';
-    engine.addPlayer(1, localTeam);
-    engine.resetPositions();
+    if (isHost) {
+      engine = new EngineInstance(gameUI.selectedStadiumId || 'mediano');
+      testEngine = engine;
+      engine.applyModifiers(gameUI.physicsModifiers);
+      engine.resetPositions();
+    }
 
     // Inicializar siempre en 0: STOP con el menú de sala abierto
     gameUI.fsmPhase = 'STOPPED';
@@ -65,38 +70,100 @@
     gameUI.clearModalStack();
     gameUI.openOverlay('TEAM_MANAGEMENT');
 
+    // Sincronizar jugadores del engine con el roster reactivo
+    function syncEnginePlayers() {
+      if (!engine) return;
+      const activeIds = new Set<number>();
+      for (const p of gameUI.rosterPlayers) {
+        if (p.team === 'red' || p.team === 'blue') {
+          activeIds.add(p.id);
+          engine.setPlayerTeam(p.id, p.team);
+        } else {
+          engine.removePlayer(p.id);
+        }
+      }
+      for (const id of Array.from(engine.players.keys())) {
+        if (!activeIds.has(id)) {
+          engine.removePlayer(id);
+        }
+      }
+    }
+
+    if (isHost && engine) {
+      syncEnginePlayers();
+    }
+
     // Conectar callbacks de estado UI
     gameUI.onModifiersChanged = (mods) => {
       applyModifiersToEngine(mods);
     };
 
     gameUI.onStartMatch = () => {
-      engine.startMatch();
-      soundFX.playWhistle();
+      if (gameUI.isHost && engine) {
+        engine.startMatch();
+        soundFX.playWhistle();
+        gameApp.networkHost?.broadcastRoomStateSync();
+      } else if (!gameUI.isHost && gameApp.networkClient) {
+        gameApp.networkClient.sendAdminAction('START_MATCH');
+      }
       gameUI.clearModalStack();
     };
 
     gameUI.onStopMatch = () => {
-      engine.stopMatch();
-      soundFX.playWhistle();
+      if (gameUI.isHost && engine) {
+        engine.stopMatch();
+        soundFX.playWhistle();
+        gameApp.networkHost?.broadcastRoomStateSync();
+      } else if (!gameUI.isHost && gameApp.networkClient) {
+        gameApp.networkClient.sendAdminAction('STOP_MATCH');
+      }
       gameUI.clearModalStack();
       gameUI.openOverlay('TEAM_MANAGEMENT');
     };
 
     gameUI.onTogglePause = () => {
-      engine.togglePause();
+      if (gameUI.isHost && engine) {
+        engine.togglePause();
+        gameApp.networkHost?.broadcastRoomStateSync();
+      } else if (!gameUI.isHost && gameApp.networkClient) {
+        gameApp.networkClient.sendAdminAction('TOGGLE_PAUSE');
+      }
     };
 
     gameUI.onStartPracticeMode = () => {
-      engine.resetPositions();
+      if (engine) {
+        engine.resetPositions();
+      }
       gameUI.fsmPhase = 'STOPPED';
       gameUI.matchPhase = 0;
       gameUI.enforceStopMenu();
     };
 
     gameUI.onTeamChanged = (playerId: number, team: 'red' | 'blue' | 'spectator') => {
-      engine.setPlayerTeam(playerId, team);
-      engine.resetPositions();
+      if (gameUI.isHost && engine) {
+        engine.setPlayerTeam(playerId, team);
+        engine.resetPositions();
+        gameApp.networkHost?.setPlayerTeam(playerId, team);
+      } else if (!gameUI.isHost && gameApp.networkClient) {
+        gameApp.networkClient.requestTeamChange(team, playerId);
+      }
+    };
+
+    gameUI.onStadiumChanged = (stadiumId: string) => {
+      if (gameUI.isHost && engine) {
+        engine.loadStadium(stadiumId);
+        gameApp.updateRoomConfig({ stadiumId });
+      } else if (!gameUI.isHost && gameApp.networkClient) {
+        gameApp.networkClient.sendAdminAction('SET_RULES', { stadiumId });
+      }
+    };
+
+    gameUI.onChatSent = (text: string) => {
+      if (gameUI.isHost) {
+        gameApp.networkHost?.sendChat(gameUI.nickname, text, gameUI.myTeam);
+      } else {
+        gameApp.networkClient?.sendChat(text);
+      }
     };
 
     gameUI.onPlayerEmote = (playerId: number, emoji: string) => {
@@ -104,47 +171,41 @@
       if (visual) {
         visual.activeEmote = { emoji, timer: 120 };
       }
+      if (gameUI.isHost) {
+        gameApp.networkHost?.sendEmote(playerId, emoji);
+      } else {
+        gameApp.networkClient?.sendEmote(emoji);
+      }
     };
 
     // Conectar eventos del motor al sintetizador procedural Web Audio API
-    engine.on('goal', () => {
-      soundFX.playGoalHorn();
-      soundFX.playWhistle();
-      rendererInstance?.triggerShake(14, 450);
-    });
-
-    engine.on('post_hit', () => {
-      soundFX.playPostHit();
-      rendererInstance?.triggerShake(6, 200);
-    });
-
-    engine.on('kick', (payload: any) => {
-      soundFX.playKick(payload?.strength ?? 1.0);
-    });
-
-    engine.on('state_change', ({ newState }: { newState: MatchPhase }) => {
-      if (newState === MatchPhase.KICKOFF) {
+    if (engine) {
+      engine.on('goal', () => {
+        soundFX.playGoalHorn();
         soundFX.playWhistle();
-      }
-    });
+        rendererInstance?.triggerShake(14, 450);
+      });
+
+      engine.on('post_hit', () => {
+        soundFX.playPostHit();
+        rendererInstance?.triggerShake(6, 200);
+      });
+
+      engine.on('kick', (payload: any) => {
+        soundFX.playKick(payload?.strength ?? 1.0);
+      });
+
+      engine.on('state_change', ({ newState }: { newState: MatchPhase }) => {
+        if (newState === MatchPhase.KICKOFF) {
+          soundFX.playWhistle();
+        }
+      });
+    }
 
     // 2. Inicializar GameRenderer desacoplado
     const renderer = new GameRenderer(canvasEl, {
-      stadium: engine.stadium,
-      playerInfos: new Map([
-        [
-          1,
-          {
-            nickname: gameUI.nickname || 'Jugador',
-            number: 10,
-            avatar: gameUI.avatarValue || '1',
-            avatarType: gameUI.avatarMode,
-            hasOutline: gameUI.settings.localKit?.outlineColor !== 'none' && gameUI.settings.localKit?.outlineColor !== '',
-            tertiaryColor: gameUI.settings.localKit?.tertiaryColor || '#ffffff',
-            kit: gameUI.settings.localKit
-          }
-        ]
-      ])
+      stadium: engine?.stadium || createStadium(gameUI.selectedStadiumId || 'mediano'),
+      playerInfos: new Map()
     });
     rendererInstance = renderer;
 
@@ -185,8 +246,9 @@
         return;
       }
 
-      // Atajo canónico para Modificadores [#]
+      // Atajo canónico para Modificadores [#] (Exclusivo Host)
       if (e.key === '#') {
+        if (!gameUI.isHost) return;
         if (gameUI.activeModal === 'PHYSICS_MODIFIERS' || gameUI.activeModal === 'MODIFIERS') {
           gameUI.closeOverlay();
         } else {
@@ -219,8 +281,9 @@
     let lastTimestamp = performance.now();
     let animFrameId: number;
 
-    let prevSnapshot: GameStateSnapshot = engine.getState();
-    let currSnapshot: GameStateSnapshot = engine.getState();
+    let clientTick = 0;
+    let prevSnapshot: GameStateSnapshot = engine ? engine.getState() : ({} as any);
+    let currSnapshot: GameStateSnapshot = engine ? engine.getState() : ({} as any);
 
     let frameCount = 0;
     let lastFpsCalculation = performance.now();
@@ -230,7 +293,7 @@
       lastTimestamp = currentTime;
       accumulatedTime += deltaMs;
 
-      // Inputs canónicos del jugador local (Player 1)
+      // Inputs canónicos del jugador local
       let mask = 0;
       const isInputActive = gameUI.currentScreen === 'IN_GAME' && gameUI.activeModal === 'NONE';
       const activeEl = document.activeElement;
@@ -260,15 +323,35 @@
         if (keyState.get('ArrowRight') || keyState.get('KeyE') || keyState.get('KeyC')) mask |= INPUT_FLAG_MAGNUS_RIGHT;
       }
 
-      const inputs = new Map<number, PlayerInput>();
-      inputs.set(1, { inputMask: mask });
+      if (!gameUI.isHost) {
+        // Guest: Transmitir inputs al Host a 60 Hz y leer snapshots recibidos
+        if (gameApp.networkClient) {
+          gameApp.networkClient.sendInput(mask, clientTick++);
+          const netSnap = gameApp.networkClient.getInterpolatedState() || gameApp.networkClient.latestSnapshot;
+          if (netSnap) {
+            prevSnapshot = currSnapshot && currSnapshot.discs ? currSnapshot : netSnap;
+            currSnapshot = netSnap;
+          }
+        }
+      } else if (engine) {
+        // Host: Sincronizar jugadores y procesar física autoritativa
+        syncEnginePlayers();
+        const inputs = new Map<number, PlayerInput>();
+        inputs.set(gameUI.localPlayerId, { inputMask: mask });
+        for (const [rId, rInput] of gameApp.remoteInputs.entries()) {
+          inputs.set(rId, rInput);
+        }
 
-      // Simulación física a 60 Hz deterministas
-      while (accumulatedTime >= FIXED_DT_MS) {
-        prevSnapshot = currSnapshot;
-        engine.step(inputs);
-        currSnapshot = engine.getState();
-        accumulatedTime -= FIXED_DT_MS;
+        while (accumulatedTime >= FIXED_DT_MS) {
+          prevSnapshot = currSnapshot;
+          engine.step(inputs);
+          currSnapshot = engine.getState();
+          accumulatedTime -= FIXED_DT_MS;
+        }
+
+        // Broadcast snapshot autoritativo a todos los peers conectados
+        const snapBuffer = BinaryProtocol.encodeSnapshot(currSnapshot);
+        gameApp.networkHost?.broadcastSnapshot(snapBuffer);
       }
 
       // Interpolación lineal libre en Canvas 2D
@@ -289,9 +372,11 @@
       renderer.chatHeight = gameUI.chatHeight;
       renderer.screenShakeEnabled = gameUI.settings.screenShakeEnabled !== false;
 
-      // Sincronizar equipaciones, balón y VFX en tiempo real
-      renderer.discRenderer.redKit = gameUI.settings.localKit;
-      renderer.discRenderer.blueKit = gameUI.settings.visitorKit;
+      // Sincronizar equipaciones de los capitanes, balón y VFX en tiempo real
+      const redActiveKit = gameUI.redCaptainKit;
+      const blueActiveKit = gameUI.blueCaptainKit;
+      renderer.discRenderer.redKit = redActiveKit;
+      renderer.discRenderer.blueKit = blueActiveKit;
       renderer.discRenderer.ballSkin = gameUI.settings.ballSkin as any;
       renderer.discRenderer.ballMode = gameUI.settings.ballMode;
       renderer.discRenderer.ballCustomColor = gameUI.settings.ballCustomColor;
@@ -302,18 +387,43 @@
       renderer.vfx.fireTrailEnabled = gameUI.settings.fireShotEnabled !== false;
       renderer.vfx.floatingPointsEnabled = gameUI.settings.floatingPointsEnabled !== false;
 
-      // Sincronizar telemetría visual del jugador local
-      const localVisual = renderer.playerInfos.get(1);
-      if (localVisual) {
-        localVisual.nickname = gameUI.nickname || 'Jugador';
-        localVisual.avatar = gameUI.avatarValue || '1';
-        localVisual.avatarType = gameUI.avatarMode;
-        localVisual.hasOutline = gameUI.settings.localKit?.outlineColor !== 'none' && gameUI.settings.localKit?.outlineColor !== '';
-        localVisual.tertiaryColor = gameUI.settings.localKit?.tertiaryColor || '#ffffff';
-        localVisual.kit = gameUI.settings.localKit;
+      // Sincronizar telemetría visual de TODOS los jugadores del roster en el Canvas
+      const activeIds = new Set<number>();
+      for (const p of gameUI.rosterPlayers) {
+        activeIds.add(p.id);
+        const activeKit = p.team === 'red' ? redActiveKit : blueActiveKit;
+        const pAvatarType = (p.avatarType as 'emoji' | 'text' | 'letters') || 'letters';
+        let visual = renderer.playerInfos.get(p.id);
+        if (!visual) {
+          const newVisual: PlayerVisualInfo = {
+            nickname: p.nickname || p.name,
+            number: p.number ?? p.id,
+            avatar: p.avatar || String(p.id),
+            avatarType: pAvatarType,
+            hasOutline: activeKit?.outlineColor !== 'none' && activeKit?.outlineColor !== '',
+            tertiaryColor: activeKit?.tertiaryColor || '#ffffff',
+            kit: activeKit
+          };
+          renderer.playerInfos.set(p.id, newVisual);
+        } else {
+          visual.nickname = p.nickname || p.name;
+          visual.number = p.number ?? p.id;
+          visual.avatar = p.avatar || String(p.id);
+          visual.avatarType = pAvatarType;
+          visual.hasOutline = activeKit?.outlineColor !== 'none' && activeKit?.outlineColor !== '';
+          visual.tertiaryColor = activeKit?.tertiaryColor || '#ffffff';
+          visual.kit = activeKit;
+        }
+      }
+      for (const id of Array.from(renderer.playerInfos.keys())) {
+        if (!activeIds.has(id)) {
+          renderer.playerInfos.delete(id);
+        }
       }
 
-      renderer.render(prevSnapshot, currSnapshot, alpha, 1);
+      if (currSnapshot && currSnapshot.discs) {
+        renderer.render(prevSnapshot, currSnapshot, alpha, gameUI.localPlayerId);
+      }
 
       // Actualizar telemetría reactiva en UI
       frameCount++;
@@ -322,53 +432,61 @@
         frameCount = 0;
         lastFpsCalculation = currentTime;
 
-        gameUI.redScore = engine.fsm.redScore;
-        gameUI.blueScore = engine.fsm.blueScore;
+        if (currSnapshot && currSnapshot.discs) {
+          gameUI.redScore = currSnapshot.redScore ?? (engine ? engine.fsm.redScore : gameUI.redScore);
+          gameUI.blueScore = currSnapshot.blueScore ?? (engine ? engine.fsm.blueScore : gameUI.blueScore);
 
-        if (typeof (engine.fsm as any).getPossessionPercentages === 'function') {
-          const possession = (engine.fsm as any).getPossessionPercentages();
-          if (possession) {
-            gameUI.redPossession = possession.red;
-            gameUI.bluePossession = possession.blue;
-          }
-        }
-
-        const totalSec = Math.floor(engine.currentTick / 60);
-        const mins = Math.floor(totalSec / 60).toString().padStart(2, '0');
-        const secs = (totalSec % 60).toString().padStart(2, '0');
-        gameUI.matchTimeFormatted = `${mins}:${secs}`;
-
-        const phase = engine.fsm.state;
-        if (phase === MatchPhase.STATS) {
-          if (gameUI.fsmPhase !== 'STATS') {
-            // Transición a 5: STATS → contenedor central unificado en vista de estadísticas
-            gameUI.hasCompletedMatch = true;
-            if (!gameUI.isSecondaryOverlayOpen) {
-              gameUI.clearModalStack();
-              gameUI.activeModal = 'STATS';
+          if (gameUI.isHost && engine && typeof (engine.fsm as any).getPossessionPercentages === 'function') {
+            const possession = (engine.fsm as any).getPossessionPercentages();
+            if (possession) {
+              gameUI.redPossession = possession.red;
+              gameUI.bluePossession = possession.blue;
             }
           }
-          gameUI.fsmPhase = 'STATS';
-          gameUI.matchPhase = 5;
-        } else if (gameUI.fsmPhase !== 'STATS') {
-          if (phase === MatchPhase.PLAYING) {
-            gameUI.fsmPhase = 'PLAYING';
-            gameUI.matchPhase = 2;
-          } else if (phase === MatchPhase.KICKOFF) {
-            gameUI.fsmPhase = 'KICKOFF';
-            gameUI.matchPhase = 1;
-          } else if (phase === MatchPhase.GOAL) {
-            gameUI.fsmPhase = 'GOAL';
-            gameUI.matchPhase = 3;
-          } else if (phase === MatchPhase.PAUSE) {
-            gameUI.fsmPhase = 'PAUSED';
-            gameUI.matchPhase = 2.1;
-          } else if (phase === MatchPhase.STOP) {
+
+          const phase = currSnapshot.phase ?? (engine ? engine.fsm.state : 0);
+          if (phase === MatchPhase.STOP || phase === 0) {
+            gameUI.matchTimeFormatted = '00:00';
             gameUI.fsmPhase = 'STOPPED';
             gameUI.matchPhase = 0;
+          } else {
+            const totalSec = currSnapshot.matchTimer ?? (engine ? Math.floor(engine.fsm.matchTicksElapsed / 60) : 0);
+            const mins = Math.floor(totalSec / 60).toString().padStart(2, '0');
+            const secs = (totalSec % 60).toString().padStart(2, '0');
+            gameUI.matchTimeFormatted = `${mins}:${secs}`;
+
+            if (phase === MatchPhase.STATS || phase === 5) {
+              if (gameUI.fsmPhase !== 'STATS') {
+                gameUI.hasCompletedMatch = true;
+                if (!gameUI.isSecondaryOverlayOpen) {
+                  gameUI.clearModalStack();
+                  gameUI.activeModal = 'STATS';
+                }
+              }
+              gameUI.fsmPhase = 'STATS';
+              gameUI.matchPhase = 5;
+            } else if (gameUI.fsmPhase !== 'STATS') {
+              if (phase === MatchPhase.PLAYING || phase === 2) {
+                gameUI.fsmPhase = 'PLAYING';
+                gameUI.matchPhase = 2;
+              } else if (phase === MatchPhase.KICKOFF || phase === 1) {
+                gameUI.fsmPhase = 'KICKOFF';
+                gameUI.matchPhase = 1;
+              } else if (phase === MatchPhase.GOAL || phase === 3) {
+                gameUI.fsmPhase = 'GOAL';
+                gameUI.matchPhase = 3;
+              } else if (phase === MatchPhase.PAUSE || phase === 2.1) {
+                gameUI.fsmPhase = 'PAUSED';
+                gameUI.matchPhase = 2.1;
+              }
+            }
           }
+
+          if (gameUI.isHost) {
+            gameApp.syncMatchPhase(phase);
+          }
+          gameUI.enforceStopMenu();
         }
-        gameUI.enforceStopMenu();
       }
 
       animFrameId = requestAnimationFrame(renderLoop);

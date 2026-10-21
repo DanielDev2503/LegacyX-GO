@@ -198,7 +198,7 @@
   }
 
   function handleSlider(key: keyof GameplayConfig, e: Event, min: number, max: number) {
-    if (!gameUI.isHost && !gameUI.isAdmin) return;
+    if (!gameUI.isHost) return;
     const target = e.target as HTMLInputElement;
     const val = parseFloat(target.value);
     if (!isNaN(val)) {
@@ -208,7 +208,7 @@
   }
 
   function handleNumberInput(key: keyof GameplayConfig, e: Event, min: number, max: number) {
-    if (!gameUI.isHost && !gameUI.isAdmin) return;
+    if (!gameUI.isHost) return;
     const target = e.target as HTMLInputElement;
     if (target.value === '' || target.value === '-') return;
     const val = parseFloat(target.value);
@@ -219,7 +219,7 @@
   }
 
   function handleNumberChange(key: keyof GameplayConfig, e: Event, min: number, max: number) {
-    if (!gameUI.isHost && !gameUI.isAdmin) return;
+    if (!gameUI.isHost) return;
     const target = e.target as HTMLInputElement;
     const val = parseFloat(target.value);
     const clamped = isNaN(val) ? min : Math.max(min, Math.min(max, val));
@@ -228,14 +228,14 @@
   }
 
   function handleToggle(key: 'turboEnabled' | 'dashEnabled' | 'magnusEnabled', e: Event) {
-    if (!gameUI.isHost && !gameUI.isAdmin) return;
+    if (!gameUI.isHost) return;
     const target = e.target as HTMLInputElement;
     soundFX.playUIClick();
     gameUI.updateGameplayConfig(key, target.checked);
   }
 
   function stepValue(key: keyof GameplayConfig, step: number, min: number, max: number, direction: 1 | -1) {
-    if (!gameUI.isHost && !gameUI.isAdmin) return;
+    if (!gameUI.isHost) return;
     soundFX.playUIClick();
     const current = Number(gameUI.gameplayConfig[key]);
     const decimals = step < 0.01 ? 3 : step < 0.1 ? 2 : 1;
@@ -250,7 +250,7 @@
   }
 
   function handleReset() {
-    if (!gameUI.isHost && !gameUI.isAdmin) return;
+    if (!gameUI.isHost) return;
     gameUI.resetGameplayConfigToDefault();
   }
 
@@ -343,9 +343,9 @@
         <button
           type="button"
           class="reset-btn"
-          disabled={!gameUI.isHost && !gameUI.isAdmin}
+          disabled={!gameUI.isHost}
           onclick={handleReset}
-          title={gameUI.isHost || gameUI.isAdmin ? 'Restablecer constantes de fábrica' : 'Solo anfitriones pueden reiniciar modificadores'}
+          title={gameUI.isHost ? 'Restablecer constantes de fábrica' : 'Solo anfitriones pueden reiniciar modificadores'}
         >
           <span>↺</span>
           <span>Restablecer por Defecto</span>
@@ -372,7 +372,7 @@
           </div>
         </div>
 
-        {#if !gameUI.isHost && !gameUI.isAdmin}
+        {#if !gameUI.isHost}
           <div class="guest-warning-banner">
             ⚠️ Modo invitado: Solo el anfitrión de la sala puede alterar las variables físicas de la simulación.
           </div>
@@ -413,7 +413,7 @@
                       max={ctrl.max}
                       step={ctrl.step}
                       value={currentVal}
-                      disabled={!gameUI.isHost && !gameUI.isAdmin}
+                      disabled={!gameUI.isHost}
                       oninput={(e) => handleNumberInput(ctrl.key, e, ctrl.min, ctrl.max)}
                       onchange={(e) => handleNumberChange(ctrl.key, e, ctrl.min, ctrl.max)}
                     />
@@ -424,14 +424,14 @@
                       <button
                         type="button"
                         class="micro-step-btn"
-                        disabled={!gameUI.isHost && !gameUI.isAdmin || currentVal >= ctrl.max}
+                        disabled={!gameUI.isHost || currentVal >= ctrl.max}
                         onclick={() => stepValue(ctrl.key, ctrl.step, ctrl.min, ctrl.max, 1)}
                         aria-label="Incrementar {ctrl.label}"
                       >▲</button>
                       <button
                         type="button"
                         class="micro-step-btn"
-                        disabled={!gameUI.isHost && !gameUI.isAdmin || currentVal <= ctrl.min}
+                        disabled={!gameUI.isHost || currentVal <= ctrl.min}
                         onclick={() => stepValue(ctrl.key, ctrl.step, ctrl.min, ctrl.max, -1)}
                         aria-label="Decrementar {ctrl.label}"
                       >▼</button>
@@ -465,7 +465,7 @@
                     max={ctrl.max}
                     step={ctrl.step}
                     value={currentVal}
-                    disabled={!gameUI.isHost && !gameUI.isAdmin}
+                    disabled={!gameUI.isHost}
                     oninput={(e) => handleSlider(ctrl.key, e, ctrl.min, ctrl.max)}
                   />
                 </div>
@@ -506,7 +506,7 @@
                       max={ctrl.max}
                       step={ctrl.step}
                       value={currentVal}
-                      disabled={!gameUI.isHost && !gameUI.isAdmin}
+                      disabled={!gameUI.isHost}
                       oninput={(e) => handleNumberInput(ctrl.key, e, ctrl.min, ctrl.max)}
                       onchange={(e) => handleNumberChange(ctrl.key, e, ctrl.min, ctrl.max)}
                     />
@@ -517,14 +517,14 @@
                       <button
                         type="button"
                         class="micro-step-btn"
-                        disabled={!gameUI.isHost && !gameUI.isAdmin || currentVal >= ctrl.max}
+                        disabled={!gameUI.isHost || currentVal >= ctrl.max}
                         onclick={() => stepValue(ctrl.key, ctrl.step, ctrl.min, ctrl.max, 1)}
                         aria-label="Incrementar {ctrl.label}"
                       >▲</button>
                       <button
                         type="button"
                         class="micro-step-btn"
-                        disabled={!gameUI.isHost && !gameUI.isAdmin || currentVal <= ctrl.min}
+                        disabled={!gameUI.isHost || currentVal <= ctrl.min}
                         onclick={() => stepValue(ctrl.key, ctrl.step, ctrl.min, ctrl.max, -1)}
                         aria-label="Decrementar {ctrl.label}"
                       >▼</button>
@@ -555,7 +555,7 @@
                     max={ctrl.max}
                     step={ctrl.step}
                     value={currentVal}
-                    disabled={!gameUI.isHost && !gameUI.isAdmin}
+                    disabled={!gameUI.isHost}
                     oninput={(e) => handleSlider(ctrl.key, e, ctrl.min, ctrl.max)}
                   />
                 </div>
@@ -571,7 +571,7 @@
             <div class="toggles-panel-card">
               <div class="toggles-row">
                 <!-- Toggle 1: Turbo -->
-                <label class="toggle-item" class:disabled={!gameUI.isHost && !gameUI.isAdmin}>
+                <label class="toggle-item" class:disabled={!gameUI.isHost}>
                   <div class="toggle-text">
                     <span class="toggle-name">🔥 Turbo</span>
                     <span class="toggle-sub">Sprint con estamina</span>
@@ -580,7 +580,7 @@
                     type="checkbox"
                     class="sr-only"
                     checked={gameUI.gameplayConfig.turboEnabled}
-                    disabled={!gameUI.isHost && !gameUI.isAdmin}
+                    disabled={!gameUI.isHost}
                     onchange={(e) => handleToggle('turboEnabled', e)}
                   />
                   <span class="switch-capsule" class:active={gameUI.gameplayConfig.turboEnabled}>
@@ -589,7 +589,7 @@
                 </label>
 
                 <!-- Toggle 2: Dash -->
-                <label class="toggle-item" class:disabled={!gameUI.isHost && !gameUI.isAdmin}>
+                <label class="toggle-item" class:disabled={!gameUI.isHost}>
                   <div class="toggle-text">
                     <span class="toggle-name">⚡ Dash</span>
                     <span class="toggle-sub">Impulso direccional</span>
@@ -598,7 +598,7 @@
                     type="checkbox"
                     class="sr-only"
                     checked={gameUI.gameplayConfig.dashEnabled}
-                    disabled={!gameUI.isHost && !gameUI.isAdmin}
+                    disabled={!gameUI.isHost}
                     onchange={(e) => handleToggle('dashEnabled', e)}
                   />
                   <span class="switch-capsule" class:active={gameUI.gameplayConfig.dashEnabled}>
@@ -607,7 +607,7 @@
                 </label>
 
                 <!-- Toggle 3: Magnus -->
-                <label class="toggle-item" class:disabled={!gameUI.isHost && !gameUI.isAdmin}>
+                <label class="toggle-item" class:disabled={!gameUI.isHost}>
                   <div class="toggle-text">
                     <span class="toggle-name">🌀 Magnus</span>
                     <span class="toggle-sub">Curvatura balística</span>
@@ -616,7 +616,7 @@
                     type="checkbox"
                     class="sr-only"
                     checked={gameUI.gameplayConfig.magnusEnabled}
-                    disabled={!gameUI.isHost && !gameUI.isAdmin}
+                    disabled={!gameUI.isHost}
                     onchange={(e) => handleToggle('magnusEnabled', e)}
                   />
                   <span class="switch-capsule" class:active={gameUI.gameplayConfig.magnusEnabled}>
@@ -656,7 +656,7 @@
                       max={ctrl.max}
                       step={ctrl.step}
                       value={currentVal}
-                      disabled={!gameUI.isHost && !gameUI.isAdmin}
+                      disabled={!gameUI.isHost}
                       oninput={(e) => handleNumberInput(ctrl.key, e, ctrl.min, ctrl.max)}
                       onchange={(e) => handleNumberChange(ctrl.key, e, ctrl.min, ctrl.max)}
                     />
@@ -667,14 +667,14 @@
                       <button
                         type="button"
                         class="micro-step-btn"
-                        disabled={!gameUI.isHost && !gameUI.isAdmin || currentVal >= ctrl.max}
+                        disabled={!gameUI.isHost || currentVal >= ctrl.max}
                         onclick={() => stepValue(ctrl.key, ctrl.step, ctrl.min, ctrl.max, 1)}
                         aria-label="Incrementar {ctrl.label}"
                       >▲</button>
                       <button
                         type="button"
                         class="micro-step-btn"
-                        disabled={!gameUI.isHost && !gameUI.isAdmin || currentVal <= ctrl.min}
+                        disabled={!gameUI.isHost || currentVal <= ctrl.min}
                         onclick={() => stepValue(ctrl.key, ctrl.step, ctrl.min, ctrl.max, -1)}
                         aria-label="Decrementar {ctrl.label}"
                       >▼</button>
@@ -705,7 +705,7 @@
                     max={ctrl.max}
                     step={ctrl.step}
                     value={currentVal}
-                    disabled={!gameUI.isHost && !gameUI.isAdmin}
+                    disabled={!gameUI.isHost}
                     oninput={(e) => handleSlider(ctrl.key, e, ctrl.min, ctrl.max)}
                   />
                 </div>

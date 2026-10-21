@@ -119,7 +119,13 @@ export class GameFSM {
 
   public stopMatch(): void {
     this.stateTicksRemaining = 0;
+    this.matchTicksElapsed = 0;
+    this.redScore = 0;
+    this.blueScore = 0;
+    this.redPossessionTicks = 0;
+    this.bluePossessionTicks = 0;
     this.winningTeam = null;
+    this.lastScoringTeam = null;
     this.transitionTo(MatchPhase.STOP);
   }
 

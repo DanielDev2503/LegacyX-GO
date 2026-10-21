@@ -58,6 +58,15 @@
     };
   });
 
+  async function enterJoinedRoom(room: RoomInfo, password?: string): Promise<boolean> {
+    const ok = await gameApp.joinRoom(room.id, password);
+    if (!ok) return false;
+    gameUI.navigateTo('IN_GAME');
+    gameUI.clearModalStack();
+    gameUI.openModal('TEAM_SELECT');
+    return true;
+  }
+
   async function handleJoinRoom(room: RoomInfo) {
     if (room.isPrivate) {
       gameUI.pendingPasswordRoom = room;
@@ -66,9 +75,9 @@
       gameUI.openModal('PASSWORD_PROMPT');
     } else {
       soundFX.playUIClick();
-      await gameApp.joinRoom(room.id);
-      gameUI.joinRoomDirectly(room);
-      gameUI.openModal('TEAM_SELECT');
+      if (!(await enterJoinedRoom(room))) {
+        gameUI.refreshRooms();
+      }
     }
   }
 
@@ -80,10 +89,9 @@
     soundFX.playUIClick();
     if (gameUI.pendingPasswordRoom) {
       const room = gameUI.pendingPasswordRoom;
-      await gameApp.joinRoom(room.id, passwordInput.trim());
-      gameUI.joinRoomDirectly(room);
-      gameUI.closeModal();
-      gameUI.openModal('TEAM_SELECT');
+      if (!(await enterJoinedRoom(room, passwordInput.trim()))) {
+        passwordError = 'No se pudo entrar: contraseña incorrecta o sala no disponible';
+      }
     }
   }
 </script>

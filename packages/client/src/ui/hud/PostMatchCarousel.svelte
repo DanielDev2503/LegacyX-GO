@@ -11,21 +11,23 @@
 
   let redCaptain = $derived(redPlayers[0]);
   let blueCaptain = $derived(bluePlayers[0]);
+  let redActiveKit = $derived(gameUI.redCaptainKit);
+  let blueActiveKit = $derived(gameUI.blueCaptainKit);
 
-  let redTeamName = $derived(redCaptain?.kit?.name || gameUI.redTeamKit?.name || 'Equipo Rojo');
-  let redTeamTag = $derived(redCaptain?.kit?.tag || gameUI.redTeamKit?.tag || 'RED');
-  let redPrimaryColor = $derived(redCaptain?.kit?.primaryColor || gameUI.redTeamKit?.primaryColor || '#e74c3c');
-  let redSecondaryColor = $derived(redCaptain?.kit?.secondaryColor || gameUI.redTeamKit?.secondaryColor || '#b02a1c');
-  let redKitTertiary = $derived(redCaptain?.kit?.tertiaryColor || gameUI.redTeamKit?.tertiaryColor || '#ffffff');
-  let redOutlineColor = $derived(redCaptain?.kit?.outlineColor || gameUI.redTeamKit?.outlineColor || '#000000');
+  let redTeamName = $derived(redActiveKit?.name || gameUI.redTeamKit?.name || 'Equipo Rojo');
+  let redTeamTag = $derived(redActiveKit?.tag || gameUI.redTeamKit?.tag || 'RED');
+  let redPrimaryColor = $derived(redActiveKit?.primaryColor || gameUI.redTeamKit?.primaryColor || '#e74c3c');
+  let redSecondaryColor = $derived(redActiveKit?.secondaryColor || gameUI.redTeamKit?.secondaryColor || '#b02a1c');
+  let redKitTertiary = $derived(redActiveKit?.tertiaryColor || gameUI.redTeamKit?.tertiaryColor || '#ffffff');
+  let redOutlineColor = $derived(redActiveKit?.outlineColor || gameUI.redTeamKit?.outlineColor || '#000000');
   let redHasOutline = $derived(redOutlineColor !== 'none' && redOutlineColor !== 'transparent' && redOutlineColor !== '');
 
-  let blueTeamName = $derived(blueCaptain?.kit?.name || gameUI.blueTeamKit?.name || 'Equipo Azul');
-  let blueTeamTag = $derived(blueCaptain?.kit?.tag || gameUI.blueTeamKit?.tag || 'BLUE');
-  let bluePrimaryColor = $derived(blueCaptain?.kit?.primaryColor || gameUI.blueTeamKit?.primaryColor || '#3498db');
-  let blueSecondaryColor = $derived(blueCaptain?.kit?.secondaryColor || gameUI.blueTeamKit?.secondaryColor || '#217dbb');
-  let blueKitTertiary = $derived(blueCaptain?.kit?.tertiaryColor || gameUI.blueTeamKit?.tertiaryColor || '#ffffff');
-  let blueOutlineColor = $derived(blueCaptain?.kit?.outlineColor || gameUI.blueTeamKit?.outlineColor || '#000000');
+  let blueTeamName = $derived(blueActiveKit?.name || gameUI.blueTeamKit?.name || 'Equipo Azul');
+  let blueTeamTag = $derived(blueActiveKit?.tag || gameUI.blueTeamKit?.tag || 'BLUE');
+  let bluePrimaryColor = $derived(blueActiveKit?.primaryColor || gameUI.blueTeamKit?.primaryColor || '#3498db');
+  let blueSecondaryColor = $derived(blueActiveKit?.secondaryColor || gameUI.blueTeamKit?.secondaryColor || '#217dbb');
+  let blueKitTertiary = $derived(blueActiveKit?.tertiaryColor || gameUI.blueTeamKit?.tertiaryColor || '#ffffff');
+  let blueOutlineColor = $derived(blueActiveKit?.outlineColor || gameUI.blueTeamKit?.outlineColor || '#000000');
   let blueHasOutline = $derived(blueOutlineColor !== 'none' && blueOutlineColor !== 'transparent' && blueOutlineColor !== '');
 
   let isMatchStopped = $derived(gameUI.fsmPhase === 'STOPPED' || gameUI.matchPhase === 0);

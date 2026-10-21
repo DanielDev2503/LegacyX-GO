@@ -352,7 +352,7 @@ export class DiscRenderer {
     s.vx = compact.vx;
     s.vy = compact.vy;
     s.radius = this.playerRadius;
-    s.avatar = String(info?.number ?? compact.id);
+    s.avatar = info?.avatar || String(info?.number ?? compact.id);
     s.kicking = (flags & (1 << 0)) !== 0;
     s.isDashing = (flags & (1 << 1)) !== 0;
     s.isTurbo = (flags & (1 << 4)) !== 0;
@@ -847,42 +847,19 @@ export class DiscRenderer {
   private renderPlayerDisc(
     ctx: CanvasRenderingContext2D,
     disc: DiscSnapshot,
-    isLocal: boolean,
+    _isLocal: boolean,
     renderStamina: boolean = true,
-    nickname?: string,
+    _nickname?: string,
     visualInfo?: PlayerVisualInfo
   ): void {
     const radius = disc.radius || this.playerRadius;
-    const { x, y, team, avatar, kicking } = disc;
+    const { x, y, team, avatar } = disc;
     const isRed = team === 1;
     const neonColor = isRed ? '#FF0055' : '#00E5FF';
-    const neonGlow = isRed ? 'rgba(255, 0, 85, 0.5)' : 'rgba(0, 229, 255, 0.5)';
 
     ctx.save();
 
-    // 1. White Kick Pulse Ring (R = r + 5.5px)
-    if (kicking) {
-      ctx.save();
-      ctx.strokeStyle = 'rgba(255, 255, 255, 0.4)';
-      ctx.lineWidth = 6.0;
-      ctx.beginPath();
-      ctx.arc(x, y, radius + 5.5, 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.strokeStyle = '#FFFFFF';
-      ctx.lineWidth = 3.5;
-      ctx.beginPath();
-      ctx.arc(x, y, radius + 5.5, 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.restore();
-    }
-
-    // 2. Ground Shadow
-    ctx.fillStyle = 'rgba(15, 23, 42, 0.2)';
-    ctx.beginPath();
-    ctx.arc(x + 2, y + 3, radius, 0, Math.PI * 2);
-    ctx.fill();
-
-    // 3. Jersey Pattern Inside Disc (Circular Clip)
+    // 1. Cuerpo circular del disco con el diseño/patrón de la camiseta activa del capitán
     const kit = (isRed ? this.redKit : this.blueKit) ?? visualInfo?.kit;
     const primaryColor = kit?.primaryColor || (isRed ? '#e74c3c' : '#00e5ff');
     const secondaryColor = kit?.secondaryColor || '#ffffff';
@@ -896,11 +873,13 @@ export class DiscRenderer {
       ctx.clip();
     }
 
-    // Base fill con color primario
     ctx.fillStyle = primaryColor;
-    ctx.fillRect?.(x - radius, y - radius, radius * 2, radius * 2);
+    if (typeof ctx.fillRect === 'function') {
+      ctx.fillRect(x - radius, y - radius, radius * 2, radius * 2);
+    } else {
+      ctx.fill();
+    }
 
-    // Trazado vectorial de patrones reglamentarios
     switch (pattern) {
       case 'vertical':
       case 'vertical_stripe': {
@@ -953,112 +932,67 @@ export class DiscRenderer {
       default:
         break;
     }
-
-    // Gradiente esférico esmaltado para profundidad y volumen
-    if (typeof ctx.createRadialGradient === 'function') {
-      const gloss = ctx.createRadialGradient(x - radius * 0.35, y - radius * 0.35, radius * 0.05, x, y, radius);
-      gloss.addColorStop(0, 'rgba(255, 255, 255, 0.4)');
-      gloss.addColorStop(0.3, 'rgba(255, 255, 255, 0.08)');
-      gloss.addColorStop(0.7, 'rgba(0, 0, 0, 0.05)');
-      gloss.addColorStop(1, 'rgba(0, 0, 0, 0.35)');
-      ctx.fillStyle = gloss;
-      ctx.fillRect?.(x - radius, y - radius, radius * 2, radius * 2);
-    }
     ctx.restore();
 
-    // 4. Outer Ring (Trazo de 2px con kit.tertiaryColor o primario si no hay terciario)
+    // Borde fino perimetral del color terciario o contorno definido (sin halos ni anillos extra)
     ctx.save();
-    if (this.playerGlowEnabled) {
-      ctx.strokeStyle = neonGlow;
-      ctx.lineWidth = 4.8;
-      ctx.beginPath();
-      ctx.arc(x, y, radius - 0.6, 0, Math.PI * 2);
-      ctx.stroke();
-    }
     ctx.strokeStyle = tertiaryColor || primaryColor || neonColor;
-    ctx.lineWidth = 2.0;
+    ctx.lineWidth = 1.75;
     ctx.beginPath();
-    ctx.arc(x, y, radius - 0.6, 0, Math.PI * 2);
+    ctx.arc(x, y, radius, 0, Math.PI * 2);
     ctx.stroke();
     ctx.restore();
 
-    // 5. Inner White Ring
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.65)';
-    ctx.lineWidth = 1.0;
-    ctx.beginPath();
-    ctx.arc(x, y, radius - 2.8, 0, Math.PI * 2);
-    ctx.stroke();
-
-    // 6. Avatar Real en Cancha
-    const av = visualInfo?.avatar || avatar;
-    if (av && typeof ctx.fillText === 'function') {
+    // 2. Avatar centrado (máximo 2 caracteres en Space Grotesk / Chivo bold o emoji nítido)
+    const rawAv = (visualInfo?.avatar || avatar || '').trim();
+    if (rawAv && typeof ctx.fillText === 'function') {
       ctx.save();
-      const isEmoji = visualInfo?.avatarType === 'emoji' || /[\p{Emoji_Presentation}\p{Extended_Pictographic}]/u.test(av);
-      if (isEmoji) {
-        ctx.font = '16px "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillText(av, x, y + 1);
-      } else {
-        ctx.font = `bold ${Math.round(radius * 0.88)}px "Chivo", "Space Grotesk", sans-serif`;
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
 
-        const hasOutline = visualInfo?.hasOutline ?? (visualInfo?.outlineColor !== 'none' && visualInfo?.outlineColor !== 'transparent' && visualInfo?.outlineColor !== '');
+      const isEmoji =
+        visualInfo?.avatarType === 'emoji' ||
+        /[\p{Emoji_Presentation}\p{Extended_Pictographic}]/u.test(rawAv);
+
+      if (isEmoji) {
+        const glyphs = Array.from(rawAv);
+        const emojiChar = glyphs[0] || rawAv;
+        ctx.font = `${Math.round(radius * 1.05)}px "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif`;
+        ctx.fillText(emojiChar, x, y);
+      } else {
+        const textAv = Array.from(rawAv).slice(0, 2).join('');
+        ctx.font = `bold ${Math.round(radius * 0.85)}px "Space Grotesk", "Chivo", sans-serif`;
+
+        const hasOutline =
+          visualInfo?.hasOutline ??
+          (kit?.hasOutline !== undefined
+            ? Boolean(kit.hasOutline)
+            : visualInfo?.outlineColor !== 'none' &&
+              visualInfo?.outlineColor !== 'transparent' &&
+              visualInfo?.outlineColor !== '');
+
         if (hasOutline && typeof ctx.strokeText === 'function') {
           ctx.strokeStyle = '#000000';
-          ctx.lineWidth = 2.5;
-          ctx.strokeText(av, x, y + 1);
+          ctx.lineWidth = 2.2;
+          ctx.lineJoin = 'round';
+          ctx.strokeText(textAv, x, y);
         }
         ctx.fillStyle = tertiaryColor || '#FFFFFF';
-        ctx.fillText(av, x, y + 1);
+        ctx.fillText(textAv, x, y);
       }
       ctx.restore();
     }
 
-    // Optional Nickname above player
-    if (nickname && typeof ctx.fillText === 'function') {
-      ctx.save();
-      ctx.font = '11px "Space Grotesk", "Inter", sans-serif';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'bottom';
-      ctx.strokeStyle = 'rgba(0, 0, 0, 0.85)';
-      ctx.lineWidth = 2.5;
-      if (typeof ctx.strokeText === 'function') {
-        ctx.strokeText(nickname, x, y - radius - 8);
-      }
-      ctx.fillStyle = '#FFFFFF';
-      ctx.fillText(nickname, x, y - radius - 8);
-      ctx.restore();
-    }
-
-    // 7. Dual Stamina Bar
+    // 3. Única barra circular de estamina
     if (renderStamina) {
       this.renderStaminaBar(ctx, disc);
     }
 
-    // 8. Local Player Indicator Ring (#00E599, R = r + 11px)
-    if (isLocal) {
-      ctx.save();
-      ctx.strokeStyle = 'rgba(0, 229, 153, 0.35)';
-      ctx.lineWidth = 4.5;
-      ctx.beginPath();
-      ctx.arc(x, y, radius + 11, 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.strokeStyle = '#00E599';
-      ctx.lineWidth = 2.0;
-      ctx.beginPath();
-      ctx.arc(x, y, radius + 11, 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.restore();
-    }
-
-    // 9. Typing Speech Bubble
+    // Indicadores flotantes discretos de chat / emote
     if (disc.isTyping) {
       this.renderTypingBubble(ctx, disc);
     }
 
-    // 10. Emote Bubble Flotante en Cancha (duración: 120 frames / 2s)
     if (visualInfo?.activeEmote && visualInfo.activeEmote.timer > 0) {
       const bubbleW = 34;
       const bubbleH = 26;
@@ -1105,68 +1039,31 @@ export class DiscRenderer {
     const isDark = this.theme === 'dark';
     const { x, y, radius, stamina, team } = disc;
     const E = stamina !== undefined ? Math.max(0, Math.min(100, stamina)) : 100;
-    const ringRadius = (radius || this.playerRadius) + 6;
+    const ringRadius = (radius || this.playerRadius) + 4.5;
     const lineWidth = 2.0;
-    const gap = 0.08;
 
     const isRed = team === 1;
-    const satinColor = isRed ? 'rgba(255, 0, 85, 0.45)' : 'rgba(0, 229, 255, 0.45)';
+    const barColor = isRed ? 'rgba(255, 0, 85, 0.7)' : 'rgba(0, 229, 255, 0.7)';
 
     ctx.save();
     ctx.lineCap = 'round';
-
-    ctx.lineWidth = 3.0;
-    ctx.strokeStyle = isDark ? 'rgba(0, 0, 0, 0.45)' : 'rgba(15, 23, 42, 0.35)';
-
-    ctx.beginPath();
-    ctx.arc(x, y, ringRadius, gap, Math.PI - gap);
-    ctx.stroke();
-
-    ctx.beginPath();
-    ctx.arc(x, y, ringRadius, Math.PI + gap, Math.PI * 2 - gap);
-    ctx.stroke();
-
     ctx.lineWidth = lineWidth;
-    ctx.strokeStyle = isDark ? 'rgba(255, 255, 255, 0.12)' : 'rgba(30, 41, 59, 0.18)';
 
+    // Pista circular única y sutil
+    ctx.strokeStyle = isDark ? 'rgba(255, 255, 255, 0.14)' : 'rgba(15, 23, 42, 0.16)';
     ctx.beginPath();
-    ctx.arc(x, y, ringRadius, gap, Math.PI - gap);
+    ctx.arc(x, y, ringRadius, 0, Math.PI * 2);
     ctx.stroke();
 
-    ctx.beginPath();
-    ctx.arc(x, y, ringRadius, Math.PI + gap, Math.PI * 2 - gap);
-    ctx.stroke();
-
-    // Segment 1 (0% - 50% stamina = Dash 1)
-    const ratio1 = Math.min(1, E / 50);
-    if (ratio1 > 0) {
-      ctx.save();
-      const startAngle1 = gap;
-      const endAngle1 = gap + ratio1 * (Math.PI - 2 * gap);
-
-      ctx.lineWidth = lineWidth;
-      ctx.strokeStyle = satinColor;
-
+    // Arco continuo único proporcional a la estamina actual
+    const ratio = E / 100;
+    if (ratio > 0.005) {
+      const startAngle = -Math.PI / 2;
+      const endAngle = startAngle + ratio * Math.PI * 2;
+      ctx.strokeStyle = barColor;
       ctx.beginPath();
-      ctx.arc(x, y, ringRadius, startAngle1, endAngle1);
+      ctx.arc(x, y, ringRadius, startAngle, endAngle);
       ctx.stroke();
-      ctx.restore();
-    }
-
-    // Segment 2 (50% - 100% stamina = Dash 2)
-    const ratio2 = Math.max(0, Math.min(1, (E - 50) / 50));
-    if (ratio2 > 0) {
-      ctx.save();
-      const startAngle2 = Math.PI + gap;
-      const endAngle2 = Math.PI + gap + ratio2 * (Math.PI - 2 * gap);
-
-      ctx.lineWidth = lineWidth;
-      ctx.strokeStyle = satinColor;
-
-      ctx.beginPath();
-      ctx.arc(x, y, ringRadius, startAngle2, endAngle2);
-      ctx.stroke();
-      ctx.restore();
     }
 
     ctx.restore();
