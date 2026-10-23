@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { gameUI, type TeamSlot, type RosterPlayer } from '../state/gameUI.svelte';
+  import { gameUI, type TeamSlot, type RosterPlayer, type MatchStatsSnapshot } from '../state/gameUI.svelte';
   import { soundFX } from '../../audio/SoundFX';
   import { gameApp } from '../../net/GameApp';
 
@@ -17,13 +17,18 @@
     onTeamChange?: (playerId: number, team: TeamSlot) => void;
   } = $props();
 
+  // Solo se puede mostrar STATS si el partido está detenido y hay estadísticas de un partido concluido
+  let canShowStats = $derived(
+    gameUI.matchPhase === 0 && gameUI.hasCompletedMatch === true && gameUI.lastMatchStats !== null
+  );
+
   // Diapositiva del corredor deslizante: 0 = STATS, 1 = LOBBY / MENÚ DE SALA
   let currentSlide = $derived<0 | 1>(
-    gameUI.activeSlide === 'STATS' && gameUI.hasCompletedMatch ? 0 : 1
+    canShowStats && gameUI.activeSlide === 'STATS' ? 0 : 1
   );
 
   function goToSlide(slide: 0 | 1) {
-    if (slide === 0 && !gameUI.hasCompletedMatch) return;
+    if (slide === 0 && !canShowStats) return;
     soundFX.playUIClick();
     gameUI.activeSlide = slide === 0 ? 'STATS' : 'MENU';
     if (slide === 0) {
@@ -57,7 +62,9 @@
   let redSecondaryColor = $derived(redActiveKit?.secondaryColor || gameUI.redTeamKit?.secondaryColor || '#b02a1c');
   let redKitTertiary = $derived(redActiveKit?.tertiaryColor || gameUI.redTeamKit?.tertiaryColor || '#ffffff');
   let redOutlineColor = $derived(redActiveKit?.outlineColor || gameUI.redTeamKit?.outlineColor || '#000000');
-  let redHasOutline = $derived(redOutlineColor !== 'none' && redOutlineColor !== 'transparent' && redOutlineColor !== '');
+  let redHasOutline = $derived(
+    Boolean(redActiveKit?.outline === true || redActiveKit?.hasOutline === true)
+  );
 
   let blueTeamName = $derived(bluePlayers.length > 0 ? (blueActiveKit?.name || 'AZUL') : 'AZUL');
   let blueTeamTag = $derived(bluePlayers.length > 0 ? (blueActiveKit?.tag || 'BLU') : 'BLU');
@@ -65,7 +72,36 @@
   let blueSecondaryColor = $derived(blueActiveKit?.secondaryColor || gameUI.blueTeamKit?.secondaryColor || '#217dbb');
   let blueKitTertiary = $derived(blueActiveKit?.tertiaryColor || gameUI.blueTeamKit?.tertiaryColor || '#ffffff');
   let blueOutlineColor = $derived(blueActiveKit?.outlineColor || gameUI.blueTeamKit?.outlineColor || '#000000');
-  let blueHasOutline = $derived(blueOutlineColor !== 'none' && blueOutlineColor !== 'transparent' && blueOutlineColor !== '');
+  let blueHasOutline = $derived(
+    Boolean(blueActiveKit?.outline === true || blueActiveKit?.hasOutline === true)
+  );
+
+  let matchStatsSnapshot = $derived<MatchStatsSnapshot | null>(
+    gameUI.lastMatchStats && !Array.isArray(gameUI.lastMatchStats)
+      ? (gameUI.lastMatchStats as MatchStatsSnapshot)
+      : null
+  );
+  let matchRedScore = $derived(matchStatsSnapshot ? matchStatsSnapshot.redScore : gameUI.redScore);
+  let matchBlueScore = $derived(matchStatsSnapshot ? matchStatsSnapshot.blueScore : gameUI.blueScore);
+  let matchWinner = $derived(
+    matchStatsSnapshot
+      ? matchStatsSnapshot.winner
+      : matchRedScore > matchBlueScore
+        ? 'red'
+        : matchBlueScore > matchRedScore
+          ? 'blue'
+          : 'draw'
+  );
+  let matchWinnerTeamName = $derived(
+    matchStatsSnapshot
+      ? (matchStatsSnapshot.winner === 'red' ? matchStatsSnapshot.redTeamName : matchStatsSnapshot.blueTeamName)
+      : (matchWinner === 'red' ? redTeamName : blueTeamName)
+  );
+  let matchDurationFormatted = $derived(
+    matchStatsSnapshot
+      ? `${String(Math.floor(matchStatsSnapshot.matchDuration / 60)).padStart(2, '0')}:${String(matchStatsSnapshot.matchDuration % 60).padStart(2, '0')}`
+      : gameUI.matchTimeFormatted
+  );
 
   let isRedCaptainOrAdmin = $derived(
     gameUI.isHost || gameUI.isAdmin || (gameUI.allowCaptainKitSwitch && redCaptain && redCaptain.id === gameUI.localPlayerId)
@@ -340,29 +376,25 @@
                 class="stats-acronym-badge red-acronym"
                 style="
                   background: linear-gradient(135deg, {redPrimaryColor} 0%, {redPrimaryColor} 25%, {redSecondaryColor} 75%, {redSecondaryColor} 100%);
-                  border: {redHasOutline ? '1.5px solid #000000' : `1.5px solid ${redKitTertiary}`};
+                  border: {redHasOutline ? '1.5px solid #000000' : 'none'};
                   box-shadow: {redHasOutline ? '0 0 0 1.5px #000000' : 'none'};
                   color: {redKitTertiary};
-                  -webkit-text-stroke: 3px #000000;
-                  paint-order: stroke fill;
-                  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);
+                  {redHasOutline ? '-webkit-text-stroke: 3px #000000; paint-order: stroke fill; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);' : '-webkit-text-stroke: 0px transparent; text-shadow: none;'}
                 "
               >
                 {redTeamTag}
               </div>
-              <span class="stats-score-num" id="post-score-red">{gameUI.redScore}</span>
+              <span class="stats-score-num" id="post-score-red">{matchRedScore}</span>
               <span class="stats-score-sep">-</span>
-              <span class="stats-score-num" id="post-score-blue">{gameUI.blueScore}</span>
+              <span class="stats-score-num" id="post-score-blue">{matchBlueScore}</span>
               <div
                 class="stats-acronym-badge blue-acronym"
                 style="
                   background: linear-gradient(135deg, {bluePrimaryColor} 0%, {bluePrimaryColor} 25%, {blueSecondaryColor} 75%, {blueSecondaryColor} 100%);
-                  border: {blueHasOutline ? '1.5px solid #000000' : `1.5px solid ${blueKitTertiary}`};
+                  border: {blueHasOutline ? '1.5px solid #000000' : 'none'};
                   box-shadow: {blueHasOutline ? '0 0 0 1.5px #000000' : 'none'};
                   color: {blueKitTertiary};
-                  -webkit-text-stroke: 3px #000000;
-                  paint-order: stroke fill;
-                  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);
+                  {blueHasOutline ? '-webkit-text-stroke: 3px #000000; paint-order: stroke fill; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);' : '-webkit-text-stroke: 0px transparent; text-shadow: none;'}
                 "
               >
                 {blueTeamTag}
@@ -370,14 +402,14 @@
             </div>
 
             <div class="match-status-meta">
-              {#if gameUI.redScore > gameUI.blueScore}
-                <span class="badge-victory red">VICTORIA {redTeamName.toUpperCase()}</span>
-              {:else if gameUI.blueScore > gameUI.redScore}
-                <span class="badge-victory blue">VICTORIA {blueTeamName.toUpperCase()}</span>
+              {#if matchWinner === 'red'}
+                <span class="badge-victory red">VICTORIA {matchWinnerTeamName.toUpperCase()}</span>
+              {:else if matchWinner === 'blue'}
+                <span class="badge-victory blue">VICTORIA {matchWinnerTeamName.toUpperCase()}</span>
               {:else}
                 <span class="badge-victory draw">EMPATE</span>
               {/if}
-              <span class="match-time-chip">⏱ {gameUI.matchTimeFormatted}</span>
+              <span class="match-time-chip">⏱ {matchDurationFormatted}</span>
             </div>
 
             {#if gameUI.mvp}
@@ -583,7 +615,7 @@
         id="slide-lobby"
       >
         <!-- Pestaña exterior lateral IZQUIERDA: < STATS -->
-        {#if gameUI.hasCompletedMatch && gameUI.lastMatchStats && gameUI.lastMatchStats.length > 0}
+        {#if canShowStats}
           <button
             type="button"
             id="btn-goto-stats"
@@ -754,20 +786,34 @@
                       <span class="lock-tag">{gameUI.allowCaptainKitSwitch ? 'CAPITANES' : 'BLOQUEADO'}</span>
                     </button>
 
-                    <!-- Balanceo Automático de Espectadores -->
-                    <button
-                      type="button"
-                      id="btn-auto-balance"
-                      class="rule-cartouche-btn btn-auto-balance"
-                      disabled={(!gameUI.isAdmin && !gameUI.isHost) || specPlayers.length === 0 || gameUI.isMatchActive}
-                      title="Balancear automáticamente espectadores a Rojo y Azul (1 a cada equipo por clic)"
-                      onclick={() => {
-                        gameUI.autoBalanceSpectators();
-                      }}
-                    >
-                      <span class="lock-label">⚖️ Auto</span>
-                      <span class="lock-tag">({specPlayers.length})</span>
-                    </button>
+                    <!-- Balanceo Automático y Reset de Equipos (mitad de ancho cada uno: Auto -> Reset -> Modifiers) -->
+                    <div class="grid grid-cols-2 gap-1.5 w-full h-10 auto-reset-container">
+                      <button
+                        type="button"
+                        id="btn-auto-balance"
+                        class="rule-cartouche-btn btn-auto-balance h-full w-full flex items-center justify-center"
+                        disabled={(!gameUI.isAdmin && !gameUI.isHost) || specPlayers.length === 0}
+                        title="Balancear automáticamente espectadores a Rojo y Azul"
+                        onclick={() => {
+                          gameUI.autoBalanceSpectators();
+                        }}
+                      >
+                        <span class="lock-label">⚖️ Auto</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        id="btn-reset-teams"
+                        class="rule-cartouche-btn btn-reset-teams h-full w-full flex items-center justify-center"
+                        disabled={(!gameUI.isAdmin && !gameUI.isHost) || (redPlayers.length === 0 && bluePlayers.length === 0)}
+                        title="Mover a todos los jugadores a Espectadores"
+                        onclick={() => {
+                          gameUI.resetTeamsToSpectators();
+                        }}
+                      >
+                        <span class="lock-label">🔄 Reset</span>
+                      </button>
+                    </div>
 
                     <!-- Modifiers (Exclusivo Host) -->
                     <button
@@ -2422,10 +2468,28 @@
     user-select: none;
     line-height: 1;
     paint-order: stroke fill;
-    -webkit-text-stroke: 3px #000000;
-    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);
     box-shadow: 0 0 8px rgba(0, 0, 0, 0.6);
     box-sizing: border-box;
+  }
+
+  .auto-reset-container {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+    width: 100%;
+    height: 38px;
+  }
+
+  .btn-reset-teams {
+    background: rgba(255, 71, 87, 0.1);
+    border-color: rgba(255, 71, 87, 0.4);
+    color: #ff6b81;
+    box-shadow: 0 0 10px rgba(255, 71, 87, 0.15);
+  }
+
+  .btn-reset-teams:hover:not(:disabled) {
+    background: rgba(255, 71, 87, 0.2);
+    border-color: #ff4757;
   }
 
   .btn-auto-balance {

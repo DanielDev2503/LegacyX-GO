@@ -284,13 +284,36 @@ export class EngineInstance {
       return;
     }
     const isRed = team === 'red';
-    const player = this.players.get(id);
+    let player = this.players.get(id);
+    const isNewToPitch = !player;
     if (player) {
       this.playerTeams.set(id, team);
       player.cGroup = isRed ? COLLISION_GROUP_RED : COLLISION_GROUP_BLUE;
       player.color = isRed ? '#e74c3c' : '#3498db';
     } else {
-      this.addPlayer(id, team);
+      player = this.addPlayer(id, team);
+    }
+
+    // Si el partido está en juego (matchPhase !== 0), colocarlo exclusivamente sobre la línea de meta
+    if (this.fsm.state !== MatchPhase.STOP) {
+      const goalLineX = isRed ? -this.stadium.halfWidth : this.stadium.halfWidth;
+      let goalY = 0;
+      const maxOffset = this.stadium.goalHalfHeight ? this.stadium.goalHalfHeight * 0.8 : 40;
+      for (const [otherId, otherPlayer] of this.players.entries()) {
+        if (otherId !== id && Math.hypot(otherPlayer.pos.x - goalLineX, otherPlayer.pos.y - goalY) < otherPlayer.radius * 2) {
+          goalY = goalY === 0 ? 25 : (goalY > 0 ? -goalY : Math.min(maxOffset, Math.abs(goalY) + 25));
+        }
+      }
+      player.pos.set(goalLineX, goalY);
+      player.prevPos.set(goalLineX, goalY);
+      player.vel.set(0, 0);
+      player.stamina = 100;
+    } else if (isNewToPitch) {
+      const spawnX = isRed ? -this.stadium.spawnDistance : this.stadium.spawnDistance;
+      player.pos.set(spawnX, 0);
+      player.prevPos.set(spawnX, 0);
+      player.vel.set(0, 0);
+      player.stamina = 100;
     }
   }
 

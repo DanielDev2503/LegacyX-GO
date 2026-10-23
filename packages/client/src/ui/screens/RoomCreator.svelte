@@ -267,12 +267,12 @@
           <!-- Bloqueo de Equipaciones por Capitanes -->
           <button
             type="button"
-            class="rule-btn lock-teams-btn"
+            class="rule-btn lock-teams-btn h-10 px-3 overflow-hidden"
             class:active-locked={!allowCaptainKitSwitch}
             title="Permitir o bloquear el cambio de camisetas para capitanes"
             onclick={() => { soundFX.playUIClick(); allowCaptainKitSwitch = !allowCaptainKitSwitch; }}
           >
-            <span class="lock-label">{allowCaptainKitSwitch ? '👕 Camisetas Libres' : '🔒 Camisetas Fijas'}</span>
+            <span class="lock-label whitespace-nowrap truncate text-xs font-semibold flex items-center justify-center gap-1.5">{allowCaptainKitSwitch ? '👕 Kits: Libres' : '👕 Kits: Bloq.'}</span>
             <span class="lock-tag">{allowCaptainKitSwitch ? 'CAPITANES' : 'BLOQUEADO'}</span>
           </button>
 
@@ -781,14 +781,15 @@
 
   .rule-select-box {
     position: relative;
-    height: 36px;
+    height: 40px;
     background: #121a29;
     border: 1px solid rgba(0, 229, 255, 0.25);
     border-radius: 0.5rem;
     display: flex;
     align-items: center;
-    padding: 0 8px;
+    padding: 0 12px;
     box-sizing: border-box;
+    overflow: hidden;
     transition: border-color 0.15s, background-color 0.15s;
   }
 
@@ -831,8 +832,8 @@
   }
 
   .rule-btn {
-    height: 36px;
-    padding: 0 10px;
+    height: 40px;
+    padding: 0 12px;
     border-radius: 0.5rem;
     background: #121a29;
     border: 1px solid rgba(0, 229, 255, 0.25);
@@ -844,6 +845,7 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
+    overflow: hidden;
     transition: border-color 0.15s, background 0.15s;
     box-sizing: border-box;
   }

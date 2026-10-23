@@ -31,7 +31,7 @@
     redActiveKit?.outlineColor || gameUI.redTeamKit?.outlineColor || '#000000'
   );
   let redHasOutline = $derived(
-    redKitOutline !== 'none' && redKitOutline !== 'transparent' && redKitOutline !== ''
+    Boolean(redActiveKit?.outline === true || redActiveKit?.hasOutline === true)
   );
 
   let blueKitPrimary = $derived(
@@ -47,7 +47,7 @@
     blueActiveKit?.outlineColor || gameUI.blueTeamKit?.outlineColor || '#000000'
   );
   let blueHasOutline = $derived(
-    blueKitOutline !== 'none' && blueKitOutline !== 'transparent' && blueKitOutline !== ''
+    Boolean(blueActiveKit?.outline === true || blueActiveKit?.hasOutline === true)
   );
 
   // Ancho dinámico del minimapa (0px si está desactivado)
@@ -211,12 +211,10 @@
           class="team-acronym-card red-acronym"
           style="
             background: linear-gradient(135deg, {redKitPrimary} 0%, {redKitPrimary} 25%, {redKitSecondary} 75%, {redKitSecondary} 100%);
-            border: {redHasOutline ? '1.5px solid #000000' : `1.5px solid ${redKitTertiary}`};
+            border: {redHasOutline ? '1.5px solid #000000' : 'none'};
             box-shadow: {redHasOutline ? '0 0 0 1.5px #000000, 0 2px 6px rgba(0, 0, 0, 0.5)' : '0 2px 6px rgba(0, 0, 0, 0.5)'};
             color: {redKitTertiary};
-            -webkit-text-stroke: 3px #000000;
-            paint-order: stroke fill;
-            text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);
+            {redHasOutline ? '-webkit-text-stroke: 3px #000000; paint-order: stroke fill; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);' : '-webkit-text-stroke: 0px transparent; text-shadow: none;'}
           "
         >
           {redActiveKit?.tag || 'RED'}
@@ -242,12 +240,10 @@
           class="team-acronym-card blue-acronym"
           style="
             background: linear-gradient(135deg, {blueKitPrimary} 0%, {blueKitPrimary} 25%, {blueKitSecondary} 75%, {blueKitSecondary} 100%);
-            border: {blueHasOutline ? '1.5px solid #000000' : `1.5px solid ${blueKitTertiary}`};
+            border: {blueHasOutline ? '1.5px solid #000000' : 'none'};
             box-shadow: {blueHasOutline ? '0 0 0 1.5px #000000, 0 2px 6px rgba(0, 0, 0, 0.5)' : '0 2px 6px rgba(0, 0, 0, 0.5)'};
             color: {blueKitTertiary};
-            -webkit-text-stroke: 3px #000000;
-            paint-order: stroke fill;
-            text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);
+            {blueHasOutline ? '-webkit-text-stroke: 3px #000000; paint-order: stroke fill; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);' : '-webkit-text-stroke: 0px transparent; text-shadow: none;'}
           "
         >
           {blueActiveKit?.tag || 'BLUE'}
@@ -535,8 +531,6 @@
     user-select: none;
     line-height: 1;
     paint-order: stroke fill;
-    -webkit-text-stroke: 3px #000000;
-    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);
     box-shadow: 0 2px 6px rgba(0, 0, 0, 0.5);
     box-sizing: border-box;
     transition: all 0.15s ease;

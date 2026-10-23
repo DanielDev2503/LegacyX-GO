@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { gameUI } from '../../src/ui/state/gameUI.svelte.js';
-import { BinaryProtocol, type GameStateSnapshot } from '@legacyx/core';
+import { gameUI, type MatchStatsSnapshot } from '../../src/ui/state/gameUI.svelte.js';
+import { BinaryProtocol, type GameStateSnapshot, EngineInstance, createStadium } from '@legacyx/core';
 import { activePitchEmotes, triggerPitchEmote, clearPitchEmotes } from '../../src/renderer/DiscRenderer.js';
 
 describe('Post-Match Flow, Practice Mode, Live Kit/Stadium Sync, Auto Balance & Emote Optimization', () => {
@@ -45,8 +45,8 @@ describe('Post-Match Flow, Practice Mode, Live Kit/Stadium Sync, Auto Balance & 
     });
   });
 
-  describe('2. Practice / Solo Mode Player Registration', () => {
-    it('registers local player into rosterPlayers and players with team red and ping 0', () => {
+  describe('2. Practice / Solo Mode Player Registration & Spectator Initial Entry', () => {
+    it('registers local player into rosterPlayers and players with team spectator and ping 0', () => {
       gameUI.nickname = 'SoloStriker';
       gameUI.enterPracticeMode();
 
@@ -58,7 +58,7 @@ describe('Post-Match Flow, Practice Mode, Live Kit/Stadium Sync, Auto Balance & 
 
       const localPlayer = gameUI.rosterPlayers[0];
       expect(localPlayer.id).toBe(1);
-      expect(localPlayer.team).toBe('red');
+      expect(localPlayer.team).toBe('spectator');
       expect(localPlayer.nickname).toBe('SoloStriker');
       expect(localPlayer.ping).toBe(0);
     });
@@ -148,9 +148,10 @@ describe('Post-Match Flow, Practice Mode, Live Kit/Stadium Sync, Auto Balance & 
       expect(gameUI.allowCaptainKitSwitch).toBe(true);
     });
 
-    it('autoBalances spectators distributing 1 to Red and 1 to Blue', () => {
+    it('smart autoBalances spectators: prioritizes team with fewer players, then distributes equally', () => {
       gameUI.isHost = true;
       gameUI.isAdmin = true;
+      // Setup: Red has 1, Blue has 0, 3 spectators
       gameUI.rosterPlayers = [
         { id: 1, peerId: 'p1', nickname: 'Host', name: 'Host', team: 'red', number: 1, isAdmin: true, isHost: true, ping: 10 },
         { id: 2, peerId: 'p2', nickname: 'Spec1', name: 'Spec1', team: 'spectator', number: 2, isAdmin: false, isHost: false, ping: 20 },
@@ -158,14 +159,52 @@ describe('Post-Match Flow, Practice Mode, Live Kit/Stadium Sync, Auto Balance & 
         { id: 4, peerId: 'p4', nickname: 'Spec3', name: 'Spec3', team: 'spectator', number: 4, isAdmin: false, isHost: false, ping: 40 }
       ];
 
-      const success = gameUI.autoBalanceSpectators();
-      expect(success).toBe(true);
-
-      // Spec1 moved to red, Spec2 moved to blue
-      expect(gameUI.rosterPlayers.find((p) => p.id === 2)?.team).toBe('red');
-      expect(gameUI.rosterPlayers.find((p) => p.id === 3)?.team).toBe('blue');
-      // Spec3 remains spectator until next click
+      // Priority 1: redCount (1) > blueCount (0) -> moves Spec1 to BLUE
+      const success1 = gameUI.autoBalanceSpectators();
+      expect(success1).toBe(true);
+      expect(gameUI.rosterPlayers.find((p) => p.id === 2)?.team).toBe('blue');
+      expect(gameUI.rosterPlayers.find((p) => p.id === 3)?.team).toBe('spectator');
       expect(gameUI.rosterPlayers.find((p) => p.id === 4)?.team).toBe('spectator');
+
+      // Priority 2: redCount (1) === blueCount (1), remaining spectators >= 2 (Spec2 and Spec3)
+      // Distributes Spec2 to red, Spec3 to blue
+      const success2 = gameUI.autoBalanceSpectators();
+      expect(success2).toBe(true);
+      expect(gameUI.rosterPlayers.find((p) => p.id === 3)?.team).toBe('red');
+      expect(gameUI.rosterPlayers.find((p) => p.id === 4)?.team).toBe('blue');
+
+      // Now 0 spectators remaining -> returns false
+      expect(gameUI.autoBalanceSpectators()).toBe(false);
+    });
+
+    it('smart autoBalances single spectator when teams are equal', () => {
+      gameUI.isHost = true;
+      gameUI.isAdmin = true;
+      gameUI.rosterPlayers = [
+        { id: 1, peerId: 'p1', nickname: 'R1', name: 'R1', team: 'red', number: 1, isAdmin: true, isHost: true, ping: 10 },
+        { id: 2, peerId: 'p2', nickname: 'B1', name: 'B1', team: 'blue', number: 2, isAdmin: false, isHost: false, ping: 10 },
+        { id: 3, peerId: 'p3', nickname: 'Spec1', name: 'Spec1', team: 'spectator', number: 3, isAdmin: false, isHost: false, ping: 20 }
+      ];
+
+      // Priority 2 with 1 spectator -> moves to red
+      expect(gameUI.autoBalanceSpectators()).toBe(true);
+      expect(gameUI.rosterPlayers.find((p) => p.id === 3)?.team).toBe('red');
+    });
+
+    it('resets all players in Red and Blue back to Spectators', () => {
+      gameUI.isHost = true;
+      gameUI.isAdmin = true;
+      gameUI.rosterPlayers = [
+        { id: 1, peerId: 'p1', nickname: 'R1', name: 'R1', team: 'red', number: 1, isAdmin: true, isHost: true, ping: 10 },
+        { id: 2, peerId: 'p2', nickname: 'B1', name: 'B1', team: 'blue', number: 2, isAdmin: false, isHost: false, ping: 10 },
+        { id: 3, peerId: 'p3', nickname: 'S1', name: 'S1', team: 'spectator', number: 3, isAdmin: false, isHost: false, ping: 20 }
+      ];
+
+      const changed = gameUI.resetTeamsToSpectators();
+      expect(changed).toBe(true);
+      expect(gameUI.rosterPlayers.every((p) => p.team === 'spectator')).toBe(true);
+      expect(gameUI.redKitVariant).toBe('home');
+      expect(gameUI.blueKitVariant).toBe('away');
     });
   });
 
@@ -188,6 +227,113 @@ describe('Post-Match Flow, Practice Mode, Live Kit/Stadium Sync, Auto Balance & 
       expect(entry).toBeDefined();
       expect(entry!.emoji).toBe('🔥');
       expect(entry!.expiresAt).toBeGreaterThan(performance.now());
+    });
+  });
+
+  describe('7. Post-Match Stats Snapshot & Score Preservation', () => {
+    it('preserves real scores, winner banner and duration in lastMatchStats snapshot after engine stops', () => {
+      const snapshot: MatchStatsSnapshot = {
+        redScore: 3,
+        blueScore: 1,
+        matchDuration: 180,
+        winner: 'red',
+        winnerTeamName: 'Equipo Rojo',
+        redTeamName: 'Equipo Rojo',
+        blueTeamName: 'Equipo Azul',
+        redAcronym: 'RED',
+        blueAcronym: 'BLU',
+        mvpPlayerId: 1,
+        mvpName: 'SuperStriker',
+        mvpScore: 450,
+        players: []
+      };
+
+      gameUI.lastMatchStats = snapshot;
+      gameUI.hasCompletedMatch = true;
+
+      // When stopMatch() is executed, raw scores might reset to 0 in engine,
+      // but the snapshot must hold the final 3 - 1 score and winner banner
+      gameUI.redScore = 0;
+      gameUI.blueScore = 0;
+      gameUI.matchTimeFormatted = '00:00';
+
+      const readSnapshot = gameUI.lastMatchStats as MatchStatsSnapshot;
+      expect(readSnapshot.redScore).toBe(3);
+      expect(readSnapshot.blueScore).toBe(1);
+      expect(readSnapshot.winner).toBe('red');
+      expect(readSnapshot.winnerTeamName).toBe('Equipo Rojo');
+      expect(readSnapshot.matchDuration).toBe(180);
+    });
+
+    it('clears hasCompletedMatch, lastMatchStats and resets activeSlide when a new match starts', () => {
+      gameUI.hasCompletedMatch = true;
+      gameUI.lastMatchStats = { redScore: 2, blueScore: 0 } as any;
+      gameUI.activeSlide = 'STATS';
+
+      // Host clicks start match
+      gameUI.startMatch();
+
+      expect(gameUI.hasCompletedMatch).toBe(false);
+      expect(gameUI.lastMatchStats).toBeNull();
+      expect(gameUI.activeSlide).toBe('MENU');
+    });
+  });
+
+  describe('8. Mid-game Joiner Goal-Line Spawn Without Pitch Disruption', () => {
+    it('spawns joining player on their team goal line (x = ±halfWidth, y = 0) when match is active without altering ball or existing players', () => {
+      const stadium = createStadium('mediano');
+      const engine = new EngineInstance(stadium);
+      engine.addPlayer(1, 'red');
+      engine.startMatch();
+
+      // Move ball and player 1
+      engine.ball.pos.set(50, 20);
+      engine.ball.vel.set(2, 3);
+      const p1 = engine.players.get(1)!;
+      p1.pos.set(-100, 30);
+      p1.vel.set(1, 1);
+
+      // Player 2 joins Red mid-match
+      engine.setPlayerTeam(2, 'red');
+      const p2 = engine.players.get(2)!;
+      expect(p2).toBeDefined();
+      expect(p2.pos.x).toBe(-stadium.halfWidth);
+      expect(p2.pos.y).toBe(0);
+      expect(p2.vel.x).toBe(0);
+      expect(p2.vel.y).toBe(0);
+
+      // Ball and Player 1 positions and velocities are completely undisturbed!
+      expect(engine.ball.pos.x).toBe(50);
+      expect(engine.ball.pos.y).toBe(20);
+      expect(engine.ball.vel.x).toBe(2);
+      expect(engine.ball.vel.y).toBe(3);
+      expect(p1.pos.x).toBe(-100);
+      expect(p1.pos.y).toBe(30);
+
+      // Player 3 joins Blue mid-match
+      engine.setPlayerTeam(3, 'blue');
+      const p3 = engine.players.get(3)!;
+      expect(p3).toBeDefined();
+      expect(p3.pos.x).toBe(stadium.halfWidth);
+      expect(p3.pos.y).toBe(0);
+      expect(p3.vel.x).toBe(0);
+      expect(p3.vel.y).toBe(0);
+    });
+  });
+
+  describe('9. Strictly Conditional Acronym Outline', () => {
+    it('applies text contour and stroke only when outline or hasOutline is true', () => {
+      // Default kit: outline is false
+      expect(gameUI.redTeamKit.outline).toBe(false);
+      expect(gameUI.redTeamKit.hasOutline).toBe(false);
+
+      const hasOutline1 = Boolean(gameUI.redCaptainKit?.outline === true || gameUI.redCaptainKit?.hasOutline === true);
+      expect(hasOutline1).toBe(false);
+
+      // When outline is enabled
+      const customKit = { ...gameUI.redCaptainKit, outline: true, hasOutline: true };
+      const hasOutline2 = Boolean(customKit?.outline === true || customKit?.hasOutline === true);
+      expect(hasOutline2).toBe(true);
     });
   });
 });

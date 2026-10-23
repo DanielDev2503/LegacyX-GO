@@ -104,10 +104,12 @@
     gameUI.onStartMatch = () => {
       gameUI.hasCompletedMatch = false;
       gameUI.lastMatchStats = null;
+      gameUI.activeSlide = 'MENU';
       gameUI.redTeamStats = [];
       gameUI.blueTeamStats = [];
       gameUI.mvp = null;
       if (gameUI.isHost && engine) {
+        engine.resetMatchStats();
         engine.startMatch();
         soundFX.playWhistle();
         gameApp.networkHost?.broadcastRoomStateSync();
@@ -128,6 +130,7 @@
       }
       gameUI.hasCompletedMatch = false;
       gameUI.lastMatchStats = null;
+      gameUI.activeSlide = 'MENU';
       gameUI.redTeamStats = [];
       gameUI.blueTeamStats = [];
       gameUI.mvp = null;
@@ -160,7 +163,9 @@
     gameUI.onTeamChanged = (playerId: number, team: 'red' | 'blue' | 'spectator') => {
       if (gameUI.isHost && engine) {
         engine.setPlayerTeam(playerId, team);
-        engine.resetPositions();
+        if (gameUI.matchPhase === 0) {
+          engine.resetPositions();
+        }
         gameApp.networkHost?.setPlayerTeam(playerId, team);
       } else if (!gameUI.isHost && gameApp.networkClient) {
         gameApp.networkClient.requestTeamChange(team, playerId);
@@ -223,6 +228,38 @@
         const redStats = allStats.filter((s: any) => s.team === 'red');
         const blueStats = allStats.filter((s: any) => s.team === 'blue');
 
+        // Congelar snapshot inmutable antes de reiniciar el motor
+        const engineState = engine ? engine.getState() : null;
+        const finalRedScore = engineState ? engineState.redScore : gameUI.redScore;
+        const finalBlueScore = engineState ? engineState.blueScore : gameUI.blueScore;
+        const finalDuration = engineState ? engineState.matchTimer : 0;
+        const matchWinner: 'red' | 'blue' | 'draw' =
+          (winner as 'red' | 'blue' | 'draw') ||
+          (finalRedScore > finalBlueScore ? 'red' : finalBlueScore > finalRedScore ? 'blue' : 'draw');
+        const redName = gameUI.redCaptainKit?.name || gameUI.redTeamKit?.name || 'Equipo Rojo';
+        const blueName = gameUI.blueCaptainKit?.name || gameUI.blueTeamKit?.name || 'Equipo Azul';
+        const redAcronym = gameUI.redCaptainKit?.tag || gameUI.redTeamKit?.tag || 'RED';
+        const blueAcronym = gameUI.blueCaptainKit?.tag || gameUI.blueTeamKit?.tag || 'BLU';
+        const winnerTeamName = matchWinner === 'red' ? redName : (matchWinner === 'blue' ? blueName : 'Empate');
+
+        const snapshot = {
+          redScore: finalRedScore,
+          blueScore: finalBlueScore,
+          matchDuration: Math.round(finalDuration),
+          winner: matchWinner,
+          winnerTeamName,
+          redTeamName: redName,
+          blueTeamName: blueName,
+          redAcronym,
+          blueAcronym,
+          redKit: gameUI.redCaptainKit,
+          blueKit: gameUI.blueCaptainKit,
+          mvpPlayerId: theMVP?.playerId ?? null,
+          mvpName: theMVP?.nickname ?? '',
+          mvpScore: theMVP?.points ?? 0,
+          players: allStats
+        };
+
         gameUI.hasCompletedMatch = true;
         gameUI.activeSlide = 'STATS';
         gameUI.fsmPhase = 'STOPPED';
@@ -231,12 +268,12 @@
           engine.stopMatch();
         }
 
-        gameUI.lastMatchStats = allStats;
+        gameUI.lastMatchStats = snapshot;
         gameUI.mvp = theMVP;
         gameUI.redTeamStats = redStats;
         gameUI.blueTeamStats = blueStats;
 
-        gameApp.networkHost?.broadcastMatchStats(allStats, theMVP, redStats, blueStats);
+        gameApp.networkHost?.broadcastMatchStats(snapshot, allStats, theMVP, redStats, blueStats);
 
         if (!gameUI.isSecondaryOverlayOpen) {
           gameUI.clearModalStack();

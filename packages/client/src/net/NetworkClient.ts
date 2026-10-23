@@ -247,8 +247,12 @@ export class NetworkClient {
         gameUI.recordTelemetrySample(smoothed, gameUI.fps);
       }
     } else if (msg.type === 'MATCH_STATS_SUMMARY') {
-      if (Array.isArray(msg.stats)) {
-        gameUI.lastMatchStats = msg.stats;
+      if (msg.snapshot) {
+        gameUI.lastMatchStats = msg.snapshot as any;
+      } else if (Array.isArray(msg.stats)) {
+        gameUI.lastMatchStats = msg.stats as any;
+      }
+      if (msg.snapshot || Array.isArray(msg.stats)) {
         gameUI.hasCompletedMatch = true;
         gameUI.activeSlide = 'STATS';
         gameUI.fsmPhase = 'STOPPED';

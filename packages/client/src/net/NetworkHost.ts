@@ -65,7 +65,7 @@ export class NetworkHost {
       peerId: hostProfile?.peerId || signaling.peerId || 'host',
       nickname: hostNickname,
       name: hostNickname,
-      team: hostProfile?.team ?? 'red',
+      team: hostProfile?.team ?? 'spectator',
       number: hostProfile?.number ?? 10,
       isAdmin: true,
       isHost: true,
@@ -220,9 +220,7 @@ export class NetworkHost {
           playerId = this.nextPlayerId++;
           this.peerToPlayerId.set(peerId, playerId);
 
-          const redCount = Array.from(this.players.values()).filter((p) => p.team === 'red').length;
-          const blueCount = Array.from(this.players.values()).filter((p) => p.team === 'blue').length;
-          const team = redCount <= blueCount ? 'red' : 'blue';
+          const team = 'spectator';
           const initialNick = this.pendingNicknames.get(peerId) || `Player ${playerId}`;
 
           const playerInfo: PlayerInfo = {
@@ -361,7 +359,7 @@ export class NetworkHost {
       }
     } else if (msg.type === 'EMOTE') {
       const emoji = String(msg.emoji || '').trim();
-      if (emoji) {
+      if (emoji && player.team !== 'spectator') {
         this.onPlayerEmote?.(playerId, emoji);
         this.broadcastReliable({
           type: 'EMOTE',
@@ -418,8 +416,18 @@ export class NetworkHost {
         action === 'START_MATCH' ||
         action === 'STOP_MATCH' ||
         action === 'TOGGLE_PAUSE' ||
-        action === 'SET_RULES'
+        action === 'SET_RULES' ||
+        action === 'AUTO_BALANCE' ||
+        action === 'RESET_TEAMS'
       ) {
+        if (action === 'AUTO_BALANCE') {
+          this.autoBalanceSpectators();
+          return;
+        }
+        if (action === 'RESET_TEAMS') {
+          this.resetTeamsToSpectators();
+          return;
+        }
         if (action === 'SET_RULES') {
           if (typeof msg.teamsLocked === 'boolean') this.teamsLocked = msg.teamsLocked;
           if (typeof msg.timeLimit === 'number') this.timeLimit = msg.timeLimit;
@@ -456,16 +464,45 @@ export class NetworkHost {
   public autoBalanceSpectators(): void {
     const spectators = Array.from(this.players.values()).filter((p) => p.team === 'spectator');
     if (spectators.length === 0) return;
-    const first = spectators[0];
-    const second = spectators.length > 1 ? spectators[1] : null;
-    if (first) {
+    const redCount = Array.from(this.players.values()).filter((p) => p.team === 'red').length;
+    const blueCount = Array.from(this.players.values()).filter((p) => p.team === 'blue').length;
+
+    if (redCount < blueCount) {
+      const first = spectators[0];
       first.team = 'red';
       this.onTeamChangeRequest?.(first.id, 'red');
+    } else if (blueCount < redCount) {
+      const first = spectators[0];
+      first.team = 'blue';
+      this.onTeamChangeRequest?.(first.id, 'blue');
+    } else {
+      // redCount === blueCount
+      if (spectators.length >= 2) {
+        const first = spectators[0];
+        const second = spectators[1];
+        first.team = 'red';
+        this.onTeamChangeRequest?.(first.id, 'red');
+        second.team = 'blue';
+        this.onTeamChangeRequest?.(second.id, 'blue');
+      } else {
+        const first = spectators[0];
+        first.team = 'red';
+        this.onTeamChangeRequest?.(first.id, 'red');
+      }
     }
-    if (second) {
-      second.team = 'blue';
-      this.onTeamChangeRequest?.(second.id, 'blue');
+    this.onPlayersUpdated?.(this.getPlayers());
+    this.broadcastRoomStateSync();
+  }
+
+  public resetTeamsToSpectators(): void {
+    for (const player of this.players.values()) {
+      if (player.team === 'red' || player.team === 'blue') {
+        player.team = 'spectator';
+        this.onTeamChangeRequest?.(player.id, 'spectator');
+      }
     }
+    this.redKitVariant = 'home';
+    this.blueKitVariant = 'away';
     this.onPlayersUpdated?.(this.getPlayers());
     this.broadcastRoomStateSync();
   }
@@ -565,9 +602,10 @@ export class NetworkHost {
     this.onChatMessage?.('', text, 'system', msgId);
   }
 
-  public broadcastMatchStats(stats: any[], mvp?: any, redTeamStats?: any[], blueTeamStats?: any[]): void {
+  public broadcastMatchStats(snapshot: any, stats: any[], mvp?: any, redTeamStats?: any[], blueTeamStats?: any[]): void {
     this.broadcastReliable({
       type: 'MATCH_STATS_SUMMARY',
+      snapshot,
       stats,
       mvp,
       redTeamStats,

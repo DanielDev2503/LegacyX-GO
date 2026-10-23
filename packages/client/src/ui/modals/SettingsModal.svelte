@@ -41,11 +41,17 @@
 
   // Contorno Negro (Checkbox: #000000 vs none)
   let hasOutline = $derived(
-    currentKit.outlineColor !== 'none' && currentKit.outlineColor !== '' && currentKit.outlineColor !== undefined
+    Boolean(
+      currentKit.outline === true ||
+      currentKit.hasOutline === true ||
+      (currentKit.outlineColor !== 'none' && currentKit.outlineColor !== '' && currentKit.outlineColor !== undefined && currentKit.outline !== false && currentKit.hasOutline !== false)
+    )
   );
 
   function handleOutlineToggle(e: Event) {
     const target = e.target as HTMLInputElement;
+    currentKit.outline = target.checked;
+    currentKit.hasOutline = target.checked;
     currentKit.outlineColor = target.checked ? '#000000' : 'none';
     gameUI.saveSettings();
   }

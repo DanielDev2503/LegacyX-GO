@@ -89,6 +89,7 @@ export interface KitConfig {
   tertiaryColor?: string;
   outlineColor?: string;
   hasOutline?: boolean;
+  outline?: boolean;
 }
 
 export interface TeamKitConfig {
@@ -100,6 +101,7 @@ export interface TeamKitConfig {
   tertiaryColor?: string;
   outlineColor?: string;
   hasOutline?: boolean;
+  outline?: boolean;
 }
 
 export interface EmoteTrigger {
@@ -246,7 +248,9 @@ export const DEFAULT_SETTINGS: SettingsConfig = {
     primaryColor: '#e74c3c',
     secondaryColor: '#ffffff',
     tertiaryColor: '#ffffff',
-    outlineColor: '#000000',
+    outlineColor: 'none',
+    hasOutline: false,
+    outline: false,
     pattern: 'solid'
   },
   visitorKit: {
@@ -255,7 +259,9 @@ export const DEFAULT_SETTINGS: SettingsConfig = {
     primaryColor: '#00e5ff',
     secondaryColor: '#ffffff',
     tertiaryColor: '#ffffff',
-    outlineColor: '#000000',
+    outlineColor: 'none',
+    hasOutline: false,
+    outline: false,
     pattern: 'solid'
   },
 
@@ -352,6 +358,24 @@ export interface PlayerStatEntry {
   isCaptain?: boolean;
   isMvp?: boolean;
   isHost?: boolean;
+}
+
+export interface MatchStatsSnapshot {
+  redScore: number;
+  blueScore: number;
+  matchDuration: number;
+  winner: 'red' | 'blue' | 'draw';
+  winnerTeamName: string;
+  redTeamName: string;
+  blueTeamName: string;
+  redAcronym: string;
+  blueAcronym: string;
+  redKit?: any;
+  blueKit?: any;
+  mvpPlayerId: string | number | null;
+  mvpName: string;
+  mvpScore: number;
+  players: any[];
 }
 
 export interface PhysicsModifiers {
@@ -539,7 +563,7 @@ class GameUIStore {
   public selectedStadiumId = $state<'small' | 'medium' | 'big' | 'af_3v3' | 'classic' | 'mediano'>('mediano');
   public activeStadiumName = $state('Mediano');
   public rosterPlayers = $state<RosterPlayer[]>([
-    { id: 1, peerId: 'host', nickname: 'Jugador', name: 'Jugador', number: 10, avatar: '1', team: 'red', isAdmin: true, isHost: true, ping: 16 }
+    { id: 1, peerId: 'host', nickname: 'Jugador', name: 'Jugador', number: 10, avatar: '1', team: 'spectator', isAdmin: true, isHost: true, ping: 16 }
   ]);
 
   // Match HUD Telemetry
@@ -574,7 +598,7 @@ class GameUIStore {
   // Post-match Carousel state (100vw slides)
   public postMatchSlide = $state<0 | 1 | 2>(0);
   public hasCompletedMatch = $state(false);
-  public lastMatchStats = $state<any[] | null>(null);
+  public lastMatchStats = $state<MatchStatsSnapshot | any[] | null>(null);
   public mvp = $state<{
     nickname: string;
     points: number;
@@ -650,21 +674,58 @@ class GameUIStore {
     if (spectators.length === 0) return false;
 
     soundFX.playUIClick();
-    const first = spectators[0];
-    const second = spectators.length > 1 ? spectators[1] : null;
+    const redCount = this.rosterPlayers.filter((p) => p.team === 'red').length;
+    const blueCount = this.rosterPlayers.filter((p) => p.team === 'blue').length;
 
-    if (first) {
+    if (redCount < blueCount) {
+      // Prioridad 1: Equipo rojo tiene menos jugadores
+      const first = spectators[0];
       this.movePlayerToTeam(first.id, 'red');
       this.onTeamChanged?.(first.id, 'red');
+    } else if (blueCount < redCount) {
+      // Prioridad 1: Equipo azul tiene menos jugadores
+      const first = spectators[0];
+      this.movePlayerToTeam(first.id, 'blue');
+      this.onTeamChanged?.(first.id, 'blue');
+    } else {
+      // Prioridad 2: Ambos equipos tienen igual cantidad
+      if (spectators.length >= 2) {
+        const first = spectators[0];
+        const second = spectators[1];
+        this.movePlayerToTeam(first.id, 'red');
+        this.onTeamChanged?.(first.id, 'red');
+        this.movePlayerToTeam(second.id, 'blue');
+        this.onTeamChanged?.(second.id, 'blue');
+      } else {
+        const first = spectators[0];
+        this.movePlayerToTeam(first.id, 'red');
+        this.onTeamChanged?.(first.id, 'red');
+      }
     }
-    if (second) {
-      this.movePlayerToTeam(second.id, 'blue');
-      this.onTeamChanged?.(second.id, 'blue');
-    }
+
     if (!this.isHost) {
       this.onAdminAction?.('AUTO_BALANCE', {});
     }
     return true;
+  }
+
+  public resetTeamsToSpectators(): boolean {
+    if (!this.isHost && !this.isAdmin) return false;
+    soundFX.playUIClick();
+    let changed = false;
+    for (const p of this.rosterPlayers) {
+      if (p.team === 'red' || p.team === 'blue') {
+        p.team = 'spectator';
+        this.onTeamChanged?.(p.id, 'spectator');
+        changed = true;
+      }
+    }
+    this.redKitVariant = 'home';
+    this.blueKitVariant = 'away';
+    if (!this.isHost) {
+      this.onAdminAction?.('RESET_TEAMS', {});
+    }
+    return changed;
   }
 
   constructor() {
@@ -1101,8 +1162,9 @@ class GameUIStore {
     primaryColor: '#e74c3c',
     secondaryColor: '#ffffff',
     tertiaryColor: '#ffffff',
-    outlineColor: '#000000',
+    outlineColor: 'none',
     hasOutline: false,
+    outline: false,
     pattern: 'solid'
   };
 
@@ -1112,8 +1174,9 @@ class GameUIStore {
     primaryColor: '#3498db',
     secondaryColor: '#ffffff',
     tertiaryColor: '#ffffff',
-    outlineColor: '#000000',
+    outlineColor: 'none',
     hasOutline: false,
+    outline: false,
     pattern: 'solid'
   };
 
@@ -1201,6 +1264,9 @@ class GameUIStore {
 
   public startMatch(): void {
     soundFX.playUIClick();
+    this.hasCompletedMatch = false;
+    this.lastMatchStats = null;
+    this.activeSlide = 'MENU';
     this.fsmPhase = 'PLAYING';
     this.onStartMatch?.();
   }
@@ -1264,6 +1330,11 @@ class GameUIStore {
   }
 
   public set matchPhase(phase: number) {
+    if (phase !== 0 && phase !== 5) {
+      this.hasCompletedMatch = false;
+      this.lastMatchStats = null;
+      this.activeSlide = 'MENU';
+    }
     if (phase === 0) {
       this.fsmPhase = 'STOPPED';
     } else if (phase === 1) {
@@ -1633,7 +1704,7 @@ class GameUIStore {
       peerId: 'local',
       nickname: profile.nickname,
       name: profile.nickname,
-      team: 'red',
+      team: 'spectator',
       number: 10,
       isAdmin: true,
       isHost: true,

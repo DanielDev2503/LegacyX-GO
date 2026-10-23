@@ -132,9 +132,11 @@ export class GameApp {
       return;
     }
 
-    // Comprobar si el texto corresponde a un disparador de emote
-    const emoteEmoji = gameUI.matchEmoteTrigger(text);
+    // Comprobar si el emisor es espectador: si lo es, jamás activa emote y siempre se muestra en chat
     const player = gameUI.rosterPlayers.find((p) => p.nickname === sender || p.name === sender);
+    const playerTeam = team || player?.team;
+    const isSpectator = playerTeam === 'spectator' || playerTeam === 'spectators' || playerTeam === 'spec' || playerTeam === 'SPEC';
+    const emoteEmoji = isSpectator ? null : gameUI.matchEmoteTrigger(text);
     const playerId = player ? player.id : (isHost ? 1 : null);
 
     if (emoteEmoji && gameUI.settings.showPitchEmotes !== false) {
@@ -151,7 +153,8 @@ export class GameApp {
     const msgId = id || `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
     gameUI.addChatMessage({
       id: msgId,
-      team: toChatTeam(team),
+      team: isSpectator ? 'SPEC' : toChatTeam(team),
+      senderTeam: isSpectator ? 'spectator' : (toChatTeam(team).toLowerCase() as any),
       sender,
       isHost: Boolean(isHost),
       isSystem: false,
@@ -204,6 +207,8 @@ export class GameApp {
         this.networkHost.broadcastRoomStateSync();
       } else if (action === 'AUTO_BALANCE') {
         this.networkHost.autoBalanceSpectators();
+      } else if (action === 'RESET_TEAMS') {
+        this.networkHost.resetTeamsToSpectators();
       }
       return;
     }
@@ -353,7 +358,7 @@ export class GameApp {
     const profile = this.getLocalProfile();
     const host = new NetworkHost(this.signaling, profile.nickname, {
       peerId: this.signaling.peerId,
-      team: 'red',
+      team: 'spectator',
       avatar: profile.avatar,
       avatarType: profile.avatarType,
       kit: profile.kit,
@@ -621,7 +626,7 @@ export class GameApp {
         peerId: 'local',
         nickname: profile.nickname,
         name: profile.nickname,
-        team: 'red',
+        team: 'spectator',
         number: 1,
         isAdmin: true,
         isHost: true,

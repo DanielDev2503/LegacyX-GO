@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { gameUI, type TeamSlot } from '../state/gameUI.svelte.js';
+  import { gameUI, type TeamSlot, type MatchStatsSnapshot } from '../state/gameUI.svelte.js';
   import { soundFX } from '../../audio/SoundFX.js';
 
   let currentSlide = $state<0 | 1>(0);
@@ -20,7 +20,9 @@
   let redSecondaryColor = $derived(redActiveKit?.secondaryColor || gameUI.redTeamKit?.secondaryColor || '#b02a1c');
   let redKitTertiary = $derived(redActiveKit?.tertiaryColor || gameUI.redTeamKit?.tertiaryColor || '#ffffff');
   let redOutlineColor = $derived(redActiveKit?.outlineColor || gameUI.redTeamKit?.outlineColor || '#000000');
-  let redHasOutline = $derived(redOutlineColor !== 'none' && redOutlineColor !== 'transparent' && redOutlineColor !== '');
+  let redHasOutline = $derived(
+    Boolean(redActiveKit?.outline === true || redActiveKit?.hasOutline === true)
+  );
 
   let blueTeamName = $derived(blueActiveKit?.name || gameUI.blueTeamKit?.name || 'Equipo Azul');
   let blueTeamTag = $derived(blueActiveKit?.tag || gameUI.blueTeamKit?.tag || 'BLUE');
@@ -28,7 +30,36 @@
   let blueSecondaryColor = $derived(blueActiveKit?.secondaryColor || gameUI.blueTeamKit?.secondaryColor || '#217dbb');
   let blueKitTertiary = $derived(blueActiveKit?.tertiaryColor || gameUI.blueTeamKit?.tertiaryColor || '#ffffff');
   let blueOutlineColor = $derived(blueActiveKit?.outlineColor || gameUI.blueTeamKit?.outlineColor || '#000000');
-  let blueHasOutline = $derived(blueOutlineColor !== 'none' && blueOutlineColor !== 'transparent' && blueOutlineColor !== '');
+  let blueHasOutline = $derived(
+    Boolean(blueActiveKit?.outline === true || blueActiveKit?.hasOutline === true)
+  );
+
+  let matchStatsSnapshot = $derived<MatchStatsSnapshot | null>(
+    gameUI.lastMatchStats && !Array.isArray(gameUI.lastMatchStats)
+      ? (gameUI.lastMatchStats as MatchStatsSnapshot)
+      : null
+  );
+  let matchRedScore = $derived(matchStatsSnapshot ? matchStatsSnapshot.redScore : gameUI.redScore);
+  let matchBlueScore = $derived(matchStatsSnapshot ? matchStatsSnapshot.blueScore : gameUI.blueScore);
+  let matchWinner = $derived(
+    matchStatsSnapshot
+      ? matchStatsSnapshot.winner
+      : matchRedScore > matchBlueScore
+        ? 'red'
+        : matchBlueScore > matchRedScore
+          ? 'blue'
+          : 'draw'
+  );
+  let matchWinnerTeamName = $derived(
+    matchStatsSnapshot
+      ? (matchStatsSnapshot.winner === 'red' ? matchStatsSnapshot.redTeamName : matchStatsSnapshot.blueTeamName)
+      : (matchWinner === 'red' ? redTeamName : blueTeamName)
+  );
+  let matchDurationFormatted = $derived(
+    matchStatsSnapshot
+      ? `${String(Math.floor(matchStatsSnapshot.matchDuration / 60)).padStart(2, '0')}:${String(matchStatsSnapshot.matchDuration % 60).padStart(2, '0')}`
+      : gameUI.matchTimeFormatted
+  );
 
   let isMatchStopped = $derived(gameUI.fsmPhase === 'STOPPED' || gameUI.matchPhase === 0);
 
@@ -140,29 +171,25 @@
                 class="stats-acronym-badge red-acronym"
                 style="
                   background: linear-gradient(135deg, {redPrimaryColor} 0%, {redPrimaryColor} 25%, {redSecondaryColor} 75%, {redSecondaryColor} 100%);
-                  border: {redHasOutline ? '1.5px solid #000000' : `1.5px solid ${redKitTertiary}`};
+                  border: {redHasOutline ? '1.5px solid #000000' : 'none'};
                   box-shadow: {redHasOutline ? '0 0 0 1.5px #000000' : 'none'};
                   color: {redKitTertiary};
-                  -webkit-text-stroke: 3px #000000;
-                  paint-order: stroke fill;
-                  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);
+                  {redHasOutline ? '-webkit-text-stroke: 3px #000000; paint-order: stroke fill; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);' : '-webkit-text-stroke: 0px transparent; text-shadow: none;'}
                 "
               >
                 {redTeamTag}
               </div>
-              <span class="stats-score-num" id="post-score-red">{gameUI.redScore}</span>
+              <span class="stats-score-num" id="post-score-red">{matchRedScore}</span>
               <span class="stats-score-sep">-</span>
-              <span class="stats-score-num" id="post-score-blue">{gameUI.blueScore}</span>
+              <span class="stats-score-num" id="post-score-blue">{matchBlueScore}</span>
               <div
                 class="stats-acronym-badge blue-acronym"
                 style="
                   background: linear-gradient(135deg, {bluePrimaryColor} 0%, {bluePrimaryColor} 25%, {blueSecondaryColor} 75%, {blueSecondaryColor} 100%);
-                  border: {blueHasOutline ? '1.5px solid #000000' : `1.5px solid ${blueKitTertiary}`};
+                  border: {blueHasOutline ? '1.5px solid #000000' : 'none'};
                   box-shadow: {blueHasOutline ? '0 0 0 1.5px #000000' : 'none'};
                   color: {blueKitTertiary};
-                  -webkit-text-stroke: 3px #000000;
-                  paint-order: stroke fill;
-                  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);
+                  {blueHasOutline ? '-webkit-text-stroke: 3px #000000; paint-order: stroke fill; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);' : '-webkit-text-stroke: 0px transparent; text-shadow: none;'}
                 "
               >
                 {blueTeamTag}
@@ -171,14 +198,14 @@
 
             <!-- Badge de Victoria y Reloj -->
             <div class="match-status-meta">
-              {#if gameUI.redScore > gameUI.blueScore}
-                <span class="badge-victory red">VICTORIA {redTeamName.toUpperCase()}</span>
-              {:else if gameUI.blueScore > gameUI.redScore}
-                <span class="badge-victory blue">VICTORIA {blueTeamName.toUpperCase()}</span>
+              {#if matchWinner === 'red'}
+                <span class="badge-victory red">VICTORIA {matchWinnerTeamName.toUpperCase()}</span>
+              {:else if matchWinner === 'blue'}
+                <span class="badge-victory blue">VICTORIA {matchWinnerTeamName.toUpperCase()}</span>
               {:else}
                 <span class="badge-victory draw">EMPATE</span>
               {/if}
-              <span class="match-time-chip">⏱ {gameUI.matchTimeFormatted}</span>
+              <span class="match-time-chip">⏱ {matchDurationFormatted}</span>
             </div>
 
             <!-- Placa Dorada Destacada MVP con Glow Neón (#ffd700) -->
@@ -833,8 +860,6 @@
     user-select: none;
     line-height: 1;
     paint-order: stroke fill;
-    -webkit-text-stroke: 3px #000000;
-    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);
     box-shadow: 0 0 8px rgba(0, 0, 0, 0.6);
     box-sizing: border-box;
   }
