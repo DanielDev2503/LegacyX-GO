@@ -410,6 +410,8 @@ export class GameEngine {
     const player = this.players.get(playerId);
     if (!player) return;
 
+    const prevTeam = player.team;
+    const teamChanged = prevTeam !== team;
     player.team = team;
     const stats = this.matchStats.get(playerId);
     if (stats) {
@@ -425,17 +427,50 @@ export class GameEngine {
       }
     } else {
       const isRed = team === 'red';
-      const goalSpawnX = isRed ? -this.stadium.halfWidth : this.stadium.halfWidth;
-      const goalSpawnY = 0;
+      const isMatchLive = this.fsm.currentState === MatchPhase.PLAYING || 
+                          (this.fsm.currentState === MatchPhase.KICKOFF && !this.kickoffState.active);
+
+      if (existingDisc && !teamChanged) {
+        existingDisc.radius = this.gameplayConfig.playerRadius;
+        existingDisc.cGroup = isRed ? COLLISION_GROUP_RED : COLLISION_GROUP_BLUE;
+        existingDisc.color = isRed ? '#e74c3c' : '#3498db';
+        return;
+      }
+
+      let targetX: number;
+      let targetY = 0;
+
+      if (isMatchLive) {
+        const pRadius = this.gameplayConfig.playerRadius;
+        targetX = isRed ? -this.stadium.halfWidth + pRadius + 2 : this.stadium.halfWidth - pRadius - 2;
+        let goalY = 0;
+        const maxOffset = this.stadium.goalHalfHeight ? this.stadium.goalHalfHeight * 0.8 : 40;
+        for (const [otherId, otherDisc] of this.playerDiscs.entries()) {
+          if (otherId !== playerId && Math.hypot(otherDisc.pos.x - targetX, otherDisc.pos.y - goalY) < otherDisc.radius * 2) {
+            goalY = goalY === 0 ? 25 : (goalY > 0 ? -goalY : Math.min(maxOffset, Math.abs(goalY) + 25));
+          }
+        }
+        targetY = goalY;
+      } else {
+        const spawnDist = this.stadium.spawnDistance ?? 180;
+        targetX = isRed ? -spawnDist : spawnDist;
+        let teamIndex = 0;
+        for (const [otherId, otherP] of this.players.entries()) {
+          if (otherId !== playerId && otherP.team === team) {
+            teamIndex++;
+          }
+        }
+        targetY = teamIndex * 40 - 20 * teamIndex;
+      }
 
       if (!existingDisc) {
-        this.spawnPlayerDisc(player, goalSpawnX, goalSpawnY);
+        this.spawnPlayerDisc(player, targetX, targetY);
       } else {
         existingDisc.radius = this.gameplayConfig.playerRadius;
         existingDisc.cGroup = isRed ? COLLISION_GROUP_RED : COLLISION_GROUP_BLUE;
         existingDisc.color = isRed ? '#e74c3c' : '#3498db';
-        existingDisc.pos.set(goalSpawnX, goalSpawnY);
-        existingDisc.prevPos.set(goalSpawnX, goalSpawnY);
+        existingDisc.pos.set(targetX, targetY);
+        existingDisc.prevPos.set(targetX, targetY);
         existingDisc.vel.set(0, 0);
       }
     }
@@ -928,7 +963,7 @@ export class GameEngine {
 
     if (this.kickoffState.active || this.fsm.currentState === MatchPhase.KICKOFF) {
       const bSpeedSq = this.ball.vel.x * this.ball.vel.x + this.ball.vel.y * this.ball.vel.y;
-      if (bSpeedSq > 0.1) {
+      if (bSpeedSq > 0.0225) {
         this.kickoffState.active = false;
         this.updatePhysicsKickoffContext();
         if (this.fsm.currentState === MatchPhase.KICKOFF) {

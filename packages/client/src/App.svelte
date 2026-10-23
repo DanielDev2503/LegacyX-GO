@@ -79,10 +79,15 @@
       for (const p of gameUI.rosterPlayers) {
         if (p.team === 'red' || p.team === 'blue') {
           activeIds.add(p.id);
-          engine.setPlayerTeam(p.id, p.team);
+          const currentTeam = engine.playerTeams.get(p.id);
+          if (currentTeam !== p.team) {
+            engine.setPlayerTeam(p.id, p.team);
+          }
           engine.playerNames.set(p.id, p.nickname || p.name || `Player ${p.id}`);
         } else {
-          engine.removePlayer(p.id);
+          if (engine.players.has(p.id)) {
+            engine.removePlayer(p.id);
+          }
         }
       }
       for (const id of Array.from(engine.players.keys())) {
@@ -108,6 +113,11 @@
       gameUI.redTeamStats = [];
       gameUI.blueTeamStats = [];
       gameUI.mvp = null;
+      gameUI.activeModal = 'NONE';
+      gameUI.clearModalStack();
+      if (typeof document !== 'undefined') {
+        (document.activeElement as HTMLElement)?.blur();
+      }
       if (gameUI.isHost && engine) {
         engine.resetMatchStats();
         engine.startMatch();
@@ -116,8 +126,6 @@
       } else if (!gameUI.isHost && gameApp.networkClient) {
         gameApp.networkClient.sendAdminAction('START_MATCH');
       }
-      gameUI.clearModalStack();
-      gameUI.activeModal = 'NONE';
     };
 
     gameUI.onStopMatch = () => {
@@ -371,11 +379,11 @@
       const isTyping = activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA');
 
       if (isInputActive && !isTyping) {
-        // Movimiento: WASD
-        if (keyState.get('KeyW')) mask |= INPUT_FLAG_UP;
-        if (keyState.get('KeyS')) mask |= INPUT_FLAG_DOWN;
-        if (keyState.get('KeyA')) mask |= INPUT_FLAG_LEFT;
-        if (keyState.get('KeyD')) mask |= INPUT_FLAG_RIGHT;
+        // Movimiento: WASD o Flechas
+        if (keyState.get('KeyW') || keyState.get('ArrowUp')) mask |= INPUT_FLAG_UP;
+        if (keyState.get('KeyS') || keyState.get('ArrowDown')) mask |= INPUT_FLAG_DOWN;
+        if (keyState.get('KeyA') || keyState.get('ArrowLeft')) mask |= INPUT_FLAG_LEFT;
+        if (keyState.get('KeyD') || keyState.get('ArrowRight')) mask |= INPUT_FLAG_RIGHT;
 
         // Patear / Chutar: Space / KeyX
         if (keyState.get('Space') || keyState.get('KeyX')) mask |= INPUT_FLAG_KICK;
@@ -559,6 +567,14 @@
               } else if (phase === MatchPhase.PAUSE || phase === 2.1) {
                 gameUI.fsmPhase = 'PAUSED';
                 gameUI.matchPhase = 2.1;
+              }
+
+              if (gameUI.activeModal === 'TEAM_MANAGEMENT' || gameUI.activeModal === 'TEAM_SELECT' || gameUI.activeModal === 'teamSelect') {
+                gameUI.clearModalStack();
+                gameUI.activeModal = 'NONE';
+                if (typeof document !== 'undefined') {
+                  (document.activeElement as HTMLElement)?.blur();
+                }
               }
             }
           }

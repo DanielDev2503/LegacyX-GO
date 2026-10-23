@@ -149,6 +149,7 @@ export class EngineInstance {
   public modifiers: PhysicsModifiers;
   public currentTick: number = 0;
   public soundMask: number = 0;
+  public kickoffPossessingTeam: 'red' | 'blue' = 'red';
 
   private eventListeners: Map<string, Array<(payload: any) => void>> = new Map();
 
@@ -285,18 +286,27 @@ export class EngineInstance {
     }
     const isRed = team === 'red';
     let player = this.players.get(id);
-    const isNewToPitch = !player;
+    const prevTeam = this.playerTeams.get(id);
+    const teamChanged = prevTeam !== team;
+
     if (player) {
       this.playerTeams.set(id, team);
       player.cGroup = isRed ? COLLISION_GROUP_RED : COLLISION_GROUP_BLUE;
       player.color = isRed ? '#e74c3c' : '#3498db';
+      if (!teamChanged) {
+        return;
+      }
     } else {
       player = this.addPlayer(id, team);
     }
 
-    // Si el partido está en juego (matchPhase !== 0), colocarlo exclusivamente sobre la línea de meta
-    if (this.fsm.state !== MatchPhase.STOP) {
-      const goalLineX = isRed ? -this.stadium.halfWidth : this.stadium.halfWidth;
+    // Spawn en línea de meta estrictamente cuando el partido está en juego activo (PLAYING)
+    const isMatchLive = this.fsm.state === MatchPhase.PLAYING;
+
+    if (isMatchLive) {
+      const goalLineX = isRed
+        ? -this.stadium.halfWidth + player.radius + 2
+        : this.stadium.halfWidth - player.radius - 2;
       let goalY = 0;
       const maxOffset = this.stadium.goalHalfHeight ? this.stadium.goalHalfHeight * 0.8 : 40;
       for (const [otherId, otherPlayer] of this.players.entries()) {
@@ -308,10 +318,20 @@ export class EngineInstance {
       player.prevPos.set(goalLineX, goalY);
       player.vel.set(0, 0);
       player.stamina = 100;
-    } else if (isNewToPitch) {
-      const spawnX = isRed ? -this.stadium.spawnDistance : this.stadium.spawnDistance;
-      player.pos.set(spawnX, 0);
-      player.prevPos.set(spawnX, 0);
+    } else {
+      // Posición estándar canónica de saque inicial junto a sus compañeros
+      const spawnDist = this.stadium.spawnDistance ?? 250;
+      const spawnX = isRed ? -spawnDist : spawnDist;
+      let spawnY = 0;
+      for (const [otherId, otherPlayer] of this.players.entries()) {
+        if (otherId !== id && this.playerTeams.get(otherId) === team) {
+          if (Math.hypot(otherPlayer.pos.x - spawnX, otherPlayer.pos.y - spawnY) < otherPlayer.radius * 2) {
+            spawnY = spawnY === 0 ? 30 : (spawnY > 0 ? -spawnY : Math.abs(spawnY) + 30);
+          }
+        }
+      }
+      player.pos.set(spawnX, spawnY);
+      player.prevPos.set(spawnX, spawnY);
       player.vel.set(0, 0);
       player.stamina = 100;
     }
@@ -323,20 +343,28 @@ export class EngineInstance {
     this.ball.vel.set(0, 0);
     this.ball.resetCurve();
 
+    let redIndex = 0;
+    let blueIndex = 0;
+
     for (const [id, player] of this.players.entries()) {
       const team = this.playerTeams.get(id);
+      if (team !== 'red' && team !== 'blue') continue;
       const isRed = team === 'red';
-      const spawnX = isRed ? -this.stadium.spawnDistance : this.stadium.spawnDistance;
-      player.pos.set(spawnX, 0);
-      player.prevPos.set(spawnX, 0);
+      const spawnDist = this.stadium.spawnDistance ?? 250;
+      const spawnX = isRed ? -spawnDist : spawnDist;
+      const offset = (isRed ? redIndex : blueIndex) * 40 - 20 * (isRed ? redIndex : blueIndex);
+      player.pos.set(spawnX, offset);
+      player.prevPos.set(spawnX, offset);
       player.vel.set(0, 0);
       player.stamina = 100;
+      if (isRed) redIndex++; else blueIndex++;
     }
 
     this.world.resetNets(false);
   }
 
   public startMatch(): void {
+    this.kickoffPossessingTeam = 'red';
     this.resetPositions();
     this.resetMatchStats();
     this.fsm.startMatch();
@@ -471,21 +499,61 @@ export class EngineInstance {
           }
         }
 
-        // Si el balón entra en movimiento durante saque por contacto o patada, liberar barrera
+        // Si el balón entra en movimiento durante saque por contacto o patada (|v| > 0.15), liberar barrera
         if (this.fsm.state === MatchPhase.KICKOFF) {
           const ballVelSq = this.ball.vel.x * this.ball.vel.x + this.ball.vel.y * this.ball.vel.y;
           const touchDist = this.ball.radius + player.radius;
           const bdx = this.ball.pos.x - player.pos.x;
           const bdy = this.ball.pos.y - player.pos.y;
-          if (ballVelSq > 0.1 || (bdx * bdx + bdy * bdy <= touchDist * touchDist + 1.0)) {
+          if (ballVelSq > 0.0225 || (bdx * bdx + bdy * bdy <= touchDist * touchDist + 1.0)) {
             this.fsm.startPlaying();
           }
         }
 
         if (this.fsm.state === MatchPhase.KICKOFF) {
           const team = this.playerTeams.get(id);
-          if (team === 'red' || team === 'blue') {
-            this.world.enforceMidfieldBarrier(player, team);
+          const centerR = this.stadium.centerRadius ?? 80;
+          if (team === this.kickoffPossessingTeam) {
+            this.world.enforceKickoffPossessionBarrier(player, team, centerR);
+          } else if (team === 'red' || team === 'blue') {
+            const r = player.radius;
+            if (team === 'red') {
+              if (player.pos.x > -r) {
+                player.pos.x = -r;
+                if (player.vel.x > 0) player.vel.x = 0;
+              }
+            } else if (team === 'blue') {
+              if (player.pos.x < r) {
+                player.pos.x = r;
+                if (player.vel.x < 0) player.vel.x = 0;
+              }
+            }
+
+            const limitR = centerR + r;
+            const px = player.pos.x;
+            const py = player.pos.y;
+            const distSq = px * px + py * py;
+            if (distSq < limitR * limitR) {
+              const dist = Math.sqrt(distSq);
+              if (dist > 1e-6) {
+                const nx = px / dist;
+                const ny = py / dist;
+                player.pos.x = nx * limitR;
+                player.pos.y = ny * limitR;
+                const vDotN = player.vel.x * nx + player.vel.y * ny;
+                if (vDotN < 0) {
+                  player.vel.x -= vDotN * nx;
+                  player.vel.y -= vDotN * ny;
+                }
+              }
+              if (team === 'red' && player.pos.x > -r) {
+                player.pos.x = -r;
+                if (player.vel.x > 0) player.vel.x = 0;
+              } else if (team === 'blue' && player.pos.x < r) {
+                player.pos.x = r;
+                if (player.vel.x < 0) player.vel.x = 0;
+              }
+            }
           }
         }
       }
@@ -494,7 +562,7 @@ export class EngineInstance {
 
       if (this.fsm.state === MatchPhase.KICKOFF) {
         const ballVelSq = this.ball.vel.x * this.ball.vel.x + this.ball.vel.y * this.ball.vel.y;
-        if (ballVelSq > 0.1) {
+        if (ballVelSq > 0.0225) {
           this.fsm.startPlaying();
         }
       }
@@ -625,6 +693,7 @@ export class EngineInstance {
     }
 
     this.touchHistory = [];
+    this.kickoffPossessingTeam = scoringTeam === 'red' ? 'blue' : 'red';
     this.fsm.registerGoal(scoringTeam);
   }
 

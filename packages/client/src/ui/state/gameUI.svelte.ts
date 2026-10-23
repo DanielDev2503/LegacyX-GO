@@ -1268,6 +1268,11 @@ class GameUIStore {
     this.lastMatchStats = null;
     this.activeSlide = 'MENU';
     this.fsmPhase = 'PLAYING';
+    this.activeModal = 'NONE';
+    this.clearModalStack();
+    if (typeof document !== 'undefined') {
+      (document.activeElement as HTMLElement)?.blur();
+    }
     this.onStartMatch?.();
   }
 

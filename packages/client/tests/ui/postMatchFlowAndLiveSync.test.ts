@@ -279,12 +279,88 @@ describe('Post-Match Flow, Practice Mode, Live Kit/Stadium Sync, Auto Balance & 
     });
   });
 
-  describe('8. Mid-game Joiner Goal-Line Spawn Without Pitch Disruption', () => {
-    it('spawns joining player on their team goal line (x = ±halfWidth, y = 0) when match is active without altering ball or existing players', () => {
+  describe('8. Canonical Kickoff Spawns, Free Movement in Kickoff & Mid-game Joiner Goal-Line Spawn', () => {
+    it('positions players at regulatory kickoff spawn distance (|x| ≈ spawnDistance) upon startMatch, never on goal line (|x| = halfWidth)', () => {
+      const stadium = createStadium('mediano');
+      const engine = new EngineInstance(stadium);
+      engine.addPlayer(1, 'red');
+      engine.addPlayer(2, 'blue');
+
+      engine.startMatch();
+
+      const p1 = engine.players.get(1)!;
+      const p2 = engine.players.get(2)!;
+
+      // Mediano spawn distance is 360, halfWidth is 600
+      expect(stadium.spawnDistance).toBe(360);
+      expect(stadium.halfWidth).toBe(600);
+
+      // Red must be at -360, Blue at +360 (regulatory spawn, NOT goal lines at ±600)
+      expect(p1.pos.x).toBe(-stadium.spawnDistance);
+      expect(p1.pos.y).toBe(0);
+      expect(p1.vel.x).toBe(0);
+      expect(p1.vel.y).toBe(0);
+
+      expect(p2.pos.x).toBe(stadium.spawnDistance);
+      expect(p2.pos.y).toBe(0);
+      expect(p2.vel.x).toBe(0);
+      expect(p2.vel.y).toBe(0);
+
+      // Ball is placed dead center
+      expect(engine.ball.pos.x).toBe(0);
+      expect(engine.ball.pos.y).toBe(0);
+      expect(engine.ball.vel.x).toBe(0);
+      expect(engine.ball.vel.y).toBe(0);
+    });
+
+    it('enables player kinematics and movement inputs during KICKOFF phase (|v| > 0 towards ball)', () => {
       const stadium = createStadium('mediano');
       const engine = new EngineInstance(stadium);
       engine.addPlayer(1, 'red');
       engine.startMatch();
+
+      const p1 = engine.players.get(1)!;
+      expect(p1.pos.x).toBe(-stadium.spawnDistance);
+      expect(p1.vel.x).toBe(0);
+
+      // Apply right movement input towards center/ball during KICKOFF
+      const inputs = new Map();
+      inputs.set(1, { dirX: 1, dirY: 0 });
+      engine.step(inputs);
+
+      // Player must accelerate and move forward (|v| > 0)
+      expect(p1.vel.x).toBeGreaterThan(0);
+      expect(p1.pos.x).toBeGreaterThan(-stadium.spawnDistance);
+    });
+
+    it('freezes match timer at 00:00 during kickoff and starts ticking once ball is touched (|v| > 0.15)', () => {
+      const stadium = createStadium('mediano');
+      const engine = new EngineInstance(stadium);
+      engine.addPlayer(1, 'red');
+      engine.startMatch();
+
+      // Step multiple ticks with player moving but not touching ball yet
+      for (let i = 0; i < 30; i++) {
+        engine.step(new Map());
+      }
+      expect(engine.fsm.matchTicksElapsed).toBe(0);
+      expect(engine.getState().matchTimer).toBe(0);
+
+      // Player touches ball or kicks ball (|v| > 0.15)
+      engine.ball.vel.set(50, 0);
+      engine.step(new Map());
+
+      // Transitions to PLAYING and timer starts advancing
+      expect(engine.fsm.state).toBe(2); // MatchPhase.PLAYING
+      expect(engine.fsm.matchTicksElapsed).toBeGreaterThan(0);
+    });
+
+    it('spawns joining player on their team goal line when match is live (PLAYING) without altering ball or existing players', () => {
+      const stadium = createStadium('mediano');
+      const engine = new EngineInstance(stadium);
+      engine.addPlayer(1, 'red');
+      engine.startMatch();
+      engine.fsm.startPlaying();
 
       // Move ball and player 1
       engine.ball.pos.set(50, 20);
@@ -297,7 +373,7 @@ describe('Post-Match Flow, Practice Mode, Live Kit/Stadium Sync, Auto Balance & 
       engine.setPlayerTeam(2, 'red');
       const p2 = engine.players.get(2)!;
       expect(p2).toBeDefined();
-      expect(p2.pos.x).toBe(-stadium.halfWidth);
+      expect(p2.pos.x).toBeCloseTo(-stadium.halfWidth + p2.radius + 2, 0);
       expect(p2.pos.y).toBe(0);
       expect(p2.vel.x).toBe(0);
       expect(p2.vel.y).toBe(0);
@@ -314,7 +390,7 @@ describe('Post-Match Flow, Practice Mode, Live Kit/Stadium Sync, Auto Balance & 
       engine.setPlayerTeam(3, 'blue');
       const p3 = engine.players.get(3)!;
       expect(p3).toBeDefined();
-      expect(p3.pos.x).toBe(stadium.halfWidth);
+      expect(p3.pos.x).toBeCloseTo(stadium.halfWidth - p3.radius - 2, 0);
       expect(p3.pos.y).toBe(0);
       expect(p3.vel.x).toBe(0);
       expect(p3.vel.y).toBe(0);

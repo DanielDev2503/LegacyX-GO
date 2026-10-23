@@ -213,8 +213,12 @@ export class NetworkClient {
       // Cerrar modal automáticamente si la partida está en curso
       const phase = typeof msg.matchPhase === 'number' ? msg.matchPhase : 0;
       if (phase !== 0) {
-        if (gameUI.activeModal === 'TEAM_SELECT' || gameUI.activeModal === 'TEAM_MANAGEMENT') {
+        if (gameUI.activeModal === 'TEAM_SELECT' || gameUI.activeModal === 'TEAM_MANAGEMENT' || gameUI.activeModal === 'teamSelect') {
+          gameUI.clearModalStack();
           gameUI.activeModal = 'NONE';
+          if (typeof document !== 'undefined') {
+            (document.activeElement as HTMLElement)?.blur();
+          }
         }
       }
 

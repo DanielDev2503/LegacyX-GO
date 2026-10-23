@@ -255,8 +255,12 @@
   function handleStartMatch() {
     if (!gameUI.isAdmin && !gameUI.isHost) return;
     soundFX.playUIClick();
+    if (typeof document !== 'undefined') {
+      (document.activeElement as HTMLElement)?.blur();
+    }
     gameUI.startMatch();
     gameUI.clearModalStack();
+    gameUI.activeModal = 'NONE';
     onStartMatch();
   }
 
@@ -329,7 +333,8 @@
 </script>
 
 <div
-  id="ingame-menu"
+  id="modal-team-select"
+  data-id="ingame-menu"
   class="modal-backdrop"
   class:is-forced-open={gameUI.isTeamSelectForcedOpen || gameUI.matchPhase === 0}
   role="dialog"
