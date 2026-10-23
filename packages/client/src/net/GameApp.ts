@@ -3,6 +3,7 @@ import { NetworkHost, type PlayerInfo } from './NetworkHost.js';
 import { NetworkClient } from './NetworkClient.js';
 import { gameUI, type RosterPlayer, type ChatEntry } from '../ui/state/gameUI.svelte.js';
 import { soundFX } from '../audio/SoundFX.js';
+import { triggerPitchEmote } from '../renderer/DiscRenderer.js';
 import type { PlayerInput } from '@legacyx/core';
 
 export interface CreateRoomParams {
@@ -14,6 +15,7 @@ export interface CreateRoomParams {
   timeLimit?: number;
   scoreLimit?: number;
   teamsLocked?: boolean;
+  allowCaptainKitSwitch?: boolean;
 }
 
 export interface RoomConfigPatch {
@@ -27,6 +29,7 @@ export interface RoomConfigPatch {
   scoreLimit?: number;
   redKitVariant?: 'home' | 'away';
   blueKitVariant?: 'home' | 'away';
+  allowCaptainKitSwitch?: boolean;
 }
 
 /** Acciones que un Admin no-Host puede delegar al Host vía `ADMIN_ACTION`. */
@@ -77,6 +80,7 @@ export class GameApp {
     gameUI.onLeaveRoom = () => this.leaveCurrentRoom();
     gameUI.onRoomConfigChanged = (patch: RoomConfigPatch) => this.updateRoomConfig(patch);
     gameUI.onAdminAction = (action: string, payload?: any) => this.dispatchAdminAction(action, payload);
+    gameUI.onProfileUpdated = () => this.syncPlayerProfile();
 
     if (typeof window !== 'undefined') {
       window.addEventListener('beforeunload', () => {
@@ -115,24 +119,72 @@ export class GameApp {
     const isSys = team === 'system';
     if (isSys) {
       soundFX.playPlayerJoinedSound();
-    } else {
-      soundFX.playChatMessageSound();
+      const msgId = id || `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+      gameUI.addChatMessage({
+        id: msgId,
+        team: 'SYSTEM',
+        senderTeam: 'system',
+        sender: '',
+        isHost: false,
+        isSystem: true,
+        text
+      });
+      return;
     }
+
+    // Comprobar si el texto corresponde a un disparador de emote
+    const emoteEmoji = gameUI.matchEmoteTrigger(text);
+    const player = gameUI.rosterPlayers.find((p) => p.nickname === sender || p.name === sender);
+    const playerId = player ? player.id : (isHost ? 1 : null);
+
+    if (emoteEmoji && gameUI.settings.showPitchEmotes !== false) {
+      if (playerId !== null) {
+        triggerPitchEmote(playerId, emoteEmoji);
+      }
+      if (gameUI.settings.chatEmotesSoundEnabled !== false) {
+        soundFX.playPitchEmoteSound();
+      }
+      return; // Ocultar comando del feed de chat cuando los emotes en cancha están activados
+    }
+
+    soundFX.playChatMessageSound();
     const msgId = id || `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
     gameUI.addChatMessage({
       id: msgId,
-      team: isSys ? 'SYSTEM' : toChatTeam(team),
-      senderTeam: isSys ? 'system' : undefined,
-      sender: isSys ? '' : sender,
+      team: toChatTeam(team),
+      sender,
       isHost: Boolean(isHost),
-      isSystem: isSys,
+      isSystem: false,
       text
     });
   }
 
   private showEmote(playerId: number, emoji: string): void {
-    const p = gameUI.rosterPlayers.find((item) => item.id === playerId);
-    if (p) p.activeEmote = { emoji, timer: 120 };
+    if (gameUI.settings.showPitchEmotes !== false) {
+      triggerPitchEmote(playerId, emoji);
+      if (gameUI.settings.chatEmotesSoundEnabled !== false) {
+        soundFX.playPitchEmoteSound();
+      }
+    }
+  }
+
+  public syncPlayerProfile(): void {
+    const profile = this.getLocalProfile();
+    if (this.isHost && this.networkHost) {
+      const hostPlayer = (this.networkHost as any).players?.get(1);
+      if (hostPlayer) {
+        hostPlayer.nickname = profile.nickname;
+        hostPlayer.name = profile.nickname;
+        hostPlayer.avatar = profile.avatar;
+        hostPlayer.avatarType = profile.avatarType;
+        hostPlayer.localKit = profile.localKit;
+        hostPlayer.visitorKit = profile.visitorKit;
+        hostPlayer.kit = profile.localKit;
+      }
+      this.networkHost.broadcastRoomStateSync();
+    } else if (!this.isHost && this.networkClient) {
+      this.networkClient.sendProfileUpdate(profile);
+    }
   }
 
   /** Propaga acciones administrativas (Host: ejecuta; Admin no-Host: delega al Host). */
@@ -143,6 +195,15 @@ export class GameApp {
         this.networkHost.togglePlayerAdmin(targetId);
       } else if (action === 'KICK' || action === 'BAN') {
         this.networkHost.kickPlayer(targetId, action === 'BAN', true);
+      } else if (action === 'TOGGLE_CAPTAIN_KIT_SWITCH') {
+        if (typeof payload.allowCaptainKitSwitch === 'boolean') {
+          this.networkHost.allowCaptainKitSwitch = payload.allowCaptainKitSwitch;
+        } else {
+          this.networkHost.allowCaptainKitSwitch = !this.networkHost.allowCaptainKitSwitch;
+        }
+        this.networkHost.broadcastRoomStateSync();
+      } else if (action === 'AUTO_BALANCE') {
+        this.networkHost.autoBalanceSpectators();
       }
       return;
     }
@@ -161,6 +222,7 @@ export class GameApp {
       if (patch.stadiumId !== undefined) host.stadiumId = patch.stadiumId;
       if (patch.maxPlayers !== undefined) host.maxPlayers = patch.maxPlayers;
       if (patch.teamsLocked !== undefined) host.teamsLocked = patch.teamsLocked;
+      if (patch.allowCaptainKitSwitch !== undefined) host.allowCaptainKitSwitch = patch.allowCaptainKitSwitch;
       if (patch.timeLimit !== undefined) host.timeLimit = patch.timeLimit;
       if (patch.scoreLimit !== undefined) host.scoreLimit = patch.scoreLimit;
       if (patch.redKitVariant !== undefined) host.redKitVariant = patch.redKitVariant;
@@ -303,6 +365,7 @@ export class GameApp {
     host.stadiumId = stadium;
     host.maxPlayers = maxPlayers;
     host.teamsLocked = params?.teamsLocked ?? false;
+    host.allowCaptainKitSwitch = params?.allowCaptainKitSwitch ?? false;
     host.timeLimit = params?.timeLimit ?? 3;
     host.scoreLimit = params?.scoreLimit ?? 3;
     host.matchPhase = 0;
@@ -313,6 +376,7 @@ export class GameApp {
     gameUI.localPlayerId = 1;
     gameUI.matchId = roomId;
     gameUI.teamsLocked = host.teamsLocked;
+    gameUI.allowCaptainKitSwitch = host.allowCaptainKitSwitch;
     gameUI.timeLimitMinutes = host.timeLimit;
     gameUI.scoreLimitGoals = host.scoreLimit;
     gameUI.redScore = 0;
@@ -569,6 +633,7 @@ export class GameApp {
         ping: 0
       }
     ];
+    gameUI.players = gameUI.rosterPlayers;
   }
 
   private resetToLobbyState(): void {

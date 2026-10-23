@@ -7,6 +7,8 @@ import { soundFX } from '../../audio/SoundFX.js';
 import { sharedSignaling, type SignalingClient } from '../../net/SignalingClient.js';
 import { type GameplayConfig, DEFAULT_GAMEPLAY_CONFIG } from '@legacyx/core';
 import { $gameConfig as gameConfigStore } from '../../controllers/stores/gameStore.js';
+import { triggerPitchEmote } from '../../renderer/DiscRenderer.js';
+import { EMOJI_CATALOG } from '../utils/constants.js';
 
 export type ScreenType = 'GATEKEEPER' | 'LOBBY' | 'ROOM_CREATOR' | 'IN_GAME';
 export type ModalType =
@@ -260,9 +262,10 @@ export const DEFAULT_SETTINGS: SettingsConfig = {
   showPitchEmotes: true,
   emoteTriggers: [
     { trigger: 'gol', emoji: '⚽' },
-    { trigger: 'gg', emoji: '🤝' },
+    { trigger: 'gg', emoji: '👑' },
     { trigger: 'wow', emoji: '😮' },
-    { trigger: 'fire', emoji: '🔥' }
+    { trigger: 'fire', emoji: '🔥' },
+    { trigger: 'fuego', emoji: '🔥' }
   ]
 };
 
@@ -591,6 +594,12 @@ class GameUIStore {
   public isAudioMuted = $state(false);
   public masterVolume = $state(0.5);
 
+  // Diapositiva activa del carrusel ('MENU' | 'STATS')
+  public activeSlide = $state<'MENU' | 'STATS'>('MENU');
+
+  // Ajuste de sala: permitir a capitanes conmutar su kit
+  public allowCaptainKitSwitch = $state(false);
+
   // Callbacks for Engine / Worker / Netcode integration
   public onModifiersChanged: ((modifiers: PhysicsModifiers) => void) | null = null;
   public onStartPracticeMode: (() => void) | null = null;
@@ -605,13 +614,57 @@ class GameUIStore {
   public onLeaveRoom: (() => void) | null = null;
   public onAdminAction: ((action: string, payload?: any) => void) | null = null;
   public onRoomConfigChanged: ((patch: any) => void) | null = null;
+  public onProfileUpdated: (() => void) | null = null;
 
   public triggerPlayerEmote(playerId: number, emoji: string): void {
-    const player = this.rosterPlayers.find((p) => p.id === playerId);
-    if (player) {
-      player.activeEmote = { emoji, timer: 120 };
+    if (this.settings.showPitchEmotes !== false) {
+      triggerPitchEmote(playerId, emoji);
+      if (this.settings.chatEmotesSoundEnabled !== false) {
+        soundFX.playPitchEmoteSound();
+      }
     }
     this.onPlayerEmote?.(playerId, emoji);
+  }
+
+  public matchEmoteTrigger(text: string): string | null {
+    const trimmed = text.trim();
+    if (!trimmed) return null;
+    const lower = trimmed.toLowerCase();
+    const cleanWord = lower.replace(/^[:/]+|[:/]+$/g, '');
+    const triggers = this.settings.emoteTriggers || [];
+    for (const t of triggers) {
+      const triggerClean = t.trigger.toLowerCase().replace(/^[:/]+|[:/]+$/g, '');
+      if (t.trigger.toLowerCase() === lower || triggerClean === cleanWord || t.trigger.toLowerCase() === cleanWord) {
+        return t.emoji;
+      }
+    }
+    if ((EMOJI_CATALOG as readonly string[]).includes(trimmed)) {
+      return trimmed;
+    }
+    return null;
+  }
+
+  public autoBalanceSpectators(): boolean {
+    if (!this.isHost && !this.isAdmin) return false;
+    const spectators = this.rosterPlayers.filter((p) => p.team === 'spectator');
+    if (spectators.length === 0) return false;
+
+    soundFX.playUIClick();
+    const first = spectators[0];
+    const second = spectators.length > 1 ? spectators[1] : null;
+
+    if (first) {
+      this.movePlayerToTeam(first.id, 'red');
+      this.onTeamChanged?.(first.id, 'red');
+    }
+    if (second) {
+      this.movePlayerToTeam(second.id, 'blue');
+      this.onTeamChanged?.(second.id, 'blue');
+    }
+    if (!this.isHost) {
+      this.onAdminAction?.('AUTO_BALANCE', {});
+    }
+    return true;
   }
 
   constructor() {
@@ -758,6 +811,7 @@ class GameUIStore {
         // Ignore storage quota
       }
     }
+    this.onProfileUpdated?.();
   }
 
   public setPlayerAvatar(avatar: string, type?: 'emoji' | 'text' | 'letters'): void {
@@ -781,6 +835,7 @@ class GameUIStore {
         // Ignore storage quota
       }
     }
+    this.onProfileUpdated?.();
   }
 
   public saveProfile(nick: string, avatar: string, type?: 'emoji' | 'text' | 'letters'): void {
@@ -809,6 +864,7 @@ class GameUIStore {
         // Ignore storage quota errors
       }
     }
+    this.onProfileUpdated?.();
   }
 
   public saveSettings(patch?: Partial<SettingsConfig>): void {
@@ -870,6 +926,7 @@ class GameUIStore {
       }
     }
     this.onSettingsChanged?.(this.settings);
+    this.onProfileUpdated?.();
   }
 
   public resetGraphicsSettings(): void {
@@ -1555,7 +1612,40 @@ class GameUIStore {
       stadium: 'Mediano'
     };
     this.activeStadiumName = 'Mediano';
+    this.selectedStadiumId = 'mediano';
     this.fsmPhase = 'STOPPED';
+    this.matchPhase = 0;
+    this.isHost = true;
+    this.isAdmin = true;
+    this.localPlayerId = 1;
+
+    const profile = {
+      nickname: this.nickname || 'Jugador',
+      avatar: this.avatarValue || '1',
+      avatarType: this.avatarMode || 'letters',
+      kit: { ...this.settings.localKit },
+      localKit: { ...this.settings.localKit },
+      visitorKit: { ...this.settings.visitorKit }
+    };
+
+    const localPlayer: RosterPlayer = {
+      id: 1,
+      peerId: 'local',
+      nickname: profile.nickname,
+      name: profile.nickname,
+      team: 'red',
+      number: 10,
+      isAdmin: true,
+      isHost: true,
+      avatar: profile.avatar,
+      avatarType: profile.avatarType,
+      kit: profile.kit,
+      localKit: profile.localKit,
+      visitorKit: profile.visitorKit,
+      ping: 0
+    };
+
+    this.rosterPlayers = [localPlayer];
     this.navigateTo('IN_GAME');
     this.openOverlay('TEAM_MANAGEMENT');
     if (this.onStartPracticeMode) {

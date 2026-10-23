@@ -1,5 +1,23 @@
 import type { DiscSnapshot, CompactDiscState } from '@legacyx/core';
 
+export interface ActivePitchEmote {
+  emoji: string;
+  expiresAt: number;
+}
+
+export const activePitchEmotes = new Map<number, ActivePitchEmote>();
+
+export function triggerPitchEmote(playerId: number, emoji: string, durationMs: number = 2000): void {
+  activePitchEmotes.set(playerId, {
+    emoji,
+    expiresAt: (typeof performance !== 'undefined' ? performance.now() : Date.now()) + durationMs
+  });
+}
+
+export function clearPitchEmotes(): void {
+  activePitchEmotes.clear();
+}
+
 export interface PlayerVisualInfo {
   nickname?: string;
   number?: number | string;
@@ -993,43 +1011,48 @@ export class DiscRenderer {
       this.renderTypingBubble(ctx, disc);
     }
 
-    if (visualInfo?.activeEmote && visualInfo.activeEmote.timer > 0) {
-      const bubbleW = 34;
-      const bubbleH = 26;
-      const bounce = Math.sin((120 - visualInfo.activeEmote.timer) * 0.1) * 2;
-      const bx = x - bubbleW / 2;
-      const by = y - radius - 24 + bounce;
+    const pitchEmote = activePitchEmotes.get(disc.id);
+    const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    if (pitchEmote) {
+      if (pitchEmote.expiresAt > now) {
+        const remaining = pitchEmote.expiresAt - now;
+        const bounce = Math.sin((remaining / 200) * Math.PI) * 2;
+        const bubbleW = 34;
+        const bubbleH = 26;
+        const bx = x - bubbleW / 2;
+        const by = y - radius - 24 + bounce;
 
-      ctx.save();
-      ctx.fillStyle = 'rgba(10, 16, 26, 0.95)';
-      ctx.strokeStyle = 'rgba(0, 229, 255, 0.5)';
-      ctx.lineWidth = 1.0;
+        ctx.save();
+        ctx.fillStyle = 'rgba(10, 16, 26, 0.95)';
+        ctx.strokeStyle = 'rgba(0, 229, 255, 0.5)';
+        ctx.lineWidth = 1.0;
 
-      const br = 5;
-      ctx.beginPath();
-      ctx.moveTo(bx + br, by);
-      ctx.lineTo(bx + bubbleW - br, by);
-      ctx.quadraticCurveTo(bx + bubbleW, by, bx + bubbleW, by + br);
-      ctx.lineTo(bx + bubbleW, by + bubbleH - br);
-      ctx.quadraticCurveTo(bx + bubbleW, by + bubbleH, bx + bubbleW - br, by + bubbleH);
-      ctx.lineTo(x + 4, by + bubbleH);
-      ctx.lineTo(x, by + bubbleH + 4);
-      ctx.lineTo(x - 4, by + bubbleH);
-      ctx.lineTo(bx + br, by + bubbleH);
-      ctx.quadraticCurveTo(bx, by + bubbleH, bx, by + bubbleH - br);
-      ctx.lineTo(bx, by + br);
-      ctx.quadraticCurveTo(bx, by, bx + br, by);
-      ctx.closePath();
-      ctx.fill();
-      ctx.stroke();
+        const br = 5;
+        ctx.beginPath();
+        ctx.moveTo(bx + br, by);
+        ctx.lineTo(bx + bubbleW - br, by);
+        ctx.quadraticCurveTo(bx + bubbleW, by, bx + bubbleW, by + br);
+        ctx.lineTo(bx + bubbleW, by + bubbleH - br);
+        ctx.quadraticCurveTo(bx + bubbleW, by + bubbleH, bx + bubbleW - br, by + bubbleH);
+        ctx.lineTo(x + 4, by + bubbleH);
+        ctx.lineTo(x, by + bubbleH + 4);
+        ctx.lineTo(x - 4, by + bubbleH);
+        ctx.lineTo(bx + br, by + bubbleH);
+        ctx.quadraticCurveTo(bx, by + bubbleH, bx, by + bubbleH - br);
+        ctx.lineTo(bx, by + br);
+        ctx.quadraticCurveTo(bx, by, bx + br, by);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
 
-      ctx.font = '18px "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(visualInfo.activeEmote.emoji, x, by + bubbleH / 2);
-
-      visualInfo.activeEmote.timer--;
-      ctx.restore();
+        ctx.font = '18px "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(pitchEmote.emoji, x, by + bubbleH / 2);
+        ctx.restore();
+      } else {
+        activePitchEmotes.delete(disc.id);
+      }
     }
 
     ctx.restore();

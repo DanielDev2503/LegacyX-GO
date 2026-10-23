@@ -18,7 +18,7 @@
     INPUT_FLAG_MAGNUS_RIGHT
   } from '@legacyx/core';
 
-  import { GameRenderer } from './renderer/GameRenderer.js';
+  import { GameRenderer, triggerPitchEmote } from './renderer/GameRenderer.js';
   import type { PlayerVisualInfo } from './renderer/DiscRenderer.js';
   import { gameUI, type PhysicsModifiers } from './ui/state/gameUI.svelte.js';
   import { soundFX } from './audio/SoundFX.js';
@@ -115,6 +115,7 @@
         gameApp.networkClient.sendAdminAction('START_MATCH');
       }
       gameUI.clearModalStack();
+      gameUI.activeModal = 'NONE';
     };
 
     gameUI.onStopMatch = () => {
@@ -131,7 +132,7 @@
       gameUI.blueTeamStats = [];
       gameUI.mvp = null;
       gameUI.clearModalStack();
-      gameUI.openOverlay('TEAM_MANAGEMENT');
+      gameUI.activeModal = 'TEAM_SELECT';
     };
 
     gameUI.onTogglePause = () => {
@@ -144,7 +145,11 @@
     };
 
     gameUI.onStartPracticeMode = () => {
+      gameApp.setupPracticeMode();
       if (engine) {
+        engine.loadStadium('mediano');
+        rendererInstance?.setStadium(createStadium('mediano'));
+        syncEnginePlayers();
         engine.resetPositions();
       }
       gameUI.fsmPhase = 'STOPPED';
@@ -163,6 +168,9 @@
     };
 
     gameUI.onStadiumChanged = (stadiumId: string) => {
+      if (rendererInstance) {
+        rendererInstance.setStadium(createStadium(stadiumId));
+      }
       if (gameUI.isHost && engine) {
         engine.loadStadium(stadiumId);
         gameApp.updateRoomConfig({ stadiumId });
@@ -180,14 +188,8 @@
     };
 
     gameUI.onPlayerEmote = (playerId: number, emoji: string) => {
-      const visual = renderer.playerInfos.get(playerId);
-      if (visual) {
-        visual.activeEmote = { emoji, timer: 120 };
-      }
-      if (gameUI.isHost) {
-        gameApp.networkHost?.sendEmote(playerId, emoji);
-      } else {
-        gameApp.networkClient?.sendEmote(emoji);
+      if (gameUI.settings.showPitchEmotes !== false) {
+        triggerPitchEmote(playerId, emoji);
       }
     };
 
@@ -222,6 +224,13 @@
         const blueStats = allStats.filter((s: any) => s.team === 'blue');
 
         gameUI.hasCompletedMatch = true;
+        gameUI.activeSlide = 'STATS';
+        gameUI.fsmPhase = 'STOPPED';
+        gameUI.matchPhase = 0;
+        if (engine) {
+          engine.stopMatch();
+        }
+
         gameUI.lastMatchStats = allStats;
         gameUI.mvp = theMVP;
         gameUI.redTeamStats = redStats;
@@ -231,7 +240,7 @@
 
         if (!gameUI.isSecondaryOverlayOpen) {
           gameUI.clearModalStack();
-          gameUI.activeModal = 'STATS';
+          gameUI.activeModal = 'TEAM_SELECT';
         }
       });
     }

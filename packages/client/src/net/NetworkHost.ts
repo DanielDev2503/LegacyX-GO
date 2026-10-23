@@ -30,6 +30,7 @@ export class NetworkHost {
   private nextPlayerId = 2; // 1 is reserved for Host local player
   private iceServers: RTCIceServer[] = [];
   public teamsLocked = false;
+  public allowCaptainKitSwitch = false;
   public roomId: string = '';
   public roomName: string = '';
   public stadiumId: string = 'mediano';
@@ -153,6 +154,7 @@ export class NetworkHost {
       playersList,
       players: playersList,
       teamsLocked: this.teamsLocked,
+      allowCaptainKitSwitch: this.allowCaptainKitSwitch,
       roomId: this.roomId,
       roomName: this.roomName,
       stadiumId: this.stadiumId,
@@ -169,7 +171,8 @@ export class NetworkHost {
         maxPlayers: this.maxPlayers,
         timeLimit: this.timeLimit,
         scoreLimit: this.scoreLimit,
-        teamsLocked: this.teamsLocked
+        teamsLocked: this.teamsLocked,
+        allowCaptainKitSwitch: this.allowCaptainKitSwitch
       }
     };
   }
@@ -317,12 +320,27 @@ export class NetworkHost {
     } else if (msg.type === 'KIT_VARIANT_CHANGE') {
       const redCapId = this.getRedCaptainId();
       const blueCapId = this.getBlueCaptainId();
-      if (player.isAdmin || player.isHost || player.id === redCapId || player.id === blueCapId) {
+      const isCaptain = player.id === redCapId || player.id === blueCapId;
+      if (player.isAdmin || player.isHost || (this.allowCaptainKitSwitch && isCaptain)) {
         if (msg.team === 'red' && (msg.variant === 'home' || msg.variant === 'away')) {
           this.redKitVariant = msg.variant;
         } else if (msg.team === 'blue' && (msg.variant === 'home' || msg.variant === 'away')) {
           this.blueKitVariant = msg.variant;
         }
+        this.broadcastRoomStateSync();
+      }
+    } else if (msg.type === 'UPDATE_PLAYER_PROFILE') {
+      const pid = Number(msg.playerId ?? playerId);
+      const target = this.players.get(pid);
+      if (target) {
+        if (typeof msg.nickname === 'string' && msg.nickname) target.nickname = msg.nickname;
+        if (typeof msg.name === 'string' && msg.name) target.name = msg.name;
+        if (typeof msg.avatar === 'string') target.avatar = msg.avatar;
+        if (typeof msg.avatarType === 'string') target.avatarType = msg.avatarType as any;
+        if (msg.localKit && typeof msg.localKit === 'object') target.localKit = msg.localKit;
+        if (msg.visitorKit && typeof msg.visitorKit === 'object') target.visitorKit = msg.visitorKit;
+        if (msg.kit && typeof msg.kit === 'object') target.kit = msg.kit;
+        this.onPlayersUpdated?.(this.getPlayers());
         this.broadcastRoomStateSync();
       }
     } else if (msg.type === 'CHAT') {
@@ -387,6 +405,15 @@ export class NetworkHost {
         if (target && target.id !== 1 && !target.isHost && target.id !== playerId) {
           this.kickPlayer(targetId, action === 'BAN', true);
         }
+      } else if (action === 'TOGGLE_CAPTAIN_KIT_SWITCH') {
+        if (typeof msg.allowCaptainKitSwitch === 'boolean') {
+          this.allowCaptainKitSwitch = msg.allowCaptainKitSwitch;
+        } else {
+          this.allowCaptainKitSwitch = !this.allowCaptainKitSwitch;
+        }
+        this.broadcastRoomStateSync();
+      } else if (action === 'AUTO_BALANCE') {
+        this.autoBalanceSpectators();
       } else if (
         action === 'START_MATCH' ||
         action === 'STOP_MATCH' ||
@@ -398,6 +425,7 @@ export class NetworkHost {
           if (typeof msg.timeLimit === 'number') this.timeLimit = msg.timeLimit;
           if (typeof msg.scoreLimit === 'number') this.scoreLimit = msg.scoreLimit;
           if (typeof msg.stadiumId === 'string') this.stadiumId = msg.stadiumId;
+          if (typeof msg.allowCaptainKitSwitch === 'boolean') this.allowCaptainKitSwitch = msg.allowCaptainKitSwitch;
         }
         this.onAdminMatchAction?.(action, msg);
         this.broadcastRoomStateSync();
@@ -423,6 +451,23 @@ export class NetworkHost {
     this.onPlayersUpdated?.(this.getPlayers());
     this.broadcastRoomStateSync();
     return true;
+  }
+
+  public autoBalanceSpectators(): void {
+    const spectators = Array.from(this.players.values()).filter((p) => p.team === 'spectator');
+    if (spectators.length === 0) return;
+    const first = spectators[0];
+    const second = spectators.length > 1 ? spectators[1] : null;
+    if (first) {
+      first.team = 'red';
+      this.onTeamChangeRequest?.(first.id, 'red');
+    }
+    if (second) {
+      second.team = 'blue';
+      this.onTeamChangeRequest?.(second.id, 'blue');
+    }
+    this.onPlayersUpdated?.(this.getPlayers());
+    this.broadcastRoomStateSync();
   }
 
   public getRedCaptainId(): number | null {

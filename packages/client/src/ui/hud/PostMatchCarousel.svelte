@@ -139,12 +139,13 @@
               <div
                 class="stats-acronym-badge red-acronym"
                 style="
-                  background: linear-gradient(90deg, {redPrimaryColor} 0%, {redPrimaryColor} 30%, {redSecondaryColor} 70%, {redSecondaryColor} 100%);
+                  background: linear-gradient(135deg, {redPrimaryColor} 0%, {redPrimaryColor} 25%, {redSecondaryColor} 75%, {redSecondaryColor} 100%);
                   border: {redHasOutline ? '1.5px solid #000000' : `1.5px solid ${redKitTertiary}`};
                   box-shadow: {redHasOutline ? '0 0 0 1.5px #000000' : 'none'};
                   color: {redKitTertiary};
-                  -webkit-text-stroke: {redHasOutline ? '1px #000000' : 'none'};
-                  text-shadow: {redHasOutline ? '-1px -1px 0 #000000, 1px -1px 0 #000000, -1px 1px 0 #000000, 1px 1px 0 #000000' : 'none'};
+                  -webkit-text-stroke: 3px #000000;
+                  paint-order: stroke fill;
+                  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);
                 "
               >
                 {redTeamTag}
@@ -155,12 +156,13 @@
               <div
                 class="stats-acronym-badge blue-acronym"
                 style="
-                  background: linear-gradient(90deg, {bluePrimaryColor} 0%, {bluePrimaryColor} 30%, {blueSecondaryColor} 70%, {blueSecondaryColor} 100%);
+                  background: linear-gradient(135deg, {bluePrimaryColor} 0%, {bluePrimaryColor} 25%, {blueSecondaryColor} 75%, {blueSecondaryColor} 100%);
                   border: {blueHasOutline ? '1.5px solid #000000' : `1.5px solid ${blueKitTertiary}`};
                   box-shadow: {blueHasOutline ? '0 0 0 1.5px #000000' : 'none'};
                   color: {blueKitTertiary};
-                  -webkit-text-stroke: {blueHasOutline ? '1px #000000' : 'none'};
-                  text-shadow: {blueHasOutline ? '-1px -1px 0 #000000, 1px -1px 0 #000000, -1px 1px 0 #000000, 1px 1px 0 #000000' : 'none'};
+                  -webkit-text-stroke: 3px #000000;
+                  paint-order: stroke fill;
+                  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);
                 "
               >
                 {blueTeamTag}
@@ -170,9 +172,9 @@
             <!-- Badge de Victoria y Reloj -->
             <div class="match-status-meta">
               {#if gameUI.redScore > gameUI.blueScore}
-                <span class="badge-victory red">VICTORIA RED</span>
+                <span class="badge-victory red">VICTORIA {redTeamName.toUpperCase()}</span>
               {:else if gameUI.blueScore > gameUI.redScore}
-                <span class="badge-victory blue">VICTORIA BLUE</span>
+                <span class="badge-victory blue">VICTORIA {blueTeamName.toUpperCase()}</span>
               {:else}
                 <span class="badge-victory draw">EMPATE</span>
               {/if}
@@ -817,17 +819,24 @@
   }
 
   .stats-acronym-badge {
-    height: 26px;
-    padding: 0 0.55rem;
-    display: flex;
+    min-width: 68px;
+    height: 36px;
+    padding: 0 14px;
+    display: inline-flex;
     align-items: center;
     justify-content: center;
-    border-radius: 0.35rem;
+    border-radius: 0.375rem;
     font-family: 'Space Grotesk', system-ui, sans-serif;
-    font-size: 0.78rem;
+    font-size: 0.95rem;
     font-weight: 900;
-    letter-spacing: 0.05em;
+    letter-spacing: 0.08em;
+    user-select: none;
+    line-height: 1;
+    paint-order: stroke fill;
+    -webkit-text-stroke: 3px #000000;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);
     box-shadow: 0 0 8px rgba(0, 0, 0, 0.6);
+    box-sizing: border-box;
   }
 
   .stats-score-num {

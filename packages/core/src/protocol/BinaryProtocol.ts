@@ -79,7 +79,7 @@ export class BinaryProtocol {
   public static readonly PKT_SNAPSHOT = OP_SNAPSHOT;
   public static readonly INPUT_SIZE = 9;
   public static readonly SNAPSHOT_HEADER_SIZE = 12;
-  public static readonly DISC_RECORD_SIZE = 16;
+  public static readonly DISC_RECORD_SIZE = 18;
 
   public static peekPacketType(buffer: ArrayBuffer | DataView): number {
     const view = buffer instanceof DataView ? buffer : new DataView(buffer);
@@ -178,6 +178,12 @@ export class BinaryProtocol {
       view.setInt16(offset + 12, qvx, false);
       view.setInt16(offset + 14, qvy, false);
 
+      const stamina = Math.max(0, Math.min(100, Math.round(d.stamina ?? 100)));
+      view.setUint8(offset + 16, stamina);
+
+      const spin = Math.max(-128, Math.min(127, Math.round((d.spin ?? 0) * 50)));
+      view.setInt8(offset + 17, spin);
+
       offset += this.DISC_RECORD_SIZE;
     }
 
@@ -202,7 +208,21 @@ export class BinaryProtocol {
     let offset = this.SNAPSHOT_HEADER_SIZE;
 
     for (let i = 0; i < discCount; i++) {
-      if (offset + this.DISC_RECORD_SIZE > view.byteLength) break;
+      if (offset + this.DISC_RECORD_SIZE > view.byteLength) {
+        if (offset + 16 <= view.byteLength) {
+          const id = view.getUint16(offset, false);
+          const team = view.getUint8(offset + 2);
+          const flags = view.getUint8(offset + 3);
+          const x = view.getFloat32(offset + 4, false);
+          const y = view.getFloat32(offset + 8, false);
+          const vx = view.getInt16(offset + 12, false) / 20;
+          const vy = view.getInt16(offset + 14, false) / 20;
+          discs.push({ id, team, flags, x, y, vx, vy, stamina: 100, spin: 0 });
+          offset += 16;
+          continue;
+        }
+        break;
+      }
       const id = view.getUint16(offset, false);
       const team = view.getUint8(offset + 2);
       const flags = view.getUint8(offset + 3);
@@ -210,8 +230,10 @@ export class BinaryProtocol {
       const y = view.getFloat32(offset + 8, false);
       const vx = view.getInt16(offset + 12, false) / 20;
       const vy = view.getInt16(offset + 14, false) / 20;
+      const stamina = view.getUint8(offset + 16);
+      const spin = view.getInt8(offset + 17) / 50;
 
-      discs.push({ id, team, flags, x, y, vx, vy });
+      discs.push({ id, team, flags, x, y, vx, vy, stamina, spin });
       offset += this.DISC_RECORD_SIZE;
     }
 

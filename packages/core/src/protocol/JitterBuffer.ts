@@ -315,7 +315,8 @@ export class JitterBuffer<T extends AnySnapshot = any> {
         vx: lerp(d0.vx, d1.vx, alpha),
         vy: lerp(d0.vy, d1.vy, alpha),
         flags: d1.flags,
-        spin: d1.spin !== undefined && d0.spin !== undefined ? lerp(d0.spin, d1.spin, alpha) : d1.spin
+        spin: d1.spin !== undefined && d0.spin !== undefined ? lerp(d0.spin, d1.spin, alpha) : d1.spin,
+        stamina: d1.stamina !== undefined && d0.stamina !== undefined ? lerp(d0.stamina, d1.stamina, alpha) : (d1.stamina ?? 100)
       };
     });
 

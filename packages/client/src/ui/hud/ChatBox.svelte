@@ -23,16 +23,8 @@
   function sendChat() {
     const text = chatInput.trim();
     if (text.length > 0) {
-      const triggers = gameUI.settings.emoteTriggers || [];
-      const lower = text.toLowerCase();
-      const matched = triggers.find((t) => t.trigger.toLowerCase() === lower);
-
-      if (gameUI.settings.showPitchEmotes !== false && matched) {
-        soundFX.playPitchEmoteSound();
-        gameUI.triggerPlayerEmote(gameUI.localPlayerId, matched.emoji);
-        if (gameUI.onChatSent) {
-          gameUI.onChatSent(text);
-        }
+      if (gameUI.onChatSent) {
+        gameUI.onChatSent(text);
       } else {
         onSendChat(text);
       }

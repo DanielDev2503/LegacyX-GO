@@ -891,3 +891,4 @@ export class GameRenderer {
 }
 
 export { GameRenderer as CanvasRenderer };
+export { triggerPitchEmote, clearPitchEmotes, activePitchEmotes } from './DiscRenderer';

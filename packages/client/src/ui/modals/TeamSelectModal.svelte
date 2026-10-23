@@ -18,26 +18,18 @@
   } = $props();
 
   // Diapositiva del corredor deslizante: 0 = STATS, 1 = LOBBY / MENÚ DE SALA
-  let currentSlide = $state<0 | 1>(
-    (gameUI.activeModal === 'STATS' || gameUI.activeModal === 'stats' || gameUI.fsmPhase === 'STATS') && gameUI.hasCompletedMatch ? 0 : 1
+  let currentSlide = $derived<0 | 1>(
+    gameUI.activeSlide === 'STATS' && gameUI.hasCompletedMatch ? 0 : 1
   );
-
-  $effect(() => {
-    if ((gameUI.activeModal === 'STATS' || gameUI.activeModal === 'stats' || gameUI.fsmPhase === 'STATS') && gameUI.hasCompletedMatch) {
-      currentSlide = 0;
-    } else if (gameUI.activeModal === 'TEAM_MANAGEMENT' || gameUI.activeModal === 'TEAM_SELECT' || !gameUI.hasCompletedMatch) {
-      currentSlide = 1;
-    }
-  });
 
   function goToSlide(slide: 0 | 1) {
     if (slide === 0 && !gameUI.hasCompletedMatch) return;
     soundFX.playUIClick();
-    currentSlide = slide;
+    gameUI.activeSlide = slide === 0 ? 'STATS' : 'MENU';
     if (slide === 0) {
       gameUI.activeModal = 'STATS';
     } else {
-      gameUI.activeModal = 'TEAM_MANAGEMENT';
+      gameUI.activeModal = 'TEAM_SELECT';
     }
   }
 
@@ -76,10 +68,10 @@
   let blueHasOutline = $derived(blueOutlineColor !== 'none' && blueOutlineColor !== 'transparent' && blueOutlineColor !== '');
 
   let isRedCaptainOrAdmin = $derived(
-    gameUI.isHost || gameUI.isAdmin || (redCaptain && redCaptain.id === gameUI.localPlayerId)
+    gameUI.isHost || gameUI.isAdmin || (gameUI.allowCaptainKitSwitch && redCaptain && redCaptain.id === gameUI.localPlayerId)
   );
   let isBlueCaptainOrAdmin = $derived(
-    gameUI.isHost || gameUI.isAdmin || (blueCaptain && blueCaptain.id === gameUI.localPlayerId)
+    gameUI.isHost || gameUI.isAdmin || (gameUI.allowCaptainKitSwitch && blueCaptain && blueCaptain.id === gameUI.localPlayerId)
   );
 
   function handleSetRedKitVariant(variant: 'home' | 'away') {
@@ -347,12 +339,13 @@
               <div
                 class="stats-acronym-badge red-acronym"
                 style="
-                  background: linear-gradient(90deg, {redPrimaryColor} 0%, {redPrimaryColor} 30%, {redSecondaryColor} 70%, {redSecondaryColor} 100%);
+                  background: linear-gradient(135deg, {redPrimaryColor} 0%, {redPrimaryColor} 25%, {redSecondaryColor} 75%, {redSecondaryColor} 100%);
                   border: {redHasOutline ? '1.5px solid #000000' : `1.5px solid ${redKitTertiary}`};
                   box-shadow: {redHasOutline ? '0 0 0 1.5px #000000' : 'none'};
                   color: {redKitTertiary};
-                  -webkit-text-stroke: {redHasOutline ? '1px #000000' : 'none'};
-                  text-shadow: {redHasOutline ? '-1px -1px 0 #000000, 1px -1px 0 #000000, -1px 1px 0 #000000, 1px 1px 0 #000000' : 'none'};
+                  -webkit-text-stroke: 3px #000000;
+                  paint-order: stroke fill;
+                  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);
                 "
               >
                 {redTeamTag}
@@ -363,12 +356,13 @@
               <div
                 class="stats-acronym-badge blue-acronym"
                 style="
-                  background: linear-gradient(90deg, {bluePrimaryColor} 0%, {bluePrimaryColor} 30%, {blueSecondaryColor} 70%, {blueSecondaryColor} 100%);
+                  background: linear-gradient(135deg, {bluePrimaryColor} 0%, {bluePrimaryColor} 25%, {blueSecondaryColor} 75%, {blueSecondaryColor} 100%);
                   border: {blueHasOutline ? '1.5px solid #000000' : `1.5px solid ${blueKitTertiary}`};
                   box-shadow: {blueHasOutline ? '0 0 0 1.5px #000000' : 'none'};
                   color: {blueKitTertiary};
-                  -webkit-text-stroke: {blueHasOutline ? '1px #000000' : 'none'};
-                  text-shadow: {blueHasOutline ? '-1px -1px 0 #000000, 1px -1px 0 #000000, -1px 1px 0 #000000, 1px 1px 0 #000000' : 'none'};
+                  -webkit-text-stroke: 3px #000000;
+                  paint-order: stroke fill;
+                  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);
                 "
               >
                 {blueTeamTag}
@@ -377,9 +371,9 @@
 
             <div class="match-status-meta">
               {#if gameUI.redScore > gameUI.blueScore}
-                <span class="badge-victory red">VICTORIA RED</span>
+                <span class="badge-victory red">VICTORIA {redTeamName.toUpperCase()}</span>
               {:else if gameUI.blueScore > gameUI.redScore}
-                <span class="badge-victory blue">VICTORIA BLUE</span>
+                <span class="badge-victory blue">VICTORIA {blueTeamName.toUpperCase()}</span>
               {:else}
                 <span class="badge-victory draw">EMPATE</span>
               {/if}
@@ -736,6 +730,43 @@
                     >
                       <span class="lock-label">{gameUI.teamsLocked ? '🔒 Bloqueados' : '🔓 Libres'}</span>
                       <span class="lock-tag">{gameUI.teamsLocked ? 'SOLO ADMINS' : 'TODOS'}</span>
+                    </button>
+
+                    <!-- Bloqueo de Equipaciones por Capitanes -->
+                    <button
+                      type="button"
+                      id="btn-lock-captain-kits"
+                      class="rule-cartouche-btn lock-teams-btn"
+                      class:active-locked={!gameUI.allowCaptainKitSwitch}
+                      disabled={(!gameUI.isAdmin && !gameUI.isHost) || gameUI.isMatchActive}
+                      title="Permitir o bloquear el cambio de camisetas para capitanes"
+                      onclick={() => {
+                        soundFX.playUIClick();
+                        gameUI.allowCaptainKitSwitch = !gameUI.allowCaptainKitSwitch;
+                        if (gameUI.isHost) {
+                          gameApp.updateRoomConfig({ allowCaptainKitSwitch: gameUI.allowCaptainKitSwitch });
+                        } else {
+                          gameApp.dispatchAdminAction('TOGGLE_CAPTAIN_KIT_SWITCH', { allowCaptainKitSwitch: gameUI.allowCaptainKitSwitch });
+                        }
+                      }}
+                    >
+                      <span class="lock-label">{gameUI.allowCaptainKitSwitch ? '👕 Camisetas Libres' : '🔒 Camisetas Fijas'}</span>
+                      <span class="lock-tag">{gameUI.allowCaptainKitSwitch ? 'CAPITANES' : 'BLOQUEADO'}</span>
+                    </button>
+
+                    <!-- Balanceo Automático de Espectadores -->
+                    <button
+                      type="button"
+                      id="btn-auto-balance"
+                      class="rule-cartouche-btn btn-auto-balance"
+                      disabled={(!gameUI.isAdmin && !gameUI.isHost) || specPlayers.length === 0 || gameUI.isMatchActive}
+                      title="Balancear automáticamente espectadores a Rojo y Azul (1 a cada equipo por clic)"
+                      onclick={() => {
+                        gameUI.autoBalanceSpectators();
+                      }}
+                    >
+                      <span class="lock-label">⚖️ Auto</span>
+                      <span class="lock-tag">({specPlayers.length})</span>
                     </button>
 
                     <!-- Modifiers (Exclusivo Host) -->
@@ -2377,17 +2408,36 @@
   }
 
   .stats-acronym-badge {
-    height: 26px;
-    padding: 0 0.55rem;
-    display: flex;
+    min-width: 68px;
+    height: 36px;
+    padding: 0 14px;
+    display: inline-flex;
     align-items: center;
     justify-content: center;
-    border-radius: 0.35rem;
+    border-radius: 0.375rem;
     font-family: 'Space Grotesk', system-ui, sans-serif;
-    font-size: 0.78rem;
+    font-size: 0.95rem;
     font-weight: 900;
-    letter-spacing: 0.05em;
+    letter-spacing: 0.08em;
+    user-select: none;
+    line-height: 1;
+    paint-order: stroke fill;
+    -webkit-text-stroke: 3px #000000;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);
     box-shadow: 0 0 8px rgba(0, 0, 0, 0.6);
+    box-sizing: border-box;
+  }
+
+  .btn-auto-balance {
+    background: rgba(0, 229, 255, 0.1);
+    border-color: rgba(0, 229, 255, 0.4);
+    color: #00e5ff;
+    box-shadow: 0 0 10px rgba(0, 229, 255, 0.15);
+  }
+
+  .btn-auto-balance:hover:not(:disabled) {
+    background: rgba(0, 229, 255, 0.2);
+    border-color: #00e5ff;
   }
 
   .stats-score-num {

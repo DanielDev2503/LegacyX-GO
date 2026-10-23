@@ -197,12 +197,27 @@ export class NetworkClient {
       if (typeof msg.teamsLocked === 'boolean') {
         this.teamsLocked = msg.teamsLocked;
       }
+      if (typeof msg.allowCaptainKitSwitch === 'boolean') {
+        gameUI.allowCaptainKitSwitch = msg.allowCaptainKitSwitch;
+      }
+      if (typeof msg.stadiumId === 'string' && msg.stadiumId) {
+        gameUI.onStadiumChanged?.(msg.stadiumId);
+      }
       if (msg.redKitVariant === 'home' || msg.redKitVariant === 'away') {
         gameUI.redKitVariant = msg.redKitVariant;
       }
       if (msg.blueKitVariant === 'home' || msg.blueKitVariant === 'away') {
         gameUI.blueKitVariant = msg.blueKitVariant;
       }
+
+      // Cerrar modal automáticamente si la partida está en curso
+      const phase = typeof msg.matchPhase === 'number' ? msg.matchPhase : 0;
+      if (phase !== 0) {
+        if (gameUI.activeModal === 'TEAM_SELECT' || gameUI.activeModal === 'TEAM_MANAGEMENT') {
+          gameUI.activeModal = 'NONE';
+        }
+      }
+
       this.onRoomStateSync?.(msg);
       this.onPlayerListUpdated?.(this.players);
       if (this.localPlayerId !== null) {
@@ -235,6 +250,9 @@ export class NetworkClient {
       if (Array.isArray(msg.stats)) {
         gameUI.lastMatchStats = msg.stats;
         gameUI.hasCompletedMatch = true;
+        gameUI.activeSlide = 'STATS';
+        gameUI.fsmPhase = 'STOPPED';
+        gameUI.matchPhase = 0;
         if (msg.mvp) {
           gameUI.mvp = msg.mvp as any;
         }
@@ -246,7 +264,7 @@ export class NetworkClient {
         }
         if (!gameUI.isSecondaryOverlayOpen) {
           gameUI.clearModalStack();
-          gameUI.activeModal = 'STATS';
+          gameUI.activeModal = 'TEAM_SELECT';
         }
       }
     } else if (msg.type === 'EMOTE') {
@@ -301,6 +319,21 @@ export class NetworkClient {
     this.peer?.sendReliable({
       type: 'CHAT',
       text
+    });
+  }
+
+  public sendProfileUpdate(profile: {
+    nickname?: string;
+    avatar?: string;
+    avatarType?: string;
+    kit?: any;
+    localKit?: any;
+    visitorKit?: any;
+  }): void {
+    this.peer?.sendReliable({
+      type: 'UPDATE_PLAYER_PROFILE',
+      playerId: this.localPlayerId,
+      ...profile
     });
   }
 

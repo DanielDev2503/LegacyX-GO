@@ -98,22 +98,8 @@
     const text = chatMessage.trim();
     if (text) {
       soundFX.playUIClick();
-
-      const triggers = gameUI.settings.emoteTriggers || [];
-      const lower = text.toLowerCase();
-      const matched = triggers.find((t) => t.trigger.toLowerCase() === lower);
-
-      if (gameUI.settings.showPitchEmotes !== false && matched) {
-        // Activación silenciosa: no se imprime la cadena en el feed del chat
-        soundFX.playPitchEmoteSound();
-        gameUI.triggerPlayerEmote(gameUI.localPlayerId, matched.emoji);
-        if (gameUI.onChatSent) {
-          gameUI.onChatSent(text);
-        }
-      } else {
-        if (gameUI.onChatSent) {
-          gameUI.onChatSent(text);
-        }
+      if (gameUI.onChatSent) {
+        gameUI.onChatSent(text);
       }
     }
     chatMessage = '';
@@ -224,12 +210,13 @@
         <div
           class="team-acronym-card red-acronym"
           style="
-            background: linear-gradient(90deg, {redKitPrimary} 50%, {redKitSecondary} 50%);
+            background: linear-gradient(135deg, {redKitPrimary} 0%, {redKitPrimary} 25%, {redKitSecondary} 75%, {redKitSecondary} 100%);
             border: {redHasOutline ? '1.5px solid #000000' : `1.5px solid ${redKitTertiary}`};
             box-shadow: {redHasOutline ? '0 0 0 1.5px #000000, 0 2px 6px rgba(0, 0, 0, 0.5)' : '0 2px 6px rgba(0, 0, 0, 0.5)'};
             color: {redKitTertiary};
-            -webkit-text-stroke: {redHasOutline ? '1px #000000' : 'none'};
-            text-shadow: {redHasOutline ? '-1px -1px 0 #000000, 1px -1px 0 #000000, -1px 1px 0 #000000, 1px 1px 0 #000000' : 'none'};
+            -webkit-text-stroke: 3px #000000;
+            paint-order: stroke fill;
+            text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);
           "
         >
           {redActiveKit?.tag || 'RED'}
@@ -254,12 +241,13 @@
         <div
           class="team-acronym-card blue-acronym"
           style="
-            background: linear-gradient(90deg, {blueKitPrimary} 50%, {blueKitSecondary} 50%);
+            background: linear-gradient(135deg, {blueKitPrimary} 0%, {blueKitPrimary} 25%, {blueKitSecondary} 75%, {blueKitSecondary} 100%);
             border: {blueHasOutline ? '1.5px solid #000000' : `1.5px solid ${blueKitTertiary}`};
             box-shadow: {blueHasOutline ? '0 0 0 1.5px #000000, 0 2px 6px rgba(0, 0, 0, 0.5)' : '0 2px 6px rgba(0, 0, 0, 0.5)'};
             color: {blueKitTertiary};
-            -webkit-text-stroke: {blueHasOutline ? '1px #000000' : 'none'};
-            text-shadow: {blueHasOutline ? '-1px -1px 0 #000000, 1px -1px 0 #000000, -1px 1px 0 #000000, 1px 1px 0 #000000' : 'none'};
+            -webkit-text-stroke: 3px #000000;
+            paint-order: stroke fill;
+            text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);
           "
         >
           {blueActiveKit?.tag || 'BLUE'}
@@ -536,16 +524,19 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    padding: 0.25rem 0.65rem;
-    min-width: 50px;
-    height: 28px;
+    padding: 0 14px;
+    min-width: 68px;
+    height: 36px;
     border-radius: 0.375rem;
     font-family: 'Space Grotesk', system-ui, sans-serif;
-    font-size: 0.8rem;
+    font-size: 0.95rem;
     font-weight: 900;
     letter-spacing: 0.08em;
     user-select: none;
     line-height: 1;
+    paint-order: stroke fill;
+    -webkit-text-stroke: 3px #000000;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);
     box-shadow: 0 2px 6px rgba(0, 0, 0, 0.5);
     box-sizing: border-box;
     transition: all 0.15s ease;

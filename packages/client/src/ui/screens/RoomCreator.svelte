@@ -10,6 +10,7 @@
   let roomPassword = $state('');
   let isPublic = $state(true);
   let teamsLocked = $state(true);
+  let allowCaptainKitSwitch = $state(false);
   let selectedTimeMinutes = $state(3);
   let selectedGoalsLimit = $state(3);
   let selectedStadiumIndex = $state(0);
@@ -64,9 +65,11 @@
         maxPlayers: playerCount || 12,
         timeLimit: selectedTimeMinutes,
         scoreLimit: selectedGoalsLimit,
-        teamsLocked: teamsLocked
+        teamsLocked: teamsLocked,
+        allowCaptainKitSwitch: allowCaptainKitSwitch
       });
       if (success) {
+        gameUI.allowCaptainKitSwitch = allowCaptainKitSwitch;
         gameUI.currentScreen = 'IN_GAME';
         gameUI.activeModal = 'TEAM_SELECT';
       }
@@ -259,6 +262,18 @@
           >
             <span class="lock-label">{teamsLocked ? '🔒 Bloqueados' : '🔓 Libres'}</span>
             <span class="lock-tag">{teamsLocked ? 'SOLO ADMINS' : 'TODOS'}</span>
+          </button>
+
+          <!-- Bloqueo de Equipaciones por Capitanes -->
+          <button
+            type="button"
+            class="rule-btn lock-teams-btn"
+            class:active-locked={!allowCaptainKitSwitch}
+            title="Permitir o bloquear el cambio de camisetas para capitanes"
+            onclick={() => { soundFX.playUIClick(); allowCaptainKitSwitch = !allowCaptainKitSwitch; }}
+          >
+            <span class="lock-label">{allowCaptainKitSwitch ? '👕 Camisetas Libres' : '🔒 Camisetas Fijas'}</span>
+            <span class="lock-tag">{allowCaptainKitSwitch ? 'CAPITANES' : 'BLOQUEADO'}</span>
           </button>
 
           <!-- Modifiers Button (without PHYS_STD badge) -->
