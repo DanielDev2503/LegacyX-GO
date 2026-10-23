@@ -143,6 +143,9 @@ export class EngineInstance {
   public ball: Disc;
   public players: Map<number, Disc> = new Map();
   public playerTeams: Map<number, 'red' | 'blue' | 'spec'> = new Map();
+  public playerNames: Map<number, string> = new Map();
+  public matchStats: Map<number, PlayerMatchStats> = new Map();
+  private touchHistory: Array<{ playerId: number; team: 'red' | 'blue'; tick: number; isKick: boolean }> = [];
   public modifiers: PhysicsModifiers;
   public currentTick: number = 0;
   public soundMask: number = 0;
@@ -196,8 +199,11 @@ export class EngineInstance {
           if (other?.isPost) {
             this.soundMask |= SOUND_POST_HIT;
             this.emit('post_hit', { ball: this.ball, post: other });
-          } else if (other && !other.isBall && this.fsm.state === MatchPhase.KICKOFF) {
-            this.fsm.startPlaying();
+          } else if (other && !other.isBall) {
+            this.recordTouch(other.id, false);
+            if (this.fsm.state === MatchPhase.KICKOFF) {
+              this.fsm.startPlaying();
+            }
           }
         }
       }
@@ -216,7 +222,11 @@ export class EngineInstance {
     };
 
     this.fsm.onMatchEnd = (winner) => {
-      this.emit('match_end', { winner });
+      this.emit('match_end', {
+        winner,
+        stats: this.getMatchStats(),
+        mvp: this.getMVP()
+      });
     };
   }
 
@@ -305,11 +315,13 @@ export class EngineInstance {
 
   public startMatch(): void {
     this.resetPositions();
+    this.resetMatchStats();
     this.fsm.startMatch();
   }
 
   public stopMatch(): void {
     this.resetPositions();
+    this.resetMatchStats();
     this.fsm.stopMatch();
   }
 
@@ -420,6 +432,7 @@ export class EngineInstance {
             }
 
             this.soundMask |= SOUND_KICK;
+            this.recordTouch(player.id, true);
             this.emit('kick', { player, ball: this.ball });
 
             if (this.fsm.state === MatchPhase.KICKOFF) {
@@ -470,15 +483,157 @@ export class EngineInstance {
 
       if (Math.abs(by) <= gh) {
         if (bx < -hw - this.ball.radius) {
-          this.fsm.registerGoal('blue');
+          this.handleGoalScored('blue');
         } else if (bx > hw + this.ball.radius) {
-          this.fsm.registerGoal('red');
+          this.handleGoalScored('red');
         }
       }
     }
 
     this.fsm.updateTick();
     this.currentTick++;
+  }
+
+  public getOrCreateStats(id: number): PlayerMatchStats {
+    let s = this.matchStats.get(id);
+    if (!s) {
+      const team = (this.playerTeams.get(id) ?? 'spec') as 'red' | 'blue' | 'spec';
+      const name = this.playerNames.get(id) || `Jugador ${id}`;
+      s = {
+        playerId: String(id),
+        playerName: name,
+        nickname: name,
+        team,
+        points: 0,
+        totalPoints: 0,
+        goals: 0,
+        assists: 0,
+        passes: 0,
+        saves: 0,
+        shots: 0,
+        touches: 0,
+        hasHattrickBonus: false,
+        shotsNormal: 0,
+        shotsPowerCurve: 0,
+        assistsNormal: 0,
+        assistsCurve: 0,
+        hattrickBonus: 0
+      };
+      this.matchStats.set(id, s);
+    }
+    return s;
+  }
+
+  public recordTouch(id: number, isKick: boolean): void {
+    const team = this.playerTeams.get(id);
+    if (team !== 'red' && team !== 'blue') return;
+
+    const stats = this.getOrCreateStats(id);
+    stats.touches++;
+
+    const lastTouch = this.touchHistory.length > 0 ? this.touchHistory[this.touchHistory.length - 1] : null;
+
+    // Detectar pase entre compañeros de equipo
+    if (lastTouch && lastTouch.playerId !== id && lastTouch.team === team) {
+      const prevStats = this.getOrCreateStats(lastTouch.playerId);
+      prevStats.passes++;
+      prevStats.points += 5;
+    }
+
+    if (isKick) {
+      stats.shots++;
+      stats.points += 10;
+    }
+
+    // Detectar parada defensiva en área propia
+    const hw = this.stadium.halfWidth;
+    const gh = this.stadium.goalHalfHeight;
+    const player = this.players.get(id);
+    if (player) {
+      const inOwnHalf = (team === 'red' && player.pos.x < -hw * 0.6) || (team === 'blue' && player.pos.x > hw * 0.6);
+      if (inOwnHalf && Math.abs(player.pos.y) < gh * 2.2) {
+        stats.saves++;
+        stats.points += 25;
+      }
+    }
+
+    this.touchHistory.push({ playerId: id, team, tick: this.currentTick, isKick });
+    if (this.touchHistory.length > 50) {
+      this.touchHistory.shift();
+    }
+  }
+
+  public handleGoalScored(scoringTeam: 'red' | 'blue'): void {
+    let scorerId: number | null = null;
+    let assisterId: number | null = null;
+
+    for (let i = this.touchHistory.length - 1; i >= 0; i--) {
+      const entry = this.touchHistory[i];
+      if (entry.team === scoringTeam) {
+        if (scorerId === null) {
+          scorerId = entry.playerId;
+        } else if (assisterId === null && entry.playerId !== scorerId) {
+          if (this.currentTick - entry.tick <= 600) {
+            assisterId = entry.playerId;
+          }
+          break;
+        }
+      } else if (scorerId !== null) {
+        break;
+      }
+    }
+
+    if (scorerId !== null) {
+      const sStats = this.getOrCreateStats(scorerId);
+      sStats.goals++;
+      sStats.points += 100;
+
+      if (sStats.goals >= 3 && !sStats.hasHattrickBonus) {
+        sStats.hasHattrickBonus = true;
+        sStats.hattrickBonus = 100;
+        sStats.points += 100;
+      }
+    }
+
+    if (assisterId !== null) {
+      const aStats = this.getOrCreateStats(assisterId);
+      aStats.assists++;
+      aStats.points += 50;
+    }
+
+    this.touchHistory = [];
+    this.fsm.registerGoal(scoringTeam);
+  }
+
+  public getMatchStats(): PlayerMatchStats[] {
+    for (const [id, team] of this.playerTeams.entries()) {
+      const s = this.getOrCreateStats(id);
+      s.team = team as 'red' | 'blue' | 'spec';
+      const name = this.playerNames.get(id);
+      if (name) {
+        s.playerName = name;
+        s.nickname = name;
+      }
+      s.totalPoints = s.points;
+    }
+    return Array.from(this.matchStats.values());
+  }
+
+  public getMVP(): PlayerMatchStats | null {
+    const all = this.getMatchStats();
+    let mvp: PlayerMatchStats | null = null;
+    for (const s of all) {
+      if (s.team === 'spec') continue;
+      if (!mvp || s.points > mvp.points || (s.points === mvp.points && s.goals > mvp.goals)) {
+        mvp = s;
+      }
+    }
+    return mvp;
+  }
+
+  public resetMatchStats(): void {
+    this.matchStats.clear();
+    this.touchHistory = [];
   }
 
   public setState(snapshot: GameStateSnapshot): void {

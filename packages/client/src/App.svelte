@@ -23,6 +23,7 @@
   import { gameUI, type PhysicsModifiers } from './ui/state/gameUI.svelte.js';
   import { soundFX } from './audio/SoundFX.js';
   import { gameApp } from './net/GameApp.js';
+  import { SimulationTicker } from './net/SimulationTicker.js';
 
   import Gatekeeper from './ui/screens/Gatekeeper.svelte';
   import Lobby from './ui/screens/Lobby.svelte';
@@ -62,6 +63,7 @@
       testEngine = engine;
       engine.applyModifiers(gameUI.physicsModifiers);
       engine.resetPositions();
+      soundFX.startHostKeepAlive();
     }
 
     // Inicializar siempre en 0: STOP con el menú de sala abierto
@@ -78,6 +80,7 @@
         if (p.team === 'red' || p.team === 'blue') {
           activeIds.add(p.id);
           engine.setPlayerTeam(p.id, p.team);
+          engine.playerNames.set(p.id, p.nickname || p.name || `Player ${p.id}`);
         } else {
           engine.removePlayer(p.id);
         }
@@ -99,6 +102,11 @@
     };
 
     gameUI.onStartMatch = () => {
+      gameUI.hasCompletedMatch = false;
+      gameUI.lastMatchStats = null;
+      gameUI.redTeamStats = [];
+      gameUI.blueTeamStats = [];
+      gameUI.mvp = null;
       if (gameUI.isHost && engine) {
         engine.startMatch();
         soundFX.playWhistle();
@@ -117,6 +125,11 @@
       } else if (!gameUI.isHost && gameApp.networkClient) {
         gameApp.networkClient.sendAdminAction('STOP_MATCH');
       }
+      gameUI.hasCompletedMatch = false;
+      gameUI.lastMatchStats = null;
+      gameUI.redTeamStats = [];
+      gameUI.blueTeamStats = [];
+      gameUI.mvp = null;
       gameUI.clearModalStack();
       gameUI.openOverlay('TEAM_MANAGEMENT');
     };
@@ -200,6 +213,27 @@
           soundFX.playWhistle();
         }
       });
+
+      engine.on('match_end', ({ winner, stats, mvp }: any) => {
+        soundFX.playWhistle();
+        const allStats = stats ?? (engine ? engine.getMatchStats() : []);
+        const theMVP = mvp ?? (engine ? engine.getMVP() : null);
+        const redStats = allStats.filter((s: any) => s.team === 'red');
+        const blueStats = allStats.filter((s: any) => s.team === 'blue');
+
+        gameUI.hasCompletedMatch = true;
+        gameUI.lastMatchStats = allStats;
+        gameUI.mvp = theMVP;
+        gameUI.redTeamStats = redStats;
+        gameUI.blueTeamStats = blueStats;
+
+        gameApp.networkHost?.broadcastMatchStats(allStats, theMVP, redStats, blueStats);
+
+        if (!gameUI.isSecondaryOverlayOpen) {
+          gameUI.clearModalStack();
+          gameUI.activeModal = 'STATS';
+        }
+      });
     }
 
     // 2. Inicializar GameRenderer desacoplado
@@ -275,25 +309,16 @@
     window.addEventListener('keydown', onKeyDown);
     window.addEventListener('keyup', onKeyUp);
 
-    // 4. Bucle desacoplado: Física a 60 Hz exactos + Render en requestAnimationFrame
+    // 4. Bucle desacoplado: Simulación y Network a 60 Hz en Worker + Render en requestAnimationFrame
     const FIXED_DT_MS = 1000 / 60;
-    let accumulatedTime = 0;
-    let lastTimestamp = performance.now();
+    let lastSimTimestamp = performance.now();
     let animFrameId: number;
 
     let clientTick = 0;
     let prevSnapshot: GameStateSnapshot = engine ? engine.getState() : ({} as any);
     let currSnapshot: GameStateSnapshot = engine ? engine.getState() : ({} as any);
 
-    let frameCount = 0;
-    let lastFpsCalculation = performance.now();
-
-    function renderLoop(currentTime: number): void {
-      const deltaMs = Math.min(100, currentTime - lastTimestamp);
-      lastTimestamp = currentTime;
-      accumulatedTime += deltaMs;
-
-      // Inputs canónicos del jugador local
+    function getCurrentInputMask(): number {
       let mask = 0;
       const isInputActive = gameUI.currentScreen === 'IN_GAME' && gameUI.activeModal === 'NONE';
       const activeEl = document.activeElement;
@@ -322,6 +347,12 @@
         if (keyState.get('ArrowLeft') || keyState.get('KeyQ') || keyState.get('KeyZ')) mask |= INPUT_FLAG_MAGNUS_LEFT;
         if (keyState.get('ArrowRight') || keyState.get('KeyE') || keyState.get('KeyC')) mask |= INPUT_FLAG_MAGNUS_RIGHT;
       }
+      return mask;
+    }
+
+    const simTicker = new SimulationTicker((now) => {
+      lastSimTimestamp = now;
+      const mask = getCurrentInputMask();
 
       if (!gameUI.isHost) {
         // Guest: Transmitir inputs al Host a 60 Hz y leer snapshots recibidos
@@ -342,20 +373,24 @@
           inputs.set(rId, rInput);
         }
 
-        while (accumulatedTime >= FIXED_DT_MS) {
-          prevSnapshot = currSnapshot;
-          engine.step(inputs);
-          currSnapshot = engine.getState();
-          accumulatedTime -= FIXED_DT_MS;
-        }
+        prevSnapshot = currSnapshot;
+        engine.step(inputs);
+        currSnapshot = engine.getState();
 
         // Broadcast snapshot autoritativo a todos los peers conectados
         const snapBuffer = BinaryProtocol.encodeSnapshot(currSnapshot);
         gameApp.networkHost?.broadcastSnapshot(snapBuffer);
       }
+    });
 
+    simTicker.start();
+
+    let frameCount = 0;
+    let lastFpsCalculation = performance.now();
+
+    function renderLoop(currentTime: number): void {
       // Interpolación lineal libre en Canvas 2D
-      const alpha = Math.max(0, Math.min(1.0, accumulatedTime / FIXED_DT_MS));
+      const alpha = Math.max(0, Math.min(1.0, (currentTime - lastSimTimestamp) / FIXED_DT_MS));
 
       // Sincronizar cámara, zoom y proyección 2D
       renderer.camera.setZoom(gameUI.settings.cameraZoom || 1.0);
@@ -495,6 +530,10 @@
     animFrameId = requestAnimationFrame(renderLoop);
 
     return () => {
+      simTicker.stop();
+      if (isHost) {
+        soundFX.stopHostKeepAlive();
+      }
       cancelAnimationFrame(animFrameId);
       window.removeEventListener('resize', handleResize);
       window.removeEventListener('keydown', onKeyDown);

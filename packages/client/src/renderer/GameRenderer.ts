@@ -169,7 +169,7 @@ export class GameRenderer {
   }
 
   public setExtrapolation(ms: number): void {
-    this.extrapolationMs = Math.max(0, Math.min(250, ms));
+    this.extrapolationMs = Math.max(0, Math.min(100, ms));
     this.discRenderer.setExtrapolation(this.extrapolationMs);
   }
 

@@ -111,14 +111,6 @@
           gameUI.onChatSent(text);
         }
       } else {
-        const newMsg: ChatEntry = {
-          id: Date.now(),
-          team: (gameUI.myTeam === 'red' ? 'RED' : gameUI.myTeam === 'blue' ? 'BLUE' : 'SPEC'),
-          sender: gameUI.nickname || 'Jugador',
-          isHost: gameUI.isHost,
-          text
-        };
-        gameUI.chatMessages.push(newMsg);
         if (gameUI.onChatSent) {
           gameUI.onChatSent(text);
         }

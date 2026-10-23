@@ -180,11 +180,13 @@
             </div>
 
             <!-- Placa Dorada Destacada MVP con Glow Neón (#ffd700) -->
-            <div class="mvp-golden-plaque">
-              <span class="crown-icon">👑</span>
-              <span class="mvp-title">MVP: {gameUI.mvp.nickname}</span>
-              <span class="mvp-points-chip">({gameUI.mvp.points} pts)</span>
-            </div>
+            {#if gameUI.mvp}
+              <div class="mvp-golden-plaque">
+                <span class="crown-icon">👑</span>
+                <span class="mvp-title">MVP: {gameUI.mvp.nickname}</span>
+                <span class="mvp-points-chip">({gameUI.mvp.points} pts)</span>
+              </div>
+            {/if}
           </div>
 
           <!-- Tablas Duales Paralelas RED y BLUE con Cabeceras Bicolor Suave y Nombres de Capitán -->

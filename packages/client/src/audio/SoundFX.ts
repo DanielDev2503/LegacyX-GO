@@ -11,6 +11,8 @@ export class SoundFX {
   private chatGain: GainNode | null = null;
   private sfxGain: GainNode | null = null;
   private envGain: GainNode | null = null;
+  private keepAliveOsc: OscillatorNode | null = null;
+  private keepAliveGain: GainNode | null = null;
 
   private _isMuted: boolean = false;
   private _volume: number = 0.5;
@@ -722,6 +724,49 @@ export class SoundFX {
       };
     } catch {
       // AudioContext fallback
+    }
+  }
+
+  /**
+   * Mantiene activo un oscilador inaudible de ganancia casi cero (0.00001) para el Host.
+   * Evita que el navegador suspenda o ralentice la pestaña del Host cuando está en segundo plano.
+   */
+  public startHostKeepAlive(): void {
+    const ctx = this.ensureContext();
+    if (!ctx) return;
+    if (this.keepAliveOsc) return;
+
+    try {
+      this.keepAliveGain = ctx.createGain();
+      this.keepAliveGain.gain.setValueAtTime(0.00001, ctx.currentTime);
+      this.keepAliveOsc = ctx.createOscillator();
+      this.keepAliveOsc.type = 'sine';
+      this.keepAliveOsc.frequency.setValueAtTime(40, ctx.currentTime);
+      this.keepAliveOsc.connect(this.keepAliveGain);
+      this.keepAliveGain.connect(ctx.destination);
+      this.keepAliveOsc.start();
+    } catch {
+      // Ignorado si la política del navegador requiere interacción previa
+    }
+  }
+
+  public stopHostKeepAlive(): void {
+    if (this.keepAliveOsc) {
+      try {
+        this.keepAliveOsc.stop();
+        this.keepAliveOsc.disconnect();
+      } catch {
+        // Ignored
+      }
+      this.keepAliveOsc = null;
+    }
+    if (this.keepAliveGain) {
+      try {
+        this.keepAliveGain.disconnect();
+      } catch {
+        // Ignored
+      }
+      this.keepAliveGain = null;
     }
   }
 

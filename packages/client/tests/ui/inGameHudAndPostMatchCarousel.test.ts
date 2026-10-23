@@ -89,24 +89,87 @@ describe('InGameHUD & PostMatchCarousel Integration Suite (Cyber-Pitch HUD)', ()
   });
 
   describe('3. PostMatch Statistics Data & Accordion Breakdowns', () => {
-    it('contains comprehensive player statistics for RED and BLUE teams with MVP attribution', () => {
-      expect(gameUI.redTeamStats.length).toBeGreaterThan(0);
-      expect(gameUI.blueTeamStats.length).toBeGreaterThan(0);
+    it('initializes with empty stats until match conclusion and populates real stats', () => {
+      // Inicia vacío (sin mock stats)
+      gameUI.resetRoomSession();
+      expect(gameUI.redTeamStats).toEqual([]);
+      expect(gameUI.blueTeamStats).toEqual([]);
+      expect(gameUI.hasCompletedMatch).toBe(false);
+      expect(gameUI.mvp).toBeNull();
+
+      // Simular conclusión natural con telemetría real
+      const mockStats = [
+        {
+          playerId: '1',
+          playerName: 'CaptainRed',
+          nickname: 'CaptainRed',
+          team: 'red' as const,
+          points: 150,
+          goals: 1,
+          assists: 1,
+          passes: 10,
+          saves: 0,
+          shots: 4,
+          touches: 20,
+          hasHattrickBonus: false,
+          isCaptain: true
+        },
+        {
+          playerId: '2',
+          playerName: 'StrikerBlue',
+          nickname: 'StrikerBlue',
+          team: 'blue' as const,
+          points: 420,
+          goals: 3,
+          assists: 1,
+          passes: 12,
+          saves: 1,
+          shots: 4,
+          touches: 14,
+          hasHattrickBonus: true,
+          isMvp: true
+        }
+      ];
+
+      gameUI.redTeamStats = [mockStats[0]];
+      gameUI.blueTeamStats = [mockStats[1]];
+      gameUI.lastMatchStats = mockStats;
+      gameUI.mvp = mockStats[1];
+      gameUI.hasCompletedMatch = true;
+
+      expect(gameUI.redTeamStats.length).toBe(1);
+      expect(gameUI.blueTeamStats.length).toBe(1);
 
       const mvpEntry = gameUI.blueTeamStats.find((p) => p.isMvp);
       expect(mvpEntry).toBeDefined();
-      expect(mvpEntry?.nickname).toBe('yami');
+      expect(mvpEntry?.nickname).toBe('StrikerBlue');
       expect(mvpEntry?.points).toBe(420);
       expect(mvpEntry?.goals).toBe(3);
 
       const redCaptain = gameUI.redTeamStats.find((p) => p.isCaptain);
       expect(redCaptain).toBeDefined();
-      expect(redCaptain?.nickname).toBe('kiko');
+      expect(redCaptain?.nickname).toBe('CaptainRed');
     });
 
     it('computes point breakdowns according to the canonical multipliers', () => {
+      const player = {
+        playerId: '2',
+        playerName: 'StrikerBlue',
+        nickname: 'StrikerBlue',
+        team: 'blue' as const,
+        points: 420,
+        goals: 3,
+        assists: 1,
+        passes: 12,
+        saves: 1,
+        shots: 4,
+        touches: 14,
+        hasHattrickBonus: true,
+        ownGoals: 0
+      };
+      gameUI.blueTeamStats = [player];
+
       // Breakdown rules: Toques (+2), Pases (+10), Tiros (+20), Goles (+100), Autogol (-50)
-      const player = gameUI.blueTeamStats[0]!;
       const toquesPts = (player.touches ?? 14) * 2;
       const pasesPts = player.passes * 10;
       const tirosPts = player.shots * 20;

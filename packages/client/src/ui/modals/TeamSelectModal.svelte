@@ -1,6 +1,7 @@
 <script lang="ts">
   import { gameUI, type TeamSlot, type RosterPlayer } from '../state/gameUI.svelte';
   import { soundFX } from '../../audio/SoundFX';
+  import { gameApp } from '../../net/GameApp';
 
   let {
     onStartMatch = () => {},
@@ -18,18 +19,19 @@
 
   // Diapositiva del corredor deslizante: 0 = STATS, 1 = LOBBY / MENÚ DE SALA
   let currentSlide = $state<0 | 1>(
-    gameUI.activeModal === 'STATS' || gameUI.activeModal === 'stats' || gameUI.fsmPhase === 'STATS' ? 0 : 1
+    (gameUI.activeModal === 'STATS' || gameUI.activeModal === 'stats' || gameUI.fsmPhase === 'STATS') && gameUI.hasCompletedMatch ? 0 : 1
   );
 
   $effect(() => {
-    if (gameUI.activeModal === 'STATS' || gameUI.activeModal === 'stats' || gameUI.fsmPhase === 'STATS') {
+    if ((gameUI.activeModal === 'STATS' || gameUI.activeModal === 'stats' || gameUI.fsmPhase === 'STATS') && gameUI.hasCompletedMatch) {
       currentSlide = 0;
-    } else if (gameUI.activeModal === 'TEAM_MANAGEMENT' || gameUI.activeModal === 'TEAM_SELECT') {
+    } else if (gameUI.activeModal === 'TEAM_MANAGEMENT' || gameUI.activeModal === 'TEAM_SELECT' || !gameUI.hasCompletedMatch) {
       currentSlide = 1;
     }
   });
 
   function goToSlide(slide: 0 | 1) {
+    if (slide === 0 && !gameUI.hasCompletedMatch) return;
     soundFX.playUIClick();
     currentSlide = slide;
     if (slide === 0) {
@@ -57,21 +59,42 @@
   let redActiveKit = $derived(gameUI.redCaptainKit);
   let blueActiveKit = $derived(gameUI.blueCaptainKit);
 
-  let redTeamName = $derived(redActiveKit?.name || gameUI.redTeamKit?.name || 'Equipo Rojo');
-  let redTeamTag = $derived(redActiveKit?.tag || gameUI.redTeamKit?.tag || 'RED');
+  let redTeamName = $derived(redPlayers.length > 0 ? (redActiveKit?.name || 'ROJO') : 'ROJO');
+  let redTeamTag = $derived(redPlayers.length > 0 ? (redActiveKit?.tag || 'RED') : 'RED');
   let redPrimaryColor = $derived(redActiveKit?.primaryColor || gameUI.redTeamKit?.primaryColor || '#e74c3c');
   let redSecondaryColor = $derived(redActiveKit?.secondaryColor || gameUI.redTeamKit?.secondaryColor || '#b02a1c');
   let redKitTertiary = $derived(redActiveKit?.tertiaryColor || gameUI.redTeamKit?.tertiaryColor || '#ffffff');
   let redOutlineColor = $derived(redActiveKit?.outlineColor || gameUI.redTeamKit?.outlineColor || '#000000');
   let redHasOutline = $derived(redOutlineColor !== 'none' && redOutlineColor !== 'transparent' && redOutlineColor !== '');
 
-  let blueTeamName = $derived(blueActiveKit?.name || gameUI.blueTeamKit?.name || 'Equipo Azul');
-  let blueTeamTag = $derived(blueActiveKit?.tag || gameUI.blueTeamKit?.tag || 'BLUE');
+  let blueTeamName = $derived(bluePlayers.length > 0 ? (blueActiveKit?.name || 'AZUL') : 'AZUL');
+  let blueTeamTag = $derived(bluePlayers.length > 0 ? (blueActiveKit?.tag || 'BLU') : 'BLU');
   let bluePrimaryColor = $derived(blueActiveKit?.primaryColor || gameUI.blueTeamKit?.primaryColor || '#3498db');
   let blueSecondaryColor = $derived(blueActiveKit?.secondaryColor || gameUI.blueTeamKit?.secondaryColor || '#217dbb');
   let blueKitTertiary = $derived(blueActiveKit?.tertiaryColor || gameUI.blueTeamKit?.tertiaryColor || '#ffffff');
   let blueOutlineColor = $derived(blueActiveKit?.outlineColor || gameUI.blueTeamKit?.outlineColor || '#000000');
   let blueHasOutline = $derived(blueOutlineColor !== 'none' && blueOutlineColor !== 'transparent' && blueOutlineColor !== '');
+
+  let isRedCaptainOrAdmin = $derived(
+    gameUI.isHost || gameUI.isAdmin || (redCaptain && redCaptain.id === gameUI.localPlayerId)
+  );
+  let isBlueCaptainOrAdmin = $derived(
+    gameUI.isHost || gameUI.isAdmin || (blueCaptain && blueCaptain.id === gameUI.localPlayerId)
+  );
+
+  function handleSetRedKitVariant(variant: 'home' | 'away') {
+    if (!isRedCaptainOrAdmin) return;
+    soundFX.playUIClick();
+    gameUI.setRedKitVariant(variant);
+    gameApp.setKitVariant('red', variant);
+  }
+
+  function handleSetBlueKitVariant(variant: 'home' | 'away') {
+    if (!isBlueCaptainOrAdmin) return;
+    soundFX.playUIClick();
+    gameUI.setBlueKitVariant(variant);
+    gameApp.setKitVariant('blue', variant);
+  }
 
   let isMatchStopped = $derived(
     gameUI.fsmPhase === 'STOPPED' ||
@@ -363,11 +386,13 @@
               <span class="match-time-chip">⏱ {gameUI.matchTimeFormatted}</span>
             </div>
 
-            <div class="mvp-golden-plaque">
-              <span class="crown-icon">👑</span>
-              <span class="mvp-title">MVP: {gameUI.mvp.nickname}</span>
-              <span class="mvp-points-chip">({gameUI.mvp.points} pts)</span>
-            </div>
+            {#if gameUI.mvp}
+              <div class="mvp-golden-plaque">
+                <span class="crown-icon">👑</span>
+                <span class="mvp-title">MVP: {gameUI.mvp.nickname}</span>
+                <span class="mvp-points-chip">({gameUI.mvp.points} pts)</span>
+              </div>
+            {/if}
           </header>
 
           <!-- Tablas Duales Paralelas RED y BLUE con Cabeceras Bicolor Suave y Nombres de Capitán -->
@@ -564,7 +589,7 @@
         id="slide-lobby"
       >
         <!-- Pestaña exterior lateral IZQUIERDA: < STATS -->
-        {#if gameUI.hasCompletedMatch || (gameUI.lastMatchStats && gameUI.lastMatchStats.length > 0)}
+        {#if gameUI.hasCompletedMatch && gameUI.lastMatchStats && gameUI.lastMatchStats.length > 0}
           <button
             type="button"
             id="btn-goto-stats"
@@ -933,6 +958,28 @@
                       class="team-name"
                       style="color: {redKitTertiary}; text-shadow: {redHasOutline ? '-1px -1px 0 #000000, 1px -1px 0 #000000, -1px 1px 0 #000000, 1px 1px 0 #000000' : 'none'};"
                     >{redTeamName}</span>
+                    <div class="kit-variant-toggles" role="group" aria-label="Equipación del equipo rojo">
+                      <button
+                        type="button"
+                        class="kit-variant-btn"
+                        class:active={gameUI.redKitVariant === 'home'}
+                        disabled={!isRedCaptainOrAdmin}
+                        title={isRedCaptainOrAdmin ? 'Equipación Local' : 'Solo capitán o admin'}
+                        onclick={() => handleSetRedKitVariant('home')}
+                      >
+                        Local
+                      </button>
+                      <button
+                        type="button"
+                        class="kit-variant-btn"
+                        class:active={gameUI.redKitVariant === 'away'}
+                        disabled={!isRedCaptainOrAdmin}
+                        title={isRedCaptainOrAdmin ? 'Equipación Visitante' : 'Solo capitán o admin'}
+                        onclick={() => handleSetRedKitVariant('away')}
+                      >
+                        Visitante
+                      </button>
+                    </div>
                   </div>
 
                   <div id="redPlayersList" class="bench-players-list custom-scrollbar-red">
@@ -1049,6 +1096,28 @@
                       class="team-name"
                       style="color: {blueKitTertiary}; text-shadow: {blueHasOutline ? '-1px -1px 0 #000000, 1px -1px 0 #000000, -1px 1px 0 #000000, 1px 1px 0 #000000' : 'none'};"
                     >{blueTeamName}</span>
+                    <div class="kit-variant-toggles" role="group" aria-label="Equipación del equipo azul">
+                      <button
+                        type="button"
+                        class="kit-variant-btn"
+                        class:active={gameUI.blueKitVariant === 'home'}
+                        disabled={!isBlueCaptainOrAdmin}
+                        title={isBlueCaptainOrAdmin ? 'Equipación Local' : 'Solo capitán o admin'}
+                        onclick={() => handleSetBlueKitVariant('home')}
+                      >
+                        Local
+                      </button>
+                      <button
+                        type="button"
+                        class="kit-variant-btn"
+                        class:active={gameUI.blueKitVariant === 'away'}
+                        disabled={!isBlueCaptainOrAdmin}
+                        title={isBlueCaptainOrAdmin ? 'Equipación Visitante' : 'Solo capitán o admin'}
+                        onclick={() => handleSetBlueKitVariant('away')}
+                      >
+                        Visitante
+                      </button>
+                    </div>
                   </div>
 
                   <div id="bluePlayersList" class="bench-players-list custom-scrollbar">
@@ -2003,9 +2072,53 @@
   .captain-bicolor-header {
     display: flex;
     align-items: center;
-    justify-content: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    padding: 0 0.6rem;
     text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9), 0 0 6px rgba(0, 0, 0, 0.8);
     border-bottom: 1px solid rgba(255, 255, 255, 0.15);
+  }
+
+  .kit-variant-toggles {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    background: rgba(0, 0, 0, 0.4);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 4px;
+    padding: 1px;
+    flex-shrink: 0;
+  }
+
+  .kit-variant-btn {
+    border: none;
+    background: transparent;
+    color: rgba(255, 255, 255, 0.7);
+    font-family: 'Space Grotesk', system-ui, sans-serif;
+    font-size: 0.62rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    padding: 2px 5px;
+    border-radius: 3px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+
+  .kit-variant-btn:hover:not(:disabled) {
+    color: #ffffff;
+    background: rgba(255, 255, 255, 0.2);
+  }
+
+  .kit-variant-btn.active {
+    background: #ffffff;
+    color: #000000;
+    font-weight: 800;
+  }
+
+  .kit-variant-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
   }
 
   .spec-header {

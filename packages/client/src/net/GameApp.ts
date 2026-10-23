@@ -25,6 +25,8 @@ export interface RoomConfigPatch {
   teamsLocked?: boolean;
   timeLimit?: number;
   scoreLimit?: number;
+  redKitVariant?: 'home' | 'away';
+  blueKitVariant?: 'home' | 'away';
 }
 
 /** Acciones que un Admin no-Host puede delegar al Host vía `ADMIN_ACTION`. */
@@ -109,16 +111,23 @@ export class GameApp {
     }
   }
 
-  private pushChat(sender: string, text: string, team?: string, isHost?: boolean): void {
-    soundFX.playChatMessageSound();
-    gameUI.chatMessages.push({
-      id: Date.now() + Math.random(),
-      team: toChatTeam(team),
-      sender,
+  private pushChat(sender: string, text: string, team?: string, isHost?: boolean, id?: string): void {
+    const isSys = team === 'system';
+    if (isSys) {
+      soundFX.playPlayerJoinedSound();
+    } else {
+      soundFX.playChatMessageSound();
+    }
+    const msgId = id || `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    gameUI.addChatMessage({
+      id: msgId,
+      team: isSys ? 'SYSTEM' : toChatTeam(team),
+      senderTeam: isSys ? 'system' : undefined,
+      sender: isSys ? '' : sender,
       isHost: Boolean(isHost),
+      isSystem: isSys,
       text
     });
-    if (gameUI.chatMessages.length > 80) gameUI.chatMessages.shift();
   }
 
   private showEmote(playerId: number, emoji: string): void {
@@ -154,6 +163,8 @@ export class GameApp {
       if (patch.teamsLocked !== undefined) host.teamsLocked = patch.teamsLocked;
       if (patch.timeLimit !== undefined) host.timeLimit = patch.timeLimit;
       if (patch.scoreLimit !== undefined) host.scoreLimit = patch.scoreLimit;
+      if (patch.redKitVariant !== undefined) host.redKitVariant = patch.redKitVariant;
+      if (patch.blueKitVariant !== undefined) host.blueKitVariant = patch.blueKitVariant;
       host.broadcastRoomStateSync();
 
       this.signaling.send({
@@ -183,7 +194,18 @@ export class GameApp {
     this.networkHost.broadcastRoomStateSync();
   }
 
+  public setKitVariant(team: 'red' | 'blue', variant: 'home' | 'away'): void {
+    if (this.isHost && this.networkHost) {
+      if (team === 'red') this.networkHost.redKitVariant = variant;
+      else this.networkHost.blueKitVariant = variant;
+      this.networkHost.broadcastRoomStateSync();
+    } else if (this.networkClient) {
+      this.networkClient.sendKitVariantChange(team, variant);
+    }
+  }
+
   public async createRoom(params: CreateRoomParams): Promise<boolean> {
+    this.teardownNetworkSession();
     await this.signaling.ensureConnected();
 
     return new Promise<boolean>((resolve) => {
@@ -263,6 +285,8 @@ export class GameApp {
     this.networkClient = null;
     this.networkHost?.destroy();
 
+    soundFX.startHostKeepAlive();
+
     // Registrar al Host con su perfil real (nombre, avatar, equipaciones)
     const profile = this.getLocalProfile();
     const host = new NetworkHost(this.signaling, profile.nickname, {
@@ -326,7 +350,7 @@ export class GameApp {
       this.remoteInputs.set(playerId, { inputMask });
     };
 
-    host.onChatMessage = (sender, text, team) => this.pushChat(sender, text, team, false);
+    host.onChatMessage = (sender, text, team, id) => this.pushChat(sender, text, team, false, id);
 
     host.onPlayerEmote = (playerId, emoji) => {
       this.showEmote(playerId, emoji);
@@ -351,6 +375,7 @@ export class GameApp {
   }
 
   public async joinRoom(roomId: string, password?: string): Promise<boolean> {
+    this.teardownNetworkSession();
     await this.signaling.ensureConnected();
 
     return new Promise<boolean>((resolve) => {
@@ -472,7 +497,7 @@ export class GameApp {
       this.syncLocalRole();
     };
 
-    client.onChatMessage = (sender, text, team, isHost) => this.pushChat(sender, text, team, isHost);
+    client.onChatMessage = (sender, text, team, isHost, id) => this.pushChat(sender, text, team, isHost, id);
 
     client.onEmote = (playerId, emoji) => {
       this.showEmote(playerId, emoji);
@@ -499,6 +524,53 @@ export class GameApp {
     gameUI.navigateTo('LOBBY');
   }
 
+  public teardownNetworkSession(): void {
+    soundFX.stopHostKeepAlive();
+    if (this.networkHost) {
+      this.networkHost.closeRoomAndDestroy();
+      this.networkHost = null;
+    }
+    if (this.networkClient) {
+      this.networkClient.disconnect();
+      this.networkClient = null;
+    }
+    if (this.currentRoomId) {
+      this.signaling.send({ type: 'leave_room', roomId: this.currentRoomId });
+      this.currentRoomId = null;
+    }
+    this.remoteInputs.clear();
+    this.currentRoomConfig = null;
+    gameUI.resetRoomSession();
+  }
+
+  public setupPracticeMode(): void {
+    this.teardownNetworkSession();
+    this.isHost = true;
+    gameUI.resetRoomSession();
+    const profile = this.getLocalProfile();
+    gameUI.localPlayerId = 1;
+    gameUI.isHost = true;
+    gameUI.isAdmin = true;
+    gameUI.rosterPlayers = [
+      {
+        id: 1,
+        peerId: 'local',
+        nickname: profile.nickname,
+        name: profile.nickname,
+        team: 'red',
+        number: 1,
+        isAdmin: true,
+        isHost: true,
+        avatar: profile.avatar,
+        avatarType: profile.avatarType,
+        kit: profile.kit,
+        localKit: profile.localKit,
+        visitorKit: profile.visitorKit,
+        ping: 0
+      }
+    ];
+  }
+
   private resetToLobbyState(): void {
     this.isHost = false;
     this.currentRoomConfig = null;
@@ -513,21 +585,7 @@ export class GameApp {
   }
 
   public leaveCurrentRoom(): void {
-    const roomId = this.currentRoomId;
-    this.currentRoomId = null;
-
-    if (this.networkHost) {
-      // Host abandona → destruir sala de inmediato y notificar a todos los peers
-      this.networkHost.closeRoomAndDestroy();
-      this.networkHost = null;
-    }
-    if (this.networkClient) {
-      this.networkClient.disconnect();
-      this.networkClient = null;
-    }
-    if (roomId) {
-      this.signaling.send({ type: 'leave_room', roomId });
-    }
+    this.teardownNetworkSession();
     this.resetToLobbyState();
   }
 }

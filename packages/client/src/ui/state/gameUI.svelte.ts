@@ -86,6 +86,7 @@ export interface KitConfig {
   pattern: PatternType;
   tertiaryColor?: string;
   outlineColor?: string;
+  hasOutline?: boolean;
 }
 
 export interface TeamKitConfig {
@@ -96,6 +97,7 @@ export interface TeamKitConfig {
   pattern: PatternType;
   tertiaryColor?: string;
   outlineColor?: string;
+  hasOutline?: boolean;
 }
 
 export interface EmoteTrigger {
@@ -326,7 +328,7 @@ export interface RosterPlayer {
 }
 
 export interface ChatEntry {
-  id: number;
+  id: number | string;
   team: 'RED' | 'BLUE' | 'SPEC' | 'SYSTEM';
   sender: string;
   isHost?: boolean;
@@ -546,7 +548,7 @@ class GameUIStore {
   public isGoldenGoal = $state(false);
   public redPossession = $state(50);
   public bluePossession = $state(50);
-  public pingMs = $state(24);
+  public pingMs = $state(0);
   public jitterMs = $state(2);
   public fps = $state(60);
 
@@ -555,33 +557,30 @@ class GameUIStore {
   public readonly pingSamples = new Float32Array(40);
   public pingSampleHead = $state(0);
   public pingSampleCount = $state(0);
-  public avgPingMs = $state(24);
+  public avgPingMs = $state(0);
 
   // Chat State (Responsive & Dynamic Height)
   public chatHeight = $state(160);
   public isChatFocused = $state(false);
   public chatMessages = $state<ChatEntry[]>([]);
 
+  // Modos de equipación activa por capitán ('home' para Red por defecto, 'away' para Blue por defecto)
+  public redKitVariant = $state<'home' | 'away'>('home');
+  public blueKitVariant = $state<'home' | 'away'>('away');
+
   // Post-match Carousel state (100vw slides)
   public postMatchSlide = $state<0 | 1 | 2>(0);
   public hasCompletedMatch = $state(false);
-  public mvp = $state({
-    nickname: 'yami',
-    points: 420,
-    goals: 3,
-    assists: 1,
-    team: 'blue' as 'red' | 'blue'
-  });
-  public redTeamStats = $state<PlayerStatEntry[]>([
-    { nickname: 'kiko', points: 180, goals: 0, assists: 0, passes: 14, shots: 2, touches: 14, ownGoals: 0, isCaptain: true },
-    { nickname: 'dani', points: 140, goals: 0, assists: 0, passes: 9, shots: 1, touches: 10, ownGoals: 0 },
-    { nickname: 'mateo', points: 110, goals: 0, assists: 0, passes: 6, shots: 0, touches: 8, ownGoals: 0 }
-  ]);
-  public blueTeamStats = $state<PlayerStatEntry[]>([
-    { nickname: 'yami', points: 420, goals: 3, assists: 1, passes: 12, shots: 4, touches: 14, ownGoals: 0, isMvp: true, isHost: true },
-    { nickname: 'nano', points: 290, goals: 0, assists: 2, passes: 18, shots: 3, touches: 8, ownGoals: 0, isCaptain: true },
-    { nickname: 'leo', points: 210, goals: 0, assists: 0, passes: 11, shots: 1, touches: 6, ownGoals: 0 }
-  ]);
+  public lastMatchStats = $state<any[] | null>(null);
+  public mvp = $state<{
+    nickname: string;
+    points: number;
+    goals: number;
+    assists: number;
+    team: 'red' | 'blue';
+  } | null>(null);
+  public redTeamStats = $state<PlayerStatEntry[]>([]);
+  public blueTeamStats = $state<PlayerStatEntry[]>([]);
 
   // Physical Modifiers and Gameplay Config
   public modifiers = $state<PhysicsModifiers>({ ...DEFAULT_PHYSICS_MODIFIERS });
@@ -1026,10 +1025,6 @@ class GameUIStore {
     }
   }
 
-  public get lastMatchStats(): PlayerStatEntry[] {
-    return [...this.redTeamStats, ...this.blueTeamStats];
-  }
-
   public get myTeam(): TeamSlot {
     const local = this.rosterPlayers.find((p) => p.id === this.localPlayerId);
     return local?.team ?? 'red';
@@ -1043,16 +1038,70 @@ class GameUIStore {
     return this.settings.visitorKit;
   }
 
-  /** Equipación activa del capitán RED (índice 0): su kit Local. */
-  public get redCaptainKit(): TeamKitConfig {
-    const cap = this.rosterPlayers.find((p) => p.team === 'red');
-    return cap?.localKit || cap?.kit || this.settings.localKit;
+  public static readonly DEFAULT_RED_KIT: TeamKitConfig = {
+    name: 'ROJO',
+    tag: 'RED',
+    primaryColor: '#e74c3c',
+    secondaryColor: '#ffffff',
+    tertiaryColor: '#ffffff',
+    outlineColor: '#000000',
+    hasOutline: false,
+    pattern: 'solid'
+  };
+
+  public static readonly DEFAULT_BLUE_KIT: TeamKitConfig = {
+    name: 'AZUL',
+    tag: 'BLU',
+    primaryColor: '#3498db',
+    secondaryColor: '#ffffff',
+    tertiaryColor: '#ffffff',
+    outlineColor: '#000000',
+    hasOutline: false,
+    pattern: 'solid'
+  };
+
+  public get ping(): number {
+    return this.pingMs;
   }
 
-  /** Equipación activa del capitán BLUE (índice 0): su kit Visitante. */
+  public set ping(val: number) {
+    this.pingMs = val;
+  }
+
+  public setRedKitVariant(variant: 'home' | 'away'): void {
+    this.redKitVariant = variant;
+    this.onRoomConfigChanged?.({ redKitVariant: variant });
+  }
+
+  public setBlueKitVariant(variant: 'home' | 'away'): void {
+    this.blueKitVariant = variant;
+    this.onRoomConfigChanged?.({ blueKitVariant: variant });
+  }
+
+  /** Equipación activa del capitán RED (índice 0): su kit Local por defecto, o Visitante si se conmuta. */
+  public get redCaptainKit(): TeamKitConfig {
+    const redPlayers = this.rosterPlayers.filter((p) => p.team === 'red');
+    if (redPlayers.length === 0) {
+      return GameUIStore.DEFAULT_RED_KIT;
+    }
+    const cap = redPlayers[0];
+    const kit = this.redKitVariant === 'home'
+      ? (cap.localKit || cap.kit || this.settings.localKit || GameUIStore.DEFAULT_RED_KIT)
+      : (cap.visitorKit || cap.kit || this.settings.visitorKit || GameUIStore.DEFAULT_RED_KIT);
+    return kit;
+  }
+
+  /** Equipación activa del capitán BLUE (índice 0): su kit Visitante por defecto, o Local si se conmuta. */
   public get blueCaptainKit(): TeamKitConfig {
-    const cap = this.rosterPlayers.find((p) => p.team === 'blue');
-    return cap?.visitorKit || cap?.kit || this.settings.visitorKit;
+    const bluePlayers = this.rosterPlayers.filter((p) => p.team === 'blue');
+    if (bluePlayers.length === 0) {
+      return GameUIStore.DEFAULT_BLUE_KIT;
+    }
+    const cap = bluePlayers[0];
+    const kit = this.blueKitVariant === 'away'
+      ? (cap.visitorKit || cap.kit || this.settings.visitorKit || GameUIStore.DEFAULT_BLUE_KIT)
+      : (cap.localKit || cap.kit || this.settings.localKit || GameUIStore.DEFAULT_BLUE_KIT);
+    return kit;
   }
 
   public get theme(): 'dark' | 'light' {
@@ -1442,23 +1491,38 @@ class GameUIStore {
     return true;
   }
 
-  public sendChatMessage(rawText: string): void {
-    const trimmed = rawText.trim().slice(0, 140);
-    if (!trimmed) return;
-    soundFX.playChatMessageSound();
-    const localPlayer = this.rosterPlayers.find((p) => p.id === this.localPlayerId);
-    const teamTag: ChatEntry['team'] =
-      localPlayer?.team === 'red' ? 'RED' : localPlayer?.team === 'blue' ? 'BLUE' : 'SPEC';
-    this.chatMessages.push({
-      id: Date.now() + Math.random(),
-      team: teamTag,
-      sender: this.nickname,
-      isHost: this.isHost,
-      text: trimmed
-    });
+  public addChatMessage(entry: ChatEntry): void {
+    if (this.chatMessages.some((m) => m.id === entry.id)) return;
+    this.chatMessages.push(entry);
     if (this.chatMessages.length > 80) {
       this.chatMessages.shift();
     }
+  }
+
+  public resetRoomSession(): void {
+    this.chatMessages = [];
+    this.players = [];
+    this.rosterPlayers = [];
+    this.lastMatchStats = null;
+    this.redTeamStats = [];
+    this.blueTeamStats = [];
+    this.mvp = null;
+    this.hasCompletedMatch = false;
+    this.redScore = 0;
+    this.blueScore = 0;
+    this.matchTimeFormatted = '00:00';
+    this.matchPhase = 0;
+    this.fsmPhase = 'STOPPED';
+    this.isGoldenGoal = false;
+    this.postMatchSlide = 1;
+    this.clearModalStack();
+    this.redKitVariant = 'home';
+    this.blueKitVariant = 'away';
+  }
+
+  public sendChatMessage(rawText: string): void {
+    const trimmed = rawText.trim().slice(0, 140);
+    if (!trimmed) return;
     this.onChatSent?.(trimmed);
   }
 

@@ -47,10 +47,13 @@ export class NetworkHost {
   public onPlayerJoined?: (player: PlayerInfo) => void;
   public onPlayerLeft?: (playerId: number) => void;
   public onPlayersUpdated?: (players: PlayerInfo[]) => void;
-  public onChatMessage?: (sender: string, text: string, team?: string) => void;
+  public onChatMessage?: (sender: string, text: string, team?: string, id?: string) => void;
   public onPlayerEmote?: (playerId: number, emoji: string) => void;
   public onTeamChangeRequest?: (playerId: number, team: 'red' | 'blue' | 'spectator') => void;
   public onAdminMatchAction?: (action: string, payload?: Record<string, unknown>) => void;
+
+  public redKitVariant: 'home' | 'away' = 'home';
+  public blueKitVariant: 'home' | 'away' = 'away';
 
   constructor(signaling: SignalingClient, hostNickname: string, hostProfile?: Partial<PlayerInfo>) {
     this.signaling = signaling;
@@ -157,6 +160,8 @@ export class NetworkHost {
       timeLimit: this.timeLimit,
       scoreLimit: this.scoreLimit,
       matchPhase: this.matchPhase,
+      redKitVariant: this.redKitVariant,
+      blueKitVariant: this.blueKitVariant,
       roomConfig: {
         id: this.roomId,
         name: this.roomName,
@@ -273,6 +278,7 @@ export class NetworkHost {
     if (!player) return;
 
     if (msg.type === 'SET_PROFILE' || msg.type === 'CLIENT_HELLO') {
+      const isHello = msg.type === 'CLIENT_HELLO';
       const nick = String(msg.name || msg.nickname || player.nickname).trim().slice(0, 25);
       if (nick) {
         player.nickname = nick;
@@ -299,12 +305,36 @@ export class NetworkHost {
 
       this.onPlayersUpdated?.(this.getPlayers());
       this.broadcastRoomStateSync();
+      if (isHello) {
+        this.broadcastSystemNotice(`${player.nickname} se ha unido a la sala`);
+      }
+    } else if (msg.type === 'PING_PROBE') {
+      const peer = this.peers.get(peerId);
+      peer?.sendReliable({
+        type: 'PONG_PROBE',
+        t: msg.t
+      });
+    } else if (msg.type === 'KIT_VARIANT_CHANGE') {
+      const redCapId = this.getRedCaptainId();
+      const blueCapId = this.getBlueCaptainId();
+      if (player.isAdmin || player.isHost || player.id === redCapId || player.id === blueCapId) {
+        if (msg.team === 'red' && (msg.variant === 'home' || msg.variant === 'away')) {
+          this.redKitVariant = msg.variant;
+        } else if (msg.team === 'blue' && (msg.variant === 'home' || msg.variant === 'away')) {
+          this.blueKitVariant = msg.variant;
+        }
+        this.broadcastRoomStateSync();
+      }
     } else if (msg.type === 'CHAT') {
       const text = String(msg.text || '').trim().slice(0, 140);
       if (text) {
-        this.onChatMessage?.(player.nickname, text, player.team);
+        const msgId = typeof msg.id === 'string'
+          ? msg.id
+          : `${playerId}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+        this.onChatMessage?.(player.nickname, text, player.team, msgId);
         this.broadcastReliable({
           type: 'CHAT',
+          id: msgId,
           sender: player.nickname,
           text,
           team: player.team,
@@ -395,6 +425,16 @@ export class NetworkHost {
     return true;
   }
 
+  public getRedCaptainId(): number | null {
+    const p = Array.from(this.players.values()).find((item) => item.team === 'red');
+    return p ? p.id : null;
+  }
+
+  public getBlueCaptainId(): number | null {
+    const p = Array.from(this.players.values()).find((item) => item.team === 'blue');
+    return p ? p.id : null;
+  }
+
   public kickPlayer(targetPlayerId: number, ban: boolean = false, byHostOrAdmin: boolean = false): boolean {
     // Host admin immutability: Host (id === 1) cannot be kicked or banned
     if (targetPlayerId === 1) return false;
@@ -413,11 +453,13 @@ export class NetworkHost {
         reason: ban ? 'Banned by admin' : 'Kicked by admin'
       });
     }
-    this.handlePeerDisconnect(target.peerId);
+    const targetName = target.name || target.nickname;
+    this.broadcastSystemNotice(ban ? `${targetName} ha sido baneado de la sala` : `${targetName} ha sido expulsado de la sala`);
+    this.handlePeerDisconnect(target.peerId, true);
     return true;
   }
 
-  private handlePeerDisconnect(peerId: string): void {
+  private handlePeerDisconnect(peerId: string, wasKickedOrBanned: boolean = false): void {
     const peer = this.peers.get(peerId);
     if (peer) {
       peer.close();
@@ -427,8 +469,13 @@ export class NetworkHost {
 
     const playerId = this.peerToPlayerId.get(peerId);
     if (playerId !== undefined) {
+      const p = this.players.get(playerId);
+      const pName = p ? (p.name || p.nickname) : `Player ${playerId}`;
       this.peerToPlayerId.delete(peerId);
       this.players.delete(playerId);
+      if (!wasKickedOrBanned) {
+        this.broadcastSystemNotice(`${pName} ha abandonado la sala`);
+      }
       this.onPlayerLeft?.(playerId);
       this.onPlayersUpdated?.(this.getPlayers());
       this.broadcastRoomStateSync();
@@ -448,12 +495,38 @@ export class NetworkHost {
   }
 
   public sendChat(sender: string, text: string, team?: string): void {
+    const msgId = `host-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
     this.broadcastReliable({
       type: 'CHAT',
+      id: msgId,
       sender,
       text,
       team,
       isHost: true
+    });
+    this.onChatMessage?.(sender, text, team, msgId);
+  }
+
+  public broadcastSystemNotice(text: string): void {
+    const msgId = `sys-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    this.broadcastReliable({
+      type: 'CHAT',
+      id: msgId,
+      sender: '',
+      text,
+      team: 'system',
+      isSystem: true
+    });
+    this.onChatMessage?.('', text, 'system', msgId);
+  }
+
+  public broadcastMatchStats(stats: any[], mvp?: any, redTeamStats?: any[], blueTeamStats?: any[]): void {
+    this.broadcastReliable({
+      type: 'MATCH_STATS_SUMMARY',
+      stats,
+      mvp,
+      redTeamStats,
+      blueTeamStats
     });
   }
 

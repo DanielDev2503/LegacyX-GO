@@ -3,6 +3,7 @@ import { PeerConnection } from './PeerConnection';
 import { SignalingClient } from './SignalingClient';
 import { JitterBuffer } from './JitterBuffer';
 import type { PlayerInfo } from './NetworkHost';
+import { gameUI } from '../ui/state/gameUI.svelte.js';
 
 export interface ClientProfileOptions {
   avatar?: string;
@@ -38,7 +39,7 @@ export class NetworkClient {
   public onRoomClosed?: (reason?: string) => void;
   public onPlayerListUpdated?: (players: PlayerInfo[]) => void;
   public onRoomStateSync?: (msg: Record<string, unknown>) => void;
-  public onChatMessage?: (sender: string, text: string, team?: string, isHost?: boolean) => void;
+  public onChatMessage?: (sender: string, text: string, team?: string, isHost?: boolean, id?: string) => void;
   public onEmote?: (playerId: number, emoji: string) => void;
   public onSnapshotBuffer?: (buffer: ArrayBuffer) => void;
   public onSnapshotDecoded?: (snapshot: GameStateSnapshot) => void;
@@ -46,6 +47,7 @@ export class NetworkClient {
   private nickname: string;
   private number: number;
   private reusableInputBuffer = new ArrayBuffer(8);
+  private pingIntervalId: ReturnType<typeof setInterval> | null = null;
 
   constructor(
     signaling: SignalingClient,
@@ -173,6 +175,7 @@ export class NetworkClient {
           this.helloSent = true;
           this.sendClientHello();
         }
+        this.startPingProbe();
       },
       onDisconnected: () => {
         this.onDisconnected?.();
@@ -194,6 +197,12 @@ export class NetworkClient {
       if (typeof msg.teamsLocked === 'boolean') {
         this.teamsLocked = msg.teamsLocked;
       }
+      if (msg.redKitVariant === 'home' || msg.redKitVariant === 'away') {
+        gameUI.redKitVariant = msg.redKitVariant;
+      }
+      if (msg.blueKitVariant === 'home' || msg.blueKitVariant === 'away') {
+        gameUI.blueKitVariant = msg.blueKitVariant;
+      }
       this.onRoomStateSync?.(msg);
       this.onPlayerListUpdated?.(this.players);
       if (this.localPlayerId !== null) {
@@ -210,8 +219,36 @@ export class NetworkClient {
         String(msg.sender || 'Player'),
         String(msg.text || ''),
         msg.team as string | undefined,
-        Boolean(msg.isHost)
+        Boolean(msg.isHost),
+        typeof msg.id === 'string' || typeof msg.id === 'number' ? String(msg.id) : undefined
       );
+    } else if (msg.type === 'PONG_PROBE') {
+      const now = performance.now();
+      const sentTime = Number(msg.t || 0);
+      if (sentTime > 0) {
+        const rtt = Math.max(1, Math.round(now - sentTime));
+        const prev = gameUI.pingMs;
+        const smoothed = prev > 0 ? Math.round(0.7 * prev + 0.3 * rtt) : rtt;
+        gameUI.recordTelemetrySample(smoothed, gameUI.fps);
+      }
+    } else if (msg.type === 'MATCH_STATS_SUMMARY') {
+      if (Array.isArray(msg.stats)) {
+        gameUI.lastMatchStats = msg.stats;
+        gameUI.hasCompletedMatch = true;
+        if (msg.mvp) {
+          gameUI.mvp = msg.mvp as any;
+        }
+        if (Array.isArray(msg.redTeamStats)) {
+          gameUI.redTeamStats = msg.redTeamStats;
+        }
+        if (Array.isArray(msg.blueTeamStats)) {
+          gameUI.blueTeamStats = msg.blueTeamStats;
+        }
+        if (!gameUI.isSecondaryOverlayOpen) {
+          gameUI.clearModalStack();
+          gameUI.activeModal = 'STATS';
+        }
+      }
     } else if (msg.type === 'EMOTE') {
       const pid = Number(msg.playerId ?? 0);
       const emoji = String(msg.emoji || '');
@@ -274,12 +311,40 @@ export class NetworkClient {
     });
   }
 
+  public sendKitVariantChange(team: 'red' | 'blue', variant: 'home' | 'away'): void {
+    this.peer?.sendReliable({
+      type: 'KIT_VARIANT_CHANGE',
+      team,
+      variant
+    });
+  }
+
   public getInterpolatedState(): GameStateSnapshot | null {
     return this.jitterBuffer.getInterpolatedState(performance.now());
   }
 
+  public startPingProbe(): void {
+    if (this.pingIntervalId !== null) return;
+    this.pingIntervalId = setInterval(() => {
+      if (this.peer) {
+        this.peer.sendReliable({
+          type: 'PING_PROBE',
+          t: performance.now()
+        });
+      }
+    }, 1000);
+  }
+
+  public stopPingProbe(): void {
+    if (this.pingIntervalId !== null) {
+      clearInterval(this.pingIntervalId);
+      this.pingIntervalId = null;
+    }
+  }
+
   public disconnect(): void {
     this.isDisconnecting = true;
+    this.stopPingProbe();
     this.cleanupSignalingListeners();
     if (this.peer) {
       this.peer.close();

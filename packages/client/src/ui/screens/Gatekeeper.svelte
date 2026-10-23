@@ -79,7 +79,18 @@
     <!-- Logotipo Oficial Circular -->
     <div class="logo-wrapper">
       <div class="logo-badge">
-        <img src="/Logo LegacyX-GO.webp" alt="LegacyX-GO" class="logo-image" />
+        <img
+          src="/logo.webp"
+          alt="LegacyX-GO Logo"
+          class="logo-image w-48 h-auto max-h-28 mx-auto object-contain select-none drop-shadow-[0_0_16px_rgba(0,229,255,0.35)]"
+          draggable="false"
+          onerror={(e) => {
+            const img = e.currentTarget as HTMLImageElement;
+            if (!img.src.includes('Logo%20LegacyX-GO.webp')) {
+              img.src = '/Logo%20LegacyX-GO.webp';
+            }
+          }}
+        />
       </div>
     </div>
 

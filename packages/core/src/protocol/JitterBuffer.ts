@@ -223,13 +223,23 @@ export class JitterBuffer<T extends AnySnapshot = any> {
     if (!s0 || !s1) {
       const latest = this.buffer[this.buffer.length - 1];
       this.lastProcessedTick = Math.max(this.lastProcessedTick, latest.snapshot.tick);
-      const deltaSec = Math.max(0, (renderTime - latest.receivedAt) / 1000);
-      if (deltaSec === 0) return latest.snapshot;
+      const rawDeltaSec = Math.max(0, (renderTime - latest.receivedAt) / 1000);
+      if (rawDeltaSec === 0) return latest.snapshot;
+
+      // Limitar extrapolación cinemática a un máximo estricto de 100 ms (0.10s)
+      const MAX_EXTRAPOLATION_SEC = 0.10;
+      const clampedDeltaSec = Math.min(MAX_EXTRAPOLATION_SEC, rawDeltaSec);
+      // Si transcurren más de 100 ms sin paquetes, amortiguar la velocidad visual suavemente a cero
+      const decay = rawDeltaSec > MAX_EXTRAPOLATION_SEC
+        ? Math.max(0, 1 - (rawDeltaSec - MAX_EXTRAPOLATION_SEC) / 0.10)
+        : 1.0;
 
       const extrapolatedDiscs = (latest.snapshot as any).discs.map((d: any) => ({
         ...d,
-        x: d.x + d.vx * deltaSec,
-        y: d.y + d.vy * deltaSec
+        x: d.x + (d.vx || 0) * clampedDeltaSec,
+        y: d.y + (d.vy || 0) * clampedDeltaSec,
+        vx: (d.vx || 0) * decay,
+        vy: (d.vy || 0) * decay
       }));
 
       return {
