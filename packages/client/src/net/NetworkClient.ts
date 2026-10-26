@@ -209,17 +209,13 @@ export class NetworkClient {
       if (msg.blueKitVariant === 'home' || msg.blueKitVariant === 'away') {
         gameUI.blueKitVariant = msg.blueKitVariant;
       }
+      if (msg.gameplayConfig || msg.modifiers) {
+        gameUI.applyRemoteGameplayConfig(msg.gameplayConfig as any, msg.modifiers as any);
+      }
 
-      // Cerrar modal automáticamente si la partida está en curso
-      const phase = typeof msg.matchPhase === 'number' ? msg.matchPhase : 0;
-      if (phase !== 0) {
-        if (gameUI.activeModal === 'TEAM_SELECT' || gameUI.activeModal === 'TEAM_MANAGEMENT' || gameUI.activeModal === 'teamSelect') {
-          gameUI.clearModalStack();
-          gameUI.activeModal = 'NONE';
-          if (typeof document !== 'undefined') {
-            (document.activeElement as HTMLElement)?.blur();
-          }
-        }
+      // Gestionar transición de fase sin cerrar el menú en bucle durante el partido
+      if (typeof msg.matchPhase === 'number') {
+        gameUI.handleMatchPhaseTransition(msg.matchPhase, msg.type === 'INITIAL_STATE_PACKET');
       }
 
       this.onRoomStateSync?.(msg);
@@ -261,6 +257,7 @@ export class NetworkClient {
         gameUI.activeSlide = 'STATS';
         gameUI.fsmPhase = 'STOPPED';
         gameUI.matchPhase = 0;
+        gameUI.previousMatchPhase = 0;
         if (msg.mvp) {
           gameUI.mvp = msg.mvp as any;
         }

@@ -165,8 +165,8 @@ export class EngineInstance {
     this.world = new PhysicsWorld({
       fixedDt: CORE_DT,
       maxSubsteps: 10,
-      kickMargin: 4.0,
-      magnusCoefficient: this.modifiers.magnusCoefficient
+      kickMargin: (this.modifiers as any).kickMargin ?? 4.0,
+      magnusCoefficient: 0
     });
 
     this.fsm = new GameFSM({
@@ -182,8 +182,8 @@ export class EngineInstance {
       y: 0,
       radius: this.modifiers.ballRadius,
       mass: this.modifiers.ballMass,
-      damping: this.modifiers.pitchFriction,
-      bounciness: 0.80,
+      damping: (this.modifiers as any).ballFriction ?? this.modifiers.pitchFriction ?? 0.99,
+      bounciness: (this.modifiers as any).ballRestitution ?? 0.412,
       cGroup: COLLISION_GROUP_BALL,
       cMask: COLLISION_GROUP_ALL,
       isBall: true,
@@ -197,6 +197,9 @@ export class EngineInstance {
       if (e.type === 'disc-disc') {
         if (e.discA.isBall || e.discB?.isBall) {
           const other = e.discA.isBall ? e.discB : e.discA;
+          if (other && other.id !== this.ball.lastKickerDiscId) {
+            this.ball.resetCurve();
+          }
           if (other?.isPost) {
             this.soundMask |= SOUND_POST_HIT;
             this.emit('post_hit', { ball: this.ball, post: other });
@@ -207,6 +210,8 @@ export class EngineInstance {
             }
           }
         }
+      } else if (e.type === 'disc-segment' && e.discA.isBall) {
+        this.ball.resetCurve();
       }
     };
 
@@ -256,7 +261,7 @@ export class EngineInstance {
       y: 0,
       radius: this.modifiers.playerRadius,
       mass: this.modifiers.playerMass,
-      damping: 0.92,
+      damping: (this.modifiers as any).playerFriction ?? 0.96,
       bounciness: 0.50,
       cGroup: isRed ? COLLISION_GROUP_RED : COLLISION_GROUP_BLUE,
       cMask: COLLISION_GROUP_ALL,
@@ -393,6 +398,11 @@ export class EngineInstance {
     const isGameActive = this.fsm.state === MatchPhase.PLAYING || this.fsm.state === MatchPhase.KICKOFF;
 
     if (isGameActive) {
+      const baseKickCfg = (this.modifiers as any).kickStrength !== undefined
+        ? ((this.modifiers as any).kickStrength / 4.545) * 450.0
+        : (this.modifiers.baseKickStrength ?? 450.0);
+      const rechargePerTick = ((this.modifiers as any).staminaRechargeRate ?? 20.0) / 60;
+
       for (const [id, player] of this.players.entries()) {
         const input = inputs.get(id);
 
@@ -413,12 +423,17 @@ export class EngineInstance {
             iy /= inputLen;
           }
 
+          const isKickRequested = Boolean(input.kick || (input.inputMask && (input.inputMask & INPUT_FLAG_KICK)));
+          player.kicking = isKickRequested;
+          player.isTyping = Boolean(input.inputMask && (input.inputMask & INPUT_FLAG_TYPING));
+
           const accelBase = (this.modifiers as any).playerAcceleration !== undefined
             ? ((this.modifiers as any).playerAcceleration / 0.11) * 2.4
             : 2.4;
-          const isTurboRequested = Boolean(input.inputMask && (input.inputMask & INPUT_FLAG_TURBO));
+          const canTurbo = (this.modifiers as any).turboEnabled !== false;
+          const isTurboRequested = canTurbo && Boolean(input.inputMask && (input.inputMask & INPUT_FLAG_TURBO));
           const turboMultiplier = (this.modifiers as any).boostMultiplier ?? (this.modifiers as any).turboMultiplier ?? 2.0;
-          let accel = accelBase;
+          let accel = isKickRequested ? accelBase * (0.083 / 0.11) : accelBase;
 
           if (isTurboRequested && inputLen > 0.1 && player.stamina > 0) {
             accel *= Math.max(1.8, turboMultiplier * 1.2);
@@ -431,7 +446,8 @@ export class EngineInstance {
           player.vel.x += ix * accel;
           player.vel.y += iy * accel;
 
-          const maxSpeedBase = (this.modifiers as any).playerSpeed ? (this.modifiers as any).playerSpeed * 60 : 168.0;
+          const pMaxSpeedCfg = (this.modifiers as any).playerMaxSpeed ?? (this.modifiers as any).playerSpeed ?? 2.8;
+          const maxSpeedBase = (pMaxSpeedCfg / 2.8) * 168.0;
           const currentMaxSpeed = player.isTurbo ? maxSpeedBase * turboMultiplier : maxSpeedBase;
           const curSpeed = player.vel.len();
           if (curSpeed > currentMaxSpeed) {
@@ -439,7 +455,8 @@ export class EngineInstance {
             player.vel.y = (player.vel.y / curSpeed) * currentMaxSpeed;
           }
 
-          const isDashRequested = Boolean(input.dash || (input.inputMask && (input.inputMask & INPUT_FLAG_DASH)));
+          const canDash = (this.modifiers as any).dashEnabled !== false;
+          const isDashRequested = canDash && Boolean(input.dash || (input.inputMask && (input.inputMask & INPUT_FLAG_DASH)));
           const dashesPerFullBar = (this.modifiers as any).dashesPerFullBar ?? 4;
           const dashCost = 100 / Math.max(1, Math.min(6, dashesPerFullBar));
 
@@ -447,7 +464,9 @@ export class EngineInstance {
             player.stamina = Math.max(0, player.stamina - dashCost);
             const dashDirX = inputLen > 0.1 ? ix : (curSpeed > 0.1 ? player.vel.x / curSpeed : 1);
             const dashDirY = inputLen > 0.1 ? iy : (curSpeed > 0.1 ? player.vel.y / curSpeed : 0);
-            const power = this.modifiers.dashPower ?? 280;
+            const power = (this.modifiers as any).dashDistance !== undefined
+              ? ((this.modifiers as any).dashDistance / 11.3) * 280
+              : (this.modifiers.dashPower ?? 280);
             player.vel.x += dashDirX * power;
             player.vel.y += dashDirY * power;
             player.isDashing = true;
@@ -456,12 +475,8 @@ export class EngineInstance {
           }
 
           if (inputLen === 0 && !player.isTurbo && !player.isDashing && player.stamina < 100) {
-            player.stamina = Math.min(100, player.stamina + 0.35);
+            player.stamina = Math.min(100, player.stamina + rechargePerTick);
           }
-
-          const isKickRequested = Boolean(input.kick || (input.inputMask && (input.inputMask & INPUT_FLAG_KICK)));
-          player.kicking = isKickRequested;
-          player.isTyping = Boolean(input.inputMask && (input.inputMask & INPUT_FLAG_TYPING));
 
           if (isKickRequested && this.world.isWithinKickDistance(player, this.ball)) {
             const dx = this.ball.pos.x - player.pos.x;
@@ -470,17 +485,31 @@ export class EngineInstance {
             const nx = dx / dist;
             const ny = dy / dist;
 
-            const strength = this.modifiers.baseKickStrength ?? 450.0;
-            this.ball.vel.x = nx * strength;
-            this.ball.vel.y = ny * strength;
-            this.ball.lastKickerDiscId = player.id;
-            this.ball.isCurvingAllowed = true;
-
-            if (input.magnusLeft || (input.inputMask && (input.inputMask & INPUT_FLAG_MAGNUS_LEFT))) {
-              this.ball.spin = -1.2;
-            } else if (input.magnusRight || (input.inputMask && (input.inputMask & INPUT_FLAG_MAGNUS_RIGHT))) {
-              this.ball.spin = 1.2;
+            const pVelAlongKick = Math.max(0, player.vel.x * nx + player.vel.y * ny);
+            let effectiveKick = baseKickCfg + pVelAlongKick * 0.35;
+            if (player.isDashing) {
+              effectiveKick = Math.max(effectiveKick, baseKickCfg * 1.35 + pVelAlongKick * 0.35);
+            } else if (player.isTurbo) {
+              effectiveKick = Math.max(effectiveKick, baseKickCfg * 1.15 + pVelAlongKick * 0.35);
             }
+            const existingBallAlongKick = Math.max(0, this.ball.vel.x * nx + this.ball.vel.y * ny);
+
+            this.ball.vel.x = nx * (effectiveKick + existingBallAlongKick * 0.25);
+            this.ball.vel.y = ny * (effectiveKick + existingBallAlongKick * 0.25);
+
+            const bSpeedAfterKick = Math.hypot(this.ball.vel.x, this.ball.vel.y);
+            this.ball.isPowerShot = bSpeedAfterKick >= baseKickCfg * 1.12;
+
+            this.ball.lastKickerDiscId = player.id;
+            this.ball.lastKickerId = String(player.id);
+            this.ball.magnusControllerId = String(player.id);
+            this.ball.magnusPressesRemaining = 2;
+            this.ball.magnusTimer = 3.0;
+            this.ball.lastCurveDir = 0;
+            this.ball.isCurvingAllowed = true;
+            this.ball.isCurving = false;
+            this.ball.curvePerp = 0;
+            this.ball.spin = 0;
 
             this.soundMask |= SOUND_KICK;
             this.recordTouch(player.id, true);
@@ -495,7 +524,7 @@ export class EngineInstance {
           player.isDashing = false;
           player.kicking = false;
           if (player.stamina < 100) {
-            player.stamina = Math.min(100, player.stamina + 0.35);
+            player.stamina = Math.min(100, player.stamina + rechargePerTick);
           }
         }
 
@@ -558,7 +587,79 @@ export class EngineInstance {
         }
       }
 
+      // Máquina de estados de Efecto Magnus Dirigido (ventana de 3.0s y máximo 2 pulsaciones)
+      if (this.ball.magnusTimer > 0) {
+        this.ball.magnusTimer -= CORE_DT;
+        if (this.ball.magnusTimer <= 0) {
+          this.ball.magnusTimer = 0;
+          this.ball.isCurvingAllowed = false;
+          this.ball.isCurving = false;
+          this.ball.curvePerp = 0;
+          this.ball.spin = 0;
+          this.ball.magnusControllerId = null;
+        }
+      }
+
+      const canMagnus = (this.modifiers as any).magnusEnabled !== false;
+      const controllerIdNum = this.ball.magnusControllerId !== null ? Number(this.ball.magnusControllerId) : -1;
+      const controllerInput = controllerIdNum !== -1 ? inputs.get(controllerIdNum) : undefined;
+      const bSpeed = Math.hypot(this.ball.vel.x, this.ball.vel.y);
+
+      if (canMagnus && this.ball.isCurvingAllowed && this.ball.magnusTimer > 0 && bSpeed > 0.05 && this.players.has(controllerIdNum)) {
+        const kMagnus = ((this.modifiers as any).magnusCurveStrength ?? this.modifiers.magnusCoefficient ?? 1.2) * 5.0;
+        const hasLeft = Boolean(controllerInput?.magnusLeft || (controllerInput?.inputMask && (controllerInput.inputMask & INPUT_FLAG_MAGNUS_LEFT)));
+        const hasRight = Boolean(controllerInput?.magnusRight || (controllerInput?.inputMask && (controllerInput.inputMask & INPUT_FLAG_MAGNUS_RIGHT)));
+
+        let desiredDir = 0;
+        if (hasLeft && !hasRight) desiredDir = -1;
+        else if (hasRight && !hasLeft) desiredDir = 1;
+
+        if (desiredDir !== 0) {
+          if (desiredDir !== this.ball.lastCurveDir) {
+            if (this.ball.magnusPressesRemaining > 0 && this.ball.magnusTimer > 0) {
+              this.ball.magnusPressesRemaining--;
+              this.ball.lastCurveDir = desiredDir;
+            } else {
+              desiredDir = 0;
+            }
+          }
+        } else {
+          if (this.ball.lastCurveDir !== 0 && this.ball.magnusPressesRemaining <= 0) {
+            this.ball.isCurvingAllowed = false;
+            this.ball.magnusControllerId = null;
+            this.ball.magnusTimer = 0;
+          }
+          this.ball.lastCurveDir = 0;
+        }
+
+        if (desiredDir === -1 && this.ball.magnusTimer > 0 && this.ball.isCurvingAllowed) {
+          this.ball.applyMagnusCurve(true, false, kMagnus);
+        } else if (desiredDir === 1 && this.ball.magnusTimer > 0 && this.ball.isCurvingAllowed) {
+          this.ball.applyMagnusCurve(false, true, kMagnus);
+        } else {
+          this.ball.isCurving = false;
+          this.ball.curvePerp = 0;
+          this.ball.spin = 0;
+        }
+      } else {
+        if (bSpeed <= 0.05 && this.ball.isCurvingAllowed) {
+          this.ball.resetCurve();
+        } else if (this.ball.isCurving || this.ball.spin !== 0) {
+          this.ball.isCurving = false;
+          this.ball.curvePerp = 0;
+          this.ball.spin = 0;
+        }
+      }
+
+      if (this.ball.isPowerShot && bSpeed < baseKickCfg * 0.65) {
+        this.ball.isPowerShot = false;
+      }
+
       this.world.step(CORE_DT, isReplay);
+
+      if (this.ball.lastKickerDiscId !== -1) {
+        this.ball.lastKickerDiscId = -1;
+      }
 
       if (this.fsm.state === MatchPhase.KICKOFF) {
         const ballVelSq = this.ball.vel.x * this.ball.vel.x + this.ball.vel.y * this.ball.vel.y;
@@ -740,7 +841,9 @@ export class EngineInstance {
       if (d.id === 0 || d.team === 0) {
         this.ball.pos.set(d.x, d.y);
         this.ball.vel.set(d.vx, d.vy);
-        if (d.spin !== undefined) this.ball.spin = d.spin;
+        this.ball.spin = d.spin ?? 0;
+        this.ball.isCurving = Math.abs(this.ball.spin) > 0.001;
+        this.ball.isPowerShot = ((d.flags ?? 0) & (1 << 3)) !== 0;
       } else {
         let p = this.players.get(d.id);
         if (!p) {
@@ -749,6 +852,10 @@ export class EngineInstance {
         p.pos.set(d.x, d.y);
         p.vel.set(d.vx, d.vy);
         if (d.stamina !== undefined) p.stamina = d.stamina;
+        p.kicking = ((d.flags ?? 0) & (1 << 0)) !== 0;
+        p.isDashing = ((d.flags ?? 0) & (1 << 1)) !== 0;
+        p.isTurbo = ((d.flags ?? 0) & (1 << 4)) !== 0;
+        p.isTyping = ((d.flags ?? 0) & (1 << 5)) !== 0;
       }
     }
   }
@@ -757,9 +864,12 @@ export class EngineInstance {
     const discStates: CompactDiscState[] = [];
 
     let ballFlags = 0;
-    if (this.ball.isCurving || this.ball.spin !== 0) ballFlags |= 1 << 1;
-    if (this.ball.isCurvingAllowed) ballFlags |= 1 << 2;
-    if (this.ball.vel.len() >= POWER_SHOT_SPEED_THRESHOLD) ballFlags |= 1 << 3;
+    if (Math.abs(this.ball.spin) > 0.001) {
+      ballFlags |= (1 << 1) | (1 << 2);
+    }
+    if (this.ball.isPowerShot || this.ball.vel.len() >= POWER_SHOT_SPEED_THRESHOLD) {
+      ballFlags |= 1 << 3;
+    }
 
     discStates.push({
       id: this.ball.id,
@@ -816,8 +926,10 @@ export class EngineInstance {
 
     if (this.modifiers.ballRadius !== undefined) this.ball.radius = this.modifiers.ballRadius;
     if (this.modifiers.ballMass !== undefined) this.ball.setMass(this.modifiers.ballMass);
-    if (this.modifiers.pitchFriction !== undefined) this.ball.damping = this.modifiers.pitchFriction;
-    if (this.modifiers.magnusCoefficient !== undefined) this.world.magnusCoefficient = this.modifiers.magnusCoefficient;
+    const ballDamping = (this.modifiers as any).ballFriction ?? this.modifiers.pitchFriction;
+    if (ballDamping !== undefined) this.ball.damping = ballDamping;
+    if ((this.modifiers as any).ballRestitution !== undefined) this.ball.bounciness = (this.modifiers as any).ballRestitution;
+    if ((this.modifiers as any).kickMargin !== undefined) this.world.kickMargin = (this.modifiers as any).kickMargin;
     if (this.modifiers.goalCelebrationDuration !== undefined) this.fsm.celebrationDurationTicks = Math.round(this.modifiers.goalCelebrationDuration * 60);
     if (this.modifiers.goalLimit !== undefined) this.fsm.scoreLimit = this.modifiers.goalLimit;
     if (this.modifiers.goldenGoalOvertime !== undefined) this.fsm.goldenGoal = this.modifiers.goldenGoalOvertime;
@@ -825,7 +937,8 @@ export class EngineInstance {
     for (const player of this.players.values()) {
       if (this.modifiers.playerRadius !== undefined) player.radius = this.modifiers.playerRadius;
       if (this.modifiers.playerMass !== undefined) player.setMass(this.modifiers.playerMass);
-      if (this.modifiers.pitchFriction !== undefined) player.damping = this.modifiers.pitchFriction;
+      const pDamping = (this.modifiers as any).playerFriction ?? this.modifiers.pitchFriction;
+      if (pDamping !== undefined) player.damping = pDamping;
     }
   }
 

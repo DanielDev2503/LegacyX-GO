@@ -55,6 +55,8 @@ export class NetworkHost {
 
   public redKitVariant: 'home' | 'away' = 'home';
   public blueKitVariant: 'home' | 'away' = 'away';
+  public gameplayConfig: Record<string, unknown> | null = null;
+  public modifiers: Record<string, unknown> | null = null;
 
   constructor(signaling: SignalingClient, hostNickname: string, hostProfile?: Partial<PlayerInfo>) {
     this.signaling = signaling;
@@ -164,6 +166,8 @@ export class NetworkHost {
       matchPhase: this.matchPhase,
       redKitVariant: this.redKitVariant,
       blueKitVariant: this.blueKitVariant,
+      gameplayConfig: this.gameplayConfig,
+      modifiers: this.modifiers,
       roomConfig: {
         id: this.roomId,
         name: this.roomName,

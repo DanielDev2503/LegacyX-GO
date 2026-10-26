@@ -400,19 +400,35 @@ export interface PhysicsModifiers {
   airDensity: number; // 0.0 to 3.0
   timeLimit?: number;
   scoreLimit?: number;
+  // Full GameplayConfig parity fields
+  playerMaxSpeed?: number;
+  playerAcceleration?: number;
+  playerFriction?: number;
+  ballFriction?: number;
+  ballRestitution?: number;
+  kickStrength?: number;
+  kickMargin?: number;
+  boostMultiplier?: number;
+  dashDistance?: number;
+  dashesPerFullBar?: number;
+  staminaRechargeRate?: number;
+  magnusCurveStrength?: number;
+  turboEnabled?: boolean;
+  dashEnabled?: boolean;
+  magnusEnabled?: boolean;
 }
 
 export const DEFAULT_PHYSICS_MODIFIERS: Readonly<PhysicsModifiers> = {
   gravity: 0.0,
   pitchFriction: 0.99,
-  wallBounciness: 0.8,
-  postBounciness: 0.85,
-  baseKickStrength: 450.0,
+  wallBounciness: 0.412,
+  postBounciness: 0.5,
+  baseKickStrength: 320.0,
   dashPower: 280.0,
   dashCooldown: 1.5,
-  playerMass: 1.0,
+  playerMass: 2.0,
   playerRadius: 15.0,
-  ballMass: 0.2,
+  ballMass: 1.0,
   ballRadius: 5.8,
   magnusCoefficient: 0.35,
   netElasticity: 0.45,
@@ -421,7 +437,22 @@ export const DEFAULT_PHYSICS_MODIFIERS: Readonly<PhysicsModifiers> = {
   goalLimit: 3,
   matchTimeMinutes: 3.0,
   goldenGoalOvertime: true,
-  airDensity: 1.0
+  airDensity: 1.0,
+  playerMaxSpeed: 2.8,
+  playerAcceleration: 0.11,
+  playerFriction: 0.96,
+  ballFriction: 0.99,
+  ballRestitution: 0.412,
+  kickStrength: 4.545,
+  kickMargin: 4.0,
+  boostMultiplier: 1.75,
+  dashDistance: 37.5,
+  dashesPerFullBar: 4,
+  staminaRechargeRate: 22.0,
+  magnusCurveStrength: 0.35,
+  turboEnabled: true,
+  dashEnabled: true,
+  magnusEnabled: true
 };
 
 export function detectUserRegion(): string {
@@ -572,6 +603,8 @@ class GameUIStore {
   public blueScore = $state(0);
   public matchTimeFormatted = $state('00:00');
   public fsmPhase = $state<'STOPPED' | 'WARMUP' | 'KICKOFF' | 'PLAYING' | 'PAUSED' | 'GOAL' | 'OVERTIME' | 'STATS'>('STOPPED');
+  public previousMatchPhase = $state<number>(0);
+  public hasJoinedInitialSync = $state<boolean>(false);
   public isGoldenGoal = $state(false);
   public redPossession = $state(50);
   public bluePossession = $state(50);
@@ -1268,6 +1301,8 @@ class GameUIStore {
     this.lastMatchStats = null;
     this.activeSlide = 'MENU';
     this.fsmPhase = 'PLAYING';
+    this.previousMatchPhase = 2;
+    this.hasJoinedInitialSync = true;
     this.activeModal = 'NONE';
     this.clearModalStack();
     if (typeof document !== 'undefined') {
@@ -1279,6 +1314,7 @@ class GameUIStore {
   public stopMatch(): void {
     soundFX.playUIClick();
     this.fsmPhase = 'STOPPED';
+    this.previousMatchPhase = 0;
     this.onStopMatch?.();
   }
 
@@ -1403,7 +1439,87 @@ class GameUIStore {
 
   /** Contenedor central unificado (menú de sala / estadísticas) visible. */
   public get isRoomPanelOpen(): boolean {
-    return this.activeModal === 'TEAM_MANAGEMENT' || this.activeModal === 'STATS';
+    return (
+      this.activeModal === 'TEAM_MANAGEMENT' ||
+      this.activeModal === 'TEAM_SELECT' ||
+      this.activeModal === 'teamSelect' ||
+      this.activeModal === 'STATS' ||
+      this.activeModal === 'stats'
+    );
+  }
+
+  /**
+   * Regla de transición de fase única (`previousMatchPhase` + `hasJoinedInitialSync`).
+   * - Cuando `newPhase === 0`: fuerza el menú abierto (`TEAM_MANAGEMENT` o `STATS`).
+   * - Transición `0 -> != 0`: cierra el menú una única vez (`activeModal = 'NONE'`).
+   * - Ingreso inicial a partido activo (`!hasJoinedInitialSync && newPhase !== 0`): inicia con `activeModal = 'NONE'`.
+   * - Mientras el partido está en curso (`previousMatchPhase !== 0 && newPhase !== 0`): NUNCA cierra ni sobrescribe `activeModal`.
+   * - Transición `!= 0 -> 0`: abre automáticamente el menú de nuevo.
+   */
+  public handleMatchPhaseTransition(newPhase: number, isInitialSync: boolean = false): void {
+    const prev = this.previousMatchPhase;
+    const isFirstSync = !this.hasJoinedInitialSync || isInitialSync;
+
+    if (isFirstSync) {
+      this.hasJoinedInitialSync = true;
+      this.previousMatchPhase = newPhase;
+      this.matchPhase = newPhase;
+      if (newPhase === 5) {
+        this.hasCompletedMatch = true;
+        if (!this.isSecondaryOverlayOpen) {
+          this.modalStack = [];
+          this.activeModal = 'STATS';
+        }
+      } else if (newPhase !== 0) {
+        if (this.isRoomPanelOpen) {
+          this.clearModalStack();
+          this.activeModal = 'NONE';
+          if (typeof document !== 'undefined') {
+            (document.activeElement as HTMLElement)?.blur();
+          }
+        }
+      } else {
+        this.enforceStopMenu();
+      }
+      return;
+    }
+
+    const wasStopped = prev === 0 || prev === 5;
+    const isNowStopped = newPhase === 0 || newPhase === 5;
+
+    if (wasStopped && !isNowStopped) {
+      // Transición de inicio (0 -> != 0): cerrar el menú una única vez
+      this.matchPhase = newPhase;
+      this.previousMatchPhase = newPhase;
+      if (this.isRoomPanelOpen) {
+        this.clearModalStack();
+        this.activeModal = 'NONE';
+        if (typeof document !== 'undefined') {
+          (document.activeElement as HTMLElement)?.blur();
+        }
+      }
+    } else if (!wasStopped && isNowStopped) {
+      // Transición a fin/detención (!= 0 -> 0 / 5): abrir el menú de nuevo
+      this.matchPhase = newPhase;
+      this.previousMatchPhase = newPhase;
+      if (newPhase === 5) {
+        this.hasCompletedMatch = true;
+        if (!this.isSecondaryOverlayOpen) {
+          this.modalStack = [];
+          this.activeModal = 'STATS';
+        }
+      } else {
+        this.enforceStopMenu();
+      }
+    } else if (newPhase === 0) {
+      this.matchPhase = 0;
+      this.previousMatchPhase = 0;
+      this.enforceStopMenu();
+    } else {
+      // Partido en curso (prev !== 0 && newPhase !== 0): PROHIBIDO tocar activeModal
+      this.matchPhase = newPhase;
+      this.previousMatchPhase = newPhase;
+    }
   }
 
   /** Conmuta el menú de sala in-game (`Escape` / botón ☰). En `0: STOP` permanece abierto. */
@@ -1426,8 +1542,7 @@ class GameUIStore {
       this.matchPhase === 0 &&
       this.currentScreen === 'IN_GAME' &&
       !this.isSecondaryOverlayOpen &&
-      this.activeModal !== 'STATS' &&
-      this.activeModal !== 'TEAM_MANAGEMENT'
+      !this.isRoomPanelOpen
     ) {
       this.modalStack = [];
       this.activeModal = 'TEAM_MANAGEMENT';
@@ -1479,20 +1594,64 @@ class GameUIStore {
     if (this.onModifiersChanged) {
       this.onModifiersChanged({ ...this.modifiers });
     }
+    if (this.isHost) {
+      this.onRoomConfigChanged?.({
+        gameplayConfig: { ...this.gameplayConfig },
+        modifiers: { ...this.modifiers }
+      });
+    }
+  }
+
+  private syncGameplayConfigToModifiers(): void {
+    const cfg = this.gameplayConfig;
+    this.modifiers.playerMaxSpeed = cfg.playerMaxSpeed;
+    this.modifiers.playerAcceleration = cfg.playerAcceleration;
+    this.modifiers.playerFriction = cfg.playerFriction ?? 0.96;
+    this.modifiers.playerRadius = cfg.playerRadius;
+    this.modifiers.playerMass = cfg.playerMass ?? 2.0;
+    this.modifiers.ballRadius = cfg.ballRadius;
+    this.modifiers.ballMass = cfg.ballMass ?? 1.0;
+    this.modifiers.ballFriction = cfg.ballFriction ?? 0.99;
+    this.modifiers.pitchFriction = cfg.ballFriction ?? 0.99;
+    this.modifiers.ballRestitution = cfg.ballRestitution;
+    this.modifiers.wallBounciness = cfg.ballRestitution;
+    this.modifiers.kickStrength = cfg.kickStrength;
+    this.modifiers.baseKickStrength = (cfg.kickStrength / 4.545) * 320.0;
+    this.modifiers.kickMargin = cfg.kickMargin ?? 4.0;
+    this.modifiers.boostMultiplier = cfg.boostMultiplier;
+    this.modifiers.dashDistance = cfg.dashDistance;
+    this.modifiers.dashPower = (cfg.dashDistance / 4) * 60;
+    this.modifiers.dashesPerFullBar = cfg.dashesPerFullBar ?? 4;
+    this.modifiers.staminaRechargeRate = cfg.staminaRechargeRate;
+    this.modifiers.magnusCurveStrength = cfg.magnusCurveStrength;
+    this.modifiers.magnusCoefficient = cfg.magnusCurveStrength;
+    this.modifiers.turboEnabled = cfg.turboEnabled !== false;
+    this.modifiers.dashEnabled = cfg.dashEnabled !== false;
+    this.modifiers.magnusEnabled = cfg.magnusEnabled !== false;
   }
 
   public updateGameplayConfig<K extends keyof GameplayConfig>(key: K, value: GameplayConfig[K]): void {
     (this.gameplayConfig as any)[key] = value;
     gameConfigStore.set({ ...this.gameplayConfig });
-    // Synchronize corresponding fields to modifiers
-    if (key === 'playerRadius') this.modifiers.playerRadius = value as number;
-    if (key === 'playerMass') this.modifiers.playerMass = value as number;
-    if (key === 'ballRadius') this.modifiers.ballRadius = value as number;
-    if (key === 'ballMass') this.modifiers.ballMass = value as number;
-    if (key === 'ballFriction') this.modifiers.pitchFriction = value as number;
-    if (key === 'kickStrength') this.modifiers.baseKickStrength = value as number;
-    if (key === 'dashDistance') this.modifiers.dashPower = (value as number) * 8;
-    if (key === 'magnusCurveStrength') this.modifiers.magnusCoefficient = (value as number) * 0.0025;
+    this.syncGameplayConfigToModifiers();
+    this.onModifiersChanged?.({ ...this.modifiers });
+    if (this.isHost) {
+      this.onRoomConfigChanged?.({
+        gameplayConfig: { ...this.gameplayConfig },
+        modifiers: { ...this.modifiers }
+      });
+    }
+  }
+
+  public applyRemoteGameplayConfig(cfg?: Partial<GameplayConfig>, mods?: Partial<PhysicsModifiers>): void {
+    if (cfg && typeof cfg === 'object') {
+      this.gameplayConfig = { ...this.gameplayConfig, ...cfg };
+      gameConfigStore.set({ ...this.gameplayConfig });
+      this.syncGameplayConfigToModifiers();
+    }
+    if (mods && typeof mods === 'object') {
+      this.modifiers = { ...this.modifiers, ...mods };
+    }
     this.onModifiersChanged?.({ ...this.modifiers });
   }
 
@@ -1506,8 +1665,15 @@ class GameUIStore {
   public resetModifiersToDefault(): void {
     soundFX.playUIClick();
     this.modifiers = { ...DEFAULT_PHYSICS_MODIFIERS };
+    this.syncGameplayConfigToModifiers();
     if (this.onModifiersChanged) {
       this.onModifiersChanged({ ...this.modifiers });
+    }
+    if (this.isHost) {
+      this.onRoomConfigChanged?.({
+        gameplayConfig: { ...this.gameplayConfig },
+        modifiers: { ...this.modifiers }
+      });
     }
   }
 
@@ -1645,6 +1811,8 @@ class GameUIStore {
     this.blueScore = 0;
     this.matchTimeFormatted = '00:00';
     this.matchPhase = 0;
+    this.previousMatchPhase = 0;
+    this.hasJoinedInitialSync = false;
     this.fsmPhase = 'STOPPED';
     this.isGoldenGoal = false;
     this.postMatchSlide = 1;

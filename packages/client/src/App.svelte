@@ -43,6 +43,10 @@
   let testEngine: EngineInstance | null = null;
 
   function applyModifiersToEngine(modifiers: PhysicsModifiers): void {
+    if (rendererInstance) {
+      rendererInstance.discRenderer.ballRadius = modifiers.ballRadius ?? gameUI.gameplayConfig.ballRadius ?? 5.8;
+      rendererInstance.discRenderer.playerRadius = modifiers.playerRadius ?? gameUI.gameplayConfig.playerRadius ?? 15.0;
+    }
     if (!testEngine) return;
     testEngine.applyModifiers(modifiers);
   }
@@ -69,6 +73,10 @@
     // Inicializar siempre en 0: STOP con el menú de sala abierto
     gameUI.fsmPhase = 'STOPPED';
     gameUI.matchPhase = 0;
+    gameUI.previousMatchPhase = 0;
+    if (isHost) {
+      gameUI.hasJoinedInitialSync = true;
+    }
     gameUI.clearModalStack();
     gameUI.openOverlay('TEAM_MANAGEMENT');
 
@@ -272,6 +280,7 @@
         gameUI.activeSlide = 'STATS';
         gameUI.fsmPhase = 'STOPPED';
         gameUI.matchPhase = 0;
+        gameUI.previousMatchPhase = 0;
         if (engine) {
           engine.stopMatch();
         }
@@ -346,7 +355,7 @@
         return;
       }
 
-      if (e.code === 'ArrowUp' && !e.repeat) {
+      if (gameUI.keybinds.dash.includes(e.code) && !e.repeat) {
         dashTriggered = true;
       }
 
@@ -354,7 +363,7 @@
     };
 
     const onKeyUp = (e: KeyboardEvent) => {
-      if (e.code === 'ArrowUp') {
+      if (gameUI.keybinds.dash.includes(e.code)) {
         dashTriggered = false;
       }
       keyState.set(e.code, false);
@@ -379,17 +388,17 @@
       const isTyping = activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA');
 
       if (isInputActive && !isTyping) {
-        // Movimiento: WASD o Flechas
-        if (keyState.get('KeyW') || keyState.get('ArrowUp')) mask |= INPUT_FLAG_UP;
-        if (keyState.get('KeyS') || keyState.get('ArrowDown')) mask |= INPUT_FLAG_DOWN;
-        if (keyState.get('KeyA') || keyState.get('ArrowLeft')) mask |= INPUT_FLAG_LEFT;
-        if (keyState.get('KeyD') || keyState.get('ArrowRight')) mask |= INPUT_FLAG_RIGHT;
+        // Movimiento direccional según keybinds canónicos (por defecto WASD)
+        if (gameUI.keybinds.up.some((k) => keyState.get(k))) mask |= INPUT_FLAG_UP;
+        if (gameUI.keybinds.down.some((k) => keyState.get(k))) mask |= INPUT_FLAG_DOWN;
+        if (gameUI.keybinds.left.some((k) => keyState.get(k))) mask |= INPUT_FLAG_LEFT;
+        if (gameUI.keybinds.right.some((k) => keyState.get(k))) mask |= INPUT_FLAG_RIGHT;
 
         // Patear / Chutar: Space / KeyX
-        if (keyState.get('Space') || keyState.get('KeyX')) mask |= INPUT_FLAG_KICK;
+        if (gameUI.keybinds.kick.some((k) => keyState.get(k)) || keyState.get('KeyX')) mask |= INPUT_FLAG_KICK;
 
         // Turbo / Sprint: ShiftLeft / ShiftRight
-        if (keyState.get('ShiftLeft') || keyState.get('ShiftRight')) mask |= INPUT_FLAG_TURBO;
+        if (gameUI.keybinds.turbo.some((k) => keyState.get(k)) || keyState.get('ShiftRight')) mask |= INPUT_FLAG_TURBO;
 
         // Dash: ArrowUp (flanco ascendente / edge-trigger)
         if (dashTriggered) {
@@ -398,8 +407,12 @@
         }
 
         // Curva Magnus: ArrowLeft / ArrowRight (y KeyQ/KeyZ / KeyE/KeyC)
-        if (keyState.get('ArrowLeft') || keyState.get('KeyQ') || keyState.get('KeyZ')) mask |= INPUT_FLAG_MAGNUS_LEFT;
-        if (keyState.get('ArrowRight') || keyState.get('KeyE') || keyState.get('KeyC')) mask |= INPUT_FLAG_MAGNUS_RIGHT;
+        if (gameUI.keybinds.curveLeft.some((k) => keyState.get(k)) || keyState.get('KeyQ') || keyState.get('KeyZ')) {
+          mask |= INPUT_FLAG_MAGNUS_LEFT;
+        }
+        if (gameUI.keybinds.curveRight.some((k) => keyState.get(k)) || keyState.get('KeyE') || keyState.get('KeyC')) {
+          mask |= INPUT_FLAG_MAGNUS_RIGHT;
+        }
       }
       return mask;
     }
@@ -466,6 +479,8 @@
       const blueActiveKit = gameUI.blueCaptainKit;
       renderer.discRenderer.redKit = redActiveKit;
       renderer.discRenderer.blueKit = blueActiveKit;
+      renderer.discRenderer.ballRadius = gameUI.gameplayConfig.ballRadius || gameUI.modifiers.ballRadius || 5.8;
+      renderer.discRenderer.playerRadius = gameUI.gameplayConfig.playerRadius || gameUI.modifiers.playerRadius || 15.0;
       renderer.discRenderer.ballSkin = gameUI.settings.ballSkin as any;
       renderer.discRenderer.ballMode = gameUI.settings.ballMode;
       renderer.discRenderer.ballCustomColor = gameUI.settings.ballCustomColor;
@@ -536,47 +551,26 @@
           const phase = currSnapshot.phase ?? (engine ? engine.fsm.state : 0);
           if (phase === MatchPhase.STOP || phase === 0) {
             gameUI.matchTimeFormatted = '00:00';
-            gameUI.fsmPhase = 'STOPPED';
-            gameUI.matchPhase = 0;
+            gameUI.handleMatchPhaseTransition(0);
           } else {
             const totalSec = currSnapshot.matchTimer ?? (engine ? Math.floor(engine.fsm.matchTicksElapsed / 60) : 0);
             const mins = Math.floor(totalSec / 60).toString().padStart(2, '0');
             const secs = (totalSec % 60).toString().padStart(2, '0');
             gameUI.matchTimeFormatted = `${mins}:${secs}`;
 
+            let canonicalPhase = 2;
             if (phase === MatchPhase.STATS || phase === 5) {
-              if (gameUI.fsmPhase !== 'STATS') {
-                gameUI.hasCompletedMatch = true;
-                if (!gameUI.isSecondaryOverlayOpen) {
-                  gameUI.clearModalStack();
-                  gameUI.activeModal = 'STATS';
-                }
-              }
-              gameUI.fsmPhase = 'STATS';
-              gameUI.matchPhase = 5;
-            } else if (gameUI.fsmPhase !== 'STATS') {
-              if (phase === MatchPhase.PLAYING || phase === 2) {
-                gameUI.fsmPhase = 'PLAYING';
-                gameUI.matchPhase = 2;
-              } else if (phase === MatchPhase.KICKOFF || phase === 1) {
-                gameUI.fsmPhase = 'KICKOFF';
-                gameUI.matchPhase = 1;
-              } else if (phase === MatchPhase.GOAL || phase === 3) {
-                gameUI.fsmPhase = 'GOAL';
-                gameUI.matchPhase = 3;
-              } else if (phase === MatchPhase.PAUSE || phase === 2.1) {
-                gameUI.fsmPhase = 'PAUSED';
-                gameUI.matchPhase = 2.1;
-              }
-
-              if (gameUI.activeModal === 'TEAM_MANAGEMENT' || gameUI.activeModal === 'TEAM_SELECT' || gameUI.activeModal === 'teamSelect') {
-                gameUI.clearModalStack();
-                gameUI.activeModal = 'NONE';
-                if (typeof document !== 'undefined') {
-                  (document.activeElement as HTMLElement)?.blur();
-                }
-              }
+              canonicalPhase = 5;
+            } else if (phase === MatchPhase.PLAYING || phase === 2) {
+              canonicalPhase = 2;
+            } else if (phase === MatchPhase.KICKOFF || phase === 1) {
+              canonicalPhase = 1;
+            } else if (phase === MatchPhase.GOAL || phase === 3) {
+              canonicalPhase = 3;
+            } else if (phase === MatchPhase.PAUSE || phase === 2.1) {
+              canonicalPhase = 2.1;
             }
+            gameUI.handleMatchPhaseTransition(canonicalPhase);
           }
 
           if (gameUI.isHost) {

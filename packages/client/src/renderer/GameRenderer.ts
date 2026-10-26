@@ -399,7 +399,7 @@ export class GameRenderer {
       snapDisc.avatar = d1.team === 0 ? '' : (info?.avatar || String(info?.number ?? d1.id));
       snapDisc.kicking = (flags & 1) !== 0;
       snapDisc.isDashing = (flags & 2) !== 0;
-      snapDisc.isSpinActive = d1.team === 0 && ((flags & 4) !== 0 || Math.abs(d1.spin ?? 0) > 0.05);
+      snapDisc.isSpinActive = d1.team === 0 && Math.abs(d1.spin ?? 0) > 0.001;
       snapDisc.isPowerShot = d1.team === 0 && (flags & 8) !== 0;
       snapDisc.isTurbo = (flags & 16) !== 0;
       snapDisc.isTyping = (flags & 32) !== 0;

@@ -83,20 +83,6 @@
   );
   let matchRedScore = $derived(matchStatsSnapshot ? matchStatsSnapshot.redScore : gameUI.redScore);
   let matchBlueScore = $derived(matchStatsSnapshot ? matchStatsSnapshot.blueScore : gameUI.blueScore);
-  let matchWinner = $derived(
-    matchStatsSnapshot
-      ? matchStatsSnapshot.winner
-      : matchRedScore > matchBlueScore
-        ? 'red'
-        : matchBlueScore > matchRedScore
-          ? 'blue'
-          : 'draw'
-  );
-  let matchWinnerTeamName = $derived(
-    matchStatsSnapshot
-      ? (matchStatsSnapshot.winner === 'red' ? matchStatsSnapshot.redTeamName : matchStatsSnapshot.blueTeamName)
-      : (matchWinner === 'red' ? redTeamName : blueTeamName)
-  );
   let matchDurationFormatted = $derived(
     matchStatsSnapshot
       ? `${String(Math.floor(matchStatsSnapshot.matchDuration / 60)).padStart(2, '0')}:${String(matchStatsSnapshot.matchDuration % 60).padStart(2, '0')}`
@@ -344,7 +330,11 @@
     if (e.target === e.currentTarget && canClose) handleClose();
   }}
   onkeydown={(e) => {
-    if (e.key === 'Escape' && canClose) handleClose();
+    if (e.key === 'Escape' && canClose) {
+      e.preventDefault();
+      e.stopPropagation();
+      handleClose();
+    }
   }}
 >
   <!-- Viewport del Corredor Deslizante -->
@@ -373,9 +363,9 @@
 
         <!-- Tarjeta Central de Estadísticas -->
         <div class="team-modal-card stats-modal-card">
-          <!-- Header de Estadísticas -->
+          <!-- Header de Estadísticas en 3 Zonas Horizontales (Izquierda: Marcador, Centro: MVP, Derecha: Tiempo) -->
           <header class="stats-header-row">
-            <!-- Marcador Homologado con HUD y Colores del Capitán -->
+            <!-- Zona Izquierda: Marcador Homologado con HUD y Colores del Capitán -->
             <div class="stats-scoreboard-banner">
               <div
                 class="stats-acronym-badge red-acronym"
@@ -406,24 +396,21 @@
               </div>
             </div>
 
-            <div class="match-status-meta">
-              {#if matchWinner === 'red'}
-                <span class="badge-victory red">VICTORIA {matchWinnerTeamName.toUpperCase()}</span>
-              {:else if matchWinner === 'blue'}
-                <span class="badge-victory blue">VICTORIA {matchWinnerTeamName.toUpperCase()}</span>
-              {:else}
-                <span class="badge-victory draw">EMPATE</span>
+            <!-- Zona Centro: Insignia Dorada del MVP -->
+            <div class="stats-center-zone">
+              {#if gameUI.mvp}
+                <div class="mvp-golden-plaque">
+                  <span class="crown-icon">👑</span>
+                  <span class="mvp-title">MVP: {gameUI.mvp.nickname}</span>
+                  <span class="mvp-points-chip">({gameUI.mvp.points} pts)</span>
+                </div>
               {/if}
-              <span class="match-time-chip">⏱ {matchDurationFormatted}</span>
             </div>
 
-            {#if gameUI.mvp}
-              <div class="mvp-golden-plaque">
-                <span class="crown-icon">👑</span>
-                <span class="mvp-title">MVP: {gameUI.mvp.nickname}</span>
-                <span class="mvp-points-chip">({gameUI.mvp.points} pts)</span>
-              </div>
-            {/if}
+            <!-- Zona Derecha: Duración del Partido -->
+            <div class="match-status-meta">
+              <span class="match-time-chip">⏱ {matchDurationFormatted}</span>
+            </div>
           </header>
 
           <!-- Tablas Duales Paralelas RED y BLUE con Cabeceras Bicolor Suave y Nombres de Capitán -->
@@ -2438,16 +2425,16 @@
     padding: 0.85rem 1.25rem;
     background: rgba(8, 14, 24, 0.85);
     border-bottom: 1px solid rgba(0, 229, 255, 0.25);
-    display: flex;
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
     align-items: center;
-    justify-content: space-between;
     flex-shrink: 0;
     gap: 0.75rem;
-    flex-wrap: wrap;
   }
 
   /* Banner Homologado de Marcador de Estadísticas */
   .stats-scoreboard-banner {
+    justify-self: start;
     display: flex;
     align-items: center;
     gap: 0.65rem;
@@ -2456,6 +2443,13 @@
     border-radius: 0.5rem;
     padding: 0.25rem 0.65rem;
     box-shadow: 0 0 12px rgba(0, 229, 255, 0.15);
+  }
+
+  .stats-center-zone {
+    justify-self: center;
+    display: flex;
+    align-items: center;
+    justify-content: center;
   }
 
   .stats-acronym-badge {
@@ -2528,36 +2522,11 @@
   }
 
   .match-status-meta {
+    justify-self: end;
     display: flex;
     align-items: center;
+    justify-content: flex-end;
     gap: 0.5rem;
-  }
-
-  .badge-victory {
-    font-family: 'Space Grotesk', system-ui, sans-serif;
-    font-size: 0.75rem;
-    font-weight: 800;
-    letter-spacing: 0.08em;
-    padding: 0.2rem 0.5rem;
-    border-radius: 0.25rem;
-  }
-
-  .badge-victory.red {
-    background: rgba(255, 71, 87, 0.15);
-    border: 1px solid rgba(255, 71, 87, 0.5);
-    color: #ff4757;
-  }
-
-  .badge-victory.blue {
-    background: rgba(0, 229, 255, 0.15);
-    border: 1px solid rgba(0, 229, 255, 0.5);
-    color: #00e5ff;
-  }
-
-  .badge-victory.draw {
-    background: rgba(255, 219, 60, 0.15);
-    border: 1px solid rgba(255, 219, 60, 0.5);
-    color: #ffe16d;
   }
 
   .match-time-chip {

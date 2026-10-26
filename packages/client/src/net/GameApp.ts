@@ -30,6 +30,8 @@ export interface RoomConfigPatch {
   redKitVariant?: 'home' | 'away';
   blueKitVariant?: 'home' | 'away';
   allowCaptainKitSwitch?: boolean;
+  gameplayConfig?: Record<string, unknown>;
+  modifiers?: Record<string, unknown>;
 }
 
 /** Acciones que un Admin no-Host puede delegar al Host vía `ADMIN_ACTION`. */
@@ -232,6 +234,8 @@ export class GameApp {
       if (patch.scoreLimit !== undefined) host.scoreLimit = patch.scoreLimit;
       if (patch.redKitVariant !== undefined) host.redKitVariant = patch.redKitVariant;
       if (patch.blueKitVariant !== undefined) host.blueKitVariant = patch.blueKitVariant;
+      if (patch.gameplayConfig !== undefined) host.gameplayConfig = patch.gameplayConfig;
+      if (patch.modifiers !== undefined) host.modifiers = patch.modifiers;
       host.broadcastRoomStateSync();
 
       this.signaling.send({
@@ -374,12 +378,16 @@ export class GameApp {
     host.timeLimit = params?.timeLimit ?? 3;
     host.scoreLimit = params?.scoreLimit ?? 3;
     host.matchPhase = 0;
+    host.gameplayConfig = { ...gameUI.gameplayConfig } as any;
+    host.modifiers = { ...gameUI.modifiers } as any;
     this.networkHost = host;
 
     gameUI.isHost = true;
     gameUI.isAdmin = true;
     gameUI.localPlayerId = 1;
     gameUI.matchId = roomId;
+    gameUI.previousMatchPhase = 0;
+    gameUI.hasJoinedInitialSync = true;
     gameUI.teamsLocked = host.teamsLocked;
     gameUI.allowCaptainKitSwitch = host.allowCaptainKitSwitch;
     gameUI.timeLimitMinutes = host.timeLimit;
@@ -521,6 +529,8 @@ export class GameApp {
     gameUI.isHost = false;
     gameUI.isAdmin = false;
     gameUI.matchId = roomId;
+    gameUI.previousMatchPhase = 0;
+    gameUI.hasJoinedInitialSync = false;
     gameUI.redScore = 0;
     gameUI.blueScore = 0;
     gameUI.matchTimeFormatted = '00:00';
@@ -553,10 +563,14 @@ export class GameApp {
       if (typeof state.teamsLocked === 'boolean') gameUI.teamsLocked = state.teamsLocked;
       if (typeof state.timeLimit === 'number') gameUI.modifiers.matchTimeMinutes = state.timeLimit;
       if (typeof state.scoreLimit === 'number') gameUI.modifiers.goalLimit = state.scoreLimit;
-      if (typeof state.matchPhase === 'number' && state.matchPhase === 0 && gameUI.matchPhase !== 0) {
-        gameUI.matchPhase = 0;
-        gameUI.matchTimeFormatted = '00:00';
-        gameUI.enforceStopMenu();
+      if (state.gameplayConfig || state.modifiers) {
+        gameUI.applyRemoteGameplayConfig(state.gameplayConfig, state.modifiers);
+      }
+      if (typeof state.matchPhase === 'number') {
+        if (state.matchPhase === 0) {
+          gameUI.matchTimeFormatted = '00:00';
+        }
+        gameUI.handleMatchPhaseTransition(state.matchPhase, state.type === 'INITIAL_STATE_PACKET');
       }
     };
 

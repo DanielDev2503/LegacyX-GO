@@ -102,7 +102,7 @@
       min: 0.0,
       max: 1.8,
       step: 0.01,
-      defaultVal: 0.50
+      defaultVal: 0.412
     },
     {
       key: 'ballMass',
@@ -111,7 +111,7 @@
       min: 0.1,
       max: 10.0,
       step: 0.1,
-      defaultVal: 1.0
+      defaultVal: 0.67
     },
     {
       key: 'ballFriction',

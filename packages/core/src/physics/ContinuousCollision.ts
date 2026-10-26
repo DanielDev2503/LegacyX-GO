@@ -78,16 +78,16 @@ export function resolveDiscDiscCollision(
   const relVel = Vec2.t2.copy(d1.vel).sub(d2.vel);
   const velAlongNormal = relVel.dot(normal);
 
+  // Extinción instantánea de la comba del balón al colisionar con cualquier disco (poste o jugador)
+  if (d1.isBall && (d1.isCurving || d1.isCurvingAllowed || d1.spin !== 0 || d1.magnusTimer > 0) && d2.id !== d1.lastKickerDiscId) {
+    d1.resetCurve();
+  }
+  if (d2.isBall && (d2.isCurving || d2.isCurvingAllowed || d2.spin !== 0 || d2.magnusTimer > 0) && d1.id !== d2.lastKickerDiscId) {
+    d2.resetCurve();
+  }
+
   // Do not resolve if velocities are already separating
   if (velAlongNormal < 0) {
-    // Extinción instantánea de la comba del balón al colisionar con cualquier disco (poste u otro jugador)
-    if (d1.isBall && (d1.isCurving || d1.isCurvingAllowed) && d2.id !== d1.lastKickerDiscId) {
-      d1.resetCurve();
-    }
-    if (d2.isBall && (d2.isCurving || d2.isCurvingAllowed) && d1.id !== d2.lastKickerDiscId) {
-      d2.resetCurve();
-    }
-
     const restitution = Math.min(d1.bounciness, d2.bounciness);
     const impulseMag = (-(1 + restitution) * velAlongNormal) / totalInvMass;
 
@@ -142,7 +142,9 @@ export function resolveDiscSegmentCollision(
   }
 
   // Extinción instantánea de la comba al chocar contra segmentos o paredes
-  if (disc.isBall && (disc.isCurving || disc.isCurvingAllowed)) disc.resetCurve();
+  if (disc.isBall && (disc.isCurving || disc.isCurvingAllowed || disc.spin !== 0 || disc.magnusTimer > 0)) {
+    disc.resetCurve();
+  }
 
   const dist = Math.sqrt(distSq);
   const normal = Vec2.t2;

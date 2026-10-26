@@ -269,11 +269,11 @@ export class DiscRenderer {
     const ballDisc = discs.find((d) => d.team === 0);
     if (ballDisc) {
       const spinVal = ballDisc.spin ?? (ballDisc.curveFactor ? ballDisc.curveFactor / 10 : 0);
-      const isSpinning = Boolean(ballDisc.isSpinActive || spinVal !== 0);
+      const isSpinning = Math.abs(spinVal) > 0.001;
       if (isSpinning) {
-        this.recordBallTrailPoint(ballDisc.x, ballDisc.y, spinVal !== 0 ? spinVal : ballDisc.isSpinActive ? 1.0 : 0);
-      } else if (this.ballTrailCount > 0) {
-        this.ballTrailCount--;
+        this.recordBallTrailPoint(ballDisc.x, ballDisc.y, spinVal);
+      } else {
+        this.ballTrailCount = 0;
       }
 
       if (ballDisc.isPowerShot) {
@@ -341,7 +341,7 @@ export class DiscRenderer {
     s.vy = vy;
     s.radius = this.ballRadius;
     s.spin = spin;
-    s.isSpinActive = Math.abs(spin) > 0.05 || (flags & (1 << 2)) !== 0;
+    s.isSpinActive = Math.abs(spin) > 0.001;
     s.isPowerShot = (flags & (1 << 3)) !== 0;
     this.renderBallDisc(ctx, s);
   }
@@ -634,13 +634,13 @@ export class DiscRenderer {
 
     if (disc.isPowerShot && typeof ctx.createRadialGradient === 'function') {
       ctx.save();
-      const auraGrad = ctx.createRadialGradient(x, y, radius * 0.2, x, y, radius * 2.8);
-      auraGrad.addColorStop(0, 'rgba(255, 140, 0, 0.6)');
-      auraGrad.addColorStop(0.4, 'rgba(255, 69, 0, 0.25)');
+      const auraGrad = ctx.createRadialGradient(x, y, radius * 0.2, x, y, radius * 3.2);
+      auraGrad.addColorStop(0, 'rgba(255, 215, 0, 0.85)');
+      auraGrad.addColorStop(0.45, 'rgba(255, 107, 0, 0.45)');
       auraGrad.addColorStop(1, 'rgba(255, 0, 0, 0)');
       ctx.fillStyle = auraGrad;
       ctx.beginPath();
-      ctx.arc(x, y, radius * 2.8, 0, Math.PI * 2);
+      ctx.arc(x, y, radius * 3.2, 0, Math.PI * 2);
       ctx.fill();
       ctx.restore();
     }
@@ -952,10 +952,12 @@ export class DiscRenderer {
     }
     ctx.restore();
 
-    // Borde fino perimetral del color terciario o contorno definido (sin halos ni anillos extra)
+    // Borde fino perimetral: blanco (#ffffff) al patear, o color normal de la equipación
+    const isKicking = Boolean(disc.kicking || (disc as any).isKicking);
+    const normalBorderColor = tertiaryColor || primaryColor || neonColor;
     ctx.save();
-    ctx.strokeStyle = tertiaryColor || primaryColor || neonColor;
-    ctx.lineWidth = 1.75;
+    ctx.strokeStyle = isKicking ? '#ffffff' : normalBorderColor;
+    ctx.lineWidth = isKicking ? 2.5 : 2.0;
     ctx.beginPath();
     ctx.arc(x, y, radius, 0, Math.PI * 2);
     ctx.stroke();

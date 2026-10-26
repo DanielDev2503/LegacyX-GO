@@ -119,29 +119,29 @@ export const STADIUM_BIG: StadiumPreset = {
 export const STADIUM_AF_3V3: StadiumPreset = {
   id: 'AF 3v3',
   name: 'AF 3v3 Official',
-  description: '840x400 - Arcos 120 (Canónico GDD)',
+  description: '840x400 - Arcos 130 (AF 3v3)',
   width: 840,
   height: 400,
-  goalSize: 120,
-  goalWidth: 120,
-  goalDepth: 45,
-  kickOffRadius: 70,
-  runOff: 45,
-  spawnDistance: 240,
-  bgColor: '#1D2431',
+  goalSize: 130,
+  goalWidth: 130,
+  goalDepth: 35,
+  kickOffRadius: 75,
+  runOff: 50,
+  spawnDistance: 250,
+  bgColor: '#2E5A27',
   postRadius: 8,
   postColor: '#ffffff',
   ballPhysics: {
-    radius: 10,
-    bCoef: 0.80,
-    invMass: 5.0,
+    radius: 5.8,
+    bCoef: 0.412,
+    invMass: 1.5,
     color: '#ffffff'
   },
   playerPhysics: {
-    acceleration: 0.15,
-    kickingAcceleration: 0.10,
-    kickStrength: 450,
-    bCoef: 0.5
+    acceleration: 0.11,
+    kickingAcceleration: 0.083,
+    kickStrength: 4.545,
+    bCoef: 0
   }
 };
 

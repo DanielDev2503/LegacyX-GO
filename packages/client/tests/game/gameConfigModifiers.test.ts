@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { GameEngine } from '../../../core/src/game/GameEngine';
-import { Player, INPUT_KICK } from '../../../core/src/game/Player';
+import { EngineInstance } from '../../../core/src/index';
+import { Player, INPUT_KICK, INPUT_RIGHT, INPUT_TURBO } from '../../../core/src/game/Player';
 import { MatchPhase } from '../../../core/src/game/GameFSM';
 import {
   DEFAULT_GAMEPLAY_CONFIG,
@@ -8,6 +9,8 @@ import {
   GAMEPLAY_CONFIG_LIMITS
 } from '../../../core/src/game/GameConfig';
 import { $theme, setTheme, toggleTheme } from '../../src/controllers/stores/gameStore';
+import { DiscRenderer } from '../../src/renderer/DiscRenderer';
+import { gameUI } from '../../src/ui/state/gameUI.svelte';
 
 describe('Gameplay Modifiers & Continuous A/D Magnus Physics Suite', () => {
   let engine: GameEngine;
@@ -233,6 +236,142 @@ describe('Gameplay Modifiers & Continuous A/D Magnus Physics Suite', () => {
       engine.ball.resetCurve();
       expect(engine.ball.isCurvingAllowed).toBe(false);
       expect(engine.ball.lastKickerId).toBeNull();
+    });
+
+    it('preserves custom gameplayConfig and modifiers when changing stadium (setStadium / loadStadium)', () => {
+      engine.setGameplayConfig({
+        ballRadius: 9.0,
+        playerRadius: 20.0,
+        ballRestitution: 0.9,
+        ballMass: 1.5,
+        playerMass: 3.0,
+        kickStrength: 8.0
+      });
+
+      engine.setStadium('big');
+      expect(engine.gameplayConfig.ballRadius).toBe(9.0);
+      expect(engine.gameplayConfig.playerRadius).toBe(20.0);
+      expect(engine.gameplayConfig.ballRestitution).toBe(0.9);
+      expect(engine.ball.radius).toBe(9.0);
+      expect(engine.ball.bounciness).toBe(0.9);
+      expect(engine.ball.mass).toBe(1.5);
+
+      const inst = new EngineInstance('classic');
+      inst.addPlayer(1, 'red');
+      inst.applyModifiers({ ballRadius: 8.5, playerRadius: 19.0, ballRestitution: 0.75 });
+      inst.loadStadium('big');
+      expect(inst.ball.radius).toBe(8.5);
+      expect(inst.ball.bounciness).toBe(0.75);
+      expect(inst.players.get(1)!.radius).toBe(19.0);
+    });
+
+    it('calibrates HBS AF 3v3 Official defaults and applies kickingAcceleration (0.083/0.11) while holding kick', () => {
+      expect(DEFAULT_GAMEPLAY_CONFIG.ballRadius).toBe(5.8);
+      expect(DEFAULT_GAMEPLAY_CONFIG.playerRadius).toBe(15.0);
+      expect(DEFAULT_GAMEPLAY_CONFIG.ballRestitution).toBe(0.412);
+      expect(DEFAULT_GAMEPLAY_CONFIG.ballMass).toBe(0.67);
+      expect(DEFAULT_GAMEPLAY_CONFIG.playerMass).toBe(2.0);
+      expect(DEFAULT_GAMEPLAY_CONFIG.playerFriction).toBe(0.96);
+      expect(DEFAULT_GAMEPLAY_CONFIG.ballFriction).toBe(0.99);
+      expect(DEFAULT_GAMEPLAY_CONFIG.playerAcceleration).toBe(0.11);
+      expect(DEFAULT_GAMEPLAY_CONFIG.kickStrength).toBe(4.545);
+
+      const disc = engine.playerDiscs.get('p1')!;
+      disc.pos.set(-200, 0);
+      disc.vel.set(0, 0);
+      engine.tick(new Map([['p1', INPUT_RIGHT]]));
+      const normalVelX = disc.vel.x;
+
+      disc.pos.set(-200, 0);
+      disc.vel.set(0, 0);
+      engine.tick(new Map([['p1', INPUT_RIGHT | INPUT_KICK]]));
+      const kickingVelX = disc.vel.x;
+
+      expect(kickingVelX).toBeCloseTo(normalVelX * (0.083 / 0.11), 4);
+    });
+
+    it('activates Power Shot on running/turbo/dash kick and keeps standing normal kick as non-power shot', () => {
+      const disc = engine.playerDiscs.get('p1')!;
+      disc.pos.set(-22, 0);
+      disc.vel.set(0, 0);
+      engine.ball.pos.set(0, 0);
+      engine.ball.vel.set(0, 0);
+
+      // Standing kick -> normal shot
+      engine.tick(new Map([['p1', INPUT_KICK]]));
+      expect(engine.ball.isPowerShot).toBe(false);
+      expect(engine.ball.spin).toBe(0);
+
+      // Running + Turbo kick -> Power Shot
+      disc.pos.set(-22, 0);
+      disc.vel.set(160, 0);
+      engine.ball.pos.set(0, 0);
+      engine.ball.vel.set(0, 0);
+      engine.tick(new Map([['p1', INPUT_KICK | INPUT_RIGHT | INPUT_TURBO]]));
+      expect(engine.ball.isPowerShot).toBe(true);
+    });
+
+    it('renders white player perimeter outline (#ffffff, lineWidth 2.5) while kicking and normal border when released', () => {
+      const renderer = new DiscRenderer();
+      const recordedStrokes: Array<{ style: string; width: number }> = [];
+      let currentStrokeStyle = '';
+      let currentLineWidth = 1;
+      const mockCtx: any = {
+        save: () => {},
+        restore: () => {},
+        beginPath: () => {},
+        arc: () => {},
+        clip: () => {},
+        fill: () => {},
+        fillRect: () => {},
+        stroke: () => {
+          recordedStrokes.push({ style: String(currentStrokeStyle), width: currentLineWidth });
+        },
+        set strokeStyle(v: string) { currentStrokeStyle = v; },
+        get strokeStyle() { return currentStrokeStyle; },
+        set lineWidth(v: number) { currentLineWidth = v; },
+        get lineWidth() { return currentLineWidth; }
+      };
+
+      renderer.renderPlayer(mockCtx, {
+        id: 1,
+        team: 1,
+        x: 0,
+        y: 0,
+        vx: 0,
+        vy: 0,
+        radius: 15,
+        kicking: true,
+        avatar: ''
+      }, true, false);
+
+      expect(recordedStrokes.some(s => s.style.toLowerCase() === '#ffffff' && s.width === 2.5)).toBe(true);
+    });
+
+    it('keeps in-game menu open during active match snapshots and only auto-closes on match start transition', () => {
+      gameUI.matchPhase = 0;
+      gameUI.previousMatchPhase = 0;
+      gameUI.hasJoinedInitialSync = false;
+      gameUI.activeModal = 'TEAM_MANAGEMENT';
+
+      // Transition 0 -> 1 (match starts): auto-closes menu once
+      gameUI.handleMatchPhaseTransition(1, true);
+      expect(gameUI.activeModal).toBe('NONE');
+
+      // Player opens menu during active match (Escape)
+      gameUI.toggleEscapeMenu();
+      expect(gameUI.activeModal).toBe('TEAM_MANAGEMENT');
+
+      // Incoming 60Hz snapshots (phase 1 -> 2, 2 -> 2) MUST NOT close the menu
+      gameUI.handleMatchPhaseTransition(2, false);
+      expect(gameUI.activeModal).toBe('TEAM_MANAGEMENT');
+      gameUI.handleMatchPhaseTransition(2, false);
+      expect(gameUI.activeModal).toBe('TEAM_MANAGEMENT');
+
+      // Transition 2 -> 0 (match stops): forces menu open
+      gameUI.activeModal = 'NONE';
+      gameUI.handleMatchPhaseTransition(0, false);
+      expect(gameUI.activeModal).toBe('TEAM_MANAGEMENT');
     });
   });
 });
