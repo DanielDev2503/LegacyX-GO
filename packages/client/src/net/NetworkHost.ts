@@ -57,6 +57,7 @@ export class NetworkHost {
   public blueKitVariant: 'home' | 'away' = 'away';
   public gameplayConfig: Record<string, unknown> | null = null;
   public modifiers: Record<string, unknown> | null = null;
+  public activeBanner: Record<string, unknown> | null = null;
 
   constructor(signaling: SignalingClient, hostNickname: string, hostProfile?: Partial<PlayerInfo>) {
     this.signaling = signaling;
@@ -168,6 +169,7 @@ export class NetworkHost {
       blueKitVariant: this.blueKitVariant,
       gameplayConfig: this.gameplayConfig,
       modifiers: this.modifiers,
+      activeBanner: this.activeBanner,
       roomConfig: {
         id: this.roomId,
         name: this.roomName,
@@ -622,6 +624,23 @@ export class NetworkHost {
       type: 'EMOTE',
       playerId,
       emoji
+    });
+  }
+
+  public broadcastGameFx(fx: string, intensity?: number, countdownValue?: number): void {
+    this.broadcastReliable({
+      type: 'GAME_FX_EVENT',
+      fx,
+      intensity,
+      countdownValue
+    });
+  }
+
+  public broadcastMatchBanner(banner: Record<string, unknown> | null): void {
+    this.activeBanner = banner;
+    this.broadcastReliable({
+      type: 'MATCH_BANNER_EVENT',
+      banner: banner ?? { kind: 'NONE' }
     });
   }
 

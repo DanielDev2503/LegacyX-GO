@@ -869,6 +869,84 @@
                   />
                 </div>
 
+                <!-- Extrapolación (0 - 250 ms) -->
+                <div class="slider-row pt-2">
+                  <div class="slider-meta">
+                    <span class="param-name label-with-tooltip">
+                      Extrapolación (0 - 250 ms)
+                      <span
+                        class="info-tooltip-wrapper"
+                        tabindex="0"
+                        role="button"
+                        aria-label="Info extrapolación"
+                        use:tooltip={"Proyecta visualmente jugadores y balón (0 a 250 ms) en tu pantalla para compensar la latencia sin alterar la física real. Comando rápido: /extrapolation <0-250>"}
+                      >
+                        <svg class="info-help-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                          <circle cx="12" cy="12" r="10"></circle>
+                          <line x1="12" y1="16" x2="12" y2="12"></line>
+                          <line x1="12" y1="8" x2="12.01" y2="8"></line>
+                        </svg>
+                      </span>
+                    </span>
+                    <div class="extrap-stepper-group">
+                      <button
+                        type="button"
+                        class="extrap-step-btn"
+                        aria-label="Reducir extrapolación 5 ms"
+                        disabled={gameUI.extrapolationMs <= 0}
+                        onclick={() => {
+                          soundFX.playUIClick();
+                          gameUI.setExtrapolationMs(gameUI.extrapolationMs - 5);
+                        }}
+                      >
+                        −
+                      </button>
+                      <input
+                        id="input-extrapolation-ms"
+                        type="number"
+                        class="extrap-number-input"
+                        min="0"
+                        max="250"
+                        step="5"
+                        aria-label="Extrapolación en milisegundos"
+                        value={gameUI.extrapolationMs}
+                        oninput={(e) => {
+                          const raw = Number((e.currentTarget as HTMLInputElement).value);
+                          if (Number.isFinite(raw)) {
+                            gameUI.setExtrapolationMs(raw);
+                          }
+                        }}
+                      />
+                      <span class="extrap-unit-badge">ms</span>
+                      <button
+                        type="button"
+                        class="extrap-step-btn"
+                        aria-label="Aumentar extrapolación 5 ms"
+                        disabled={gameUI.extrapolationMs >= 250}
+                        onclick={() => {
+                          soundFX.playUIClick();
+                          gameUI.setExtrapolationMs(gameUI.extrapolationMs + 5);
+                        }}
+                      >
+                        +
+                      </button>
+                    </div>
+                  </div>
+                  <input
+                    id="slider-extrapolation-ms"
+                    type="range"
+                    class="custom-slider"
+                    min="0"
+                    max="250"
+                    step="5"
+                    style="--val-percent: {(gameUI.extrapolationMs / 250) * 100}%;"
+                    value={gameUI.extrapolationMs}
+                    oninput={(e) => {
+                      gameUI.setExtrapolationMs(Number((e.currentTarget as HTMLInputElement).value));
+                    }}
+                  />
+                </div>
+
                 <!-- Opacidad del minimapa -->
                 <div class="slider-row pt-2">
                   <div class="slider-meta">
@@ -1072,11 +1150,9 @@
                       <label class="switch-toggle" aria-label="Screen shake">
                         <input
                           type="checkbox"
-                          checked={gameUI.settings.screenShakeEnabled}
+                          checked={gameUI.screenShake}
                           onchange={(e) => {
-                            gameUI.settings.screenShakeEnabled = (e.currentTarget as HTMLInputElement).checked;
-                            gameUI.settings.goalShakeEnabled = gameUI.settings.screenShakeEnabled;
-                            gameUI.saveSettings();
+                            gameUI.screenShake = (e.currentTarget as HTMLInputElement).checked;
                           }}
                         />
                         <span class="toggle-slider"></span>
@@ -3589,6 +3665,75 @@
     cursor: not-allowed;
     border-color: rgba(255, 255, 255, 0.2);
     color: #64748b;
+  }
+
+  /* Controles numéricos estilizados para Extrapolación (0 - 250 ms) */
+  .extrap-stepper-group {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    background: #080e18;
+    border: 1px solid rgba(0, 229, 255, 0.28);
+    border-radius: 0.375rem;
+    padding: 0.15rem 0.25rem;
+  }
+
+  .extrap-step-btn {
+    width: 1.45rem;
+    height: 1.45rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 0.25rem;
+    border: 1px solid rgba(0, 229, 255, 0.25);
+    background: rgba(0, 229, 255, 0.1);
+    color: #00e5ff;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.85rem;
+    font-weight: 800;
+    cursor: pointer;
+    line-height: 1;
+    transition: all 0.15s ease;
+  }
+
+  .extrap-step-btn:hover:not(:disabled) {
+    background: #00e5ff;
+    color: #050811;
+    box-shadow: 0 0 8px rgba(0, 229, 255, 0.45);
+  }
+
+  .extrap-step-btn:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+  }
+
+  .extrap-number-input {
+    width: 2.6rem;
+    background: transparent;
+    border: none;
+    outline: none;
+    color: #00e5ff;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.82rem;
+    font-weight: 800;
+    text-align: right;
+    appearance: textfield;
+    -moz-appearance: textfield;
+  }
+
+  .extrap-number-input::-webkit-outer-spin-button,
+  .extrap-number-input::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
+
+  .extrap-unit-badge {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.72rem;
+    font-weight: 700;
+    color: #94a3b8;
+    padding-right: 0.15rem;
+    user-select: none;
   }
 
   /* Responsive Adjustments */

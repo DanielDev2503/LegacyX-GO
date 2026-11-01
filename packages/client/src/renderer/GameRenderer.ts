@@ -169,7 +169,7 @@ export class GameRenderer {
   }
 
   public setExtrapolation(ms: number): void {
-    this.extrapolationMs = Math.max(0, Math.min(100, ms));
+    this.extrapolationMs = Math.max(0, Math.min(250, ms));
     this.discRenderer.setExtrapolation(this.extrapolationMs);
   }
 
@@ -232,13 +232,16 @@ export class GameRenderer {
     this.camera.resize(this.canvas.width / dpr, this.canvas.height / dpr, this.stadium.width, this.stadium.height);
   }
 
-  public triggerShake(intensity: number, durationMs: number = 150): void {
-    if (!this.goalShakeEnabled || !this.screenShakeEnabled) return;
+  public triggerShake(intensity: number, durationMs: number = 220): void {
+    if (!this.goalShakeEnabled || !this.screenShakeEnabled) {
+      this.camera.resetShake();
+      return;
+    }
     this.camera.triggerShake(intensity, durationMs);
   }
 
   public triggerPostHitShake(): void {
-    this.triggerShake(4, 150);
+    this.triggerShake(7, 220);
   }
 
   public addFloatingScore(text: string, x: number, y: number, color?: string): void {
@@ -420,30 +423,31 @@ export class GameRenderer {
     const hExt = this.stadium.height + this.stadium.runOff * 2;
     this.camera.clamp(wExt, hExt, this.canvas.width, this.canvas.height, this.safeAreaBottom);
 
+    const isFrozenPhase =
+      s1.phase === MatchPhase.PAUSE ||
+      s1.phase === MatchPhase.RESUME_COUNTDOWN ||
+      s1.phase === MatchPhase.PRE_MATCH_VS ||
+      s1.phase === MatchPhase.START_COUNTDOWN ||
+      s1.phase === MatchPhase.STOP ||
+      s1.phase === MatchPhase.STATS;
+    this.discRenderer.isPaused = isFrozenPhase;
+
+    if (this.screenShakeEnabled && this.goalShakeEnabled) {
+      this.camera.updateShake(dt);
+    } else {
+      this.camera.resetShake();
+    }
+
     if (s1.soundMask !== this.lastProcessedSoundMask) {
       if ((s1.soundMask & SOUND_POST_HIT) !== 0) {
-        this.triggerShake(6, 150);
         this.vfx.emitPostSparks(ballX, ballY, 12);
-      }
-      if ((s1.soundMask & SOUND_GOAL) !== 0) {
-        this.triggerShake(12, 350);
-        this.vfx.showFloatingText('¡GOL!', '#ffd32a', 0, -80, 2.2);
       }
       this.lastProcessedSoundMask = s1.soundMask;
     }
 
-    if (s1.phase !== this.lastPhase) {
-      if (s1.phase === MatchPhase.KICKOFF) {
-        this.vfx.showFloatingText('KICKOFF', '#ffffff', 0, -60, 1.5);
-      } else if (s1.phase === MatchPhase.PAUSE) {
-        this.vfx.showFloatingText('PAUSA', '#ff9f43', 0, -60, 2.0);
-      } else if (s1.phase === MatchPhase.STATS || s1.phase === MatchPhase.MATCH_ENDED) {
-        this.vfx.showFloatingText('FIN DEL PARTIDO', '#2ed573', 0, -80, 3.0);
-      }
-      this.lastPhase = s1.phase;
-    }
+    this.lastPhase = s1.phase;
 
-    if (hasBall && this.netDeformationEnabled) {
+    if (!this.goalNets && hasBall && this.netDeformationEnabled && !isFrozenPhase) {
       this.scratchBall.pos.x = ballX;
       this.scratchBall.pos.y = ballY;
       this.scratchBall.vel.x = ballVx;
@@ -559,12 +563,28 @@ export class GameRenderer {
     const hExt = this.stadium.height + this.stadium.runOff * 2;
     this.camera.clamp(wExt, hExt, vWidth, vHeight, this.safeAreaBottom);
 
+    const currentPhaseSingle: GameMatchPhase =
+      snapshot.matchPhase !== undefined ? snapshot.matchPhase : toMatchPhase(snapshot.matchState);
+    this.discRenderer.isPaused =
+      currentPhaseSingle === GameMatchPhase.PAUSED ||
+      currentPhaseSingle === GameMatchPhase.COUNTDOWN ||
+      currentPhaseSingle === GameMatchPhase.STOPPED;
+
+    if (this.screenShakeEnabled && this.goalShakeEnabled) {
+      this.camera.updateShake(1 / 60);
+    } else {
+      this.camera.resetShake();
+    }
+
     ctx.save();
     ctx.fillStyle = this.theme === 'dark' ? '#050811' : '#E0F2FE';
     ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
 
     ctx.scale(dpr, dpr);
-    ctx.translate(this.offsetX + this.cameraOffset.x, this.offsetY + this.cameraOffset.y);
+    ctx.translate(
+      this.offsetX + this.cameraOffset.x + this.camera.shakeOffsetX,
+      this.offsetY + this.cameraOffset.y + this.camera.shakeOffsetY
+    );
     const zoom = this.camera?.zoom || 1.0;
     ctx.scale(this.scale * zoom, this.scale * zoom);
 

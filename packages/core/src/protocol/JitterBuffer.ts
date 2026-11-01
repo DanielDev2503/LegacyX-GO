@@ -41,9 +41,9 @@ export class JitterBuffer<T extends AnySnapshot = any> {
   private lastTick: number | null = null;
 
   public static readonly MIN_DELAY_MS = 16;
-  public static readonly MAX_DELAY_MS = 60;
+  public static readonly MAX_DELAY_MS = 40;
 
-  constructor(interpolationDelayMs: number = 33, maxBufferSize: number = 30, isAdaptive: boolean = false) {
+  constructor(interpolationDelayMs: number = 25, maxBufferSize: number = 30, isAdaptive: boolean = false) {
     this.interpolationDelayMs = interpolationDelayMs;
     this.maxBufferSize = maxBufferSize;
     this.isAdaptive = isAdaptive;
@@ -173,6 +173,7 @@ export class JitterBuffer<T extends AnySnapshot = any> {
 
     const latestSnapshot = this.buffer[this.buffer.length - 1].snapshot as any;
     const isGameSnapshot = latestSnapshot.matchPhase !== undefined || latestSnapshot.matchState !== undefined;
+    const isBinarySnapshot = !isGameSnapshot && typeof latestSnapshot.phase === 'number';
 
     if (isGameSnapshot) {
       const effectivePhase = typeof this.currentMatchState === 'number'
@@ -185,6 +186,24 @@ export class JitterBuffer<T extends AnySnapshot = any> {
 
       if (!isSimulationActive) {
         const frozenDiscs: DiscSnapshot[] = latestSnapshot.discs.map((d: any) => ({
+          ...d,
+          vx: 0,
+          vy: 0
+        }));
+        this.lastProcessedTick = Math.max(this.lastProcessedTick, latestSnapshot.tick);
+        return {
+          ...latestSnapshot,
+          discs: frozenDiscs
+        } as T;
+      }
+    } else if (isBinarySnapshot) {
+      const p = latestSnapshot.phase as number;
+      const isForcedPaused = this.currentMatchState === 'PAUSED' || this.currentMatchState === 2.1 || this.currentMatchState === 2.2;
+      const isBinarySimActive =
+        !isForcedPaused && (p === 1 || p === 2 || p === 3 || p === 4);
+
+      if (!isBinarySimActive) {
+        const frozenDiscs = latestSnapshot.discs.map((d: any) => ({
           ...d,
           vx: 0,
           vy: 0
@@ -307,11 +326,20 @@ export class JitterBuffer<T extends AnySnapshot = any> {
       const d0 = s0Discs.get(d1.id);
       if (!d0) return d1;
 
+      const jumpDist = Math.hypot(d1.x - d0.x, d1.y - d0.y);
+      if (jumpDist > 120) {
+        return d1;
+      }
+
+      const useHermite = jumpDist < 80 && Number.isFinite(d0.vx) && Number.isFinite(d1.vx);
+      const ix = useHermite ? hermite(d0.x, d1.x, d0.vx, d1.vx, alpha, dtSec) : lerp(d0.x, d1.x, alpha);
+      const iy = useHermite ? hermite(d0.y, d1.y, d0.vy, d1.vy, alpha, dtSec) : lerp(d0.y, d1.y, alpha);
+
       return {
         id: d1.id,
         team: d1.team,
-        x: lerp(d0.x, d1.x, alpha),
-        y: lerp(d0.y, d1.y, alpha),
+        x: ix,
+        y: iy,
         vx: lerp(d0.vx, d1.vx, alpha),
         vy: lerp(d0.vy, d1.vy, alpha),
         flags: d1.flags,

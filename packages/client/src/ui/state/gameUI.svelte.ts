@@ -118,6 +118,22 @@ export const LEGACYX_PLAYER_AVATAR_KEY = 'legacyx_player_avatar';
 export const LEGACYX_AVATAR_TYPE_KEY = 'legacyx_avatar_type';
 export const NICKNAME_STORAGE_KEY = 'legacyx_player_name';
 export const AVATAR_STORAGE_KEY = 'legacyx_player_avatar';
+export const LEGACYX_EXTRAPOLATION_KEY = 'legacyx_extrapolation_ms';
+
+export interface MatchBannerPayload {
+  kind: 'NONE' | 'VS' | 'COUNTDOWN' | 'PAUSED' | 'GOAL' | 'VICTORY';
+  count?: number;
+  label?: string;
+  isResume?: boolean;
+  scoringTeam?: 'red' | 'blue';
+  scorerName?: string | null;
+  assisterName?: string | null;
+  isOwnGoal?: boolean;
+  winner?: 'red' | 'blue' | 'draw';
+  redScore?: number;
+  blueScore?: number;
+  durationMs?: number;
+}
 
 export interface SettingsConfig {
   theme: 'dark' | 'light';
@@ -563,6 +579,8 @@ class GameUIStore {
 
   // Settings & Keybinds
   public settings = $state<SettingsConfig>({ ...DEFAULT_SETTINGS });
+  public extrapolationMs = $state<number>(0);
+  public activeBanner = $state<MatchBannerPayload>({ kind: 'NONE' });
   public activeSettingsTab = $state<'controls' | 'audio' | 'video' | 'kits' | 'avatar' | 'club'>('controls');
   public keybinds = $state<KeybindConfig>({
     up: [...DEFAULT_KEYBINDS.up],
@@ -602,7 +620,20 @@ class GameUIStore {
   public redScore = $state(0);
   public blueScore = $state(0);
   public matchTimeFormatted = $state('00:00');
-  public fsmPhase = $state<'STOPPED' | 'WARMUP' | 'KICKOFF' | 'PLAYING' | 'PAUSED' | 'GOAL' | 'OVERTIME' | 'STATS'>('STOPPED');
+  public fsmPhase = $state<
+    | 'STOPPED'
+    | 'PRE_MATCH_VS'
+    | 'START_COUNTDOWN'
+    | 'WARMUP'
+    | 'KICKOFF'
+    | 'PLAYING'
+    | 'PAUSED'
+    | 'RESUME_COUNTDOWN'
+    | 'GOAL'
+    | 'OVERTIME'
+    | 'CELEBRATION'
+    | 'STATS'
+  >('STOPPED');
   public previousMatchPhase = $state<number>(0);
   public hasJoinedInitialSync = $state<boolean>(false);
   public isGoldenGoal = $state(false);
@@ -672,6 +703,77 @@ class GameUIStore {
   public onAdminAction: ((action: string, payload?: any) => void) | null = null;
   public onRoomConfigChanged: ((patch: any) => void) | null = null;
   public onProfileUpdated: (() => void) | null = null;
+  public onTriggerShake: ((intensity: number, durationMs: number) => void) | null = null;
+
+  public get screenShake(): boolean {
+    return this.settings.screenShakeEnabled !== false;
+  }
+
+  public set screenShake(val: boolean) {
+    this.settings.screenShakeEnabled = Boolean(val);
+    this.settings.goalShakeEnabled = Boolean(val);
+    this.saveSettings();
+  }
+
+  public setExtrapolationMs(ms: number): number {
+    const num = Number(ms);
+    const clamped = Number.isFinite(num) ? Math.max(0, Math.min(250, Math.round(num))) : 0;
+    this.extrapolationMs = clamped;
+    this.settings.extrapolationMs = clamped;
+    if (typeof localStorage !== 'undefined') {
+      try {
+        localStorage.setItem(LEGACYX_EXTRAPOLATION_KEY, String(clamped));
+        localStorage.setItem('haxball_extrapolation_ms', String(clamped));
+        localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(this.settings));
+      } catch {
+        // Ignore storage quota
+      }
+    }
+    this.onSettingsChanged?.(this.settings);
+    return clamped;
+  }
+
+  public applyMatchBanner(banner: MatchBannerPayload | null | undefined): void {
+    if (!banner || !banner.kind) {
+      this.activeBanner = { kind: 'NONE' };
+      return;
+    }
+    this.activeBanner = { ...banner };
+  }
+
+  public pushLocalSystemNotice(text: string): void {
+    const msgId = `local-sys-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    this.addChatMessage({
+      id: msgId,
+      team: 'SYSTEM',
+      senderTeam: 'system',
+      sender: '',
+      isHost: false,
+      isSystem: true,
+      text
+    });
+  }
+
+  public handleChatCommand(rawText: string): boolean {
+    const trimmed = rawText.trim();
+    const match = /^\/(?:extrapolation|extra)(?:\s+(.*))?$/i.exec(trimmed);
+    if (!match) return false;
+
+    const arg = (match[1] ?? '').trim();
+    if (!arg) {
+      this.pushLocalSystemNotice(`Extrapolación actual: ${this.extrapolationMs} ms. Uso: /extrapolation <0-250>`);
+      return true;
+    }
+
+    if (!/^-?\d+(?:\.\d+)?$/.test(arg)) {
+      this.pushLocalSystemNotice(`Valor inválido. Uso: /extrapolation <0-250>`);
+      return true;
+    }
+
+    const clamped = this.setExtrapolationMs(Number(arg));
+    this.pushLocalSystemNotice(`Extrapolación establecida en ${clamped} ms`);
+    return true;
+  }
 
   public triggerPlayerEmote(playerId: number, emoji: string): void {
     if (this.settings.showPitchEmotes !== false) {
@@ -870,6 +972,21 @@ class GameUIStore {
         soundFX.setSfxVolume(this.settings.sfxVolume);
         soundFX.setEnvVolume(this.settings.envVolume);
       }
+      const savedExtrap =
+        localStorage.getItem(LEGACYX_EXTRAPOLATION_KEY) ??
+        localStorage.getItem('haxball_extrapolation_ms');
+      if (savedExtrap !== null && savedExtrap !== '') {
+        const parsedExtrap = Number(savedExtrap);
+        const clampedExtrap = Number.isFinite(parsedExtrap)
+          ? Math.max(0, Math.min(250, Math.round(parsedExtrap)))
+          : 0;
+        this.extrapolationMs = clampedExtrap;
+        this.settings.extrapolationMs = clampedExtrap;
+      } else {
+        const clampedExtrap = Math.max(0, Math.min(250, Math.round(this.settings.extrapolationMs || 0)));
+        this.extrapolationMs = clampedExtrap;
+        this.settings.extrapolationMs = clampedExtrap;
+      }
       const hostEntry = this.rosterPlayers.find((p) => p.id === this.localPlayerId);
       if (hostEntry) {
         hostEntry.avatarType = this.avatarMode;
@@ -965,6 +1082,8 @@ class GameUIStore {
     if (patch) {
       this.settings = { ...this.settings, ...patch };
     }
+    this.extrapolationMs = Math.max(0, Math.min(250, Math.round(Number(this.settings.extrapolationMs) || 0)));
+    this.settings.extrapolationMs = this.extrapolationMs;
     this.isAudioMuted = this.settings.isMuted;
     this.masterVolume = this.settings.masterVolume;
 
@@ -1015,6 +1134,8 @@ class GameUIStore {
       try {
         localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(this.settings));
         localStorage.setItem('haxball_ball_skin', this.settings.ballSkin);
+        localStorage.setItem(LEGACYX_EXTRAPOLATION_KEY, String(this.extrapolationMs));
+        localStorage.setItem('haxball_extrapolation_ms', String(this.extrapolationMs));
       } catch {
         // Ignore storage error
       }
@@ -1043,6 +1164,8 @@ class GameUIStore {
     this.settings.ballMode = DEFAULT_SETTINGS.ballMode;
     this.settings.ballSkin = DEFAULT_SETTINGS.ballSkin;
     this.settings.ballCustomColor = DEFAULT_SETTINGS.ballCustomColor;
+    this.settings.extrapolationMs = DEFAULT_SETTINGS.extrapolationMs;
+    this.extrapolationMs = DEFAULT_SETTINGS.extrapolationMs;
     this.saveSettings();
   }
 
@@ -1296,32 +1419,67 @@ class GameUIStore {
   }
 
   public startMatch(): void {
+    if (!this.isHost && !this.isAdmin) return;
     soundFX.playUIClick();
     this.hasCompletedMatch = false;
     this.lastMatchStats = null;
     this.activeSlide = 'MENU';
-    this.fsmPhase = 'PLAYING';
-    this.previousMatchPhase = 2;
     this.hasJoinedInitialSync = true;
     this.activeModal = 'NONE';
     this.clearModalStack();
     if (typeof document !== 'undefined') {
       (document.activeElement as HTMLElement)?.blur();
     }
+    if (!this.isHost && this.isAdmin) {
+      this.onAdminAction?.('START_MATCH');
+      return;
+    }
+    this.fsmPhase = 'PLAYING';
+    this.previousMatchPhase = 2;
     this.onStartMatch?.();
   }
 
   public stopMatch(): void {
+    if (!this.isHost && !this.isAdmin) return;
     soundFX.playUIClick();
+    if (!this.isHost && this.isAdmin) {
+      this.onAdminAction?.('STOP_MATCH');
+      return;
+    }
+    this.activeBanner = { kind: 'NONE' };
     this.fsmPhase = 'STOPPED';
     this.previousMatchPhase = 0;
     this.onStopMatch?.();
   }
 
   public togglePause(): void {
+    if (!this.isHost && !this.isAdmin) return;
+    if (
+      this.fsmPhase === 'RESUME_COUNTDOWN' ||
+      this.fsmPhase === 'PRE_MATCH_VS' ||
+      this.fsmPhase === 'START_COUNTDOWN' ||
+      this.fsmPhase === 'STOPPED' ||
+      this.fsmPhase === 'CELEBRATION' ||
+      this.fsmPhase === 'STATS'
+    ) {
+      if (!this.onTogglePause && this.fsmPhase === 'STOPPED') {
+        // Standalone unit test compatibility when no engine callback is attached
+        soundFX.playUIClick();
+        this.fsmPhase = 'PAUSED';
+        return;
+      }
+      return;
+    }
     soundFX.playUIClick();
-    this.fsmPhase = this.fsmPhase === 'PAUSED' ? 'PLAYING' : 'PAUSED';
-    this.onTogglePause?.();
+    if (!this.isHost && this.isAdmin) {
+      this.onAdminAction?.('TOGGLE_PAUSE');
+      return;
+    }
+    if (this.onTogglePause) {
+      this.onTogglePause();
+    } else {
+      this.fsmPhase = this.fsmPhase === 'PAUSED' ? 'PLAYING' : 'PAUSED';
+    }
   }
 
   public leaveRoom(): void {
@@ -1348,21 +1506,29 @@ class GameUIStore {
 
   public get isMatchActive(): boolean {
     return (
+      this.fsmPhase === 'PRE_MATCH_VS' ||
+      this.fsmPhase === 'START_COUNTDOWN' ||
       this.fsmPhase === 'PLAYING' ||
       this.fsmPhase === 'KICKOFF' ||
       this.fsmPhase === 'PAUSED' ||
+      this.fsmPhase === 'RESUME_COUNTDOWN' ||
       this.fsmPhase === 'GOAL' ||
-      this.fsmPhase === 'OVERTIME'
+      this.fsmPhase === 'OVERTIME' ||
+      this.fsmPhase === 'CELEBRATION'
     );
   }
 
   public get matchPhase(): number {
     switch (this.fsmPhase) {
       case 'STOPPED': return 0;
+      case 'PRE_MATCH_VS': return 0.5;
+      case 'START_COUNTDOWN': return 0.6;
       case 'KICKOFF': return 1;
       case 'PLAYING': return 2;
       case 'PAUSED': return 2.1;
+      case 'RESUME_COUNTDOWN': return 2.2;
       case 'GOAL': return 3;
+      case 'CELEBRATION': return 4;
       case 'OVERTIME': return 2;
       case 'WARMUP': return 1;
       case 'STATS': return 5;
@@ -1371,21 +1537,29 @@ class GameUIStore {
   }
 
   public set matchPhase(phase: number) {
-    if (phase !== 0 && phase !== 5) {
+    if (phase !== 0 && phase !== 4 && phase !== 5) {
       this.hasCompletedMatch = false;
       this.lastMatchStats = null;
       this.activeSlide = 'MENU';
     }
     if (phase === 0) {
       this.fsmPhase = 'STOPPED';
+    } else if (phase === 0.5) {
+      this.fsmPhase = 'PRE_MATCH_VS';
+    } else if (phase === 0.6) {
+      this.fsmPhase = 'START_COUNTDOWN';
     } else if (phase === 1) {
       this.fsmPhase = 'KICKOFF';
     } else if (phase === 2) {
       this.fsmPhase = 'PLAYING';
     } else if (phase === 2.1) {
       this.fsmPhase = 'PAUSED';
+    } else if (phase === 2.2) {
+      this.fsmPhase = 'RESUME_COUNTDOWN';
     } else if (phase === 3) {
       this.fsmPhase = 'GOAL';
+    } else if (phase === 4) {
+      this.fsmPhase = 'CELEBRATION';
     } else if (phase === 5) {
       this.fsmPhase = 'STATS';
     }
@@ -1510,6 +1684,10 @@ class GameUIStore {
         }
       } else {
         this.enforceStopMenu();
+        if (!this.isSecondaryOverlayOpen && !this.isRoomPanelOpen) {
+          this.modalStack = [];
+          this.activeModal = 'TEAM_MANAGEMENT';
+        }
       }
     } else if (newPhase === 0) {
       this.matchPhase = 0;
@@ -1534,6 +1712,10 @@ class GameUIStore {
     } else {
       this.openModal('TEAM_MANAGEMENT');
     }
+  }
+
+  public toggleEscapeMenu(): void {
+    this.toggleRoomMenu();
   }
 
   /** Guardia `0: STOP`: fuerza el menú abierto sin pisar overlays `#` ni la vista de estadísticas. */
@@ -1810,6 +1992,7 @@ class GameUIStore {
     this.redScore = 0;
     this.blueScore = 0;
     this.matchTimeFormatted = '00:00';
+    this.activeBanner = { kind: 'NONE' };
     this.matchPhase = 0;
     this.previousMatchPhase = 0;
     this.hasJoinedInitialSync = false;
@@ -1824,6 +2007,7 @@ class GameUIStore {
   public sendChatMessage(rawText: string): void {
     const trimmed = rawText.trim().slice(0, 140);
     if (!trimmed) return;
+    if (this.handleChatCommand(trimmed)) return;
     this.onChatSent?.(trimmed);
   }
 

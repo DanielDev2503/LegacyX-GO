@@ -41,7 +41,9 @@ export type ControlMessageType =
   | 'MAP_CHANGE_SYNC'
   | 'PEER_DISCONNECT'
   | 'SCORE_EVENT'
-  | 'MATCH_END_STATS';
+  | 'MATCH_END_STATS'
+  | 'GAME_FX_EVENT'
+  | 'MATCH_BANNER_EVENT';
 
 export interface RoomConfig {
   name: string;
@@ -252,4 +254,49 @@ export interface MatchEndStatsPacket {
   mvpPlayerId: string | null;
   winner: 'red' | 'blue' | null;
   outcomeText?: string | undefined;
+}
+
+export type GameFxType =
+  | 'kick'
+  | 'post'
+  | 'wall'
+  | 'goal'
+  | 'whistle'
+  | 'countdown_tick'
+  | 'power_shot';
+
+export interface GameFxEventMessage {
+  type: 'GAME_FX_EVENT';
+  fx: GameFxType;
+  intensity?: number;
+  countdownValue?: number;
+}
+
+export type MatchBannerPayload =
+  | { kind: 'NONE' }
+  | { kind: 'VS'; durationMs: number }
+  | { kind: 'COUNTDOWN'; count: number; label: string; isResume?: boolean }
+  | { kind: 'PAUSED' }
+  | {
+      kind: 'GOAL';
+      scoringTeam: 'red' | 'blue';
+      scorerName: string;
+      assisterName: string | null;
+      isOwnGoal: boolean;
+      redScore: number;
+      blueScore: number;
+    }
+  | {
+      kind: 'VICTORY';
+      winner: 'red' | 'blue';
+      redScore: number;
+      blueScore: number;
+      scorerName?: string;
+      assisterName?: string | null;
+      isOwnGoal?: boolean;
+    };
+
+export interface MatchBannerEventMessage {
+  type: 'MATCH_BANNER_EVENT';
+  banner: MatchBannerPayload;
 }

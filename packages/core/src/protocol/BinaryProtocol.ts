@@ -71,6 +71,22 @@ export interface GameStateSnapshot {
   discs: CompactDiscState[];
 }
 
+function encodeWirePhase(phase: number): number {
+  if (Math.abs(phase - 0.5) < 0.01) return 15; // PRE_MATCH_VS
+  if (Math.abs(phase - 0.6) < 0.01) return 16; // START_COUNTDOWN
+  if (Math.abs(phase - 2.1) < 0.01) return 21; // PAUSE
+  if (Math.abs(phase - 2.2) < 0.01) return 22; // RESUME_COUNTDOWN
+  return Math.round(phase) & 0xff;
+}
+
+function decodeWirePhase(wire: number): number {
+  if (wire === 15) return 0.5;
+  if (wire === 16) return 0.6;
+  if (wire === 21) return 2.1;
+  if (wire === 22) return 2.2;
+  return wire;
+}
+
 /**
  * Protocolo binario de alto rendimiento (Zero-GC) con ArrayBuffer y DataView
  */
@@ -157,7 +173,7 @@ export class BinaryProtocol {
 
     view.setUint8(0, OP_SNAPSHOT);
     view.setUint32(1, snapshot.tick, false);
-    view.setUint8(5, snapshot.phase & 0xff);
+    view.setUint8(5, encodeWirePhase(snapshot.phase));
     view.setUint16(6, snapshot.matchTimer & 0xffff, false);
     view.setUint8(8, snapshot.redScore & 0xff);
     view.setUint8(9, snapshot.blueScore & 0xff);
@@ -197,7 +213,7 @@ export class BinaryProtocol {
     }
 
     const tick = view.getUint32(1, false);
-    const phase = view.getUint8(5);
+    const phase = decodeWirePhase(view.getUint8(5));
     const matchTimer = view.getUint16(6, false);
     const redScore = view.getUint8(8);
     const blueScore = view.getUint8(9);

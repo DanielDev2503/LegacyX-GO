@@ -644,16 +644,19 @@ export class GameEngine {
 
     if (this.fsm.currentState === MatchPhase.COUNTDOWN) {
       this.physicsWorld.stepNets(1 / 60);
+      const wasResumingFromPause = this.fsm.isResumingFromPause;
       if (this.fsm.stateTicksRemaining > 0) {
         const transitioned = this.fsm.tick();
         if (transitioned) {
-          this.physicsWorld.resetNets(false);
+          if (!wasResumingFromPause) {
+            this.physicsWorld.resetNets(false);
+          }
           if (this.onStateChange) {
             this.onStateChange(this.fsm.currentState);
           }
         }
       }
-      if (inputs.size === 0) {
+      if (wasResumingFromPause || inputs.size === 0) {
         return;
       }
     }

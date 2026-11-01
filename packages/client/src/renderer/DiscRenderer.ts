@@ -123,6 +123,7 @@ export class DiscRenderer {
   private scratchCoreRightY: Float32Array = new Float32Array(TURBO_TRAIL_CAPACITY);
 
   public extrapolationMs: number = 0;
+  public isPaused: boolean = false;
   public stadiumBounds: { halfWidth: number; halfHeight: number; goalDepth: number; goalHalfHeight: number } | null = null;
   public dampingBall: number = 0.99;
   public dampingPlayer: number = 0.96;
@@ -166,7 +167,7 @@ export class DiscRenderer {
   }
 
   public setExtrapolation(ms: number): void {
-    this.extrapolationMs = Math.max(0, Math.min(100, ms));
+    this.extrapolationMs = Math.max(0, Math.min(250, ms));
   }
 
   public setStadiumBounds(bounds: { halfWidth: number; halfHeight: number; goalDepth: number; goalHalfHeight: number } | null): void {
@@ -191,15 +192,16 @@ export class DiscRenderer {
   }
 
   public getRenderDisc(disc: DiscSnapshot, isRemote: boolean = true): DiscSnapshot {
-    if (!isRemote || this.extrapolationMs <= 0) return disc;
-    const dt = this.extrapolationMs / 1000;
-    if (dt === 0) return disc;
+    if (this.isPaused || !isRemote || this.extrapolationMs <= 0) return disc;
+    const k = (this.extrapolationMs / 1000) * 60;
+    if (k <= 0) return disc;
 
-    const damping = (disc as { damping?: number }).damping ?? (disc.team === 0 ? this.dampingBall : this.dampingPlayer);
+    const d = (disc as { damping?: number }).damping ?? (disc.team === 0 ? this.dampingBall : this.dampingPlayer);
+    const factor = d < 0.9999 ? (1 - Math.pow(d, k)) / (1 - d) : k;
     const s = this.scratchDisc;
     s.id = disc.id;
-    let px = disc.x + (disc.vx || 0) * (dt * damping);
-    let py = disc.y + (disc.vy || 0) * (dt * damping);
+    let px = disc.x + ((disc.vx || 0) / 60) * factor;
+    let py = disc.y + ((disc.vy || 0) / 60) * factor;
 
     if (this.stadiumBounds) {
       const hw = this.stadiumBounds.halfWidth;
@@ -249,13 +251,14 @@ export class DiscRenderer {
     const activeTurboIds = new Set<number>();
     for (const disc of discs) {
       if (disc.team !== 0) {
+        const renderD = this.getRenderDisc(disc, true);
         if (disc.isDashing) {
-          this.recordDashGhost(disc);
+          this.recordDashGhost(renderD);
         }
         if (disc.isTurbo) {
           activeTurboIds.add(disc.id);
-          this.recordRibbonPoint(disc);
-          this.emitTurboParticle(disc);
+          this.recordRibbonPoint(renderD);
+          this.emitTurboParticle(renderD);
         }
       }
     }
@@ -268,16 +271,19 @@ export class DiscRenderer {
 
     const ballDisc = discs.find((d) => d.team === 0);
     if (ballDisc) {
+      const renderBall = this.getRenderDisc(ballDisc, true);
+      const bx = renderBall.x;
+      const by = renderBall.y;
       const spinVal = ballDisc.spin ?? (ballDisc.curveFactor ? ballDisc.curveFactor / 10 : 0);
       const isSpinning = Math.abs(spinVal) > 0.001;
       if (isSpinning) {
-        this.recordBallTrailPoint(ballDisc.x, ballDisc.y, spinVal);
+        this.recordBallTrailPoint(bx, by, spinVal);
       } else {
         this.ballTrailCount = 0;
       }
 
       if (ballDisc.isPowerShot) {
-        this.recordPowerTrailPoint(ballDisc.x, ballDisc.y);
+        this.recordPowerTrailPoint(bx, by);
       } else if (this.powerTrailCount > 0) {
         this.powerTrailCount--;
       }

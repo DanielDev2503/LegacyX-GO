@@ -3,7 +3,7 @@ import { EngineInstance, MatchPhase } from '../src/index';
 import { PlayerInput, INPUT_FLAG_KICK, INPUT_FLAG_RIGHT } from '../src/protocol/BinaryProtocol';
 
 describe('FSM Rules and Match Transitions', () => {
-  it('transitions from PLAYING to GOAL on goal line crossing, freezes inputs and resets to KICKOFF after 180 ticks', () => {
+  it('transitions from PLAYING to GOAL on goal line crossing, keeps active physics/inputs while pausing clock, and resets to KICKOFF after 180 ticks', () => {
     const engine = new EngineInstance('AF 3v3');
     const p1 = engine.addPlayer(1, 'red');
     const p2 = engine.addPlayer(2, 'blue');
@@ -46,8 +46,9 @@ describe('FSM Rules and Match Transitions', () => {
     expect(engine.fsm.redScore).toBe(1);
     expect(engine.fsm.blueScore).toBe(0);
 
-    // 3. Durante el estado GOAL, las entradas de los jugadores deben estar congeladas
+    // 3. Durante el estado GOAL (celebración activa 3.0s), los jugadores conservan movimiento fluido y el reloj permanece pausado
     const p1OldX = p1.pos.x;
+    const timerAtGoal = engine.fsm.matchTimer;
     const movingInputs = new Map<number, PlayerInput>();
     movingInputs.set(1, {
       sequence: 99,
@@ -56,8 +57,8 @@ describe('FSM Rules and Match Transitions', () => {
     });
 
     engine.step(movingInputs);
-    // En GOAL, los jugadores no deben avanzar con inputs
-    expect(p1.pos.x).toBe(p1OldX);
+    expect(p1.pos.x).toBeGreaterThan(p1OldX);
+    expect(engine.fsm.matchTimer).toBe(timerAtGoal);
 
     // 4. Tras los 180 ticks de celebración canónicos (3.0s a 60 Hz), transiciona a KICKOFF y resetea posiciones
     // Ya consumimos 1 tick en el paso anterior, restan 179

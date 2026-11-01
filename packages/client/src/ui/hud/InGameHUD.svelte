@@ -50,6 +50,50 @@
     Boolean(blueActiveKit?.outline === true || blueActiveKit?.hasOutline === true)
   );
 
+  let redTeamName = $derived(redActiveKit?.name || gameUI.redTeamKit?.name || 'ROJO');
+  let blueTeamName = $derived(blueActiveKit?.name || gameUI.blueTeamKit?.name || 'AZUL');
+  let redTeamTag = $derived(redActiveKit?.tag || gameUI.redTeamKit?.tag || 'RED');
+  let blueTeamTag = $derived(blueActiveKit?.tag || gameUI.blueTeamKit?.tag || 'BLUE');
+
+  let activeBanner = $derived(gameUI.activeBanner);
+  let showPauseBanner = $derived(
+    (activeBanner.kind === 'PAUSED' || gameUI.matchPhase === 2.1 || gameUI.fsmPhase === 'PAUSED') &&
+      activeBanner.kind !== 'COUNTDOWN'
+  );
+  let goalTeamName = $derived(
+    activeBanner.scoringTeam === 'blue' ? blueTeamName : redTeamName
+  );
+  let goalPrimaryColor = $derived(
+    activeBanner.scoringTeam === 'blue' ? blueKitPrimary : redKitPrimary
+  );
+  let goalSecondaryColor = $derived(
+    activeBanner.scoringTeam === 'blue' ? blueKitSecondary : redKitSecondary
+  );
+  let goalTertiaryColor = $derived(
+    activeBanner.scoringTeam === 'blue' ? blueKitTertiary : redKitTertiary
+  );
+  let victoryWinnerName = $derived(
+    activeBanner.winner === 'red'
+      ? redTeamName
+      : activeBanner.winner === 'blue'
+        ? blueTeamName
+        : 'EMPATE'
+  );
+  let victoryPrimaryColor = $derived(
+    activeBanner.winner === 'blue'
+      ? blueKitPrimary
+      : activeBanner.winner === 'red'
+        ? redKitPrimary
+        : '#00e5ff'
+  );
+  let victorySecondaryColor = $derived(
+    activeBanner.winner === 'blue'
+      ? blueKitSecondary
+      : activeBanner.winner === 'red'
+        ? redKitSecondary
+        : '#1e293b'
+  );
+
   // Ancho dinámico del minimapa (0px si está desactivado)
   let minimapWidth = $derived.by(() => {
     if (!gameUI.settings.minimapEnabled) return 0;
@@ -98,12 +142,20 @@
     const text = chatMessage.trim();
     if (text) {
       soundFX.playUIClick();
+      if (gameUI.handleChatCommand(text)) {
+        chatMessage = '';
+        isChatInputActive = false;
+        gameUI.isChatFocused = false;
+        chatInputEl?.blur();
+        return;
+      }
       if (gameUI.onChatSent) {
         gameUI.onChatSent(text);
       }
     }
     chatMessage = '';
     isChatInputActive = false;
+    gameUI.isChatFocused = false;
     chatInputEl?.blur();
   }
 
@@ -117,6 +169,7 @@
       e.stopPropagation();
       chatMessage = '';
       isChatInputActive = false;
+      gameUI.isChatFocused = false;
       chatInputEl?.blur();
     }
   }
@@ -313,6 +366,112 @@
   </div>
 
   <!-- ========================================== -->
+  <!-- 1.5 BANNERS DE PARTIDO CYBER-PITCH HUD     -->
+  <!-- ========================================== -->
+  {#if showPauseBanner}
+    <div class="cyber-banner-pause" id="hud-banner-pause" role="status" aria-live="polite">
+      <div class="pause-icon-badge" aria-hidden="true">⏸</div>
+      <div class="pause-copy-col">
+        <span class="pause-banner-title">PARTIDO EN PAUSA</span>
+        <span class="pause-banner-subtitle">Esperando reanudación del administrador...</span>
+      </div>
+    </div>
+  {/if}
+
+  {#if activeBanner.kind === 'VS'}
+    <div class="cyber-banner-center" id="hud-banner-vs" role="status" aria-live="polite">
+      <div class="vs-card">
+        <div
+          class="vs-team-half vs-local"
+          style="--team-c1: {redKitPrimary}; --team-c2: {redKitSecondary}; --team-c3: {redKitTertiary};"
+        >
+          <span class="vs-team-tag">{redTeamTag}</span>
+          <span class="vs-team-name">{redTeamName}</span>
+        </div>
+
+        <div class="vs-bolt-badge">
+          <span class="vs-bolt">⚡</span>
+          <span class="vs-text">VS</span>
+          <span class="vs-bolt">⚡</span>
+        </div>
+
+        <div
+          class="vs-team-half vs-visitor"
+          style="--team-c1: {blueKitPrimary}; --team-c2: {blueKitSecondary}; --team-c3: {blueKitTertiary};"
+        >
+          <span class="vs-team-name">{blueTeamName}</span>
+          <span class="vs-team-tag">{blueTeamTag}</span>
+        </div>
+      </div>
+    </div>
+  {:else if activeBanner.kind === 'COUNTDOWN'}
+    <div class="cyber-banner-center" id="hud-banner-countdown" role="status" aria-live="assertive">
+      <div class="countdown-card" class:is-go={activeBanner.count === 0}>
+        <span class="countdown-kicker">
+          {activeBanner.isResume ? 'REANUDANDO PARTIDO' : 'SAQUE INICIAL'}
+        </span>
+        {#key activeBanner.label}
+          <span class="countdown-value">{activeBanner.label || activeBanner.count}</span>
+        {/key}
+      </div>
+    </div>
+  {:else if activeBanner.kind === 'GOAL'}
+    <div class="cyber-banner-center" id="hud-banner-goal" role="status" aria-live="polite">
+      <div
+        class="goal-banner-card"
+        style="--goal-c1: {goalPrimaryColor}; --goal-c2: {goalSecondaryColor}; --goal-c3: {goalTertiaryColor};"
+      >
+        <div class="goal-accent-strip"></div>
+        <h2 class="goal-banner-title">⚽ ¡GOOOOL DE {goalTeamName.toUpperCase()}!</h2>
+        <div class="goal-credits-row">
+          <span class="goal-scorer-pill" class:own-goal={activeBanner.isOwnGoal}>
+            {activeBanner.isOwnGoal ? 'Autogol de:' : 'Gol de:'}
+            <strong>{activeBanner.scorerName || goalTeamName}</strong>
+          </span>
+          {#if activeBanner.assisterName && !activeBanner.isOwnGoal}
+            <span class="goal-assist-pill">
+              👟 Asistencia: <strong>{activeBanner.assisterName}</strong>
+            </span>
+          {/if}
+        </div>
+      </div>
+    </div>
+  {:else if activeBanner.kind === 'VICTORY'}
+    <div class="cyber-banner-center" id="hud-banner-victory" role="status" aria-live="polite">
+      <div
+        class="victory-banner-card"
+        style="--win-c1: {victoryPrimaryColor}; --win-c2: {victorySecondaryColor};"
+      >
+        <div class="victory-gold-crown">FINAL DEL ENCUENTRO</div>
+        <h2 class="victory-banner-title">
+          {#if activeBanner.winner === 'draw'}
+            🏆 ¡EMPATE FINAL! 🏆
+          {:else}
+            🏆 ¡VICTORIA DE {victoryWinnerName.toUpperCase()}! 🏆
+          {/if}
+        </h2>
+        <div class="victory-score-strip">
+          <span class="victory-tag" style="color: {redKitPrimary};">{redTeamTag}</span>
+          <span class="victory-digits">
+            {activeBanner.redScore ?? gameUI.redScore} - {activeBanner.blueScore ?? gameUI.blueScore}
+          </span>
+          <span class="victory-tag" style="color: {blueKitPrimary};">{blueTeamTag}</span>
+        </div>
+        {#if activeBanner.scorerName}
+          <div class="victory-last-goal">
+            {activeBanner.isOwnGoal ? 'Autogol decisivo:' : 'Gol decisivo:'}
+            <strong>{activeBanner.scorerName}</strong>
+            {#if activeBanner.assisterName && !activeBanner.isOwnGoal}
+              <span class="victory-assist-sep">·</span>
+              <span>👟 {activeBanner.assisterName}</span>
+            {/if}
+          </div>
+        {/if}
+      </div>
+    </div>
+  {/if}
+
+  <!-- ========================================== -->
   <!-- 2. TELEMETRÍA EN VIVO (ESQUINA INFERIOR IZQ)-->
   <!-- ========================================== -->
   <div class="hud-telemetry-corner" bind:this={telemetryEl}>
@@ -363,12 +522,18 @@
         </div>
       {:else}
         {#each gameUI.chatMessages as msg (msg.id)}
-          <div class="chat-line">
-            <span class="chat-sender {msg.team.toLowerCase()} font-bold">
-              {msg.sender}:
-            </span>
-            <span class="chat-text">{msg.text}</span>
-          </div>
+          {#if msg.isSystem || msg.team === 'SYSTEM' || msg.senderTeam === 'system'}
+            <div class="chat-line chat-line-system">
+              <span class="chat-system-notice">⚡ {msg.text}</span>
+            </div>
+          {:else}
+            <div class="chat-line">
+              <span class="chat-sender {msg.team.toLowerCase()} font-bold">
+                {msg.sender}:
+              </span>
+              <span class="chat-text">{msg.text}</span>
+            </div>
+          {/if}
         {/each}
       {/if}
     </div>
@@ -378,11 +543,17 @@
         bind:this={chatInputEl}
         type="text"
         class="chat-text-input"
-        placeholder="Presiona Enter para escribir..."
+        placeholder="Presiona Enter para escribir (/extrapolation 0-250)..."
         bind:value={chatMessage}
         onkeydown={handleChatKeyDown}
-        onfocus={() => { isChatInputActive = true; }}
-        onblur={() => { isChatInputActive = false; }}
+        onfocus={() => {
+          isChatInputActive = true;
+          gameUI.isChatFocused = true;
+        }}
+        onblur={() => {
+          isChatInputActive = false;
+          gameUI.isChatFocused = false;
+        }}
       />
       <button
         type="button"
@@ -784,6 +955,394 @@
   .chat-text {
     color: #dde2f1;
     word-break: break-word;
+  }
+
+  .chat-line-system {
+    padding: 0.1rem 0;
+  }
+
+  .chat-system-notice {
+    color: #00e5ff;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.74rem;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+  }
+
+  /* ========================================== */
+  /* BANNERS CYBER-PITCH HUD (CERO BLUR)        */
+  /* ========================================== */
+  .cyber-banner-pause {
+    position: fixed;
+    top: 60px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 95;
+    pointer-events: none;
+    display: flex;
+    align-items: center;
+    gap: 0.85rem;
+    padding: 0.65rem 1.35rem;
+    background: rgba(10, 16, 26, 0.96);
+    border: 1.5px solid #00e5ff;
+    border-radius: 0.65rem;
+    box-shadow: 0 0 24px rgba(0, 229, 255, 0.28), 0 8px 28px rgba(0, 0, 0, 0.75);
+    animation: bannerElasticIn 0.28s cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  .pause-icon-badge {
+    width: 2.2rem;
+    height: 2.2rem;
+    border-radius: 0.45rem;
+    background: rgba(0, 229, 255, 0.16);
+    border: 1px solid rgba(0, 229, 255, 0.6);
+    color: #00e5ff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.05rem;
+    font-weight: 900;
+    flex-shrink: 0;
+  }
+
+  .pause-copy-col {
+    display: flex;
+    flex-direction: column;
+    gap: 0.12rem;
+  }
+
+  .pause-banner-title {
+    font-family: 'Space Grotesk', system-ui, sans-serif;
+    font-size: 0.95rem;
+    font-weight: 900;
+    letter-spacing: 0.09em;
+    color: #00e5ff;
+    text-transform: uppercase;
+  }
+
+  .pause-banner-subtitle {
+    font-family: 'Chivo', system-ui, sans-serif;
+    font-size: 0.76rem;
+    color: #cbd5e1;
+  }
+
+  .cyber-banner-center {
+    position: fixed;
+    top: 22%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 96;
+    pointer-events: none;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+
+  /* 1. Banner VS Rápido (1.8s) */
+  .vs-card {
+    display: flex;
+    align-items: stretch;
+    background: rgba(10, 16, 26, 0.96);
+    border: 1.5px solid rgba(0, 229, 255, 0.45);
+    border-radius: 0.75rem;
+    overflow: hidden;
+    box-shadow: 0 10px 36px rgba(0, 0, 0, 0.8), 0 0 28px rgba(0, 229, 255, 0.22);
+    animation: bannerElasticIn 0.34s cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  .vs-team-half {
+    display: flex;
+    align-items: center;
+    gap: 0.65rem;
+    padding: 0.85rem 1.4rem;
+    min-width: 190px;
+    background: linear-gradient(135deg, var(--team-c1) 0%, rgba(10, 16, 26, 0.96) 92%);
+    box-shadow: inset 0 0 22px rgba(0, 0, 0, 0.45);
+  }
+
+  .vs-team-half.vs-visitor {
+    justify-content: flex-end;
+    background: linear-gradient(225deg, var(--team-c1) 0%, rgba(10, 16, 26, 0.96) 92%);
+  }
+
+  .vs-team-tag {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.82rem;
+    font-weight: 900;
+    letter-spacing: 0.08em;
+    padding: 0.22rem 0.55rem;
+    border-radius: 0.32rem;
+    background: #080e18;
+    border: 1px solid var(--team-c2);
+    color: var(--team-c3);
+  }
+
+  .vs-team-name {
+    font-family: 'Space Grotesk', system-ui, sans-serif;
+    font-size: 1.15rem;
+    font-weight: 900;
+    letter-spacing: 0.06em;
+    color: #ffffff;
+    text-transform: uppercase;
+    text-shadow: 0 2px 6px rgba(0, 0, 0, 0.85);
+  }
+
+  .vs-bolt-badge {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.3rem;
+    padding: 0 1.1rem;
+    background: #080e18;
+    border-left: 1px solid rgba(0, 229, 255, 0.35);
+    border-right: 1px solid rgba(0, 229, 255, 0.35);
+  }
+
+  .vs-bolt {
+    color: #ffd700;
+    font-size: 1rem;
+  }
+
+  .vs-text {
+    font-family: 'Space Grotesk', system-ui, sans-serif;
+    font-size: 1.25rem;
+    font-weight: 900;
+    letter-spacing: 0.1em;
+    color: #00e5ff;
+  }
+
+  /* 2. Banner de Cuenta Regresiva (3, 2, 1, ¡JUEGUEN!) */
+  .countdown-card {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.25rem;
+    padding: 0.7rem 1.8rem 0.85rem;
+    background: rgba(10, 16, 26, 0.96);
+    border: 1.5px solid #00e5ff;
+    border-radius: 0.75rem;
+    box-shadow: 0 8px 30px rgba(0, 0, 0, 0.78), 0 0 26px rgba(0, 229, 255, 0.28);
+  }
+
+  .countdown-card.is-go {
+    border-color: #2ecc71;
+    box-shadow: 0 8px 30px rgba(0, 0, 0, 0.78), 0 0 28px rgba(46, 204, 113, 0.42);
+  }
+
+  .countdown-kicker {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.68rem;
+    font-weight: 800;
+    letter-spacing: 0.14em;
+    color: #94a3b8;
+    text-transform: uppercase;
+  }
+
+  .countdown-value {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 2.55rem;
+    font-weight: 900;
+    line-height: 1.05;
+    color: #00e5ff;
+    font-variant-numeric: tabular-nums;
+    text-shadow: 0 0 18px rgba(0, 229, 255, 0.55);
+    animation: countdownPopIn 0.26s cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  .countdown-card.is-go .countdown-value {
+    font-family: 'Space Grotesk', system-ui, sans-serif;
+    font-size: 1.85rem;
+    letter-spacing: 0.08em;
+    color: #2ecc71;
+    text-shadow: 0 0 18px rgba(46, 204, 113, 0.55);
+  }
+
+  /* 3. Banner de Gol con Goleador y Asistidor (3.0s) */
+  .goal-banner-card {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.9rem 2rem 1rem;
+    min-width: 340px;
+    background: rgba(10, 16, 26, 0.96);
+    border: 2px solid var(--goal-c1);
+    border-radius: 0.8rem;
+    overflow: hidden;
+    box-shadow: 0 12px 36px rgba(0, 0, 0, 0.82), 0 0 30px rgba(0, 229, 255, 0.2);
+    animation: bannerElasticIn 0.36s cubic-bezier(0.2, 1.15, 0.35, 1);
+  }
+
+  .goal-accent-strip {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 5px;
+    background: linear-gradient(90deg, var(--goal-c1) 0%, var(--goal-c2) 100%);
+  }
+
+  .goal-banner-title {
+    margin: 0.15rem 0 0;
+    font-family: 'Space Grotesk', system-ui, sans-serif;
+    font-size: 1.45rem;
+    font-weight: 900;
+    letter-spacing: 0.07em;
+    color: #ffffff;
+    text-transform: uppercase;
+    text-shadow: 0 2px 10px rgba(0, 0, 0, 0.8);
+  }
+
+  .goal-credits-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: center;
+    gap: 0.55rem;
+    font-family: 'Chivo', system-ui, sans-serif;
+    font-size: 0.84rem;
+  }
+
+  .goal-scorer-pill,
+  .goal-assist-pill {
+    padding: 0.24rem 0.7rem;
+    border-radius: 0.4rem;
+    background: #080e18;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    color: #e2e8f0;
+  }
+
+  .goal-scorer-pill strong {
+    color: #00e5ff;
+    margin-left: 0.25rem;
+  }
+
+  .goal-scorer-pill.own-goal {
+    border-color: rgba(255, 71, 87, 0.5);
+  }
+
+  .goal-scorer-pill.own-goal strong {
+    color: #ff6b81;
+  }
+
+  .goal-assist-pill {
+    border-color: rgba(255, 215, 0, 0.38);
+  }
+
+  .goal-assist-pill strong {
+    color: #ffd700;
+    margin-left: 0.2rem;
+  }
+
+  /* 4. Banner de Victoria / Final de Partido (5.0s) */
+  .victory-banner-card {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.48rem;
+    padding: 0.95rem 2.2rem 1.05rem;
+    min-width: 370px;
+    background: linear-gradient(180deg, rgba(16, 23, 38, 0.97) 0%, rgba(8, 13, 23, 0.98) 100%);
+    border: 2px solid #ffd700;
+    border-radius: 0.85rem;
+    box-shadow: 0 14px 40px rgba(0, 0, 0, 0.85), 0 0 32px rgba(255, 215, 0, 0.28);
+    animation: bannerElasticIn 0.4s cubic-bezier(0.2, 1.12, 0.35, 1);
+  }
+
+  .victory-gold-crown {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.68rem;
+    font-weight: 800;
+    letter-spacing: 0.16em;
+    color: #ffd700;
+    padding: 0.15rem 0.6rem;
+    border-radius: 0.3rem;
+    background: rgba(255, 215, 0, 0.12);
+    border: 1px solid rgba(255, 215, 0, 0.45);
+  }
+
+  .victory-banner-title {
+    margin: 0.1rem 0 0;
+    font-family: 'Space Grotesk', system-ui, sans-serif;
+    font-size: 1.5rem;
+    font-weight: 900;
+    letter-spacing: 0.07em;
+    color: #ffffff;
+    text-transform: uppercase;
+    text-shadow: 0 2px 10px rgba(0, 0, 0, 0.85);
+  }
+
+  .victory-score-strip {
+    display: flex;
+    align-items: center;
+    gap: 0.85rem;
+    padding: 0.32rem 1.05rem;
+    background: #080e18;
+    border: 1px solid rgba(255, 215, 0, 0.35);
+    border-radius: 0.5rem;
+    font-family: 'JetBrains Mono', monospace;
+  }
+
+  .victory-tag {
+    font-size: 0.95rem;
+    font-weight: 900;
+    letter-spacing: 0.08em;
+  }
+
+  .victory-digits {
+    font-size: 1.35rem;
+    font-weight: 900;
+    color: #ffd700;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .victory-last-goal {
+    font-family: 'Chivo', system-ui, sans-serif;
+    font-size: 0.78rem;
+    color: #cbd5e1;
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+  }
+
+  .victory-last-goal strong {
+    color: #00e5ff;
+  }
+
+  .victory-assist-sep {
+    color: #64748b;
+  }
+
+  @keyframes pulseGlow {
+    0%, 100% {
+      opacity: 1;
+    }
+    50% {
+      opacity: 0.55;
+    }
+  }
+
+  @keyframes bannerElasticIn {
+    0% {
+      opacity: 0;
+      transform: scale(0.86) translateY(-10px);
+    }
+    100% {
+      opacity: 1;
+      transform: scale(1) translateY(0);
+    }
+  }
+
+  @keyframes countdownPopIn {
+    0% {
+      opacity: 0.25;
+      transform: scale(1.32);
+    }
+    100% {
+      opacity: 1;
+      transform: scale(1);
+    }
   }
 
   .chat-input-bar {

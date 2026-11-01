@@ -5,6 +5,7 @@
     MatchPhase,
     createStadium,
     BinaryProtocol,
+    type CompactDiscState,
     type GameStateSnapshot,
     type PlayerInput,
     INPUT_FLAG_UP,
@@ -15,15 +16,17 @@
     INPUT_FLAG_TURBO,
     INPUT_FLAG_DASH,
     INPUT_FLAG_MAGNUS_LEFT,
-    INPUT_FLAG_MAGNUS_RIGHT
+    INPUT_FLAG_MAGNUS_RIGHT,
+    lerp
   } from '@legacyx/core';
 
   import { GameRenderer, triggerPitchEmote } from './renderer/GameRenderer.js';
   import type { PlayerVisualInfo } from './renderer/DiscRenderer.js';
-  import { gameUI, type PhysicsModifiers } from './ui/state/gameUI.svelte.js';
+  import { gameUI, type PhysicsModifiers, type MatchBannerPayload } from './ui/state/gameUI.svelte.js';
   import { soundFX } from './audio/SoundFX.js';
   import { gameApp } from './net/GameApp.js';
   import { SimulationTicker } from './net/SimulationTicker.js';
+  import { ClientPredictionReconciler } from './net/ClientPrediction.js';
 
   import Gatekeeper from './ui/screens/Gatekeeper.svelte';
   import Lobby from './ui/screens/Lobby.svelte';
@@ -59,22 +62,34 @@
   });
 
   function mountGame(canvasEl: HTMLCanvasElement): () => void {
-    const isHost = gameUI.isHost;
+    const isHostInitial = gameUI.isHost;
     let engine: EngineInstance | null = null;
+    let predEngine: EngineInstance | null = null;
+    const reconciler = new ClientPredictionReconciler();
+    let predStadiumId = gameUI.selectedStadiumId || 'mediano';
+    let prevPredLocalPos = { x: 0, y: 0 };
+    let currPredLocalPos = { x: 0, y: 0 };
+    let hasPredLocalPos = false;
+    let frozenMatchSnapshot: any = null;
+    let goBannerTimer: ReturnType<typeof setTimeout> | null = null;
 
-    if (isHost) {
+    if (isHostInitial) {
       engine = new EngineInstance(gameUI.selectedStadiumId || 'mediano');
       testEngine = engine;
       engine.applyModifiers(gameUI.physicsModifiers);
       engine.resetPositions();
       soundFX.startHostKeepAlive();
+    } else {
+      predEngine = new EngineInstance(predStadiumId);
+      predEngine.applyModifiers(gameUI.physicsModifiers);
     }
 
     // Inicializar siempre en 0: STOP con el menú de sala abierto
     gameUI.fsmPhase = 'STOPPED';
     gameUI.matchPhase = 0;
     gameUI.previousMatchPhase = 0;
-    if (isHost) {
+    gameUI.applyMatchBanner({ kind: 'NONE' });
+    if (isHostInitial) {
       gameUI.hasJoinedInitialSync = true;
     }
     gameUI.clearModalStack();
@@ -105,16 +120,82 @@
       }
     }
 
-    if (isHost && engine) {
+    if (isHostInitial && engine) {
       syncEnginePlayers();
+    }
+
+    function setAndBroadcastBanner(banner: MatchBannerPayload): void {
+      if (goBannerTimer !== null) {
+        clearTimeout(goBannerTimer);
+        goBannerTimer = null;
+      }
+      gameUI.applyMatchBanner(banner);
+      gameApp.networkHost?.broadcastMatchBanner(banner as unknown as Record<string, unknown>);
+    }
+
+    function buildMatchStatsSnapshot(
+      winnerOverride?: 'red' | 'blue' | 'draw' | null,
+      statsOverride?: any[],
+      mvpOverride?: any
+    ) {
+      const allStats = statsOverride ?? (engine ? engine.getMatchStats() : []);
+      const theMVP = mvpOverride ?? (engine ? engine.getMVP() : null);
+      const redStats = allStats.filter((s: any) => s.team === 'red');
+      const blueStats = allStats.filter((s: any) => s.team === 'blue');
+      const engineState = engine ? engine.getState() : null;
+      const finalRedScore = engineState ? engineState.redScore : gameUI.redScore;
+      const finalBlueScore = engineState ? engineState.blueScore : gameUI.blueScore;
+      const finalDuration = engineState ? engineState.matchTimer : 0;
+      const matchWinner: 'red' | 'blue' | 'draw' =
+        (winnerOverride as 'red' | 'blue' | 'draw') ||
+        (finalRedScore > finalBlueScore ? 'red' : finalBlueScore > finalRedScore ? 'blue' : 'draw');
+      const redName = gameUI.redCaptainKit?.name || gameUI.redTeamKit?.name || 'Equipo Rojo';
+      const blueName = gameUI.blueCaptainKit?.name || gameUI.blueTeamKit?.name || 'Equipo Azul';
+      const redAcronym = gameUI.redCaptainKit?.tag || gameUI.redTeamKit?.tag || 'RED';
+      const blueAcronym = gameUI.blueCaptainKit?.tag || gameUI.blueTeamKit?.tag || 'BLU';
+      const winnerTeamName = matchWinner === 'red' ? redName : (matchWinner === 'blue' ? blueName : 'Empate');
+
+      return {
+        snapshot: {
+          redScore: finalRedScore,
+          blueScore: finalBlueScore,
+          matchDuration: Math.round(finalDuration),
+          winner: matchWinner,
+          winnerTeamName,
+          redTeamName: redName,
+          blueTeamName: blueName,
+          redAcronym,
+          blueAcronym,
+          redKit: { ...gameUI.redCaptainKit },
+          blueKit: { ...gameUI.blueCaptainKit },
+          mvpPlayerId: theMVP?.playerId ?? null,
+          mvpName: theMVP?.nickname ?? '',
+          mvpScore: theMVP?.points ?? 0,
+          players: allStats.map((s: any) => ({ ...s }))
+        },
+        allStats: allStats.map((s: any) => ({ ...s })),
+        theMVP: theMVP ? { ...theMVP } : null,
+        redStats: redStats.map((s: any) => ({ ...s })),
+        blueStats: blueStats.map((s: any) => ({ ...s }))
+      };
     }
 
     // Conectar callbacks de estado UI
     gameUI.onModifiersChanged = (mods) => {
       applyModifiersToEngine(mods);
+      if (predEngine) {
+        predEngine.applyModifiers(mods);
+      }
+    };
+
+    gameUI.onTriggerShake = (intensity: number, durationMs: number) => {
+      if (gameUI.screenShake) {
+        rendererInstance?.triggerShake(intensity, durationMs);
+      }
     };
 
     gameUI.onStartMatch = () => {
+      frozenMatchSnapshot = null;
       gameUI.hasCompletedMatch = false;
       gameUI.lastMatchStats = null;
       gameUI.activeSlide = 'MENU';
@@ -127,9 +208,12 @@
         (document.activeElement as HTMLElement)?.blur();
       }
       if (gameUI.isHost && engine) {
+        syncEnginePlayers();
         engine.resetMatchStats();
-        engine.startMatch();
-        soundFX.playWhistle();
+        engine.startMatchWithIntro();
+        setAndBroadcastBanner({ kind: 'VS', durationMs: 1800 });
+        gameUI.handleMatchPhaseTransition(engine.fsm.state);
+        gameApp.syncMatchPhase(engine.fsm.state);
         gameApp.networkHost?.broadcastRoomStateSync();
       } else if (!gameUI.isHost && gameApp.networkClient) {
         gameApp.networkClient.sendAdminAction('START_MATCH');
@@ -137,12 +221,17 @@
     };
 
     gameUI.onStopMatch = () => {
+      frozenMatchSnapshot = null;
       if (gameUI.isHost && engine) {
         engine.stopMatch();
         soundFX.playWhistle();
+        gameApp.networkHost?.broadcastGameFx('whistle');
+        setAndBroadcastBanner({ kind: 'NONE' });
+        gameApp.syncMatchPhase(0);
         gameApp.networkHost?.broadcastRoomStateSync();
       } else if (!gameUI.isHost && gameApp.networkClient) {
         gameApp.networkClient.sendAdminAction('STOP_MATCH');
+        return;
       }
       gameUI.hasCompletedMatch = false;
       gameUI.lastMatchStats = null;
@@ -157,6 +246,8 @@
     gameUI.onTogglePause = () => {
       if (gameUI.isHost && engine) {
         engine.togglePause();
+        gameUI.handleMatchPhaseTransition(engine.fsm.state);
+        gameApp.syncMatchPhase(engine.fsm.state);
         gameApp.networkHost?.broadcastRoomStateSync();
       } else if (!gameUI.isHost && gameApp.networkClient) {
         gameApp.networkClient.sendAdminAction('TOGGLE_PAUSE');
@@ -165,12 +256,17 @@
 
     gameUI.onStartPracticeMode = () => {
       gameApp.setupPracticeMode();
-      if (engine) {
-        engine.loadStadium('mediano');
-        rendererInstance?.setStadium(createStadium('mediano'));
-        syncEnginePlayers();
-        engine.resetPositions();
+      if (!engine) {
+        engine = new EngineInstance('mediano');
+        testEngine = engine;
+        engine.applyModifiers(gameUI.physicsModifiers);
+        wireHostEngineEvents(engine);
       }
+      engine.loadStadium('mediano');
+      rendererInstance?.setStadium(createStadium('mediano'));
+      syncEnginePlayers();
+      engine.resetPositions();
+      gameUI.applyMatchBanner({ kind: 'NONE' });
       gameUI.fsmPhase = 'STOPPED';
       gameUI.matchPhase = 0;
       gameUI.enforceStopMenu();
@@ -192,10 +288,14 @@
       if (rendererInstance) {
         rendererInstance.setStadium(createStadium(stadiumId));
       }
+      if (predEngine && predStadiumId !== stadiumId) {
+        predStadiumId = stadiumId as any;
+        predEngine.loadStadium(stadiumId);
+      }
       if (gameUI.isHost && engine) {
         engine.loadStadium(stadiumId);
         gameApp.updateRoomConfig({ stadiumId });
-      } else if (!gameUI.isHost && gameApp.networkClient) {
+      } else if (!gameUI.isHost && gameApp.networkClient && gameUI.isAdmin) {
         gameApp.networkClient.sendAdminAction('SET_RULES', { stadiumId });
       }
     };
@@ -214,89 +314,160 @@
       }
     };
 
-    // Conectar eventos del motor al sintetizador procedural Web Audio API
-    if (engine) {
-      engine.on('goal', () => {
+    // Conectar eventos del motor al sintetizador procedural Web Audio API, Screen Shake y Red P2P
+    function wireHostEngineEvents(hostEngine: EngineInstance): void {
+      hostEngine.on('goal', (payload: any) => {
         soundFX.playGoalHorn();
         soundFX.playWhistle();
-        rendererInstance?.triggerShake(14, 450);
-      });
+        if (gameUI.screenShake) {
+          rendererInstance?.triggerShake(15, 500);
+        }
+        gameApp.networkHost?.broadcastGameFx('goal');
 
-      engine.on('post_hit', () => {
-        soundFX.playPostHit();
-        rendererInstance?.triggerShake(6, 200);
-      });
+        if (typeof payload?.redScore === 'number') gameUI.redScore = payload.redScore;
+        if (typeof payload?.blueScore === 'number') gameUI.blueScore = payload.blueScore;
 
-      engine.on('kick', (payload: any) => {
-        soundFX.playKick(payload?.strength ?? 1.0);
-      });
-
-      engine.on('state_change', ({ newState }: { newState: MatchPhase }) => {
-        if (newState === MatchPhase.KICKOFF) {
-          soundFX.playWhistle();
+        // Si el gol no concluyó el partido (fase 3: GOAL), desplegar Banner de Gol (3.0s)
+        if (hostEngine.fsm.state === MatchPhase.GOAL) {
+          setAndBroadcastBanner({
+            kind: 'GOAL',
+            scoringTeam: payload?.scoringTeam ?? 'red',
+            scorerName: payload?.scorerName ?? null,
+            assisterName: payload?.assisterName ?? null,
+            isOwnGoal: Boolean(payload?.isOwnGoal),
+            redScore: payload?.redScore ?? gameUI.redScore,
+            blueScore: payload?.blueScore ?? gameUI.blueScore
+          });
         }
       });
 
-      engine.on('match_end', ({ winner, stats, mvp }: any) => {
+      hostEngine.on('victory_celebration', ({ winner, redScore, blueScore, stats, mvp, lastGoal }: any) => {
+        // Congelar inmediatamente el snapshot inmutable de estadísticas al inicio de los 5.0s
+        frozenMatchSnapshot = buildMatchStatsSnapshot(winner, stats, mvp);
+        gameUI.lastMatchStats = frozenMatchSnapshot.snapshot;
+        gameUI.mvp = frozenMatchSnapshot.theMVP;
+        gameUI.redTeamStats = frozenMatchSnapshot.redStats;
+        gameUI.blueTeamStats = frozenMatchSnapshot.blueStats;
+        if (typeof redScore === 'number') gameUI.redScore = redScore;
+        if (typeof blueScore === 'number') gameUI.blueScore = blueScore;
+
+        setAndBroadcastBanner({
+          kind: 'VICTORY',
+          winner: winner ?? 'draw',
+          redScore: redScore ?? gameUI.redScore,
+          blueScore: blueScore ?? gameUI.blueScore,
+          scorerName: lastGoal?.scorerName ?? null,
+          assisterName: lastGoal?.assisterName ?? null,
+          isOwnGoal: Boolean(lastGoal?.isOwnGoal)
+        });
+        gameUI.handleMatchPhaseTransition(MatchPhase.CELEBRATION);
+        gameApp.syncMatchPhase(MatchPhase.CELEBRATION);
+      });
+
+      hostEngine.on('post_hit', () => {
+        soundFX.playPostHit();
+        if (gameUI.screenShake) {
+          rendererInstance?.triggerShake(7, 220);
+        }
+        gameApp.networkHost?.broadcastGameFx('post');
+      });
+
+      hostEngine.on('wall_hit', () => {
+        soundFX.playBounce();
+        gameApp.networkHost?.broadcastGameFx('wall');
+      });
+
+      hostEngine.on('kick', (payload: any) => {
+        const isPower = Boolean(payload?.isPowerShot);
+        const strength = payload?.strength ?? (isPower ? 1.8 : 1.0);
+        soundFX.playKick(strength);
+        gameApp.networkHost?.broadcastGameFx(isPower ? 'power_shot' : 'kick', strength);
+      });
+
+      hostEngine.on('countdown_tick', ({ count, isResume }: { count: number; isResume: boolean }) => {
+        soundFX.playCountdown(count === 0);
+        gameApp.networkHost?.broadcastGameFx('countdown_tick', undefined, count);
+        if (count > 0) {
+          setAndBroadcastBanner({
+            kind: 'COUNTDOWN',
+            count,
+            label: String(count),
+            isResume
+          });
+        } else {
+          setAndBroadcastBanner({
+            kind: 'COUNTDOWN',
+            count: 0,
+            label: '¡JUEGUEN!',
+            isResume
+          });
+          goBannerTimer = setTimeout(() => {
+            goBannerTimer = null;
+            if (gameUI.activeBanner.kind === 'COUNTDOWN' && gameUI.activeBanner.count === 0) {
+              setAndBroadcastBanner({ kind: 'NONE' });
+            }
+          }, 650);
+        }
+      });
+
+      hostEngine.on('whistle', () => {
         soundFX.playWhistle();
-        const allStats = stats ?? (engine ? engine.getMatchStats() : []);
-        const theMVP = mvp ?? (engine ? engine.getMVP() : null);
-        const redStats = allStats.filter((s: any) => s.team === 'red');
-        const blueStats = allStats.filter((s: any) => s.team === 'blue');
+        gameApp.networkHost?.broadcastGameFx('whistle');
+      });
 
-        // Congelar snapshot inmutable antes de reiniciar el motor
-        const engineState = engine ? engine.getState() : null;
-        const finalRedScore = engineState ? engineState.redScore : gameUI.redScore;
-        const finalBlueScore = engineState ? engineState.blueScore : gameUI.blueScore;
-        const finalDuration = engineState ? engineState.matchTimer : 0;
-        const matchWinner: 'red' | 'blue' | 'draw' =
-          (winner as 'red' | 'blue' | 'draw') ||
-          (finalRedScore > finalBlueScore ? 'red' : finalBlueScore > finalRedScore ? 'blue' : 'draw');
-        const redName = gameUI.redCaptainKit?.name || gameUI.redTeamKit?.name || 'Equipo Rojo';
-        const blueName = gameUI.blueCaptainKit?.name || gameUI.blueTeamKit?.name || 'Equipo Azul';
-        const redAcronym = gameUI.redCaptainKit?.tag || gameUI.redTeamKit?.tag || 'RED';
-        const blueAcronym = gameUI.blueCaptainKit?.tag || gameUI.blueTeamKit?.tag || 'BLU';
-        const winnerTeamName = matchWinner === 'red' ? redName : (matchWinner === 'blue' ? blueName : 'Empate');
+      hostEngine.on('state_change', ({ newState, prevState }: { newState: MatchPhase; prevState: MatchPhase }) => {
+        gameUI.handleMatchPhaseTransition(newState);
+        gameApp.syncMatchPhase(newState);
 
-        const snapshot = {
-          redScore: finalRedScore,
-          blueScore: finalBlueScore,
-          matchDuration: Math.round(finalDuration),
-          winner: matchWinner,
-          winnerTeamName,
-          redTeamName: redName,
-          blueTeamName: blueName,
-          redAcronym,
-          blueAcronym,
-          redKit: gameUI.redCaptainKit,
-          blueKit: gameUI.blueCaptainKit,
-          mvpPlayerId: theMVP?.playerId ?? null,
-          mvpName: theMVP?.nickname ?? '',
-          mvpScore: theMVP?.points ?? 0,
-          players: allStats
-        };
+        if (newState === MatchPhase.PAUSE) {
+          setAndBroadcastBanner({ kind: 'PAUSED' });
+        } else if (newState === MatchPhase.KICKOFF && prevState === MatchPhase.GOAL) {
+          soundFX.playWhistle();
+          gameApp.networkHost?.broadcastGameFx('whistle');
+          setAndBroadcastBanner({ kind: 'NONE' });
+        } else if (newState === MatchPhase.STOP) {
+          setAndBroadcastBanner({ kind: 'NONE' });
+        }
+      });
+
+      hostEngine.on('match_end', ({ winner, stats, mvp }: any) => {
+        soundFX.playWhistle();
+        gameApp.networkHost?.broadcastGameFx('whistle');
+        setAndBroadcastBanner({ kind: 'NONE' });
+
+        const frozen = frozenMatchSnapshot ?? buildMatchStatsSnapshot(winner, stats, mvp);
+        frozenMatchSnapshot = null;
 
         gameUI.hasCompletedMatch = true;
         gameUI.activeSlide = 'STATS';
         gameUI.fsmPhase = 'STOPPED';
         gameUI.matchPhase = 0;
         gameUI.previousMatchPhase = 0;
-        if (engine) {
-          engine.stopMatch();
-        }
+        hostEngine.stopMatch();
 
-        gameUI.lastMatchStats = snapshot;
-        gameUI.mvp = theMVP;
-        gameUI.redTeamStats = redStats;
-        gameUI.blueTeamStats = blueStats;
+        gameUI.lastMatchStats = frozen.snapshot;
+        gameUI.mvp = frozen.theMVP;
+        gameUI.redTeamStats = frozen.redStats;
+        gameUI.blueTeamStats = frozen.blueStats;
 
-        gameApp.networkHost?.broadcastMatchStats(snapshot, allStats, theMVP, redStats, blueStats);
+        gameApp.syncMatchPhase(0);
+        gameApp.networkHost?.broadcastMatchStats(
+          frozen.snapshot,
+          frozen.allStats,
+          frozen.theMVP,
+          frozen.redStats,
+          frozen.blueStats
+        );
 
         if (!gameUI.isSecondaryOverlayOpen) {
           gameUI.clearModalStack();
           gameUI.activeModal = 'TEAM_SELECT';
         }
       });
+    }
+
+    if (engine) {
+      wireHostEngineEvents(engine);
     }
 
     // 2. Inicializar GameRenderer desacoplado
@@ -317,6 +488,38 @@
     // 3. Captura y enrutamiento de inputs
     const keyState = new Map<string, boolean>();
     let dashTriggered = false;
+
+    const onPointerDown = () => {
+      soundFX.ensureContext();
+    };
+
+    function isGameplayBindCode(code: string): boolean {
+      const kb = gameUI.keybinds;
+      return (
+        kb.up.includes(code) ||
+        kb.down.includes(code) ||
+        kb.left.includes(code) ||
+        kb.right.includes(code) ||
+        kb.kick.includes(code) ||
+        kb.turbo.includes(code) ||
+        kb.dash.includes(code) ||
+        kb.curveLeft.includes(code) ||
+        kb.curveRight.includes(code) ||
+        code === 'KeyX' ||
+        code === 'ShiftRight' ||
+        code === 'KeyQ' ||
+        code === 'KeyZ' ||
+        code === 'KeyE' ||
+        code === 'KeyC'
+      );
+    }
+
+    function dispatchImmediateGuestInput(): void {
+      if (gameUI.isHost || !gameApp.networkClient) return;
+      const mask = computeInputMask(false);
+      const tick = predEngine ? predEngine.currentTick + 1 : clientTick;
+      gameApp.networkClient.sendInput(mask, tick);
+    }
 
     const onKeyDown = (e: KeyboardEvent) => {
       // Activar contexto de audio con la primera interacción del usuario
@@ -343,6 +546,18 @@
         return;
       }
 
+      // Atajo de Pausa / Reanudación (por defecto KeyP) para Host y Admin
+      if (
+        !e.repeat &&
+        gameUI.currentScreen === 'IN_GAME' &&
+        (gameUI.isHost || gameUI.isAdmin) &&
+        gameUI.keybinds.pause.includes(e.code)
+      ) {
+        e.preventDefault();
+        gameUI.togglePause();
+        return;
+      }
+
       // Atajo canónico para Modificadores [#] (Exclusivo Host)
       if (e.key === '#') {
         if (!gameUI.isHost) return;
@@ -359,16 +574,25 @@
         dashTriggered = true;
       }
 
+      const wasDown = Boolean(keyState.get(e.code));
       keyState.set(e.code, true);
+      if (!wasDown && isGameplayBindCode(e.code)) {
+        dispatchImmediateGuestInput();
+      }
     };
 
     const onKeyUp = (e: KeyboardEvent) => {
       if (gameUI.keybinds.dash.includes(e.code)) {
         dashTriggered = false;
       }
+      const wasDown = Boolean(keyState.get(e.code));
       keyState.set(e.code, false);
+      if (wasDown && isGameplayBindCode(e.code)) {
+        dispatchImmediateGuestInput();
+      }
     };
 
+    window.addEventListener('pointerdown', onPointerDown);
     window.addEventListener('keydown', onKeyDown);
     window.addEventListener('keyup', onKeyUp);
 
@@ -381,32 +605,38 @@
     let prevSnapshot: GameStateSnapshot = engine ? engine.getState() : ({} as any);
     let currSnapshot: GameStateSnapshot = engine ? engine.getState() : ({} as any);
 
-    function getCurrentInputMask(): number {
+    function isMovablePhase(phase: number): boolean {
+      return (
+        phase === MatchPhase.KICKOFF ||
+        phase === MatchPhase.PLAYING ||
+        phase === MatchPhase.GOAL ||
+        phase === MatchPhase.CELEBRATION
+      );
+    }
+
+    function computeInputMask(consumeDash: boolean): number {
       let mask = 0;
       const isInputActive = gameUI.currentScreen === 'IN_GAME' && gameUI.activeModal === 'NONE';
       const activeEl = document.activeElement;
       const isTyping = activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA');
 
       if (isInputActive && !isTyping) {
-        // Movimiento direccional según keybinds canónicos (por defecto WASD)
         if (gameUI.keybinds.up.some((k) => keyState.get(k))) mask |= INPUT_FLAG_UP;
         if (gameUI.keybinds.down.some((k) => keyState.get(k))) mask |= INPUT_FLAG_DOWN;
         if (gameUI.keybinds.left.some((k) => keyState.get(k))) mask |= INPUT_FLAG_LEFT;
         if (gameUI.keybinds.right.some((k) => keyState.get(k))) mask |= INPUT_FLAG_RIGHT;
 
-        // Patear / Chutar: Space / KeyX
         if (gameUI.keybinds.kick.some((k) => keyState.get(k)) || keyState.get('KeyX')) mask |= INPUT_FLAG_KICK;
 
-        // Turbo / Sprint: ShiftLeft / ShiftRight
         if (gameUI.keybinds.turbo.some((k) => keyState.get(k)) || keyState.get('ShiftRight')) mask |= INPUT_FLAG_TURBO;
 
-        // Dash: ArrowUp (flanco ascendente / edge-trigger)
         if (dashTriggered) {
           mask |= INPUT_FLAG_DASH;
-          dashTriggered = false;
+          if (consumeDash) {
+            dashTriggered = false;
+          }
         }
 
-        // Curva Magnus: ArrowLeft / ArrowRight (y KeyQ/KeyZ / KeyE/KeyC)
         if (gameUI.keybinds.curveLeft.some((k) => keyState.get(k)) || keyState.get('KeyQ') || keyState.get('KeyZ')) {
           mask |= INPUT_FLAG_MAGNUS_LEFT;
         }
@@ -417,18 +647,94 @@
       return mask;
     }
 
+    function syncHudTelemetryFromSnapshot(snap: GameStateSnapshot): void {
+      gameUI.redScore = snap.redScore ?? gameUI.redScore;
+      gameUI.blueScore = snap.blueScore ?? gameUI.blueScore;
+      const phase = snap.phase ?? 0;
+      if (phase === MatchPhase.STOP || phase === 0) {
+        gameUI.matchTimeFormatted = '00:00';
+      } else {
+        const totalSec = snap.matchTimer ?? 0;
+        const mins = Math.floor(totalSec / 60).toString().padStart(2, '0');
+        const secs = (totalSec % 60).toString().padStart(2, '0');
+        gameUI.matchTimeFormatted = `${mins}:${secs}`;
+      }
+      gameUI.handleMatchPhaseTransition(phase);
+    }
+
+    const handleAuthoritativeSnapshot = (snap: GameStateSnapshot) => {
+      currSnapshot = snap;
+      syncHudTelemetryFromSnapshot(snap);
+      if (!predEngine && !gameUI.isHost) {
+        predEngine = new EngineInstance(gameUI.selectedStadiumId || 'mediano');
+        predEngine.applyModifiers(gameUI.physicsModifiers);
+      }
+      if (predEngine && gameUI.localPlayerId > 0) {
+        reconciler.reconcile(predEngine, snap, gameUI.localPlayerId);
+        const localDisc = predEngine.players.get(gameUI.localPlayerId);
+        if (localDisc) {
+          prevPredLocalPos.x = localDisc.pos.x;
+          prevPredLocalPos.y = localDisc.pos.y;
+          currPredLocalPos.x = localDisc.pos.x;
+          currPredLocalPos.y = localDisc.pos.y;
+          hasPredLocalPos = true;
+        } else {
+          hasPredLocalPos = false;
+        }
+      }
+    };
+
+    if (!isHostInitial && gameApp.networkClient) {
+      gameApp.networkClient.onSnapshotDecoded = handleAuthoritativeSnapshot;
+    }
+
     const simTicker = new SimulationTicker((now) => {
       lastSimTimestamp = now;
-      const mask = getCurrentInputMask();
+      const mask = computeInputMask(true);
 
       if (!gameUI.isHost) {
-        // Guest: Transmitir inputs al Host a 60 Hz y leer snapshots recibidos
+        // Guest: Predicción local a 60 Hz + envío de input por canal no confiable
         if (gameApp.networkClient) {
-          gameApp.networkClient.sendInput(mask, clientTick++);
-          const netSnap = gameApp.networkClient.getInterpolatedState() || gameApp.networkClient.latestSnapshot;
-          if (netSnap) {
-            prevSnapshot = currSnapshot && currSnapshot.discs ? currSnapshot : netSnap;
-            currSnapshot = netSnap;
+          if (!gameApp.networkClient.onSnapshotDecoded) {
+            gameApp.networkClient.onSnapshotDecoded = handleAuthoritativeSnapshot;
+          }
+          if (
+            predEngine &&
+            gameUI.localPlayerId > 0 &&
+            predEngine.players.has(gameUI.localPlayerId) &&
+            isMovablePhase(predEngine.fsm.state)
+          ) {
+            const localDiscBefore = predEngine.players.get(gameUI.localPlayerId)!;
+            prevPredLocalPos.x = localDiscBefore.pos.x;
+            prevPredLocalPos.y = localDiscBefore.pos.y;
+
+            const nextTick = predEngine.currentTick + 1;
+            reconciler.recordInput(nextTick, mask);
+            gameApp.networkClient.sendInput(mask, nextTick);
+
+            const localInputMap = new Map<number, PlayerInput>();
+            localInputMap.set(gameUI.localPlayerId, { inputMask: mask });
+            predEngine.step(localInputMap);
+
+            const localDiscAfter = predEngine.players.get(gameUI.localPlayerId);
+            if (localDiscAfter) {
+              currPredLocalPos.x = localDiscAfter.pos.x;
+              currPredLocalPos.y = localDiscAfter.pos.y;
+              hasPredLocalPos = true;
+            }
+            clientTick = predEngine.currentTick;
+          } else {
+            gameApp.networkClient.sendInput(mask, ++clientTick);
+            if (predEngine && gameUI.localPlayerId > 0) {
+              const localDisc = predEngine.players.get(gameUI.localPlayerId);
+              if (localDisc) {
+                prevPredLocalPos.x = localDisc.pos.x;
+                prevPredLocalPos.y = localDisc.pos.y;
+                currPredLocalPos.x = localDisc.pos.x;
+                currPredLocalPos.y = localDisc.pos.y;
+                hasPredLocalPos = true;
+              }
+            }
           }
         }
       } else if (engine) {
@@ -472,7 +778,11 @@
       renderer.minimapSize = minimapPxWidth;
       renderer.minimapCameraFrustum = gameUI.settings.minimapCameraFrustum;
       renderer.chatHeight = gameUI.chatHeight;
-      renderer.screenShakeEnabled = gameUI.settings.screenShakeEnabled !== false;
+      renderer.screenShakeEnabled = gameUI.screenShake;
+      renderer.setExtrapolation(gameUI.extrapolationMs);
+      renderer.discRenderer.dampingBall = gameUI.modifiers.ballFriction ?? gameUI.modifiers.pitchFriction ?? 0.99;
+      renderer.discRenderer.dampingPlayer = gameUI.modifiers.playerFriction ?? 0.96;
+      renderer.setGoalNets(gameUI.isHost && engine ? engine.world.goalNets : null);
 
       // Sincronizar equipaciones de los capitanes, balón y VFX en tiempo real
       const redActiveKit = gameUI.redCaptainKit;
@@ -525,7 +835,46 @@
         }
       }
 
-      if (currSnapshot && currSnapshot.discs) {
+      if (!gameUI.isHost && gameApp.networkClient) {
+        reconciler.decayVisualOffset();
+        const interpSnap =
+          gameApp.networkClient.jitterBuffer.getInterpolatedSnapshot(currentTime) ??
+          gameApp.networkClient.latestSnapshot;
+        if (interpSnap && interpSnap.discs) {
+          let renderSnap = interpSnap;
+          const localId = gameUI.localPlayerId;
+          const predDisc = predEngine && localId > 0 ? predEngine.players.get(localId) : undefined;
+          if (predDisc && hasPredLocalPos && isMovablePhase(interpSnap.phase)) {
+            const predX = lerp(prevPredLocalPos.x, currPredLocalPos.x, alpha) + reconciler.visualOffset.x;
+            const predY = lerp(prevPredLocalPos.y, currPredLocalPos.y, alpha) + reconciler.visualOffset.y;
+            let predFlags = 0;
+            if (predDisc.kicking) predFlags |= 1 << 0;
+            if (predDisc.isDashing) predFlags |= 1 << 1;
+            if (predDisc.isTurbo) predFlags |= 1 << 4;
+            if (predDisc.isTyping) predFlags |= 1 << 5;
+
+            renderSnap = {
+              ...interpSnap,
+              discs: interpSnap.discs.map((d: CompactDiscState) =>
+                d.id === localId
+                  ? {
+                      ...d,
+                      x: predX,
+                      y: predY,
+                      vx: predDisc.vel.x,
+                      vy: predDisc.vel.y,
+                      stamina: predDisc.stamina,
+                      flags: predFlags || d.flags
+                    }
+                  : d
+              )
+            };
+          }
+          currSnapshot = renderSnap;
+          prevSnapshot = renderSnap;
+          renderer.render(renderSnap, renderSnap, 1.0, gameUI.localPlayerId);
+        }
+      } else if (currSnapshot && currSnapshot.discs) {
         renderer.render(prevSnapshot, currSnapshot, alpha, gameUI.localPlayerId);
       }
 
@@ -557,20 +906,7 @@
             const mins = Math.floor(totalSec / 60).toString().padStart(2, '0');
             const secs = (totalSec % 60).toString().padStart(2, '0');
             gameUI.matchTimeFormatted = `${mins}:${secs}`;
-
-            let canonicalPhase = 2;
-            if (phase === MatchPhase.STATS || phase === 5) {
-              canonicalPhase = 5;
-            } else if (phase === MatchPhase.PLAYING || phase === 2) {
-              canonicalPhase = 2;
-            } else if (phase === MatchPhase.KICKOFF || phase === 1) {
-              canonicalPhase = 1;
-            } else if (phase === MatchPhase.GOAL || phase === 3) {
-              canonicalPhase = 3;
-            } else if (phase === MatchPhase.PAUSE || phase === 2.1) {
-              canonicalPhase = 2.1;
-            }
-            gameUI.handleMatchPhaseTransition(canonicalPhase);
+            gameUI.handleMatchPhaseTransition(phase);
           }
 
           if (gameUI.isHost) {
@@ -586,12 +922,21 @@
     animFrameId = requestAnimationFrame(renderLoop);
 
     return () => {
+      if (goBannerTimer !== null) {
+        clearTimeout(goBannerTimer);
+        goBannerTimer = null;
+      }
       simTicker.stop();
-      if (isHost) {
+      if (gameUI.isHost) {
         soundFX.stopHostKeepAlive();
       }
+      if (gameApp.networkClient) {
+        gameApp.networkClient.onSnapshotDecoded = undefined;
+      }
+      gameUI.onTriggerShake = null;
       cancelAnimationFrame(animFrameId);
       window.removeEventListener('resize', handleResize);
+      window.removeEventListener('pointerdown', onPointerDown);
       window.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('keyup', onKeyUp);
       renderer.destroy();

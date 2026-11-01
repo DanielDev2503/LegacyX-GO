@@ -204,9 +204,37 @@ export class Camera {
   }
 
   public triggerShake(intensity: number, durationMs: number = 150): void {
+    if (intensity <= 0 || durationMs <= 0) return;
     this.shakeIntensity = Math.max(this.shakeIntensity, intensity);
-    this.shakeDuration = durationMs / 1000;
+    this.shakeDuration = Math.max(this.shakeDuration - this.shakeElapsed, durationMs / 1000);
     this.shakeElapsed = 0;
+  }
+
+  public resetShake(): void {
+    this.shakeIntensity = 0;
+    this.shakeDuration = 0;
+    this.shakeElapsed = 0;
+    this.shakeOffsetX = 0;
+    this.shakeOffsetY = 0;
+  }
+
+  public updateShake(dt: number): void {
+    if (this.shakeDuration > 0 && this.shakeElapsed < this.shakeDuration) {
+      this.shakeElapsed += dt;
+      if (this.shakeElapsed >= this.shakeDuration) {
+        this.resetShake();
+        return;
+      }
+      const progress = Math.min(1.0, this.shakeElapsed / this.shakeDuration);
+      const decay = Math.exp(-5.0 * progress) * (1.0 - progress);
+      const currentIntensity = this.shakeIntensity * decay;
+
+      const angle = Math.random() * Math.PI * 2;
+      this.shakeOffsetX = Math.cos(angle) * currentIntensity;
+      this.shakeOffsetY = Math.sin(angle) * currentIntensity;
+    } else if (this.shakeIntensity !== 0 || this.shakeOffsetX !== 0 || this.shakeOffsetY !== 0) {
+      this.resetShake();
+    }
   }
 
   public update(dt: number, focusX: number, focusY: number): void {
@@ -220,20 +248,7 @@ export class Camera {
     this.x = Math.max(this.bounds.minX, Math.min(this.bounds.maxX, this.x));
     this.y = Math.max(this.bounds.minY, Math.min(this.bounds.maxY, this.y));
 
-    if (this.shakeElapsed < this.shakeDuration) {
-      this.shakeElapsed += dt;
-      const progress = Math.min(1.0, this.shakeElapsed / this.shakeDuration);
-      const decay = Math.pow(1.0 - progress, 2);
-      const currentIntensity = this.shakeIntensity * decay;
-
-      const angle = Math.random() * Math.PI * 2;
-      this.shakeOffsetX = Math.cos(angle) * currentIntensity;
-      this.shakeOffsetY = Math.sin(angle) * currentIntensity;
-    } else {
-      this.shakeIntensity = 0;
-      this.shakeOffsetX = 0;
-      this.shakeOffsetY = 0;
-    }
+    this.updateShake(dt);
   }
 
   public applyTransform(ctx: CanvasRenderingContext2D, safeAreaBottom: number = 0): void {

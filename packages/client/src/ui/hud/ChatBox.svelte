@@ -23,6 +23,12 @@
   function sendChat() {
     const text = chatInput.trim();
     if (text.length > 0) {
+      if (gameUI.handleChatCommand(text)) {
+        chatInput = '';
+        gameUI.isChatFocused = false;
+        inputRef?.blur();
+        return;
+      }
       if (gameUI.onChatSent) {
         gameUI.onChatSent(text);
       } else {

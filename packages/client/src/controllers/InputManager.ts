@@ -49,6 +49,7 @@ export class InputManager {
   private keyStates: Record<string, boolean> = Object.create(null);
   public currentMask: number = 0;
   public onInputChanged?: (mask: number) => void;
+  public onImmediateInput?: (mask: number) => void;
   public onKickImmediate?: () => void;
   public keyBinds: KeyBinds;
   public isEnabled: boolean = false;
@@ -204,6 +205,12 @@ export class InputManager {
         this.keyStates[e.code] = true;
         this.updateMask();
 
+        // Despacho inmediato de input (sin esperar acumulador de 60 Hz)
+        if (this.isGameplayKey(e.code)) {
+          const immediateMask = this.dashTriggered ? (this.currentMask | INPUT_DASH) : this.currentMask;
+          this.onImmediateInput?.(immediateMask);
+        }
+
         // Minimizar latencia de pateo: disparo inmediato por RTCDataChannel
         if (this.isActionKey('kick', e.code)) {
           this.onKickImmediate?.();
@@ -217,6 +224,9 @@ export class InputManager {
       if (this.keyStates[e.code]) {
         this.keyStates[e.code] = false;
         this.updateMask();
+        if (this.isGameplayKey(e.code)) {
+          this.onImmediateInput?.(this.currentMask);
+        }
       }
     });
 

@@ -45,6 +45,7 @@ export class GameFSM {
   public stateTicksRemaining: number = 0;
   public countdownDurationTicks: number;
   public winningTeam: 'red' | 'blue' | null = null;
+  public isResumingFromPause: boolean = false;
 
   public onStateChange?: (newState: MatchPhase) => void;
 
@@ -61,6 +62,7 @@ export class GameFSM {
   }
 
   public startMatch(): void {
+    this.isResumingFromPause = false;
     this.startResumeCountdown();
     this.winningTeam = null;
   }
@@ -74,6 +76,7 @@ export class GameFSM {
     this.stateTicksRemaining = 0;
     this.countdownSeconds = 0;
     this.winningTeam = null;
+    this.isResumingFromPause = false;
     if (this.onStateChange) this.onStateChange(this.currentState);
   }
 
@@ -81,12 +84,14 @@ export class GameFSM {
     if (this.currentState === MatchPhase.PLAYING) {
       this.currentState = MatchPhase.PAUSED;
       this.stateTicksRemaining = 0;
+      this.isResumingFromPause = false;
       if (this.onStateChange) this.onStateChange(this.currentState);
     }
   }
 
   public resumeMatch(): void {
     if (this.currentState === MatchPhase.PAUSED || this.currentState === MatchPhase.STOPPED) {
+      this.isResumingFromPause = this.currentState === MatchPhase.PAUSED;
       this.startResumeCountdown();
     }
   }
@@ -155,6 +160,7 @@ export class GameFSM {
       if (this.stateTicksRemaining === 0) {
         this.currentState = MatchPhase.PLAYING;
         this.countdownSeconds = 0;
+        this.isResumingFromPause = false;
         if (this.onStateChange) this.onStateChange(this.currentState);
         return true;
       }

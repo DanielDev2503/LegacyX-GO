@@ -31,7 +31,7 @@ export class NetworkClient {
   public localPlayerId: number | null = null;
   public players: PlayerInfo[] = [];
   public teamsLocked: boolean = false;
-  public jitterBuffer = new JitterBuffer(33, 30, true);
+  public jitterBuffer = new JitterBuffer(24, 30, true);
   public latestSnapshot: GameStateSnapshot | null = null;
 
   public onConnected?: (playerId: number) => void;
@@ -41,12 +41,14 @@ export class NetworkClient {
   public onRoomStateSync?: (msg: Record<string, unknown>) => void;
   public onChatMessage?: (sender: string, text: string, team?: string, isHost?: boolean, id?: string) => void;
   public onEmote?: (playerId: number, emoji: string) => void;
+  public onGameFx?: (fx: string, intensity?: number, countdownValue?: number) => void;
+  public onMatchBanner?: (banner: Record<string, unknown>) => void;
   public onSnapshotBuffer?: (buffer: ArrayBuffer) => void;
   public onSnapshotDecoded?: (snapshot: GameStateSnapshot) => void;
 
   private nickname: string;
   private number: number;
-  private reusableInputBuffer = new ArrayBuffer(8);
+  private reusableInputBuffer = new ArrayBuffer(BinaryProtocol.INPUT_SIZE);
   private pingIntervalId: ReturnType<typeof setInterval> | null = null;
 
   constructor(
@@ -215,7 +217,11 @@ export class NetworkClient {
 
       // Gestionar transición de fase sin cerrar el menú en bucle durante el partido
       if (typeof msg.matchPhase === 'number') {
+        this.jitterBuffer.setMatchState(msg.matchPhase);
         gameUI.handleMatchPhaseTransition(msg.matchPhase, msg.type === 'INITIAL_STATE_PACKET');
+      }
+      if (msg.activeBanner && typeof msg.activeBanner === 'object') {
+        this.onMatchBanner?.(msg.activeBanner as Record<string, unknown>);
       }
 
       this.onRoomStateSync?.(msg);
@@ -277,6 +283,19 @@ export class NetworkClient {
       const emoji = String(msg.emoji || '');
       if (pid > 0 && emoji) {
         this.onEmote?.(pid, emoji);
+      }
+    } else if (msg.type === 'GAME_FX_EVENT') {
+      const fx = String(msg.fx || '');
+      if (fx) {
+        this.onGameFx?.(
+          fx,
+          typeof msg.intensity === 'number' ? msg.intensity : undefined,
+          typeof msg.countdownValue === 'number' ? msg.countdownValue : undefined
+        );
+      }
+    } else if (msg.type === 'MATCH_BANNER_EVENT') {
+      if (msg.banner && typeof msg.banner === 'object') {
+        this.onMatchBanner?.(msg.banner as Record<string, unknown>);
       }
     } else if (msg.type === 'MATCH_PAUSED') {
       this.jitterBuffer.setMatchState('PAUSED');

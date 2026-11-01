@@ -117,6 +117,16 @@
     gameUI.matchState === 'STATS'
   );
   let isMatchPaused = $derived(gameUI.fsmPhase === 'PAUSED' || gameUI.matchPhase === 2.1);
+  let isResumeCountdown = $derived(
+    gameUI.fsmPhase === 'RESUME_COUNTDOWN' || gameUI.matchPhase === 2.2
+  );
+  let isPauseLocked = $derived(
+    isResumeCountdown ||
+      gameUI.fsmPhase === 'PRE_MATCH_VS' ||
+      gameUI.fsmPhase === 'START_COUNTDOWN' ||
+      gameUI.fsmPhase === 'GOAL' ||
+      gameUI.fsmPhase === 'CELEBRATION'
+  );
   let canClose = $derived(!gameUI.isTeamSelectForcedOpen && gameUI.matchPhase !== 0);
 
   let isRoomPublic = $state(gameUI.activeRoom ? !gameUI.activeRoom.isPrivate : true);
@@ -254,7 +264,9 @@
     if (!gameUI.isAdmin && !gameUI.isHost) return;
     soundFX.playUIClick();
     gameUI.stopMatch();
-    gameUI.openOverlay('TEAM_MANAGEMENT');
+    if (gameUI.isHost) {
+      gameUI.openOverlay('TEAM_MANAGEMENT');
+    }
     onStopMatch();
   }
 
@@ -267,9 +279,13 @@
   }
 
   function handlePauseToggle() {
-    if (!gameUI.isAdmin && !gameUI.isHost) return;
+    if ((!gameUI.isAdmin && !gameUI.isHost) || isPauseLocked) return;
+    const wasPaused = isMatchPaused;
     soundFX.playUIClick();
     gameUI.togglePause();
+    if (wasPaused && canClose) {
+      gameUI.closeModal();
+    }
     onTogglePause();
   }
 
@@ -994,10 +1010,10 @@
                         id="btn-fsm-pause"
                         class="btn-pause-match btn btn-warning"
                         class:is-resuming={isMatchPaused}
-                        disabled={!gameUI.isAdmin && !gameUI.isHost}
+                        disabled={(!gameUI.isAdmin && !gameUI.isHost) || isPauseLocked}
                         onclick={handlePauseToggle}
                       >
-                        <span>{isMatchPaused ? '▶ REANUDAR' : '⏸ PAUSAR'}</span>
+                        <span>{isResumeCountdown ? '⏱ REANUDANDO...' : isMatchPaused ? '▶ REANUDAR' : '⏸ PAUSAR'}</span>
                       </button>
                     </div>
                   {/if}

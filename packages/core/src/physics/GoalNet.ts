@@ -396,8 +396,8 @@ export class GoalNet {
     const rBall = ball.radius ?? 5.8;
     const signX = this.mouthX < 0 ? -1 : 1;
 
-    const minX = Math.min(this.mouthX, this.rearLimitX) - rBall - 15;
-    const maxX = Math.max(this.mouthX, this.rearLimitX) + rBall + 15;
+    const minX = Math.min(this.mouthX, this.rearLimitX) - rBall - 35;
+    const maxX = Math.max(this.mouthX, this.rearLimitX) + rBall + 35;
     const minY = Math.min(this.topY, this.bottomY) - rBall - 15;
     const maxY = Math.max(this.topY, this.bottomY) + rBall + 15;
     if (ball.pos.x < minX || ball.pos.x > maxX || ball.pos.y < minY || ball.pos.y > maxY) return;
@@ -449,7 +449,7 @@ export class GoalNet {
       const qx = x0 + t * sx;
       const qy = y0 + t * sy;
       const sDist = (ball.pos.x - qx) * nx + (ball.pos.y - qy) * ny; // distancia con signo (lado campo > 0)
-      if (sDist >= rBall || sDist < -(rBall + 20)) continue;
+      if (sDist >= rBall || sDist < -(rBall + 35)) continue;
 
       const pen = rBall - sDist;
       const w1 = this.invMass[i];

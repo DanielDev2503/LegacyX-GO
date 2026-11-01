@@ -173,6 +173,39 @@ export class GameApp {
     }
   }
 
+  public playAndApplyGameFx(fx: string, intensity?: number, countdownValue?: number): void {
+    switch (fx) {
+      case 'kick':
+        soundFX.playKick(intensity ?? 1.0);
+        break;
+      case 'power_shot':
+        soundFX.playKick(intensity ?? 1.8);
+        break;
+      case 'post':
+        soundFX.playPostHit();
+        if (gameUI.screenShake) {
+          gameUI.onTriggerShake?.(7, 220);
+        }
+        break;
+      case 'wall':
+        soundFX.playBounce();
+        break;
+      case 'goal':
+        soundFX.playGoalHorn();
+        soundFX.playWhistle();
+        if (gameUI.screenShake) {
+          gameUI.onTriggerShake?.(15, 500);
+        }
+        break;
+      case 'whistle':
+        soundFX.playWhistle();
+        break;
+      case 'countdown_tick':
+        soundFX.playCountdown(countdownValue === 0);
+        break;
+    }
+  }
+
   public syncPlayerProfile(): void {
     const profile = this.getLocalProfile();
     if (this.isHost && this.networkHost) {
@@ -395,6 +428,7 @@ export class GameApp {
     gameUI.redScore = 0;
     gameUI.blueScore = 0;
     gameUI.matchTimeFormatted = '00:00';
+    gameUI.applyMatchBanner({ kind: 'NONE' });
     gameUI.chatMessages = [];
     gameUI.activeRoom = {
       id: roomId,
@@ -534,6 +568,7 @@ export class GameApp {
     gameUI.redScore = 0;
     gameUI.blueScore = 0;
     gameUI.matchTimeFormatted = '00:00';
+    gameUI.applyMatchBanner({ kind: 'NONE' });
     gameUI.chatMessages = [];
     gameUI.activeRoom = {
       id: roomId,
@@ -585,6 +620,14 @@ export class GameApp {
     client.onEmote = (playerId, emoji) => {
       this.showEmote(playerId, emoji);
       gameUI.onPlayerEmote?.(playerId, emoji);
+    };
+
+    client.onGameFx = (fx, intensity, countdownValue) => {
+      this.playAndApplyGameFx(fx, intensity, countdownValue);
+    };
+
+    client.onMatchBanner = (banner) => {
+      gameUI.applyMatchBanner(banner as any);
     };
 
     client.onRoomClosed = () => this.handleRemoteRoomClosed();

@@ -98,8 +98,8 @@ export class PhysicsWorld {
       const maxX = Math.max(seg.p0.x, seg.p1.x);
       const maxY = Math.max(Math.abs(seg.p0.y), Math.abs(seg.p1.y));
 
-      const isLeftGoalArea = maxX < (leftXPost + 1) && maxY <= (leftYPost + 15);
-      const isRightGoalArea = minX > (rightXPost - 1) && maxY <= (rightYPost + 15);
+      const isLeftGoalArea = maxX < (leftXPost + 1) && maxY <= (leftYPost + 30);
+      const isRightGoalArea = minX > (rightXPost - 1) && maxY <= (rightYPost + 30);
 
       if (isLeftGoalArea || isRightGoalArea) {
         seg.cMask = seg.cMask & ~COLLISION_GROUP_BALL;
@@ -113,7 +113,7 @@ export class PhysicsWorld {
       this.addDisc(post);
     }
 
-    // Instanciar GoalNet de caja con red elástica subamortiguada (N = 15 partículas, profundidad = 36 px)
+    // Instanciar GoalNet de caja con red elástica subamortiguada (N = 15 partículas)
     const depth = 36;
     const leftNet = new GoalNet({
       side: 'left',

@@ -134,7 +134,30 @@ export function pingCore(): string {
   return "LegacyX Core Engine ready (60 Hz tick-rate)";
 }
 
-export type GameEvent = 'goal' | 'kick' | 'post_hit' | 'state_change' | 'match_end';
+export type GameEvent =
+  | 'goal'
+  | 'kick'
+  | 'post_hit'
+  | 'wall_hit'
+  | 'countdown_tick'
+  | 'whistle'
+  | 'victory_celebration'
+  | 'state_change'
+  | 'match_end';
+
+export interface TouchPlayerRecord {
+  id: number;
+  name: string;
+  team: 'red' | 'blue';
+  tick: number;
+}
+
+export interface GoalBannerDetails {
+  scoringTeam: 'red' | 'blue';
+  scorerName: string;
+  assisterName: string | null;
+  isOwnGoal: boolean;
+}
 
 export class EngineInstance {
   public world: PhysicsWorld;
@@ -146,6 +169,12 @@ export class EngineInstance {
   public playerNames: Map<number, string> = new Map();
   public matchStats: Map<number, PlayerMatchStats> = new Map();
   private touchHistory: Array<{ playerId: number; team: 'red' | 'blue'; tick: number; isKick: boolean }> = [];
+  public lastTouchPlayer: TouchPlayerRecord | null = null;
+  public previousTouchPlayer: TouchPlayerRecord | null = null;
+  public lastGoalDetails: GoalBannerDetails | null = null;
+  private frozenVictoryStats: PlayerMatchStats[] | null = null;
+  private frozenVictoryMvp: PlayerMatchStats | null = null;
+  private lastWallSoundTick: number = -10;
   public modifiers: PhysicsModifiers;
   public currentTick: number = 0;
   public soundMask: number = 0;
@@ -194,6 +223,8 @@ export class EngineInstance {
     this.world.loadStadium(this.stadium);
 
     this.world.onCollision = (e) => {
+      const isCompetitivePhase =
+        this.fsm.state === MatchPhase.PLAYING || this.fsm.state === MatchPhase.KICKOFF;
       if (e.type === 'disc-disc') {
         if (e.discA.isBall || e.discB?.isBall) {
           const other = e.discA.isBall ? e.discB : e.discA;
@@ -204,7 +235,9 @@ export class EngineInstance {
             this.soundMask |= SOUND_POST_HIT;
             this.emit('post_hit', { ball: this.ball, post: other });
           } else if (other && !other.isBall) {
-            this.recordTouch(other.id, false);
+            if (isCompetitivePhase) {
+              this.recordTouch(other.id, false);
+            }
             if (this.fsm.state === MatchPhase.KICKOFF) {
               this.fsm.startPlaying();
             }
@@ -212,12 +245,46 @@ export class EngineInstance {
         }
       } else if (e.type === 'disc-segment' && e.discA.isBall) {
         this.ball.resetCurve();
+        const bSpeed = Math.hypot(this.ball.vel.x, this.ball.vel.y);
+        if (bSpeed > 25 && this.currentTick - this.lastWallSoundTick >= 4) {
+          this.lastWallSoundTick = this.currentTick;
+          this.emit('wall_hit', { ball: this.ball, speed: bSpeed });
+        }
       }
     };
 
     this.fsm.onGoalScored = (team, redScore, blueScore) => {
       this.soundMask |= SOUND_GOAL;
-      this.emit('goal', { scoringTeam: team, redScore, blueScore });
+      const details = this.lastGoalDetails;
+      this.emit('goal', {
+        scoringTeam: team,
+        redScore,
+        blueScore,
+        scorerName: details?.scorerName ?? (team === 'red' ? 'Equipo Rojo' : 'Equipo Azul'),
+        assisterName: details?.assisterName ?? null,
+        isOwnGoal: details?.isOwnGoal ?? false
+      });
+    };
+
+    this.fsm.onVictoryCelebrationStart = (winner, redScore, blueScore) => {
+      this.frozenVictoryStats = this.getMatchStats().map((s) => ({ ...s }));
+      const mvp = this.getMVP();
+      this.frozenVictoryMvp = mvp ? { ...mvp } : null;
+      this.emit('victory_celebration', {
+        winner,
+        redScore,
+        blueScore,
+        stats: this.frozenVictoryStats,
+        mvp: this.frozenVictoryMvp,
+        lastGoal: this.lastGoalDetails
+      });
+    };
+
+    this.fsm.onCountdownTick = (count, isResume) => {
+      this.emit('countdown_tick', { count, isResume });
+      if (count === 0) {
+        this.emit('whistle', { kind: isResume ? 'resume' : 'kickoff' });
+      }
     };
 
     this.fsm.onStateChange = (newState, prevState) => {
@@ -230,8 +297,8 @@ export class EngineInstance {
     this.fsm.onMatchEnd = (winner) => {
       this.emit('match_end', {
         winner,
-        stats: this.getMatchStats(),
-        mvp: this.getMVP()
+        stats: this.frozenVictoryStats ?? this.getMatchStats(),
+        mvp: this.frozenVictoryMvp ?? this.getMVP()
       });
     };
   }
@@ -368,11 +435,15 @@ export class EngineInstance {
     this.world.resetNets(false);
   }
 
-  public startMatch(): void {
+  public startMatch(withIntro: boolean = false): void {
     this.kickoffPossessingTeam = 'red';
     this.resetPositions();
     this.resetMatchStats();
-    this.fsm.startMatch();
+    this.fsm.startMatch(withIntro);
+  }
+
+  public startMatchWithIntro(): void {
+    this.startMatch(true);
   }
 
   public stopMatch(): void {
@@ -385,8 +456,8 @@ export class EngineInstance {
     this.fsm.pauseMatch();
   }
 
-  public resumeMatch(): void {
-    this.fsm.resumeMatch();
+  public resumeMatch(immediate: boolean = false): void {
+    this.fsm.resumeMatch(immediate);
   }
 
   public togglePause(): void {
@@ -395,7 +466,12 @@ export class EngineInstance {
 
   public step(inputs: Map<number, PlayerInput>, isReplay: boolean = false): void {
     this.soundMask = 0;
-    const isGameActive = this.fsm.state === MatchPhase.PLAYING || this.fsm.state === MatchPhase.KICKOFF;
+    const isCelebration =
+      this.fsm.state === MatchPhase.GOAL || this.fsm.state === MatchPhase.CELEBRATION;
+    const isGameActive =
+      this.fsm.state === MatchPhase.PLAYING ||
+      this.fsm.state === MatchPhase.KICKOFF ||
+      isCelebration;
 
     if (isGameActive) {
       const baseKickCfg = (this.modifiers as any).kickStrength !== undefined
@@ -512,8 +588,15 @@ export class EngineInstance {
             this.ball.spin = 0;
 
             this.soundMask |= SOUND_KICK;
-            this.recordTouch(player.id, true);
-            this.emit('kick', { player, ball: this.ball });
+            if (!isCelebration) {
+              this.recordTouch(player.id, true);
+            }
+            this.emit('kick', {
+              player,
+              ball: this.ball,
+              isPowerShot: this.ball.isPowerShot,
+              strength: this.ball.isPowerShot ? 1.8 : 1.0
+            });
 
             if (this.fsm.state === MatchPhase.KICKOFF) {
               this.fsm.startPlaying();
@@ -668,16 +751,18 @@ export class EngineInstance {
         }
       }
 
-      const hw = this.stadium.halfWidth;
-      const gh = this.stadium.goalHalfHeight;
-      const bx = this.ball.pos.x;
-      const by = this.ball.pos.y;
+      if (!isCelebration) {
+        const hw = this.stadium.halfWidth;
+        const gh = this.stadium.goalHalfHeight;
+        const bx = this.ball.pos.x;
+        const by = this.ball.pos.y;
 
-      if (Math.abs(by) <= gh) {
-        if (bx < -hw - this.ball.radius) {
-          this.handleGoalScored('blue');
-        } else if (bx > hw + this.ball.radius) {
-          this.handleGoalScored('red');
+        if (Math.abs(by) <= gh) {
+          if (bx < -hw - this.ball.radius) {
+            this.handleGoalScored('blue');
+          } else if (bx > hw + this.ball.radius) {
+            this.handleGoalScored('red');
+          }
         }
       }
     }
@@ -720,6 +805,16 @@ export class EngineInstance {
     const team = this.playerTeams.get(id);
     if (team !== 'red' && team !== 'blue') return;
 
+    const playerName = this.playerNames.get(id) || `Jugador ${id}`;
+    if (!this.lastTouchPlayer || this.lastTouchPlayer.id !== id) {
+      this.previousTouchPlayer = this.lastTouchPlayer;
+      this.lastTouchPlayer = { id, name: playerName, team, tick: this.currentTick };
+    } else {
+      this.lastTouchPlayer.name = playerName;
+      this.lastTouchPlayer.team = team;
+      this.lastTouchPlayer.tick = this.currentTick;
+    }
+
     const stats = this.getOrCreateStats(id);
     stats.touches++;
 
@@ -758,24 +853,34 @@ export class EngineInstance {
   public handleGoalScored(scoringTeam: 'red' | 'blue'): void {
     let scorerId: number | null = null;
     let assisterId: number | null = null;
+    let scorerName = scoringTeam === 'red' ? 'Equipo Rojo' : 'Equipo Azul';
+    let assisterName: string | null = null;
+    let isOwnGoal = false;
 
-    for (let i = this.touchHistory.length - 1; i >= 0; i--) {
-      const entry = this.touchHistory[i];
-      if (entry.team === scoringTeam) {
-        if (scorerId === null) {
-          scorerId = entry.playerId;
-        } else if (assisterId === null && entry.playerId !== scorerId) {
-          if (this.currentTick - entry.tick <= 600) {
-            assisterId = entry.playerId;
-          }
-          break;
+    const lastTouch = this.lastTouchPlayer;
+    const prevTouch = this.previousTouchPlayer;
+
+    if (lastTouch) {
+      if (lastTouch.team === scoringTeam) {
+        isOwnGoal = false;
+        scorerId = lastTouch.id;
+        scorerName = this.playerNames.get(lastTouch.id) || lastTouch.name;
+
+        if (prevTouch && prevTouch.team === scoringTeam && prevTouch.id !== lastTouch.id) {
+          assisterId = prevTouch.id;
+          assisterName = this.playerNames.get(prevTouch.id) || prevTouch.name;
         }
-      } else if (scorerId !== null) {
-        break;
+      } else {
+        // Autogol: el último toque perteneció al equipo que recibió el gol
+        isOwnGoal = true;
+        scorerId = null;
+        assisterId = null;
+        scorerName = this.playerNames.get(lastTouch.id) || lastTouch.name;
+        assisterName = null;
       }
     }
 
-    if (scorerId !== null) {
+    if (scorerId !== null && !isOwnGoal) {
       const sStats = this.getOrCreateStats(scorerId);
       sStats.goals++;
       sStats.points += 100;
@@ -787,13 +892,22 @@ export class EngineInstance {
       }
     }
 
-    if (assisterId !== null) {
+    if (assisterId !== null && !isOwnGoal) {
       const aStats = this.getOrCreateStats(assisterId);
       aStats.assists++;
       aStats.points += 50;
     }
 
+    this.lastGoalDetails = {
+      scoringTeam,
+      scorerName,
+      assisterName,
+      isOwnGoal
+    };
+
     this.touchHistory = [];
+    this.lastTouchPlayer = null;
+    this.previousTouchPlayer = null;
     this.kickoffPossessingTeam = scoringTeam === 'red' ? 'blue' : 'red';
     this.fsm.registerGoal(scoringTeam);
   }
@@ -827,6 +941,11 @@ export class EngineInstance {
   public resetMatchStats(): void {
     this.matchStats.clear();
     this.touchHistory = [];
+    this.lastTouchPlayer = null;
+    this.previousTouchPlayer = null;
+    this.lastGoalDetails = null;
+    this.frozenVictoryStats = null;
+    this.frozenVictoryMvp = null;
   }
 
   public setState(snapshot: GameStateSnapshot): void {
@@ -836,26 +955,39 @@ export class EngineInstance {
     this.fsm.blueScore = snapshot.blueScore;
     this.soundMask = snapshot.soundMask;
 
+    const seenPlayerIds = new Set<number>();
     for (let i = 0; i < snapshot.discs.length; i++) {
       const d = snapshot.discs[i]!;
       if (d.id === 0 || d.team === 0) {
         this.ball.pos.set(d.x, d.y);
+        this.ball.prevPos.set(d.x, d.y);
         this.ball.vel.set(d.vx, d.vy);
         this.ball.spin = d.spin ?? 0;
         this.ball.isCurving = Math.abs(this.ball.spin) > 0.001;
         this.ball.isPowerShot = ((d.flags ?? 0) & (1 << 3)) !== 0;
       } else {
+        seenPlayerIds.add(d.id);
+        const teamStr: 'red' | 'blue' | 'spec' = d.team === 1 ? 'red' : d.team === 2 ? 'blue' : 'spec';
         let p = this.players.get(d.id);
         if (!p) {
-          p = this.addPlayer(d.id, d.team === 1 ? 'red' : d.team === 2 ? 'blue' : 'spec');
+          p = this.addPlayer(d.id, teamStr);
+        } else if (this.playerTeams.get(d.id) !== teamStr) {
+          this.playerTeams.set(d.id, teamStr);
+          p.cGroup = teamStr === 'red' ? COLLISION_GROUP_RED : COLLISION_GROUP_BLUE;
         }
         p.pos.set(d.x, d.y);
+        p.prevPos.set(d.x, d.y);
         p.vel.set(d.vx, d.vy);
         if (d.stamina !== undefined) p.stamina = d.stamina;
         p.kicking = ((d.flags ?? 0) & (1 << 0)) !== 0;
         p.isDashing = ((d.flags ?? 0) & (1 << 1)) !== 0;
         p.isTurbo = ((d.flags ?? 0) & (1 << 4)) !== 0;
         p.isTyping = ((d.flags ?? 0) & (1 << 5)) !== 0;
+      }
+    }
+    for (const existingId of Array.from(this.players.keys())) {
+      if (!seenPlayerIds.has(existingId)) {
+        this.removePlayer(existingId);
       }
     }
   }
