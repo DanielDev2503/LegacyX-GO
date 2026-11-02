@@ -573,6 +573,12 @@ export class EngineInstance {
             this.ball.vel.x = nx * (effectiveKick + existingBallAlongKick * 0.25);
             this.ball.vel.y = ny * (effectiveKick + existingBallAlongKick * 0.25);
 
+            const minKickDist = player.radius + this.ball.radius;
+            if (dist < minKickDist) {
+              this.ball.pos.x = player.pos.x + nx * minKickDist;
+              this.ball.pos.y = player.pos.y + ny * minKickDist;
+            }
+
             const bSpeedAfterKick = Math.hypot(this.ball.vel.x, this.ball.vel.y);
             this.ball.isPowerShot = bSpeedAfterKick >= baseKickCfg * 1.12;
 

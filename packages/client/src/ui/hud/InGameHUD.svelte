@@ -176,10 +176,53 @@
 
   function focusChat() {
     isChatInputActive = true;
-    setTimeout(() => {
-      chatInputEl?.focus();
-    }, 50);
+    gameUI.isChatFocused = true;
+    chatInputEl?.focus();
   }
+
+  $effect(() => {
+    const handleGlobalCaptureKeydown = (e: KeyboardEvent) => {
+      if (e.key === 'Enter' || e.code === 'Enter' || e.code === 'NumpadEnter') {
+        const activeEl = document.activeElement;
+        if (activeEl === chatInputEl) {
+          return;
+        }
+        const isOtherInput = activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA');
+        if (isOtherInput) {
+          return;
+        }
+        if (
+          activeEl &&
+          (activeEl.tagName === 'BUTTON' ||
+            activeEl.tagName === 'SELECT' ||
+            activeEl.getAttribute('role') === 'button')
+        ) {
+          (activeEl as HTMLElement).blur();
+        }
+
+        const modal = gameUI.activeModal;
+        const isAllowedModal =
+          modal === 'NONE' ||
+          modal === 'TEAM_MANAGEMENT' ||
+          modal === 'TEAM_SELECT' ||
+          modal === 'teamSelect' ||
+          modal === 'STATS' ||
+          modal === 'stats';
+        const isAllowedSlide = gameUI.activeSlide === 'STATS' || gameUI.activeSlide === 'MENU';
+
+        if (isAllowedModal || isAllowedSlide) {
+          e.preventDefault();
+          e.stopPropagation();
+          focusChat();
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleGlobalCaptureKeydown, true);
+    return () => {
+      window.removeEventListener('keydown', handleGlobalCaptureKeydown, true);
+    };
+  });
 
   function toggleAudio() {
     soundFX.playUIClick();
@@ -222,25 +265,6 @@
     window.addEventListener('pointercancel', onPointerUp);
   }
 </script>
-
-<svelte:window
-  onkeydown={(e) => {
-    // Si presiona Enter o NumpadEnter y no está escribiendo en el chat ni en otro input
-    if (e.key === 'Enter' || e.code === 'NumpadEnter') {
-      const activeEl = document.activeElement;
-      if (activeEl === chatInputEl) {
-        return;
-      }
-      const isOtherInputFocused = activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA');
-      if (!isOtherInputFocused) {
-        if (gameUI.activeModal === 'NONE' || gameUI.activeModal === 'TEAM_MANAGEMENT' || gameUI.activeModal === 'teamSelect') {
-          e.preventDefault();
-          focusChat();
-        }
-      }
-    }
-  }}
-/>
 
 <div class="hud-root">
   <!-- ========================================== -->
@@ -383,10 +407,28 @@
       <div class="vs-card">
         <div
           class="vs-team-half vs-local"
-          style="--team-c1: {redKitPrimary}; --team-c2: {redKitSecondary}; --team-c3: {redKitTertiary};"
+          style="
+            background: linear-gradient(90deg, {redKitPrimary} 0%, {redKitPrimary} 25%, {redKitSecondary} 75%, {redKitSecondary} 100%);
+            border: 2px solid {redKitTertiary};
+            box-shadow: 0 0 16px {redKitPrimary}66, inset 0 0 8px {redKitPrimary}33;
+            color: {redKitTertiary};
+          "
         >
-          <span class="vs-team-tag">{redTeamTag}</span>
-          <span class="vs-team-name">{redTeamName}</span>
+          <span
+            class="vs-team-tag"
+            style="
+              color: {redKitTertiary};
+              border-color: {redKitTertiary};
+              {redHasOutline ? '-webkit-text-stroke: 3px #000000; text-stroke: 3px #000000; paint-order: stroke fill; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);' : '-webkit-text-stroke: 0px transparent; text-shadow: none;'}
+            "
+          >{redTeamTag}</span>
+          <span
+            class="vs-team-name"
+            style="
+              color: {redKitTertiary};
+              {redHasOutline ? '-webkit-text-stroke: 3px #000000; text-stroke: 3px #000000; paint-order: stroke fill; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);' : '-webkit-text-stroke: 0px transparent; text-shadow: none;'}
+            "
+          >{redTeamName}</span>
         </div>
 
         <div class="vs-bolt-badge">
@@ -397,10 +439,28 @@
 
         <div
           class="vs-team-half vs-visitor"
-          style="--team-c1: {blueKitPrimary}; --team-c2: {blueKitSecondary}; --team-c3: {blueKitTertiary};"
+          style="
+            background: linear-gradient(90deg, {blueKitPrimary} 0%, {blueKitPrimary} 25%, {blueKitSecondary} 75%, {blueKitSecondary} 100%);
+            border: 2px solid {blueKitTertiary};
+            box-shadow: 0 0 16px {blueKitPrimary}66, inset 0 0 8px {blueKitPrimary}33;
+            color: {blueKitTertiary};
+          "
         >
-          <span class="vs-team-name">{blueTeamName}</span>
-          <span class="vs-team-tag">{blueTeamTag}</span>
+          <span
+            class="vs-team-name"
+            style="
+              color: {blueKitTertiary};
+              {blueHasOutline ? '-webkit-text-stroke: 3px #000000; text-stroke: 3px #000000; paint-order: stroke fill; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);' : '-webkit-text-stroke: 0px transparent; text-shadow: none;'}
+            "
+          >{blueTeamName}</span>
+          <span
+            class="vs-team-tag"
+            style="
+              color: {blueKitTertiary};
+              border-color: {blueKitTertiary};
+              {blueHasOutline ? '-webkit-text-stroke: 3px #000000; text-stroke: 3px #000000; paint-order: stroke fill; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);' : '-webkit-text-stroke: 0px transparent; text-shadow: none;'}
+            "
+          >{blueTeamTag}</span>
         </div>
       </div>
     </div>
@@ -1042,11 +1102,12 @@
   .vs-card {
     display: flex;
     align-items: stretch;
-    background: rgba(10, 16, 26, 0.96);
-    border: 1.5px solid rgba(0, 229, 255, 0.45);
+    gap: 0.5rem;
+    background: transparent;
+    border: none;
     border-radius: 0.75rem;
-    overflow: hidden;
-    box-shadow: 0 10px 36px rgba(0, 0, 0, 0.8), 0 0 28px rgba(0, 229, 255, 0.22);
+    overflow: visible;
+    box-shadow: none;
     animation: bannerElasticIn 0.34s cubic-bezier(0.22, 1, 0.36, 1);
   }
 
@@ -1056,13 +1117,12 @@
     gap: 0.65rem;
     padding: 0.85rem 1.4rem;
     min-width: 190px;
-    background: linear-gradient(135deg, var(--team-c1) 0%, rgba(10, 16, 26, 0.96) 92%);
-    box-shadow: inset 0 0 22px rgba(0, 0, 0, 0.45);
+    border-radius: 0.5rem;
+    box-sizing: border-box;
   }
 
   .vs-team-half.vs-visitor {
     justify-content: flex-end;
-    background: linear-gradient(225deg, var(--team-c1) 0%, rgba(10, 16, 26, 0.96) 92%);
   }
 
   .vs-team-tag {
@@ -1073,8 +1133,7 @@
     padding: 0.22rem 0.55rem;
     border-radius: 0.32rem;
     background: #080e18;
-    border: 1px solid var(--team-c2);
-    color: var(--team-c3);
+    border: 1.5px solid currentColor;
   }
 
   .vs-team-name {
@@ -1082,9 +1141,7 @@
     font-size: 1.15rem;
     font-weight: 900;
     letter-spacing: 0.06em;
-    color: #ffffff;
     text-transform: uppercase;
-    text-shadow: 0 2px 6px rgba(0, 0, 0, 0.85);
   }
 
   .vs-bolt-badge {
@@ -1094,8 +1151,9 @@
     gap: 0.3rem;
     padding: 0 1.1rem;
     background: #080e18;
-    border-left: 1px solid rgba(0, 229, 255, 0.35);
-    border-right: 1px solid rgba(0, 229, 255, 0.35);
+    border: 1.5px solid rgba(0, 229, 255, 0.45);
+    border-radius: 0.5rem;
+    box-shadow: 0 0 16px rgba(0, 229, 255, 0.25);
   }
 
   .vs-bolt {

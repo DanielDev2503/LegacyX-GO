@@ -954,9 +954,13 @@ class GameUIStore {
         if (visitorKit.tag === 'VIS') visitorKit.tag = 'BLUE';
         if (visitorKit.primaryColor === '#3498db') visitorKit.primaryColor = '#00e5ff';
 
+        const rawZoom = typeof parsed.cameraZoom === 'number' ? parsed.cameraZoom : DEFAULT_SETTINGS.cameraZoom;
+        const clampedZoom = Math.max(0.40, Math.min(2.50, rawZoom));
+
         this.settings = {
           ...DEFAULT_SETTINGS,
           ...parsed,
+          cameraZoom: clampedZoom,
           localKit,
           visitorKit,
           emoteTriggers: Array.isArray(parsed.emoteTriggers) && parsed.emoteTriggers.length > 0

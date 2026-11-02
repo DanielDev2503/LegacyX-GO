@@ -251,7 +251,8 @@ export class DiscRenderer {
     const activeTurboIds = new Set<number>();
     for (const disc of discs) {
       if (disc.team !== 0) {
-        const renderD = this.getRenderDisc(disc, true);
+        const isRemote = disc.id !== localDiscId;
+        const renderD = this.getRenderDisc(disc, isRemote);
         if (disc.isDashing) {
           this.recordDashGhost(renderD);
         }
@@ -299,14 +300,16 @@ export class DiscRenderer {
 
     for (const disc of discs) {
       if (disc.team !== 0) {
-        const renderD = this.getRenderDisc(disc, true);
+        const isRemote = disc.id !== localDiscId;
+        const renderD = this.getRenderDisc(disc, isRemote);
         this.renderStaminaBar(ctx, renderD);
       }
     }
 
     for (const disc of discs) {
       if (disc.team !== 0) {
-        const renderD = this.getRenderDisc(disc, true);
+        const isRemote = disc.id !== localDiscId;
+        const renderD = this.getRenderDisc(disc, isRemote);
         const info = this.playerInfos.get(disc.id);
         this.renderPlayerDisc(ctx, renderD, disc.id === localDiscId, false, info?.nickname, info);
       }

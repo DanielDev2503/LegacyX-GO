@@ -852,21 +852,58 @@
                         </svg>
                       </span>
                     </span>
-                    <strong class="param-val">{gameUI.settings.cameraZoom.toFixed(2)}x</strong>
+                    <strong class="param-val">{gameUI.settings.cameraZoom.toFixed(2)}x ({Math.round(gameUI.settings.cameraZoom * 100)}%)</strong>
                   </div>
-                  <input
-                    type="range"
-                    class="custom-slider"
-                    min="0.7"
-                    max="1.5"
-                    step="0.05"
-                    style="--val-percent: {((gameUI.settings.cameraZoom - 0.7) / 0.8) * 100}%;"
-                    value={gameUI.settings.cameraZoom}
-                    oninput={(e) => {
-                      gameUI.settings.cameraZoom = Number((e.currentTarget as HTMLInputElement).value);
-                      gameUI.saveSettings();
-                    }}
-                  />
+                  <div class="zoom-stepper-control flex items-center gap-2">
+                    <button
+                      type="button"
+                      class="zoom-step-btn"
+                      aria-label="Reducir zoom 0.05x"
+                      disabled={gameUI.settings.cameraZoom <= 0.40}
+                      onclick={() => {
+                        const next = Math.max(0.40, Math.round((gameUI.settings.cameraZoom - 0.05) * 100) / 100);
+                        gameUI.settings.cameraZoom = next;
+                        gameUI.saveSettings();
+                      }}
+                    >-</button>
+                    <input
+                      type="range"
+                      class="custom-slider"
+                      min="0.40"
+                      max="2.50"
+                      step="0.05"
+                      style="--val-percent: {((gameUI.settings.cameraZoom - 0.40) / (2.50 - 0.40)) * 100}%;"
+                      value={gameUI.settings.cameraZoom}
+                      oninput={(e) => {
+                        const val = Math.max(0.40, Math.min(2.50, Number((e.currentTarget as HTMLInputElement).value)));
+                        gameUI.settings.cameraZoom = val;
+                        gameUI.saveSettings();
+                      }}
+                    />
+                    <button
+                      type="button"
+                      class="zoom-step-btn"
+                      aria-label="Aumentar zoom 0.05x"
+                      disabled={gameUI.settings.cameraZoom >= 2.50}
+                      onclick={() => {
+                        const next = Math.min(2.50, Math.round((gameUI.settings.cameraZoom + 0.05) * 100) / 100);
+                        gameUI.settings.cameraZoom = next;
+                        gameUI.saveSettings();
+                      }}
+                    >+</button>
+                  </div>
+                  <div class="zoom-presets-row flex flex-wrap gap-1 mt-1">
+                    {#each [0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 2.5] as preset}
+                      <button
+                        type="button"
+                        class="zoom-preset-chip {Math.abs(gameUI.settings.cameraZoom - preset) < 0.02 ? 'active' : ''}"
+                        onclick={() => {
+                          gameUI.settings.cameraZoom = preset;
+                          gameUI.saveSettings();
+                        }}
+                      >{preset}x</button>
+                    {/each}
+                  </div>
                 </div>
 
                 <!-- Extrapolación (0 - 250 ms) -->
@@ -3665,6 +3702,71 @@
     cursor: not-allowed;
     border-color: rgba(255, 255, 255, 0.2);
     color: #64748b;
+  }
+
+  /* Controles numéricos estilizados para Zoom (0.40x - 2.50x) */
+  .zoom-stepper-control {
+    width: 100%;
+  }
+
+  .zoom-step-btn {
+    width: 1.45rem;
+    height: 1.45rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 0.25rem;
+    border: 1px solid rgba(0, 229, 255, 0.25);
+    background: rgba(0, 229, 255, 0.1);
+    color: #00e5ff;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.85rem;
+    font-weight: 800;
+    cursor: pointer;
+    line-height: 1;
+    transition: all 0.15s ease;
+    flex-shrink: 0;
+  }
+
+  .zoom-step-btn:hover:not(:disabled) {
+    background: #00e5ff;
+    color: #050811;
+    box-shadow: 0 0 8px rgba(0, 229, 255, 0.45);
+  }
+
+  .zoom-step-btn:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+  }
+
+  .zoom-presets-row {
+    width: 100%;
+  }
+
+  .zoom-preset-chip {
+    padding: 0.15rem 0.45rem;
+    font-size: 0.72rem;
+    font-family: 'JetBrains Mono', monospace;
+    font-weight: 700;
+    border-radius: 0.25rem;
+    border: 1px solid rgba(0, 229, 255, 0.2);
+    background: rgba(0, 229, 255, 0.06);
+    color: #94a3b8;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+
+  .zoom-preset-chip:hover {
+    background: rgba(0, 229, 255, 0.18);
+    color: #00e5ff;
+    border-color: rgba(0, 229, 255, 0.4);
+  }
+
+  .zoom-preset-chip.active {
+    background: #00e5ff;
+    color: #050811;
+    border-color: #00e5ff;
+    box-shadow: 0 0 8px rgba(0, 229, 255, 0.45);
   }
 
   /* Controles numéricos estilizados para Extrapolación (0 - 250 ms) */

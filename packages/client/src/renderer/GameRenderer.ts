@@ -485,6 +485,7 @@ export class GameRenderer {
     }
 
     // 3-6. Trails, Stamina Rings, Players, Ball
+    this.resolveGeometricNonPenetration(this.scratchDiscSnapshots);
     this.discRenderer.playerInfos = this.playerInfos;
     this.discRenderer.render(ctx, this.scratchDiscSnapshots, localPlayerId);
 
@@ -609,6 +610,7 @@ export class GameRenderer {
     }
 
     if (snapshot.discs) {
+      this.resolveGeometricNonPenetration(snapshot.discs);
       this.discRenderer.draw(ctx, snapshot.discs, localDiscId);
     }
     this.stadiumRenderer.renderPosts(ctx, this.stadium);
@@ -902,6 +904,38 @@ export class GameRenderer {
     ctx.fillText(subtitle, 0, yOffset + 24);
 
     ctx.restore();
+  }
+
+  private resolveGeometricNonPenetration(discs: DiscSnapshot[]): void {
+    const len = discs.length;
+    if (len < 2) return;
+    for (let pass = 0; pass < 2; pass++) {
+      for (let i = 0; i < len; i++) {
+        const d1 = discs[i]!;
+        const r1 = d1.radius || (d1.team === 0 ? this.discRenderer.ballRadius : this.discRenderer.playerRadius);
+        const w1 = d1.team === 0 ? 1.0 : 0.5;
+        for (let j = i + 1; j < len; j++) {
+          const d2 = discs[j]!;
+          const r2 = d2.radius || (d2.team === 0 ? this.discRenderer.ballRadius : this.discRenderer.playerRadius);
+          const w2 = d2.team === 0 ? 1.0 : 0.5;
+          const minDist = r1 + r2;
+          const dx = d2.x - d1.x;
+          const dy = d2.y - d1.y;
+          const distSq = dx * dx + dy * dy;
+          if (distSq < minDist * minDist) {
+            const dist = Math.sqrt(distSq);
+            const overlap = minDist - dist;
+            const nx = dist > 1e-6 ? dx / dist : 1;
+            const ny = dist > 1e-6 ? dy / dist : 0;
+            const wSum = w1 + w2;
+            d1.x -= nx * (overlap * (w1 / wSum));
+            d1.y -= ny * (overlap * (w1 / wSum));
+            d2.x += nx * (overlap * (w2 / wSum));
+            d2.y += ny * (overlap * (w2 / wSum));
+          }
+        }
+      }
+    }
   }
 
   public destroy(): void {

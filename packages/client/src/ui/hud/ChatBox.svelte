@@ -20,6 +20,54 @@
     }
   });
 
+  $effect(() => {
+    const handleGlobalCaptureKeydown = (e: KeyboardEvent) => {
+      if (e.key === 'Enter' || e.code === 'Enter' || e.code === 'NumpadEnter') {
+        const activeEl = document.activeElement;
+        if (activeEl === inputRef) {
+          e.preventDefault();
+          e.stopPropagation();
+          sendChat();
+          return;
+        }
+        const isOtherInput = activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA');
+        if (isOtherInput) {
+          return;
+        }
+        if (
+          activeEl &&
+          (activeEl.tagName === 'BUTTON' ||
+            activeEl.tagName === 'SELECT' ||
+            activeEl.getAttribute('role') === 'button')
+        ) {
+          (activeEl as HTMLElement).blur();
+        }
+
+        const modal = gameUI.activeModal;
+        const isAllowedModal =
+          modal === 'NONE' ||
+          modal === 'TEAM_MANAGEMENT' ||
+          modal === 'TEAM_SELECT' ||
+          modal === 'teamSelect' ||
+          modal === 'STATS' ||
+          modal === 'stats';
+        const isAllowedSlide = gameUI.activeSlide === 'STATS' || gameUI.activeSlide === 'MENU';
+
+        if (isAllowedModal || isAllowedSlide) {
+          e.preventDefault();
+          e.stopPropagation();
+          inputRef?.focus();
+          gameUI.isChatFocused = true;
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleGlobalCaptureKeydown, true);
+    return () => {
+      window.removeEventListener('keydown', handleGlobalCaptureKeydown, true);
+    };
+  });
+
   function sendChat() {
     const text = chatInput.trim();
     if (text.length > 0) {

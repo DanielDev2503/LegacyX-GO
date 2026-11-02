@@ -394,6 +394,8 @@ export class GoalNet {
     if (!ball || ball.isBall === false) return;
 
     const rBall = ball.radius ?? 5.8;
+    // Contacto exacto: radio del balón + medio grosor de la cuerda (lineWidth 1.0 → 0.5). Sin padding extra.
+    const contactDist = rBall + 0.5;
     const signX = this.mouthX < 0 ? -1 : 1;
 
     const minX = Math.min(this.mouthX, this.rearLimitX) - rBall - 35;
@@ -408,13 +410,13 @@ export class GoalNet {
     const xMinSide = Math.min(this.mouthX, this.backX) - rBall;
     const xMaxSide = Math.max(this.mouthX, this.backX) + rBall;
     if (ball.pos.x >= xMinSide && ball.pos.x <= xMaxSide) {
-      if (Math.abs(ball.pos.y - this.topY) < rBall) {
-        ball.pos.y = this.topY + rBall;
+      if (Math.abs(ball.pos.y - this.topY) < contactDist) {
+        ball.pos.y = this.topY + contactDist;
         if (ball.vel.y < 0) ball.vel.y = -ball.vel.y * 0.35;
         ball.vel.x = signX * (Math.abs(ball.vel.x) * 0.7 + 2.5);
       }
-      if (Math.abs(ball.pos.y - this.bottomY) < rBall) {
-        ball.pos.y = this.bottomY - rBall;
+      if (Math.abs(ball.pos.y - this.bottomY) < contactDist) {
+        ball.pos.y = this.bottomY - contactDist;
         if (ball.vel.y > 0) ball.vel.y = -ball.vel.y * 0.35;
         ball.vel.x = signX * (Math.abs(ball.vel.x) * 0.7 + 2.5);
       }
@@ -554,16 +556,27 @@ export class GoalNet {
     ctx.lineTo(this.posX[N - 1], this.posY[N - 1]);
     ctx.stroke();
 
-    // 2. Cortina de fondo (curva continua cuadrática por puntos medios)
+    // 2. Cortina de fondo (Catmull-Rom spline continuo que pasa exactamente por todos los nodos físicos)
     ctx.beginPath();
     ctx.moveTo(this.posX[0], this.posY[0]);
-    if (typeof ctx.quadraticCurveTo === 'function') {
-      for (let i = 1; i < N - 1; i++) {
-        const xc = (this.posX[i] + this.posX[i + 1]) * 0.5;
-        const yc = (this.posY[i] + this.posY[i + 1]) * 0.5;
-        ctx.quadraticCurveTo(this.posX[i], this.posY[i], xc, yc);
+    if (typeof ctx.bezierCurveTo === 'function') {
+      for (let i = 0; i < N - 1; i++) {
+        const p0x = i > 0 ? this.posX[i - 1] : 2 * this.posX[0] - this.posX[1];
+        const p0y = i > 0 ? this.posY[i - 1] : 2 * this.posY[0] - this.posY[1];
+        const p1x = this.posX[i];
+        const p1y = this.posY[i];
+        const p2x = this.posX[i + 1];
+        const p2y = this.posY[i + 1];
+        const p3x = i + 2 < N ? this.posX[i + 2] : 2 * this.posX[N - 1] - this.posX[N - 2];
+        const p3y = i + 2 < N ? this.posY[i + 2] : 2 * this.posY[N - 1] - this.posY[N - 2];
+
+        const cp1x = p1x + (p2x - p0x) / 6;
+        const cp1y = p1y + (p2y - p0y) / 6;
+        const cp2x = p2x - (p3x - p1x) / 6;
+        const cp2y = p2y - (p3y - p1y) / 6;
+
+        ctx.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, p2x, p2y);
       }
-      ctx.lineTo(this.posX[N - 1], this.posY[N - 1]);
     } else {
       for (let i = 1; i < N; i++) ctx.lineTo(this.posX[i], this.posY[i]);
     }

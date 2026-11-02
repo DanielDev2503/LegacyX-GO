@@ -20,6 +20,10 @@ export interface PhysicsWorldConfig {
 }
 
 export class PhysicsWorld {
+  /** Substeps mínimos por tick de 60 Hz (subDt = dt / 4). */
+  public static readonly MIN_SUBSTEPS = 4;
+  /** Pasadas completas del solver de colisiones por substep. */
+  public static readonly SOLVER_ITERATIONS = 3;
   public discs: Disc[] = [];
   public segments: Segment[] = [];
   public goalNets: GoalNet[] = [];
@@ -160,7 +164,6 @@ export class PhysicsWorld {
     // 1. Detección de velocidad máxima y cálculo de substepping CCD
     let maxSpeedSq = 0;
     let minRadius = 10;
-    let hasDashingDisc = false;
     let ball: Disc | undefined;
 
     for (let i = 0; i < discCount; i++) {
@@ -169,9 +172,6 @@ export class PhysicsWorld {
         ball = d;
       }
       if (d.invMass > 0) {
-        if (d.isDashing) {
-          hasDashingDisc = true;
-        }
         const speedSq = d.vel.lenSq();
         if (speedSq > maxSpeedSq) {
           maxSpeedSq = speedSq;
@@ -188,7 +188,7 @@ export class PhysicsWorld {
     // Umbral crítico: ningún desplazamiento de tick debe ser superior a 0.45 veces el radio menor (CCD)
     const criticalThreshold = minRadius * 0.45;
     const neededSubsteps = Math.ceil(maxDisplacement / criticalThreshold);
-    const minSubsteps = hasDashingDisc ? 4 : 1;
+    const minSubsteps = PhysicsWorld.MIN_SUBSTEPS;
     const substeps = clamp(neededSubsteps, minSubsteps, Math.max(this.maxSubsteps, minSubsteps));
     const subDt = actualDt / substeps;
 
@@ -206,21 +206,25 @@ export class PhysicsWorld {
 
       this.onSubstep?.(subDt);
 
-      // Colisiones Disco vs Disco
-      for (let i = 0; i < discCount; i++) {
-        const d1 = this.discs[i];
-        for (let j = i + 1; j < discCount; j++) {
-          const d2 = this.discs[j];
-          resolveDiscDiscCollision(d1, d2, this.onCollision);
-        }
-      }
+      // Solver rígido multi-pasada: depenetración posicional 100% (disco-disco, disco-poste, disco-segmento).
+      // Varias pasadas resuelven contactos encadenados (sándwich jugador-balón-pared) sin solape residual.
+      // onCollision sólo se emite en la primera pasada para no duplicar eventos de toque/sonido.
+      for (let pass = 0; pass < PhysicsWorld.SOLVER_ITERATIONS; pass++) {
+        const onCollision = pass === 0 ? this.onCollision : undefined;
 
-      // Colisiones Disco vs Segmento
-      for (let i = 0; i < discCount; i++) {
-        const d = this.discs[i];
-        if (d.invMass > 0) {
-          for (let k = 0; k < segCount; k++) {
-            resolveDiscSegmentCollision(d, this.segments[k], this.onCollision, this.kickoffContext);
+        for (let i = 0; i < discCount; i++) {
+          const d1 = this.discs[i];
+          for (let j = i + 1; j < discCount; j++) {
+            resolveDiscDiscCollision(d1, this.discs[j], onCollision);
+          }
+        }
+
+        for (let i = 0; i < discCount; i++) {
+          const d = this.discs[i];
+          if (d.invMass > 0) {
+            for (let k = 0; k < segCount; k++) {
+              resolveDiscSegmentCollision(d, this.segments[k], onCollision, this.kickoffContext);
+            }
           }
         }
       }

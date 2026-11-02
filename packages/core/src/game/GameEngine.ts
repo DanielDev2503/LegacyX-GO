@@ -253,10 +253,11 @@ export class GameEngine {
       }
 
       if (this.pendingShot && this.pendingShot.shooterTeam !== playerTeam) {
-        const ballX = this.ball.pos.x;
+        const disc = this.playerDiscs.get(playerId);
+        const interceptX = disc ? disc.pos.x : this.ball.pos.x;
         const isRedDefendingLeft = playerTeam === 'red';
         const isBlueDefendingRight = playerTeam === 'blue';
-        const inOwnHalf = (isRedDefendingLeft && ballX <= 0) || (isBlueDefendingRight && ballX >= 0);
+        const inOwnHalf = (isRedDefendingLeft && interceptX <= 0) || (isBlueDefendingRight && interceptX >= 0);
 
         if (inOwnHalf) {
           stats.saves++;
@@ -809,6 +810,12 @@ export class GameEngine {
           const dist = Math.sqrt(distSq);
           const kickDirX = dist > 1e-6 ? diffX / dist : 1;
           const kickDirY = dist > 1e-6 ? diffY / dist : 0;
+
+          const minKickDist = disc.radius + this.ball.radius;
+          if (dist < minKickDist) {
+            this.ball.pos.x = disc.pos.x + kickDirX * minKickDist;
+            this.ball.pos.y = disc.pos.y + kickDirY * minKickDist;
+          }
 
           const pVelAlongKick = Math.max(0, disc.vel.x * kickDirX + disc.vel.y * kickDirY);
           let effectiveKickStrength = kickStrength + pVelAlongKick * 0.35;

@@ -117,6 +117,8 @@ export class ClientPredictionReconciler {
 
     const prevPredictedX = localDisc.pos.x;
     const prevPredictedY = localDisc.pos.y;
+    const prevVx = localDisc.vel.x;
+    const prevVy = localDisc.vel.y;
 
     // 2. Cap pending inputs to MAX_REPLAY_TICKS (60 ticks = 1.0s)
     if (this.inputBuffer.length > ClientPredictionReconciler.MAX_REPLAY_TICKS) {
@@ -135,11 +137,14 @@ export class ClientPredictionReconciler {
     // 4. Compute post-replay residual error at current client tick and absorb into visualOffset
     const resimDisc = engine.players.get(localDiscId);
     if (resimDisc) {
-      const errX = prevPredictedX - resimDisc.pos.x;
-      const errY = prevPredictedY - resimDisc.pos.y;
+      let errX = prevPredictedX - resimDisc.pos.x;
+      let errY = prevPredictedY - resimDisc.pos.y;
       const postDistSq = errX * errX + errY * errY;
 
-      if (postDistSq <= ClientPredictionReconciler.ERROR_THRESHOLD_SQ) {
+      // Deadband: discrepancy < 3.5 px (12.25 px^2) -> ignore to prevent micro-jitter
+      if (postDistSq < 12.25) {
+        this.visualOffset.x = 0;
+        this.visualOffset.y = 0;
         return { replayed: this.inputBuffer.length > 0, hardSnapped: false };
       }
 
@@ -149,8 +154,28 @@ export class ClientPredictionReconciler {
         return { replayed: true, hardSnapped: true };
       }
 
-      this.visualOffset.x += errX;
-      this.visualOffset.y += errY;
+      // Anti-slingshot guard:
+      // When movement keys released (inputMask & 0x0F === 0), if correction opposes recent movement (< 18px),
+      // cancel that opposing pullback component so disc glides to rest with pure friction (0.96)
+      const latestInput = this.inputBuffer.length > 0 ? this.inputBuffer[this.inputBuffer.length - 1] : null;
+      const latestMask = latestInput ? (latestInput.inputMask ?? latestInput.mask ?? 0) : 0;
+      const isMovementReleased = (latestMask & 0x0f) === 0;
+
+      if (isMovementReleased && postDistSq < 324) {
+        const vSpeed = Math.hypot(prevVx, prevVy);
+        if (vSpeed > 1e-4) {
+          const uVx = prevVx / vSpeed;
+          const uVy = prevVy / vSpeed;
+          const dot = errX * uVx + errY * uVy;
+          if (dot < 0) {
+            errX -= dot * uVx;
+            errY -= dot * uVy;
+          }
+        }
+      }
+
+      this.visualOffset.x = errX;
+      this.visualOffset.y = errY;
       const totalOffsetSq =
         this.visualOffset.x * this.visualOffset.x + this.visualOffset.y * this.visualOffset.y;
       if (totalOffsetSq > ClientPredictionReconciler.CATASTROPHIC_ERROR_SQ) {
