@@ -4,6 +4,9 @@ export interface BufferedClientInput {
   tick: number;
   mask: number;
   inputMask?: number;
+  dirX?: number;
+  dirY?: number;
+  useMouseDir?: boolean;
   curve?: { x: number; y: number };
   isTurbo?: boolean;
   triggerDash?: boolean;
@@ -28,7 +31,7 @@ export class ClientPredictionReconciler {
 
   public inputBuffer: BufferedClientInput[] = [];
   public visualOffset: { x: number; y: number } = { x: 0, y: 0 };
-  private readonly replayMap = new Map<number, { inputMask: number }>();
+  private readonly replayMap = new Map<number, { inputMask: number; dirX?: number; dirY?: number; useMouseDir?: boolean }>();
 
   public get pendingInputs(): BufferedClientInput[] {
     return this.inputBuffer;
@@ -130,7 +133,12 @@ export class ClientPredictionReconciler {
     this.replayMap.clear();
     for (let i = 0; i < this.inputBuffer.length; i++) {
       const pending = this.inputBuffer[i]!;
-      this.replayMap.set(localDiscId, { inputMask: pending.inputMask ?? pending.mask ?? 0 });
+      this.replayMap.set(localDiscId, {
+        inputMask: pending.inputMask ?? pending.mask ?? 0,
+        dirX: pending.dirX,
+        dirY: pending.dirY,
+        useMouseDir: pending.useMouseDir
+      });
       engine.step(this.replayMap, true);
     }
 

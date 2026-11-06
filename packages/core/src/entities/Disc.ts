@@ -60,6 +60,11 @@ export class Disc {
   // Mecánicas de Jugador (escalares para colisiones y snapshots)
   public stamina: number = 100;
   public isDashing: boolean = false;
+  public dashTicksRemaining: number = 0;
+  public dashCooldownTimer: number = 0;
+  public dashDirX: number = 0;
+  public dashDirY: number = 0;
+  public prevDashState: boolean = false;
   public isTurbo: boolean = false;
   public isTyping: boolean = false;
 

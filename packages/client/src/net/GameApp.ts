@@ -16,6 +16,8 @@ export interface CreateRoomParams {
   scoreLimit?: number;
   teamsLocked?: boolean;
   allowCaptainKitSwitch?: boolean;
+  roomType?: 'casual' | 'ranked';
+  countryCode?: string;
 }
 
 export interface RoomConfigPatch {
@@ -75,6 +77,14 @@ export class GameApp {
   public currentRoomConfig: CreateRoomParams | null = null;
   /** Inputs de jugadores remotos recibidos por el Host (playerId → máscara). */
   public remoteInputs = new Map<number, PlayerInput>();
+  public onScoreEvent: ((event: {
+    playerId: number;
+    points: number;
+    reason: string;
+    x: number;
+    y: number;
+    category?: string;
+  }) => void) | null = null;
 
   constructor(signaling: SignalingClient = sharedSignaling) {
     this.signaling = signaling;
@@ -357,6 +367,9 @@ export class GameApp {
         maxPlayers,
         isPublic,
         password,
+        roomType: params.roomType ?? gameUI.roomType,
+        countryCode: params.countryCode,
+        hostPingMs: gameUI.realPing ?? 20,
         config: {
           name: cleanName,
           stadiumId: stadium,
@@ -364,6 +377,9 @@ export class GameApp {
           maxPlayers,
           isPrivate: !isPublic,
           password,
+          roomType: params.roomType ?? gameUI.roomType,
+          countryCode: params.countryCode,
+          hostPingMs: gameUI.realPing ?? 20,
           timeLimit: params.timeLimit ?? 3,
           scoreLimit: params.scoreLimit ?? 3,
           teamsLocked: params.teamsLocked ?? false
@@ -457,8 +473,8 @@ export class GameApp {
       }
     };
 
-    host.onPlayerInput = (playerId, inputMask) => {
-      this.remoteInputs.set(playerId, { inputMask });
+    host.onPlayerInput = (playerId, inputMask, _tick, dirX, dirY, useMouseDir) => {
+      this.remoteInputs.set(playerId, { inputMask, dirX, dirY, useMouseDir });
     };
 
     host.onChatMessage = (sender, text, team, id) => this.pushChat(sender, text, team, false, id);
@@ -628,6 +644,10 @@ export class GameApp {
 
     client.onMatchBanner = (banner) => {
       gameUI.applyMatchBanner(banner as any);
+    };
+
+    client.onScoreEvent = (evt) => {
+      this.onScoreEvent?.(evt);
     };
 
     client.onRoomClosed = () => this.handleRemoteRoomClosed();

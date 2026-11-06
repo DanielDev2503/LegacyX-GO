@@ -70,6 +70,7 @@ export class GameRenderer {
   public offscreenIndicatorsEnabled: boolean = true;
   public goalShakeEnabled: boolean = true;
   public screenShakeEnabled: boolean = true;
+  public isFocusingBall: boolean = false;
 
   // Minimap settings
   public minimapEnabled: boolean = true;
@@ -280,12 +281,15 @@ export class GameRenderer {
       const alpha = Math.max(0, ft.life / ft.maxLife);
 
       ctx.save();
-      ctx.font = '700 13px "Inter", "Segoe UI", sans-serif';
+      ctx.globalAlpha = alpha;
+      ctx.font = '700 13px "JetBrains Mono", "Inter", "Segoe UI", sans-serif';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
 
       if (ft.color === '#ff4757') {
         ctx.fillStyle = `rgba(255, 71, 87, ${alpha})`;
+      } else if (ft.color) {
+        ctx.fillStyle = ft.color;
       } else {
         ctx.fillStyle = `rgba(255, 215, 0, ${alpha})`;
       }
@@ -410,8 +414,10 @@ export class GameRenderer {
       snapDisc.spin = d1.spin ?? 0;
     }
 
-    // Dual-target camera with 180px leash
-    if (hasLocalPlayer && hasBall) {
+    // Dual-target camera with 180px leash (or direct ball focus when focusBall is held)
+    if (this.isFocusingBall && hasBall) {
+      this.camera.follow(ballX, ballY);
+    } else if (hasLocalPlayer && hasBall) {
       this.camera.followDual(localPlayerX, localPlayerY, ballX, ballY, 0.25, 180);
     } else if (hasLocalPlayer) {
       this.camera.follow(localPlayerX, localPlayerY);

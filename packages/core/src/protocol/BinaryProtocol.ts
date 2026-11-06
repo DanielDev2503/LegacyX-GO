@@ -34,6 +34,8 @@ export const INPUT_FLAG_DASH = 1 << 6;
 export const INPUT_FLAG_MAGNUS_LEFT = 1 << 7;
 export const INPUT_FLAG_MAGNUS_RIGHT = 1 << 8;
 export const INPUT_FLAG_TYPING = 1 << 9;
+export const INPUT_FLAG_MOUSE_DIR = 1 << 10;
+export const INPUT_FLAG_FOCUS_BALL = 1 << 11;
 
 export interface PlayerInput {
   tick?: number;
@@ -43,6 +45,8 @@ export interface PlayerInput {
   clientTimestamp?: number;
   dirX?: number;
   dirY?: number;
+  useMouseDir?: boolean;
+  isFocusingBall?: boolean;
   kick?: boolean;
   dash?: boolean;
   magnusLeft?: boolean;
@@ -107,14 +111,20 @@ export class BinaryProtocol {
     const view = new DataView(buf);
 
     let mask = input.inputMask || 0;
-    if (input.dirX !== undefined) {
-      if (input.dirX < -0.3) mask |= INPUT_FLAG_LEFT;
-      if (input.dirX > 0.3) mask |= INPUT_FLAG_RIGHT;
+    const useMouse = Boolean(input.useMouseDir || (mask & INPUT_FLAG_MOUSE_DIR));
+    if (useMouse) {
+      mask |= INPUT_FLAG_MOUSE_DIR;
+    } else {
+      if (input.dirX !== undefined) {
+        if (input.dirX < -0.3) mask |= INPUT_FLAG_LEFT;
+        if (input.dirX > 0.3) mask |= INPUT_FLAG_RIGHT;
+      }
+      if (input.dirY !== undefined) {
+        if (input.dirY < -0.3) mask |= INPUT_FLAG_UP;
+        if (input.dirY > 0.3) mask |= INPUT_FLAG_DOWN;
+      }
     }
-    if (input.dirY !== undefined) {
-      if (input.dirY < -0.3) mask |= INPUT_FLAG_UP;
-      if (input.dirY > 0.3) mask |= INPUT_FLAG_DOWN;
-    }
+    if (input.isFocusingBall) mask |= INPUT_FLAG_FOCUS_BALL;
     if (input.kick) mask |= INPUT_FLAG_KICK;
     if (input.dash) mask |= INPUT_FLAG_DASH;
     if (input.magnusLeft) mask |= INPUT_FLAG_MAGNUS_LEFT;
@@ -123,7 +133,14 @@ export class BinaryProtocol {
     view.setUint8(0, OP_INPUT);
     view.setUint32(1, input.sequence ?? input.tick ?? 0, false);
     view.setUint16(5, mask, false);
-    view.setUint16(7, (input.clientTimestamp ?? 0) & 0xffff, false);
+    if ((mask & INPUT_FLAG_MOUSE_DIR) !== 0) {
+      const qx = Math.max(-127, Math.min(127, Math.round((input.dirX ?? 0) * 127)));
+      const qy = Math.max(-127, Math.min(127, Math.round((input.dirY ?? 0) * 127)));
+      view.setInt8(7, qx);
+      view.setInt8(8, qy);
+    } else {
+      view.setUint16(7, (input.clientTimestamp ?? 0) & 0xffff, false);
+    }
 
     return buf;
   }
@@ -136,19 +153,32 @@ export class BinaryProtocol {
 
     const sequence = view.getUint32(1, false);
     const inputMask = view.getUint16(5, false);
-    const clientTimestamp = view.getUint16(7, false);
+    const useMouseDir = (inputMask & INPUT_FLAG_MOUSE_DIR) !== 0;
 
+    let clientTimestamp = 0;
     let dirX = 0;
     let dirY = 0;
-    if (inputMask & INPUT_FLAG_LEFT) dirX -= 1;
-    if (inputMask & INPUT_FLAG_RIGHT) dirX += 1;
-    if (inputMask & INPUT_FLAG_UP) dirY -= 1;
-    if (inputMask & INPUT_FLAG_DOWN) dirY += 1;
 
-    const len = Math.hypot(dirX, dirY);
-    if (len > 1.0) {
-      dirX /= len;
-      dirY /= len;
+    if (useMouseDir) {
+      dirX = view.getInt8(7) / 127;
+      dirY = view.getInt8(8) / 127;
+      const len = Math.hypot(dirX, dirY);
+      if (len > 1.0) {
+        dirX /= len;
+        dirY /= len;
+      }
+    } else {
+      clientTimestamp = view.getUint16(7, false);
+      if (inputMask & INPUT_FLAG_LEFT) dirX -= 1;
+      if (inputMask & INPUT_FLAG_RIGHT) dirX += 1;
+      if (inputMask & INPUT_FLAG_UP) dirY -= 1;
+      if (inputMask & INPUT_FLAG_DOWN) dirY += 1;
+
+      const len = Math.hypot(dirX, dirY);
+      if (len > 1.0) {
+        dirX /= len;
+        dirY /= len;
+      }
     }
 
     return {
@@ -158,6 +188,8 @@ export class BinaryProtocol {
       clientTimestamp,
       dirX,
       dirY,
+      useMouseDir,
+      isFocusingBall: (inputMask & INPUT_FLAG_FOCUS_BALL) !== 0,
       kick: (inputMask & INPUT_FLAG_KICK) !== 0,
       dash: (inputMask & INPUT_FLAG_DASH) !== 0,
       magnusLeft: (inputMask & INPUT_FLAG_MAGNUS_LEFT) !== 0,

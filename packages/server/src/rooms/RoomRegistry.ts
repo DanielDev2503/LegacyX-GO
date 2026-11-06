@@ -12,13 +12,26 @@ export interface Room {
   passwordHash: string | null; // "salt:hash" (scrypt), nunca la contraseña en claro
   isLocked: boolean;
   isDedicated?: boolean;
+  roomType: 'casual' | 'ranked';
+  countryCode: string;
+  hostPingMs: number;
   createdAt: number;
   guests: Set<string>;
 }
 
 export type JoinResult =
   | { ok: true; room: Room }
-  | { ok: false; code: 'ROOM_NOT_FOUND' | 'ROOM_FULL' | 'ROOM_LOCKED' | 'INVALID_PASSWORD' | 'ALREADY_IN_ROOM' };
+  | {
+      ok: false;
+      code:
+        | 'ROOM_NOT_FOUND'
+        | 'ROOM_FULL'
+        | 'ROOM_LOCKED'
+        | 'INVALID_PASSWORD'
+        | 'ALREADY_IN_ROOM'
+        | 'RANKED_ACCOUNT_REQUIRED';
+      message?: string;
+    };
 
 function hashPassword(password: string): string {
   const salt = randomBytes(16).toString('hex');
@@ -37,19 +50,34 @@ export class RoomRegistry {
   private rooms = new Map<string, Room>();
   private peerToRoom = new Map<string, string>();
 
-  public createRoom(hostPeerId: string, opts: { name: string; stadiumId: string; maxPlayers: number; password?: string; isDedicated?: boolean }): Room {
+  public createRoom(
+    hostPeerId: string,
+    opts: {
+      name: string;
+      stadiumId: string;
+      maxPlayers: number;
+      password?: string;
+      isDedicated?: boolean;
+      roomType?: 'casual' | 'ranked';
+      countryCode?: string;
+      hostPingMs?: number;
+    }
+  ): Room {
     this.leaveRoom(hostPeerId);
     const room: Room = {
       id: randomUUID().slice(0, 6).toUpperCase(),
       name: opts.name.slice(0, 50) || 'LegacyX Room',
       stadiumId: opts.stadiumId,
       hostPeerId,
-      maxPlayers: Math.max(2, Math.min(20, Math.floor(opts.maxPlayers) || 6)),
+      maxPlayers: Math.max(2, Math.min(30, Math.floor(opts.maxPlayers) || 6)),
       currentPlayers: 1,
       hasPassword: Boolean(opts.password),
       passwordHash: opts.password ? hashPassword(opts.password) : null,
       isLocked: false,
       isDedicated: Boolean(opts.isDedicated),
+      roomType: opts.roomType === 'ranked' ? 'ranked' : 'casual',
+      countryCode: (opts.countryCode || 'CO').toUpperCase().slice(0, 2),
+      hostPingMs: Math.max(5, Math.min(500, Math.round(Number(opts.hostPingMs) || 28))),
       createdAt: Date.now(),
       guests: new Set()
     };
@@ -58,9 +86,27 @@ export class RoomRegistry {
     return room;
   }
 
-  public joinRoom(peerId: string, roomId: string, password?: string): JoinResult {
+  public joinRoom(
+    peerId: string,
+    roomId: string,
+    password?: string,
+    userContext?: { isGuest?: boolean; isVerified?: boolean; username?: string }
+  ): JoinResult {
     const room = this.rooms.get(roomId);
     if (!room) return { ok: false, code: 'ROOM_NOT_FOUND' };
+    if (room.roomType === 'ranked' && userContext) {
+      const isGuest =
+        Boolean(userContext.isGuest) ||
+        userContext.isVerified === false ||
+        /^inv_/i.test((userContext.username || '').trim());
+      if (isGuest) {
+        return {
+          ok: false,
+          code: 'RANKED_ACCOUNT_REQUIRED',
+          message: 'Esta sala es Clasificatoria. Debes iniciar sesión con una cuenta verificada para entrar.'
+        };
+      }
+    }
     const existingRoomId = this.peerToRoom.get(peerId);
     if (existingRoomId) {
       if (existingRoomId === roomId) {
@@ -126,6 +172,9 @@ export class RoomRegistry {
       password?: string | null;
       isPrivate?: boolean;
       isLocked?: boolean;
+      roomType?: 'casual' | 'ranked';
+      countryCode?: string;
+      hostPingMs?: number;
     }
   ): Room | undefined {
     const room = this.rooms.get(roomId);
@@ -137,13 +186,22 @@ export class RoomRegistry {
       room.stadiumId = String(patch.stadiumId);
     }
     if (patch.maxPlayers !== undefined) {
-      room.maxPlayers = Math.max(2, Math.min(20, Math.floor(Number(patch.maxPlayers)) || room.maxPlayers));
+      room.maxPlayers = Math.max(2, Math.min(30, Math.floor(Number(patch.maxPlayers)) || room.maxPlayers));
     }
     if (patch.currentPlayers !== undefined) {
       room.currentPlayers = Math.max(1, Math.floor(Number(patch.currentPlayers)));
     }
     if (patch.isLocked !== undefined) {
       room.isLocked = Boolean(patch.isLocked);
+    }
+    if (patch.roomType === 'ranked' || patch.roomType === 'casual') {
+      room.roomType = patch.roomType;
+    }
+    if (patch.countryCode !== undefined && patch.countryCode) {
+      room.countryCode = String(patch.countryCode).toUpperCase().slice(0, 2);
+    }
+    if (patch.hostPingMs !== undefined && Number.isFinite(Number(patch.hostPingMs))) {
+      room.hostPingMs = Math.max(5, Math.min(500, Math.round(Number(patch.hostPingMs))));
     }
     if (patch.isPrivate === false) {
       room.hasPassword = false;
@@ -183,7 +241,7 @@ export class RoomRegistry {
     }
     return [...this.rooms.values()]
       .filter((r) => !r.isLocked)
-      .map(({ id, name, stadiumId, maxPlayers, currentPlayers, hasPassword, isLocked, isDedicated, createdAt }) => ({
+      .map(({ id, name, stadiumId, maxPlayers, currentPlayers, hasPassword, isLocked, isDedicated, roomType, countryCode, hostPingMs, createdAt }) => ({
         id,
         name,
         stadiumId,
@@ -196,6 +254,9 @@ export class RoomRegistry {
         isPrivate: hasPassword,
         isLocked,
         isDedicated,
+        roomType,
+        countryCode,
+        hostPingMs,
         createdAt
       }));
   }

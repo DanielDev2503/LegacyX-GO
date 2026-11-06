@@ -1,12 +1,37 @@
 import { WebSocketServer, WebSocket } from 'ws';
 import { randomUUID } from 'node:crypto';
+import type { IncomingMessage } from 'node:http';
 import { RoomRegistry } from './rooms/RoomRegistry.js';
+import { authService, AuthService } from './auth/AuthService.js';
 import type {
   ClientSignalMessage,
   ServerSignalMessage,
   IceServerConfig,
   SignalType
 } from '@legacyx/core';
+
+export function detectCountryFromTimezoneOrHeaders(tz?: string, headers?: Record<string, string | string[] | undefined>): string {
+  const headerCountry =
+    headers?.['cf-ipcountry'] ||
+    headers?.['x-vercel-ip-country'] ||
+    headers?.['x-country-code'];
+  if (typeof headerCountry === 'string' && /^[a-zA-Z]{2}$/.test(headerCountry.trim())) {
+    return headerCountry.trim().toUpperCase();
+  }
+  const cleanTz = (tz || '').toLowerCase();
+  if (cleanTz.includes('bogota')) return 'CO';
+  if (cleanTz.includes('buenos_aires') || cleanTz.includes('argentina') || cleanTz.includes('cordoba')) return 'AR';
+  if (cleanTz.includes('sao_paulo') || cleanTz.includes('fortaleza') || cleanTz.includes('manaus')) return 'BR';
+  if (cleanTz.includes('mexico') || cleanTz.includes('monterrey') || cleanTz.includes('cancun')) return 'MX';
+  if (cleanTz.includes('santiago')) return 'CL';
+  if (cleanTz.includes('lima')) return 'PE';
+  if (cleanTz.includes('madrid') || cleanTz.includes('canary')) return 'ES';
+  if (cleanTz.includes('montevideo')) return 'UY';
+  if (cleanTz.includes('caracas')) return 'VE';
+  if (cleanTz.includes('guayaquil')) return 'EC';
+  if (cleanTz.includes('new_york') || cleanTz.includes('chicago') || cleanTz.includes('los_angeles') || cleanTz.includes('denver')) return 'US';
+  return 'CO';
+}
 
 export interface RoomConfig {
   name: string;
@@ -141,6 +166,9 @@ export function setupSignalingServer(wss: WebSocketServer) {
       if (left && !processedRooms.has(left.room.id)) {
         processedRooms.add(left.room.id);
         anyChanged = true;
+        if (left.destroyed) {
+          authService.abortRankedMatchForRoom(left.room.id);
+        }
         for (const notifyPeerId of left.notify) {
           const targetSock = peerSockets.get(notifyPeerId);
           if (targetSock) {
@@ -170,6 +198,7 @@ export function setupSignalingServer(wss: WebSocketServer) {
         if (pidSet.has(room.hostPeerId)) {
           const removed = registry.removeRoom(explicitRoomId);
           if (removed) {
+            authService.abortRankedMatchForRoom(removed.id);
             anyChanged = true;
             for (const guestId of removed.guests) {
               const targetSock = peerSockets.get(guestId);
@@ -215,12 +244,13 @@ export function setupSignalingServer(wss: WebSocketServer) {
     clearInterval(heartbeatInterval);
   });
 
-  wss.on('connection', async (socket: WebSocket) => {
+  wss.on('connection', async (socket: WebSocket, req?: IncomingMessage) => {
     const ws = socket as AliveWebSocket;
     ws.isAlive = true;
     const initialPeerId = randomUUID().slice(0, 8);
     ws.peerId = initialPeerId;
     ws.peerIds = new Set<string>([initialPeerId]);
+    const reqHeaders = req?.headers as Record<string, string | string[] | undefined> | undefined;
 
     peerSockets.set(initialPeerId, socket);
     socketToPeerId.set(socket, initialPeerId);
@@ -284,9 +314,16 @@ export function setupSignalingServer(wss: WebSocketServer) {
           case 'HEARTBEAT':
           case 'PING': {
             ws.isAlive = true;
+            if (typeof msg.rttMs === 'number' && Number.isFinite(msg.rttMs)) {
+              const hostRoom = registry.getRoomOfPeer(effectivePeerId);
+              if (hostRoom && hostRoom.hostPeerId === effectivePeerId) {
+                registry.updateRoom(hostRoom.id, { hostPingMs: msg.rttMs });
+              }
+            }
             send(ws, {
               type: 'pong',
               timestamp: msg.timestamp,
+              serverTimestamp: Date.now(),
               onlineCount: wss.clients.size
             });
             break;
@@ -303,9 +340,35 @@ export function setupSignalingServer(wss: WebSocketServer) {
             const config = msg.roomConfig || msg.config || {};
             const cleanName = String(msg.name || config.name || `Room #${effectivePeerId}`).slice(0, 50);
             const stadium = String(msg.stadiumId || msg.stadium || config.stadiumId || config.stadium || 'mediano');
-            const maxPlayers = Math.max(2, Math.min(20, Number(msg.maxPlayers ?? config.maxPlayers ?? 12)));
+            const maxPlayers = Math.max(2, Math.min(30, Number(msg.maxPlayers ?? config.maxPlayers ?? 12)));
             const password = String(msg.password || config.password || '');
             const isDedicated = Boolean(msg.isDedicated ?? config.isDedicated);
+            const requestedType = (msg.roomType || config.roomType) === 'ranked' ? 'ranked' : 'casual';
+            const tokenAcc = msg.authToken ? authService.verifyToken(String(msg.authToken)) : null;
+            const roleToCheck = tokenAcc ? tokenAcc.role : (msg.userRole || config.userRole);
+            const isGuestCreator = tokenAcc ? false : Boolean(msg.isGuest ?? config.isGuest ?? false);
+
+            if (requestedType === 'ranked') {
+              const canCreate = authService.canCreateRankedRoom({
+                role: roleToCheck,
+                isGuest: isGuestCreator,
+                isVerified: tokenAcc ? tokenAcc.isVerified : !isGuestCreator
+              });
+              if (!canCreate) {
+                send(socket, {
+                  type: 'ERROR',
+                  code: 'RANKED_PERMISSION_DENIED',
+                  message: 'Solo usuarios con rol representante o superadmin pueden crear salas Clasificatorias (Ranked).'
+                });
+                return;
+              }
+            }
+
+            const countryCode =
+              (typeof (msg.countryCode || config.countryCode) === 'string' &&
+                /^[a-zA-Z]{2}$/.test(String(msg.countryCode || config.countryCode).trim()))
+                ? String(msg.countryCode || config.countryCode).trim().toUpperCase()
+                : detectCountryFromTimezoneOrHeaders(msg.timeZone || config.timeZone, reqHeaders);
 
             // Asegurar limpieza previa si el socket tenía otra sala activa
             if (ws.peerIds) {
@@ -317,15 +380,22 @@ export function setupSignalingServer(wss: WebSocketServer) {
               stadiumId: stadium,
               maxPlayers,
               password: password || undefined,
-              isDedicated
+              isDedicated,
+              roomType: requestedType,
+              countryCode,
+              hostPingMs: Number(msg.hostPingMs ?? config.hostPingMs ?? 28)
             });
 
-            console.log(`[SignalingServer] Sala creada: ${room.id} (${room.name}) por Host ${effectivePeerId} (Dedicada: ${room.isDedicated ?? false})`);
+            console.log(
+              `[SignalingServer] Sala creada: ${room.id} (${room.name}) [${room.roomType.toUpperCase()} / ${room.countryCode}] por Host ${effectivePeerId}`
+            );
 
             send(socket, {
               type: 'ROOM_CREATED',
               roomId: room.id,
               roomName: room.name,
+              roomType: room.roomType,
+              countryCode: room.countryCode,
               roomConfig: room,
               config: room
             });
@@ -346,7 +416,10 @@ export function setupSignalingServer(wss: WebSocketServer) {
                 maxPlayers: cfg.maxPlayers,
                 currentPlayers: msg.playerCount ?? cfg.playerCount ?? cfg.currentPlayers,
                 password: cfg.password,
-                isPrivate: cfg.isPrivate
+                isPrivate: cfg.isPrivate,
+                roomType: cfg.roomType,
+                countryCode: cfg.countryCode,
+                hostPingMs: cfg.hostPingMs
               });
               broadcastRoomList();
             }
@@ -367,15 +440,52 @@ export function setupSignalingServer(wss: WebSocketServer) {
           case 'JOIN_ROOM': {
             const roomId = String(msg.roomId || '');
             const password = msg.password ? String(msg.password) : undefined;
-            const result = registry.joinRoom(effectivePeerId, roomId, password);
+            const targetRoom = registry.getRoomById(roomId);
+            const rawNickname = String(msg.nickname || 'Guest').trim();
+            const tokenAcc = msg.authToken ? authService.verifyToken(String(msg.authToken)) : null;
+            const isGuestJoiner = tokenAcc
+              ? false
+              : Boolean(msg.isGuest || AuthService.isGuestNickname(rawNickname));
+            const effectiveNickname = isGuestJoiner
+              ? AuthService.normalizeGuestNickname(rawNickname)
+              : (tokenAcc?.username || rawNickname);
+
+            if (targetRoom && targetRoom.roomType === 'ranked') {
+              const check = authService.validateRoomJoin('ranked', {
+                username: effectiveNickname,
+                role: tokenAcc?.role || (isGuestJoiner ? 'invitado' : 'jugador'),
+                isGuest: isGuestJoiner,
+                isVerified: tokenAcc ? tokenAcc.isVerified : !isGuestJoiner
+              });
+              if (!check.allowed) {
+                send(socket, {
+                  type: 'ERROR',
+                  code: 'RANKED_ACCOUNT_REQUIRED',
+                  message:
+                    check.reason ||
+                    'Esta sala es Clasificatoria. Debes iniciar sesión con una cuenta verificada para entrar.'
+                });
+                return;
+              }
+            }
+
+            const result = registry.joinRoom(effectivePeerId, roomId, password, {
+              isGuest: isGuestJoiner,
+              isVerified: tokenAcc ? tokenAcc.isVerified : !isGuestJoiner,
+              username: effectiveNickname
+            });
 
             if (!result.ok) {
-              send(socket, { type: 'ERROR', code: result.code, message: `Error al unirse a la sala: ${result.code}` });
+              send(socket, {
+                type: 'ERROR',
+                code: result.code,
+                message: result.message || `Error al unirse a la sala: ${result.code}`
+              });
               return;
             }
 
             const room = result.room;
-            console.log(`[SignalingServer] Peer ${effectivePeerId} ("${msg.nickname ?? 'Guest'}") se unió a sala ${room.id}`);
+            console.log(`[SignalingServer] Peer ${effectivePeerId} ("${effectiveNickname}") se unió a sala ${room.id}`);
 
             // Notificar al invitado que se unió con éxito (un único mensaje canónico)
             send(socket, {
@@ -384,8 +494,11 @@ export function setupSignalingServer(wss: WebSocketServer) {
               hostId: room.hostPeerId,
               hostPeerId: room.hostPeerId,
               roomName: room.name,
+              roomType: room.roomType,
+              countryCode: room.countryCode,
               stadiumId: room.stadiumId,
-              maxPlayers: room.maxPlayers
+              maxPlayers: room.maxPlayers,
+              nickname: effectiveNickname
             });
 
             // Notificar al anfitrión (Host) con un único mensaje canónico
@@ -394,11 +507,59 @@ export function setupSignalingServer(wss: WebSocketServer) {
               send(hostSocket, {
                 type: 'PEER_JOINED',
                 peerId: effectivePeerId,
-                nickname: msg.nickname ?? 'Guest'
+                nickname: effectiveNickname
               });
             }
 
             broadcastRoomList();
+            break;
+          }
+
+          case 'START_RANKED_MATCH': {
+            const roomId = String(msg.roomId || '');
+            const tokenAcc = msg.authToken ? authService.verifyToken(String(msg.authToken)) : null;
+            const hostId = tokenAcc?.id || String(msg.hostUserId || '00000000-0000-4000-8000-000000000002');
+            const issued = authService.issueRankedMatchToken({
+              roomId,
+              hostId,
+              stadiumId: String(msg.stadiumId || 'mediano'),
+              participantIds: Array.isArray(msg.participantIds) ? msg.participantIds.map(String) : []
+            });
+            send(socket, {
+              type: 'RANKED_MATCH_TOKEN',
+              ...issued
+            });
+            break;
+          }
+
+          case 'REPORT_RANKED_MATCH': {
+            const report = authService.reportRankedMatch({
+              matchToken: String(msg.matchToken || ''),
+              roomType: msg.roomType === 'ranked' ? 'ranked' : 'casual',
+              isPracticeMode: Boolean(msg.isPracticeMode),
+              durationSeconds: Number(msg.durationSeconds || 180),
+              redScore: Number(msg.redScore || 0),
+              blueScore: Number(msg.blueScore || 0),
+              winner: msg.winner === 'red' || msg.winner === 'blue' ? msg.winner : 'draw',
+              participants: Array.isArray(msg.participants) ? msg.participants : []
+            });
+            send(socket, {
+              type: 'RANKED_MATCH_REPORTED',
+              ...report
+            });
+            break;
+          }
+
+          case 'GET_LEADERBOARD': {
+            const cat =
+              msg.category === 'goals' || msg.category === 'assists' || msg.category === 'saves'
+                ? msg.category
+                : 'elo';
+            const board = authService.getLeaderboard(cat, Number(msg.limit || 50), msg.viewerUserId);
+            send(socket, {
+              type: 'LEADERBOARD_DATA',
+              ...board
+            });
             break;
           }
 

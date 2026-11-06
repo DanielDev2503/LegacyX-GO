@@ -44,7 +44,14 @@ export class NetworkHost {
   private boundOnSignal!: (msg: any) => void;
   private boundOnPeerLeft!: (msg: any) => void;
 
-  public onPlayerInput?: (playerId: number, inputMask: number, tick: number) => void;
+  public onPlayerInput?: (
+    playerId: number,
+    inputMask: number,
+    tick: number,
+    dirX?: number,
+    dirY?: number,
+    useMouseDir?: boolean
+  ) => void;
   public onPlayerJoined?: (player: PlayerInfo) => void;
   public onPlayerLeft?: (playerId: number) => void;
   public onPlayersUpdated?: (players: PlayerInfo[]) => void;
@@ -214,7 +221,14 @@ export class NetworkHost {
         if (playerId !== undefined) {
           const decoded = BinaryProtocol.decodeInput(buffer);
           if (decoded) {
-            this.onPlayerInput?.(playerId, decoded.inputMask ?? 0, decoded.tick ?? decoded.sequence ?? 0);
+            this.onPlayerInput?.(
+              playerId,
+              decoded.inputMask ?? 0,
+              decoded.tick ?? decoded.sequence ?? 0,
+              decoded.dirX,
+              decoded.dirY,
+              decoded.useMouseDir
+            );
           }
         }
       },
@@ -641,6 +655,20 @@ export class NetworkHost {
     this.broadcastReliable({
       type: 'MATCH_BANNER_EVENT',
       banner: banner ?? { kind: 'NONE' }
+    });
+  }
+
+  public broadcastScoreEvent(event: {
+    playerId: number;
+    points: number;
+    reason: string;
+    x: number;
+    y: number;
+    category?: string;
+  }): void {
+    this.broadcastReliable({
+      type: 'SCORE_EVENT',
+      ...event
     });
   }
 

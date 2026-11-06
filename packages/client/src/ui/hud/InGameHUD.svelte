@@ -1,6 +1,7 @@
 <script lang="ts">
   import { gameUI, type ChatEntry } from '../state/gameUI.svelte.js';
   import { soundFX } from '../../audio/SoundFX.js';
+  import { matchRecorder } from '../../recorder/MatchRecorder.js';
 
   let chatMessage = $state('');
   let isChatInputActive = $state(false);
@@ -9,6 +10,93 @@
   let telemetryEl = $state<HTMLElement | null>(null);
   let telemetryWidth = $state(140);
   let isResizingChat = $state(false);
+
+  // Estado reactivo de la grabadora de partidas/video (.webm + .lxr)
+  let isRecording = $state(false);
+  let recElapsedSec = $state(0);
+  let hasSavedRecording = $state(false);
+  let recSelectedIndex = $state(0);
+
+  $effect(() => {
+    const interval = setInterval(() => {
+      isRecording = matchRecorder.isRecording;
+      if (isRecording) {
+        recElapsedSec = Math.floor(matchRecorder.getElapsedMs() / 1000);
+      }
+      hasSavedRecording = !matchRecorder.isRecording && matchRecorder.getLastReplayData() !== null;
+    }, 200);
+    return () => clearInterval(interval);
+  });
+
+  let recFormattedTime = $derived(
+    `${String(Math.floor(recElapsedSec / 60)).padStart(2, '0')}:${String(recElapsedSec % 60).padStart(2, '0')}`
+  );
+
+  function handleToggleRecording() {
+    soundFX.playUIClick();
+    if (matchRecorder.isRecording) {
+      matchRecorder.stopRecording();
+      isRecording = false;
+      hasSavedRecording = matchRecorder.getLastReplayData() !== null;
+    } else {
+      const canvas = document.getElementById('game-canvas') as HTMLCanvasElement | null;
+      matchRecorder.startRecording({
+        stadiumId: gameUI.selectedStadiumId || 'classic',
+        redTeamName,
+        blueTeamName,
+        canvas
+      });
+      isRecording = true;
+      recElapsedSec = 0;
+    }
+  }
+
+  // Autocompletado de menciones @usuario / @all en el chat
+  let mentionQuery = $derived.by(() => {
+    const match = chatMessage.match(/(?:^|\s)@([^\s@]*)$/);
+    return match ? match[1]!.toLowerCase() : null;
+  });
+
+  let mentionCandidates = $derived.by(() => {
+    if (mentionQuery === null) return [];
+    const base = [
+      { tag: 'all', label: '@all', team: 'TODOS' },
+      ...gameUI.players.map((p) => ({
+        tag: (p.name || p.nickname).replace(/\s+/g, '_'),
+        label: p.name || p.nickname,
+        team: p.team === 'red' ? 'ROJO' : p.team === 'blue' ? 'AZUL' : 'SPEC'
+      }))
+    ];
+    return base.filter(
+      (c) =>
+        c.tag.toLowerCase().includes(mentionQuery!) ||
+        c.label.toLowerCase().includes(mentionQuery!)
+    ).slice(0, 6);
+  });
+
+  $effect(() => {
+    if (mentionCandidates.length > 0 && recSelectedIndex >= mentionCandidates.length) {
+      recSelectedIndex = 0;
+    }
+  });
+
+  function applyMentionCandidate(candidate: { tag: string; label: string }) {
+    chatMessage = chatMessage.replace(/(^|\s)@([^\s@]*)$/, `$1@${candidate.label} `);
+    chatInputEl?.focus();
+  }
+
+  function splitChatTokens(text: string): Array<{ text: string; isMention: boolean; isSelfMention: boolean }> {
+    const parts = text.split(/(@[A-Za-z0-9_ÁÉÍÓÚáéíóúñÑ-]+)/g);
+    const myName = (gameUI.nickname || '').toLowerCase();
+    return parts.filter(Boolean).map((part) => {
+      if (part.startsWith('@')) {
+        const clean = part.slice(1).toLowerCase();
+        const isSelf = clean === 'all' || (Boolean(myName) && clean === myName);
+        return { text: part, isMention: true, isSelfMention: isSelf };
+      }
+      return { text: part, isMention: false, isSelfMention: false };
+    });
+  }
 
   let pingColorClass = $derived(
     gameUI.pingMs < 60 ? 'text-emerald' : gameUI.pingMs <= 120 ? 'text-amber' : 'text-crimson'
@@ -160,6 +248,33 @@
   }
 
   function handleChatKeyDown(e: KeyboardEvent) {
+    if (mentionCandidates.length > 0) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        recSelectedIndex = (recSelectedIndex + 1) % mentionCandidates.length;
+        return;
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        recSelectedIndex = (recSelectedIndex - 1 + mentionCandidates.length) % mentionCandidates.length;
+        return;
+      }
+      if (e.key === 'Tab') {
+        e.preventDefault();
+        const chosen = mentionCandidates[recSelectedIndex] ?? mentionCandidates[0];
+        if (chosen) applyMentionCandidate(chosen);
+        return;
+      }
+      if ((e.key === 'Enter' || e.code === 'NumpadEnter') && mentionQuery !== null) {
+        const chosen = mentionCandidates[recSelectedIndex] ?? mentionCandidates[0];
+        if (chosen && `@${chosen.label}`.toLowerCase() !== `@${mentionQuery}`) {
+          e.preventDefault();
+          applyMentionCandidate(chosen);
+          return;
+        }
+      }
+    }
+
     if (e.key === 'Enter' || e.code === 'NumpadEnter') {
       e.preventDefault();
       e.stopPropagation();
@@ -302,7 +417,12 @@
 
         <!-- Reloj Central -->
         <div class="timer-center-block">
-          <span class="timer-glyph">⏱</span>
+          <span class="timer-glyph" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2">
+              <circle cx="12" cy="12" r="10"></circle>
+              <polyline points="12 6 12 12 16 14"></polyline>
+            </svg>
+          </span>
           <span class="timer-clock" id="hud-timer">{gameUI.matchPhase === 0 ? '00:00' : gameUI.matchTimeFormatted}</span>
           {#if gameUI.isGoldenGoal}
             <span class="golden-goal-chip">GOL DE ORO</span>
@@ -328,8 +448,48 @@
       </div>
     </div>
 
-    <!-- C) Cartucho Derecho: 3 Botones de Acción Cyber-Pitch -->
+    <!-- C) Cartucho Derecho: Grabadora REC + 3 Botones de Acción Cyber-Pitch -->
     <div class="top-card top-card-right">
+      <!-- 0. Grabadora de Partidas y Video (.webm / .lxr) -->
+      <button
+        type="button"
+        id="btn-hud-rec"
+        class="hud-rec-btn"
+        class:recording={isRecording}
+        title={isRecording ? 'Detener grabación y guardar clip (.webm + .lxr)' : 'Iniciar grabación de partida y video'}
+        onclick={handleToggleRecording}
+      >
+        <span class="rec-dot" class:pulsing={isRecording}></span>
+        <span class="rec-label">{isRecording ? `grabando ${recFormattedTime}` : 'REC'}</span>
+      </button>
+
+      {#if hasSavedRecording && !isRecording}
+        <button
+          type="button"
+          class="hud-clip-pill"
+          title="Descargar video .webm grabado del Canvas"
+          onclick={() => { soundFX.playUIClick(); matchRecorder.downloadVideoWebm(); }}
+        >
+          .WEBM
+        </button>
+        <button
+          type="button"
+          class="hud-clip-pill"
+          title="Descargar repetición ligera .lxr"
+          onclick={() => { soundFX.playUIClick(); matchRecorder.downloadReplayLxr(); }}
+        >
+          .LXR
+        </button>
+        <button
+          type="button"
+          class="hud-clip-pill highlight"
+          title="Abrir reproductor de repeticiones"
+          onclick={() => { soundFX.playUIClick(); gameUI.showReplayModal = true; }}
+        >
+          REPLAY
+        </button>
+      {/if}
+
       <!-- 1. Silenciar / Audio Toggle -->
       <button
         type="button"
@@ -408,9 +568,10 @@
         <div
           class="vs-team-half vs-local"
           style="
-            background: linear-gradient(90deg, {redKitPrimary} 0%, {redKitPrimary} 25%, {redKitSecondary} 75%, {redKitSecondary} 100%);
+            opacity: 1;
+            background: linear-gradient(135deg, {redKitPrimary} 0%, {redKitPrimary} 40%, {redKitSecondary} 100%);
             border: 2px solid {redKitTertiary};
-            box-shadow: 0 0 16px {redKitPrimary}66, inset 0 0 8px {redKitPrimary}33;
+            box-shadow: 0 10px 28px rgba(0, 0, 0, 0.85), 0 0 18px {redKitPrimary}99;
             color: {redKitTertiary};
           "
         >
@@ -419,30 +580,35 @@
             style="
               color: {redKitTertiary};
               border-color: {redKitTertiary};
-              {redHasOutline ? '-webkit-text-stroke: 3px #000000; text-stroke: 3px #000000; paint-order: stroke fill; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);' : '-webkit-text-stroke: 0px transparent; text-shadow: none;'}
+              text-shadow: 0 2px 4px rgba(0, 0, 0, 0.9);
             "
           >{redTeamTag}</span>
           <span
             class="vs-team-name"
             style="
               color: {redKitTertiary};
-              {redHasOutline ? '-webkit-text-stroke: 3px #000000; text-stroke: 3px #000000; paint-order: stroke fill; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);' : '-webkit-text-stroke: 0px transparent; text-shadow: none;'}
+              text-shadow: 0 2px 6px rgba(0, 0, 0, 0.92);
             "
           >{redTeamName}</span>
         </div>
 
         <div class="vs-bolt-badge">
-          <span class="vs-bolt">⚡</span>
+          <svg class="vs-bolt-svg" viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+            <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
+          </svg>
           <span class="vs-text">VS</span>
-          <span class="vs-bolt">⚡</span>
+          <svg class="vs-bolt-svg" viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+            <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
+          </svg>
         </div>
 
         <div
           class="vs-team-half vs-visitor"
           style="
-            background: linear-gradient(90deg, {blueKitPrimary} 0%, {blueKitPrimary} 25%, {blueKitSecondary} 75%, {blueKitSecondary} 100%);
+            opacity: 1;
+            background: linear-gradient(135deg, {blueKitPrimary} 0%, {blueKitPrimary} 40%, {blueKitSecondary} 100%);
             border: 2px solid {blueKitTertiary};
-            box-shadow: 0 0 16px {blueKitPrimary}66, inset 0 0 8px {blueKitPrimary}33;
+            box-shadow: 0 10px 28px rgba(0, 0, 0, 0.85), 0 0 18px {blueKitPrimary}99;
             color: {blueKitTertiary};
           "
         >
@@ -450,7 +616,7 @@
             class="vs-team-name"
             style="
               color: {blueKitTertiary};
-              {blueHasOutline ? '-webkit-text-stroke: 3px #000000; text-stroke: 3px #000000; paint-order: stroke fill; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);' : '-webkit-text-stroke: 0px transparent; text-shadow: none;'}
+              text-shadow: 0 2px 6px rgba(0, 0, 0, 0.92);
             "
           >{blueTeamName}</span>
           <span
@@ -458,7 +624,7 @@
             style="
               color: {blueKitTertiary};
               border-color: {blueKitTertiary};
-              {blueHasOutline ? '-webkit-text-stroke: 3px #000000; text-stroke: 3px #000000; paint-order: stroke fill; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);' : '-webkit-text-stroke: 0px transparent; text-shadow: none;'}
+              text-shadow: 0 2px 4px rgba(0, 0, 0, 0.9);
             "
           >{blueTeamTag}</span>
         </div>
@@ -482,7 +648,7 @@
         style="--goal-c1: {goalPrimaryColor}; --goal-c2: {goalSecondaryColor}; --goal-c3: {goalTertiaryColor};"
       >
         <div class="goal-accent-strip"></div>
-        <h2 class="goal-banner-title">⚽ ¡GOOOOL DE {goalTeamName.toUpperCase()}!</h2>
+        <h2 class="goal-banner-title">¡GOOOOL DE {goalTeamName.toUpperCase()}!</h2>
         <div class="goal-credits-row">
           <span class="goal-scorer-pill" class:own-goal={activeBanner.isOwnGoal}>
             {activeBanner.isOwnGoal ? 'Autogol de:' : 'Gol de:'}
@@ -490,7 +656,7 @@
           </span>
           {#if activeBanner.assisterName && !activeBanner.isOwnGoal}
             <span class="goal-assist-pill">
-              👟 Asistencia: <strong>{activeBanner.assisterName}</strong>
+              Asistencia: <strong>{activeBanner.assisterName}</strong>
             </span>
           {/if}
         </div>
@@ -505,9 +671,9 @@
         <div class="victory-gold-crown">FINAL DEL ENCUENTRO</div>
         <h2 class="victory-banner-title">
           {#if activeBanner.winner === 'draw'}
-            🏆 ¡EMPATE FINAL! 🏆
+            ¡EMPATE FINAL!
           {:else}
-            🏆 ¡VICTORIA DE {victoryWinnerName.toUpperCase()}! 🏆
+            ¡VICTORIA DE {victoryWinnerName.toUpperCase()}!
           {/if}
         </h2>
         <div class="victory-score-strip">
@@ -523,7 +689,7 @@
             <strong>{activeBanner.scorerName}</strong>
             {#if activeBanner.assisterName && !activeBanner.isOwnGoal}
               <span class="victory-assist-sep">·</span>
-              <span>👟 {activeBanner.assisterName}</span>
+              <span>Asist: {activeBanner.assisterName}</span>
             {/if}
           </div>
         {/if}
@@ -578,25 +744,52 @@
     <div class="chat-messages-scroll custom-scrollbar" bind:this={chatScrollEl}>
       {#if gameUI.chatMessages.length === 0}
         <div class="chat-empty-state">
-          <span class="chat-empty-hint">Sala iniciada. Presiona Enter para escribir...</span>
+          <span class="chat-empty-hint">Sala iniciada. Presiona Enter para escribir (@ para mencionar)...</span>
         </div>
       {:else}
         {#each gameUI.chatMessages as msg (msg.id)}
           {#if msg.isSystem || msg.team === 'SYSTEM' || msg.senderTeam === 'system'}
             <div class="chat-line chat-line-system">
-              <span class="chat-system-notice">⚡ {msg.text}</span>
+              <span class="chat-system-notice">{msg.text}</span>
             </div>
           {:else}
             <div class="chat-line">
               <span class="chat-sender {msg.team.toLowerCase()} font-bold">
                 {msg.sender}:
               </span>
-              <span class="chat-text">{msg.text}</span>
+              <span class="chat-text">
+                {#each splitChatTokens(msg.text) as tok}
+                  {#if tok.isMention}
+                    <span class="chat-mention-chip" class:self={tok.isSelfMention}>{tok.text}</span>
+                  {:else}
+                    {tok.text}
+                  {/if}
+                {/each}
+              </span>
             </div>
           {/if}
         {/each}
       {/if}
     </div>
+
+    {#if isChatInputActive && mentionCandidates.length > 0}
+      <div class="mention-autocomplete-popup" role="listbox" aria-label="Menciones disponibles">
+        {#each mentionCandidates as cand, idx}
+          <button
+            type="button"
+            class="mention-option-btn"
+            class:selected={idx === recSelectedIndex}
+            onmousedown={(e) => {
+              e.preventDefault();
+              applyMentionCandidate(cand);
+            }}
+          >
+            <span class="mention-opt-name">{cand.label.startsWith('@') ? cand.label : `@${cand.label}`}</span>
+            <span class="mention-opt-team">{cand.team}</span>
+          </button>
+        {/each}
+      </div>
+    {/if}
 
     <div class="chat-input-bar">
       <input
@@ -876,6 +1069,79 @@
     height: 1.15rem;
   }
 
+  .hud-rec-btn {
+    height: 2.1rem;
+    padding: 0 0.65rem;
+    border-radius: 0.45rem;
+    background: #141b26;
+    border: 1px solid rgba(255, 51, 102, 0.45);
+    color: #ff6b81;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.72rem;
+    font-weight: 800;
+    letter-spacing: 0.04em;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+
+  .hud-rec-btn:hover {
+    background: rgba(255, 51, 102, 0.18);
+    border-color: #ff3366;
+    color: #ffffff;
+  }
+
+  .hud-rec-btn.recording {
+    background: rgba(255, 51, 102, 0.25);
+    border-color: #ff3366;
+    color: #ffffff;
+    box-shadow: 0 0 12px rgba(255, 51, 102, 0.5);
+  }
+
+  .rec-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #ff3366;
+    flex-shrink: 0;
+  }
+
+  .rec-dot.pulsing {
+    box-shadow: 0 0 8px #ff3366;
+    animation: pulseGlow 0.9s infinite;
+  }
+
+  .hud-clip-pill {
+    height: 1.85rem;
+    padding: 0 0.45rem;
+    border-radius: 0.35rem;
+    background: #0d1624;
+    border: 1px solid rgba(0, 229, 255, 0.35);
+    color: #00e5ff;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.66rem;
+    font-weight: 800;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+
+  .hud-clip-pill:hover {
+    background: #00e5ff;
+    color: #050811;
+  }
+
+  .hud-clip-pill.highlight {
+    border-color: rgba(255, 215, 0, 0.5);
+    color: #ffd700;
+  }
+
+  .hud-clip-pill.highlight:hover {
+    background: #ffd700;
+    color: #050811;
+  }
+
   /* TELEMETRÍA EN VIVO (ESQUINA INFERIOR IZQUIERDA) */
   .hud-telemetry-corner {
     pointer-events: auto;
@@ -999,6 +1265,79 @@
     display: flex;
     align-items: baseline;
     gap: 0.4rem;
+    animation: chatLineSlideUp 180ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  @keyframes chatLineSlideUp {
+    from {
+      opacity: 0;
+      transform: translateY(6px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  .chat-mention-chip {
+    display: inline-block;
+    padding: 0 4px;
+    margin: 0 1px;
+    border-radius: 3px;
+    background: rgba(0, 229, 255, 0.16);
+    color: #00e5ff;
+    font-weight: 700;
+  }
+
+  .chat-mention-chip.self {
+    background: rgba(255, 215, 0, 0.22);
+    color: #ffd700;
+    border: 1px solid rgba(255, 215, 0, 0.4);
+  }
+
+  .mention-autocomplete-popup {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    padding: 4px 8px;
+    background: #070d17;
+    border-top: 1px solid rgba(0, 229, 255, 0.25);
+  }
+
+  .mention-option-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 8px;
+    border-radius: 4px;
+    background: #111a2c;
+    border: 1px solid rgba(0, 229, 255, 0.2);
+    color: #cbd5e1;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.7rem;
+    cursor: pointer;
+  }
+
+  .mention-option-btn.selected,
+  .mention-option-btn:hover {
+    background: rgba(0, 229, 255, 0.22);
+    border-color: #00e5ff;
+    color: #ffffff;
+  }
+
+  .mention-opt-name {
+    font-weight: 700;
+    color: #00e5ff;
+  }
+
+  .mention-opt-team {
+    font-size: 0.62rem;
+    color: #94a3b8;
+  }
+
+  .vs-bolt-svg {
+    color: #ffd700;
+    flex-shrink: 0;
   }
 
   .chat-sender {

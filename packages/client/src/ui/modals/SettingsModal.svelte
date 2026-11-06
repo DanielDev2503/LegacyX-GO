@@ -11,6 +11,7 @@
 
   // Keybinding remapping state
   let rebindingAction = $state<string | null>(null);
+  let rebindStartedAt = 0;
 
   // Audio accordions state
   let showChatAccordion = $state(false);
@@ -98,6 +99,7 @@
   function startRebind(action: string) {
     soundFX.playUIClick();
     rebindingAction = action;
+    rebindStartedAt = Date.now();
   }
 
   function handleKeyDown(e: KeyboardEvent) {
@@ -114,14 +116,36 @@
     }
 
     if (e.key === 'Escape') {
-      e.preventDefault();      handleClose();
+      e.preventDefault();
+      handleClose();
       e.stopPropagation();
+    }
+  }
+
+  function handleWindowMouseDown(e: MouseEvent) {
+    if (!rebindingAction) return;
+    if (Date.now() - rebindStartedAt < 80) return;
+    if (e.button === 0 || e.button === 1 || e.button === 2) {
+      e.preventDefault();
+      e.stopPropagation();
+      const mouseCode = `Mouse${e.button}`;
+      gameUI.remapKey(rebindingAction as any, mouseCode);
+      rebindingAction = null;
+    }
+  }
+
+  function handleWindowContextMenu(e: MouseEvent) {
+    if (rebindingAction || Date.now() - rebindStartedAt < 400) {
+      e.preventDefault();
     }
   }
 
   function getKeyLabel(codes: string[] | undefined): string {
     if (!codes || codes.length === 0) return 'Sin asignar';
     const code = codes[0]!;
+    if (code === 'Mouse0') return 'Clic Izquierdo';
+    if (code === 'Mouse1') return 'Clic Central';
+    if (code === 'Mouse2') return 'Clic Derecho';
     if (code === 'Space') return 'Espacio';
     if (code === 'ShiftLeft') return 'Shift Izq';
     if (code === 'ShiftRight') return 'Shift Der';
@@ -203,7 +227,11 @@
   }
 </script>
 
-<svelte:window onkeydown={handleKeyDown} />
+<svelte:window
+  onkeydown={handleKeyDown}
+  onmousedown={handleWindowMouseDown}
+  oncontextmenu={handleWindowContextMenu}
+/>
 
 <!-- Botón flotante Volver en la parte superior izquierda de la pantalla -->
 <button
@@ -228,7 +256,12 @@
     <!-- Panel Izquierdo: Encabezado y Lista vertical continua de 5 Pestañas -->
     <aside class="tabs-sidebar">
       <div class="sidebar-header">
-        <span class="settings-icon-box">⚙️</span>
+        <span class="settings-icon-box" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="3"></circle>
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+          </svg>
+        </span>
         <div>
           <h2 id="settings-dialog-title" class="main-header">Ajustes generales</h2>
           <span class="sub-header">CONFIGURACIÓN</span>
@@ -242,7 +275,15 @@
           class:active={activeTab === 'controls'}
           onclick={() => switchTab('controls')}
         >
-          <span class="tab-icon">🎮</span>
+          <span class="tab-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+              <line x1="6" y1="12" x2="10" y2="12"></line>
+              <line x1="8" y1="10" x2="8" y2="14"></line>
+              <line x1="15" y1="13" x2="15.01" y2="13"></line>
+              <line x1="18" y1="11" x2="18.01" y2="11"></line>
+              <rect x="2" y="6" width="20" height="12" rx="2"></rect>
+            </svg>
+          </span>
           <span class="tab-label">Controles</span>
         </button>
 
@@ -252,7 +293,13 @@
           class:active={activeTab === 'audio'}
           onclick={() => switchTab('audio')}
         >
-          <span class="tab-icon">🔊</span>
+          <span class="tab-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+              <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
+              <path d="M15.54 8.46a5 5 0 0 1 0 7.07"></path>
+              <path d="M19.07 4.93a10 10 0 0 1 0 14.14"></path>
+            </svg>
+          </span>
           <span class="tab-label">Sonido</span>
         </button>
 
@@ -262,7 +309,13 @@
           class:active={activeTab === 'video'}
           onclick={() => switchTab('video')}
         >
-          <span class="tab-icon">🖥️</span>
+          <span class="tab-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
+              <line x1="8" y1="21" x2="16" y2="21"></line>
+              <line x1="12" y1="17" x2="12" y2="21"></line>
+            </svg>
+          </span>
           <span class="tab-label">Video y gráficos</span>
         </button>
 
@@ -272,7 +325,11 @@
           class:active={activeTab === 'kits'}
           onclick={() => switchTab('kits')}
         >
-          <span class="tab-icon">👕</span>
+          <span class="tab-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M20.38 3.46 16 2a4 4 0 0 1-8 0L3.62 3.46a2 2 0 0 0-1.34 2.23l.58 3.47a1 1 0 0 0 .99.84H6v10c0 1.1.9 2 2 2h8a2 2 0 0 0 2-2V10h2.15a1 1 0 0 0 .99-.84l.58-3.47a2 2 0 0 0-1.34-2.23z"></path>
+            </svg>
+          </span>
           <span class="tab-label">Equipaciones</span>
         </button>
 
@@ -282,7 +339,12 @@
           class:active={activeTab === 'avatar'}
           onclick={() => switchTab('avatar')}
         >
-          <span class="tab-icon">🎭</span>
+          <span class="tab-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="8" r="5"></circle>
+              <path d="M20 21a8 8 0 0 0-16 0"></path>
+            </svg>
+          </span>
           <span class="tab-label">Avatar y emotes</span>
         </button>
       </nav>
@@ -298,11 +360,47 @@
           <div class="section-header-row">
             <h3 class="section-heading">Configuración de Controles</h3>
             {#if rebindingAction}
-              <span class="pulse-rebinding">Presiona una tecla para asignar...</span>
+              <span class="pulse-rebinding">Presiona una tecla o botón del ratón para asignar...</span>
             {/if}
           </div>
 
           <div class="controls-scroll-area">
+            <!-- Modo de Movimiento (Teclado vs Ratón 360°) -->
+            <div class="controls-card">
+              <div class="movement-mode-header">
+                <div>
+                  <h4 class="card-title">Modo de Movimiento</h4>
+                  <small class="bind-hint">Elige entre dirección tradicional por teclado o seguimiento vectorial 360° con el puntero del ratón</small>
+                </div>
+                <div class="movement-mode-pills">
+                  <button
+                    type="button"
+                    class="move-mode-btn"
+                    class:active={gameUI.settings.movementMode === 'keyboard'}
+                    onclick={() => {
+                      soundFX.playUIClick();
+                      gameUI.settings.movementMode = 'keyboard';
+                      gameUI.saveSettings();
+                    }}
+                  >
+                    Teclado (WASD / Flechas)
+                  </button>
+                  <button
+                    type="button"
+                    class="move-mode-btn"
+                    class:active={gameUI.settings.movementMode === 'mouse'}
+                    onclick={() => {
+                      soundFX.playUIClick();
+                      gameUI.settings.movementMode = 'mouse';
+                      gameUI.saveSettings();
+                    }}
+                  >
+                    Ratón (Seguir Puntero 360°)
+                  </button>
+                </div>
+              </div>
+            </div>
+
             <!-- Desplazamiento y Movimiento -->
             <div class="controls-card">
               <h4 class="card-title">Desplazamiento y Movimiento</h4>
@@ -356,7 +454,7 @@
 
             <!-- Acciones Principales y Disparo -->
             <div class="controls-card">
-              <h4 class="card-title">Acciones Principales y Disparo</h4>
+              <h4 class="card-title">Acciones Principales y Disparo (Acepta Teclado y Clic Izq/Cen/Der)</h4>
               <div class="grid-2col">
                 <div class="bind-row">
                   <div>
@@ -391,7 +489,7 @@
                 <div class="bind-row">
                   <div>
                     <span class="bind-name">Dash (Impulso)</span>
-                    <small class="bind-hint">Aceleración explosiva instantánea</small>
+                    <small class="bind-hint">Aceleración explosiva con estela Stella</small>
                   </div>
                   <button
                     type="button"
@@ -400,6 +498,21 @@
                     onclick={() => startRebind('dash')}
                   >
                     {rebindingAction === 'dash' ? '...' : getKeyLabel(gameUI.keybinds.dash)}
+                  </button>
+                </div>
+
+                <div class="bind-row">
+                  <div>
+                    <span class="bind-name">Enfocar Balón (Mantener)</span>
+                    <small class="bind-hint">Centra la cámara en el balón mientras se mantiene</small>
+                  </div>
+                  <button
+                    type="button"
+                    class="key-badge"
+                    class:rebinding={rebindingAction === 'focusBall'}
+                    onclick={() => startRebind('focusBall')}
+                  >
+                    {rebindingAction === 'focusBall' ? '...' : getKeyLabel(gameUI.keybinds.focusBall)}
                   </button>
                 </div>
 
@@ -1316,6 +1429,98 @@
                         <span class="toggle-slider"></span>
                       </label>
                     </div>
+
+                    {#if gameUI.settings.floatingPointsEnabled}
+                      <div class="floating-filters-box">
+                        <span class="floating-filters-title">Categorías visibles en cancha:</span>
+                        <div class="floating-filters-grid">
+                          <label class="float-filter-item">
+                            <input
+                              type="checkbox"
+                              checked={gameUI.settings.floatingTextFilters.goal}
+                              onchange={(e) => {
+                                gameUI.settings.floatingTextFilters.goal = (e.currentTarget as HTMLInputElement).checked;
+                                gameUI.saveSettings();
+                              }}
+                            />
+                            <span class="filter-dot" style="background:#00ff88"></span>
+                            <span>Goles (+100)</span>
+                          </label>
+                          <label class="float-filter-item">
+                            <input
+                              type="checkbox"
+                              checked={gameUI.settings.floatingTextFilters.assist}
+                              onchange={(e) => {
+                                gameUI.settings.floatingTextFilters.assist = (e.currentTarget as HTMLInputElement).checked;
+                                gameUI.saveSettings();
+                              }}
+                            />
+                            <span class="filter-dot" style="background:#00e5ff"></span>
+                            <span>Asistencias (+50)</span>
+                          </label>
+                          <label class="float-filter-item">
+                            <input
+                              type="checkbox"
+                              checked={gameUI.settings.floatingTextFilters.save}
+                              onchange={(e) => {
+                                gameUI.settings.floatingTextFilters.save = (e.currentTarget as HTMLInputElement).checked;
+                                gameUI.saveSettings();
+                              }}
+                            />
+                            <span class="filter-dot" style="background:#fbbf24"></span>
+                            <span>Atajadas (+40)</span>
+                          </label>
+                          <label class="float-filter-item">
+                            <input
+                              type="checkbox"
+                              checked={gameUI.settings.floatingTextFilters.shot}
+                              onchange={(e) => {
+                                gameUI.settings.floatingTextFilters.shot = (e.currentTarget as HTMLInputElement).checked;
+                                gameUI.saveSettings();
+                              }}
+                            />
+                            <span class="filter-dot" style="background:#38bdf8"></span>
+                            <span>Tiros al Arco (+20)</span>
+                          </label>
+                          <label class="float-filter-item">
+                            <input
+                              type="checkbox"
+                              checked={gameUI.settings.floatingTextFilters.pass}
+                              onchange={(e) => {
+                                gameUI.settings.floatingTextFilters.pass = (e.currentTarget as HTMLInputElement).checked;
+                                gameUI.saveSettings();
+                              }}
+                            />
+                            <span class="filter-dot" style="background:#a3e635"></span>
+                            <span>Pases (+10)</span>
+                          </label>
+                          <label class="float-filter-item">
+                            <input
+                              type="checkbox"
+                              checked={gameUI.settings.floatingTextFilters.hattrick}
+                              onchange={(e) => {
+                                gameUI.settings.floatingTextFilters.hattrick = (e.currentTarget as HTMLInputElement).checked;
+                                gameUI.saveSettings();
+                              }}
+                            />
+                            <span class="filter-dot" style="background:#ffd700"></span>
+                            <span>Hat-Trick (+50)</span>
+                          </label>
+                          <label class="float-filter-item">
+                            <input
+                              type="checkbox"
+                              checked={gameUI.settings.floatingTextFilters.own_goal}
+                              onchange={(e) => {
+                                gameUI.settings.floatingTextFilters.own_goal = (e.currentTarget as HTMLInputElement).checked;
+                                gameUI.saveSettings();
+                              }}
+                            />
+                            <span class="filter-dot" style="background:#ff3366"></span>
+                            <span>Autogoles (-50)</span>
+                          </label>
+                        </div>
+                      </div>
+                    {/if}
 
                     <div class="toggle-item">
                       <span class="label-with-tooltip">
@@ -3836,6 +4041,91 @@
     color: #94a3b8;
     padding-right: 0.15rem;
     user-select: none;
+  }
+
+  .movement-mode-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    flex-wrap: wrap;
+  }
+
+  .movement-mode-pills {
+    display: inline-flex;
+    gap: 0.45rem;
+    background: #080e18;
+    padding: 0.25rem;
+    border-radius: 0.5rem;
+    border: 1px solid rgba(0, 229, 255, 0.25);
+  }
+
+  .move-mode-btn {
+    padding: 0.4rem 0.85rem;
+    border-radius: 0.35rem;
+    border: 1px solid transparent;
+    background: transparent;
+    color: #94a3b8;
+    font-family: 'Chivo', system-ui, sans-serif;
+    font-size: 0.78rem;
+    font-weight: 700;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+
+  .move-mode-btn.active {
+    background: #00e5ff;
+    color: #050811;
+    border-color: #00e5ff;
+    box-shadow: 0 0 10px rgba(0, 229, 255, 0.4);
+  }
+
+  .floating-filters-box {
+    margin-top: 0.35rem;
+    padding: 0.65rem 0.75rem;
+    background: #080e18;
+    border: 1px solid rgba(0, 229, 255, 0.2);
+    border-radius: 0.4rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+  }
+
+  .floating-filters-title {
+    font-family: 'Space Grotesk', system-ui, sans-serif;
+    font-size: 0.68rem;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: #00e5ff;
+  }
+
+  .floating-filters-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 0.35rem 0.65rem;
+  }
+
+  .float-filter-item {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-family: 'Chivo', system-ui, sans-serif;
+    font-size: 0.74rem;
+    color: #cbd5e1;
+    cursor: pointer;
+  }
+
+  .float-filter-item input {
+    accent-color: #00e5ff;
+    cursor: pointer;
+  }
+
+  .filter-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
   }
 
   /* Responsive Adjustments */

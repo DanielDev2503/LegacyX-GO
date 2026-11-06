@@ -1,4 +1,4 @@
-﻿import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import { GameEngine } from '../src/game/GameEngine';
 import { Player, INPUT_UP, INPUT_RIGHT, INPUT_KICK, INPUT_TURBO, INPUT_DASH } from '../src/game/Player';
 import { MatchPhase } from '../src/game/GameFSM';
@@ -25,9 +25,10 @@ describe('Shared Stamina System (Turbo, Dash, Immobility Recharge & Tackle)', ()
     expect(playerRed.isTurbo).toBe(false);
   });
 
-  it('executes Dash consuming calibrated 25% stamina (4 dashes per bar) for calibrated 37.5 px displacement over 4 ticks (+100% power)', () => {
+  it('executes Dash consuming calibrated 25% stamina (4 dashes per bar) for calibrated 37.5 px displacement over 7 ticks and enforces dashCooldown', () => {
     // Keep ball far away to isolate player motion
     engine.ball.pos.set(1000, 1000);
+    engine.setGameplayConfig({ dashCooldown: 0 });
     const disc = engine.playerDiscs.get('p1')!;
     disc.pos.set(0, 0);
     disc.prevPos.set(0, 0);
@@ -41,15 +42,15 @@ describe('Shared Stamina System (Turbo, Dash, Immobility Recharge & Tackle)', ()
     expect(playerRed.stamina).toBe(75);
     expect(playerRed.isDashing).toBe(true);
 
-    // Release dash input and complete the 4-tick burst
+    // Release dash input and complete the 7-tick burst (6 remaining ticks)
     inputs.set('p1', 0);
-    for (let i = 0; i < 3; i++) {
+    for (let i = 0; i < 6; i++) {
       engine.tick(inputs);
     }
 
     expect(playerRed.isDashing).toBe(false);
-    // 4 ticks * 9.375 px/tick = 37.5 px displacement (subject to mid-step substepping damping ~37.1 px)
-    expect(disc.pos.x).toBeGreaterThanOrEqual(36.0);
+    // 7 ticks * (37.5 / 7) px/tick = 37.5 px displacement (subject to mid-step substepping damping ~36.8 px)
+    expect(disc.pos.x).toBeGreaterThanOrEqual(35.5);
     expect(disc.pos.x).toBeLessThanOrEqual(38.4);
 
     // Attempt second dash with 75% stamina remaining
@@ -58,9 +59,9 @@ describe('Shared Stamina System (Turbo, Dash, Immobility Recharge & Tackle)', ()
     expect(playerRed.stamina).toBe(50);
     expect(playerRed.isDashing).toBe(true);
 
-    // Complete second dash (3 ticks)
+    // Complete second dash (6 remaining ticks)
     inputs.set('p1', 0);
-    for (let i = 0; i < 3; i++) {
+    for (let i = 0; i < 6; i++) {
       engine.tick(inputs);
     }
     expect(playerRed.isDashing).toBe(false);
@@ -72,14 +73,14 @@ describe('Shared Stamina System (Turbo, Dash, Immobility Recharge & Tackle)', ()
 
     // Fourth dash (25% -> 0%)
     inputs.set('p1', 0);
-    for (let i = 0; i < 3; i++) engine.tick(inputs);
+    for (let i = 0; i < 6; i++) engine.tick(inputs);
     inputs.set('p1', INPUT_RIGHT | INPUT_DASH);
     engine.tick(inputs);
     expect(playerRed.stamina).toBe(0);
 
     // Fifth dash should fail due to 0% stamina
     inputs.set('p1', 0);
-    for (let i = 0; i < 3; i++) engine.tick(inputs);
+    for (let i = 0; i < 6; i++) engine.tick(inputs);
     inputs.set('p1', INPUT_RIGHT | INPUT_DASH);
     engine.tick(inputs);
     expect(playerRed.stamina).toBe(0);
@@ -87,7 +88,7 @@ describe('Shared Stamina System (Turbo, Dash, Immobility Recharge & Tackle)', ()
     expect(playerRed.dashTicksRemaining).toBe(0);
   });
 
-  it('strictly edge-triggers dash preventing auto-repeat while key is held', () => {
+  it('strictly edge-triggers dash preventing auto-repeat while key is held and enforces default 1.0s dashCooldown', () => {
     engine.ball.pos.set(1000, 1000);
     const inputs = new Map<string, number>();
 
@@ -96,27 +97,42 @@ describe('Shared Stamina System (Turbo, Dash, Immobility Recharge & Tackle)', ()
     engine.tick(inputs);
     expect(playerRed.stamina).toBe(75);
     expect(playerRed.isDashing).toBe(true);
+    expect(playerRed.dashCooldownTimer).toBe(1.0);
 
-    // Keep holding Dash key for 10 ticks: dash completes (4 ticks total) and does NOT auto-fire second dash
+    // Keep holding Dash key for 10 ticks: dash completes (7 ticks total) and does NOT auto-fire second dash
     for (let i = 0; i < 10; i++) {
       engine.tick(inputs);
     }
     expect(playerRed.isDashing).toBe(false);
     expect(playerRed.stamina).toBe(75); // Still 75, second dash was NOT consumed while held!
 
-    // Release dash key
+    // Release dash key for 1 tick while cooldown is still active (~49 ticks remaining)
+    engine.setGameplayConfig({ staminaRegenMoving: false });
     inputs.set('p1', INPUT_RIGHT);
     engine.tick(inputs);
     expect(playerRed.stamina).toBe(75);
 
-    // Press dash key again (rising edge)
+    // Pressing dash key BEFORE 1.0s cooldown expires must be blocked
+    inputs.set('p1', INPUT_RIGHT | INPUT_DASH);
+    engine.tick(inputs);
+    expect(playerRed.isDashing).toBe(false);
+    expect(playerRed.stamina).toBe(75);
+
+    // Wait out remaining cooldown ticks
+    inputs.set('p1', INPUT_RIGHT);
+    for (let i = 0; i < 50; i++) {
+      engine.tick(inputs);
+    }
+    expect(playerRed.dashCooldownTimer).toBe(0);
+
+    // Press dash key again (rising edge after cooldown expires)
     inputs.set('p1', INPUT_RIGHT | INPUT_DASH);
     engine.tick(inputs);
     expect(playerRed.stamina).toBe(50); // Second dash successfully fired on new rising edge
     expect(playerRed.isDashing).toBe(true);
   });
 
-  it('drains Turbo at 40%/s reaching scaled max speed (x2.0 over base ~168 px/s -> ~336 px/s terminal velocity)', () => {
+  it('drains Turbo at 40%/s reaching scaled max speed (x2.0 over base ~210 px/s -> ~420 px/s terminal velocity)', () => {
     engine.ball.pos.set(1000, 1000);
     const disc = engine.playerDiscs.get('p1')!;
     disc.pos.set(0, 0);
@@ -134,9 +150,9 @@ describe('Shared Stamina System (Turbo, Dash, Immobility Recharge & Tackle)', ()
     // Stamina should drain ~40% (leaving ~60%)
     expect(playerRed.stamina).toBeCloseTo(60, 0);
     expect(playerRed.isTurbo).toBe(true);
-    // Speed reaches turboMaxSpeed (x2.0 over base 168 px/s terminal velocity = 336 px/s), resulting in 336 * 0.96 = 322.56 post-damping
+    // Speed reaches turboMaxSpeed (x2.0 over base 210 px/s terminal velocity = 420 px/s), resulting in 420 * 0.96 = 403.2 post-damping
     const speed = Math.hypot(disc.vel.x, disc.vel.y);
-    expect(speed).toBeCloseTo(336.0 * 0.96, 0.5);
+    expect(speed).toBeCloseTo(420.0 * 0.96, 0.5);
 
     // Drain remaining stamina (another 90 ticks = 1.5s, total 150 ticks = 2.5s)
     for (let i = 0; i < 90; i++) {
@@ -147,7 +163,7 @@ describe('Shared Stamina System (Turbo, Dash, Immobility Recharge & Tackle)', ()
     expect(playerRed.isTurbo).toBe(false);
   });
 
-  it('recharges stamina at +25%/s conditioned strictly on null movement inputs (gliding/inertia recharges)', () => {
+  it('recharges stamina at +25%/s while moving normally by default and stops moving recharge when staminaRegenMoving is false', () => {
     engine.ball.pos.set(1000, 1000);
     const disc = engine.playerDiscs.get('p1')!;
     playerRed.stamina = 0;
@@ -161,12 +177,21 @@ describe('Shared Stamina System (Turbo, Dash, Immobility Recharge & Tackle)', ()
     engine.tick(inputs);
     expect(playerRed.stamina).toBeCloseTo(25 / 60, 4);
 
-    // Case 2: holding move key even if stalled against a wall -> NO recharge
+    // Case 2: holding move key without turbo -> recharges at +25%/s by default (staminaRegenMoving = true)
+    playerRed.stamina = 0;
+    disc.vel.set(0, 0);
+    inputs.set('p1', INPUT_UP);
+    engine.tick(inputs);
+    expect(playerRed.stamina).toBeCloseTo(25 / 60, 4);
+
+    // Case 2b: when staminaRegenMoving is disabled, holding move key does NOT recharge
+    engine.setGameplayConfig({ staminaRegenMoving: false });
     playerRed.stamina = 0;
     disc.vel.set(0, 0);
     inputs.set('p1', INPUT_UP);
     engine.tick(inputs);
     expect(playerRed.stamina).toBe(0);
+    engine.setGameplayConfig({ staminaRegenMoving: true });
 
     // Case 3: complete stillness with inputs == 0 -> recharge +25%/s
     disc.vel.set(0, 0);

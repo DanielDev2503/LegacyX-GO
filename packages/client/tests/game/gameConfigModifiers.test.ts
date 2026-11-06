@@ -265,7 +265,7 @@ describe('Gameplay Modifiers & Continuous A/D Magnus Physics Suite', () => {
       expect(inst.players.get(1)!.radius).toBe(19.0);
     });
 
-    it('calibrates HBS AF 3v3 Official defaults and applies kickingAcceleration (0.083/0.11) while holding kick', () => {
+    it('calibrates HBS AF 3v3 Official defaults and applies kickingAcceleration (0.108/0.14) while holding kick', () => {
       expect(DEFAULT_GAMEPLAY_CONFIG.ballRadius).toBe(5.8);
       expect(DEFAULT_GAMEPLAY_CONFIG.playerRadius).toBe(15.0);
       expect(DEFAULT_GAMEPLAY_CONFIG.ballRestitution).toBe(0.412);
@@ -273,7 +273,9 @@ describe('Gameplay Modifiers & Continuous A/D Magnus Physics Suite', () => {
       expect(DEFAULT_GAMEPLAY_CONFIG.playerMass).toBe(2.0);
       expect(DEFAULT_GAMEPLAY_CONFIG.playerFriction).toBe(0.96);
       expect(DEFAULT_GAMEPLAY_CONFIG.ballFriction).toBe(0.99);
-      expect(DEFAULT_GAMEPLAY_CONFIG.playerAcceleration).toBe(0.11);
+      expect(DEFAULT_GAMEPLAY_CONFIG.playerAcceleration).toBe(0.14);
+      expect(DEFAULT_GAMEPLAY_CONFIG.kickingAcceleration).toBe(0.108);
+      expect(DEFAULT_GAMEPLAY_CONFIG.playerMaxSpeed).toBe(3.5);
       expect(DEFAULT_GAMEPLAY_CONFIG.kickStrength).toBe(4.545);
 
       const disc = engine.playerDiscs.get('p1')!;
@@ -287,7 +289,7 @@ describe('Gameplay Modifiers & Continuous A/D Magnus Physics Suite', () => {
       engine.tick(new Map([['p1', INPUT_RIGHT | INPUT_KICK]]));
       const kickingVelX = disc.vel.x;
 
-      expect(kickingVelX).toBeCloseTo(normalVelX * (0.083 / 0.11), 4);
+      expect(kickingVelX).toBeCloseTo(normalVelX * (0.108 / 0.14), 4);
     });
 
     it('activates Power Shot on running/turbo/dash kick and keeps standing normal kick as non-power shot', () => {

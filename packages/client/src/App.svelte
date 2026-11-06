@@ -17,12 +17,16 @@
     INPUT_FLAG_DASH,
     INPUT_FLAG_MAGNUS_LEFT,
     INPUT_FLAG_MAGNUS_RIGHT,
+    INPUT_FLAG_MOUSE_DIR,
+    INPUT_FLAG_FOCUS_BALL,
     lerp
   } from '@legacyx/core';
 
   import { GameRenderer, triggerPitchEmote } from './renderer/GameRenderer.js';
   import type { PlayerVisualInfo } from './renderer/DiscRenderer.js';
   import { gameUI, type PhysicsModifiers, type MatchBannerPayload } from './ui/state/gameUI.svelte.js';
+  import { userProfile } from './ui/state/userProfile.svelte.js';
+  import { matchRecorder } from './recorder/MatchRecorder.js';
   import { soundFX } from './audio/SoundFX.js';
   import { gameApp } from './net/GameApp.js';
   import { SimulationTicker } from './net/SimulationTicker.js';
@@ -37,6 +41,7 @@
   import StadiumSelectModal from './ui/modals/StadiumSelectModal.svelte';
   import SettingsModal from './ui/modals/SettingsModal.svelte';
   import KeybindModal from './ui/modals/KeybindModal.svelte';
+  import ReplayViewerModal from './ui/modals/ReplayViewerModal.svelte';
   import PostMatchCarousel from './ui/hud/PostMatchCarousel.svelte';
   import GlobalTooltip from './ui/components/GlobalTooltip.svelte';
 
@@ -51,6 +56,7 @@
       rendererInstance.discRenderer.playerRadius = modifiers.playerRadius ?? gameUI.gameplayConfig.playerRadius ?? 15.0;
     }
     if (!testEngine) return;
+    testEngine.isPracticeMode = gameUI.isPracticeMode;
     testEngine.applyModifiers(modifiers);
   }
 
@@ -73,14 +79,18 @@
     let frozenMatchSnapshot: any = null;
     let goBannerTimer: ReturnType<typeof setTimeout> | null = null;
 
+    matchRecorder.attachCanvas(canvasEl);
+
     if (isHostInitial) {
       engine = new EngineInstance(gameUI.selectedStadiumId || 'mediano');
+      engine.isPracticeMode = gameUI.isPracticeMode;
       testEngine = engine;
       engine.applyModifiers(gameUI.physicsModifiers);
       engine.resetPositions();
       soundFX.startHostKeepAlive();
     } else {
       predEngine = new EngineInstance(predStadiumId);
+      predEngine.isPracticeMode = gameUI.isPracticeMode;
       predEngine.applyModifiers(gameUI.physicsModifiers);
     }
 
@@ -194,6 +204,32 @@
       }
     };
 
+    function handleFloatingScoreEvent(evt: {
+      playerId: number;
+      points: number;
+      reason: string;
+      x: number;
+      y: number;
+      category?: string;
+    }): void {
+      if (gameUI.settings.floatingPointsEnabled === false) return;
+      const cat = (evt.category || 'goal') as keyof typeof gameUI.settings.floatingTextFilters;
+      if (gameUI.settings.floatingTextFilters && gameUI.settings.floatingTextFilters[cat] === false) {
+        return;
+      }
+      const sign = evt.points >= 0 ? '+' : '';
+      const label = `${sign}${evt.points} ${evt.reason}`;
+      const color =
+        evt.points < 0
+          ? '#ff4757'
+          : cat === 'goal' || cat === 'hattrick'
+            ? '#ffd700'
+            : '#00e5ff';
+      rendererInstance?.addFloatingScore(label, evt.x, evt.y - 18, color);
+    }
+
+    gameApp.onScoreEvent = handleFloatingScoreEvent;
+
     gameUI.onStartMatch = () => {
       frozenMatchSnapshot = null;
       gameUI.hasCompletedMatch = false;
@@ -208,6 +244,7 @@
         (document.activeElement as HTMLElement)?.blur();
       }
       if (gameUI.isHost && engine) {
+        engine.isPracticeMode = gameUI.isPracticeMode;
         syncEnginePlayers();
         engine.resetMatchStats();
         engine.startMatchWithIntro();
@@ -215,6 +252,20 @@
         gameUI.handleMatchPhaseTransition(engine.fsm.state);
         gameApp.syncMatchPhase(engine.fsm.state);
         gameApp.networkHost?.broadcastRoomStateSync();
+        if (gameUI.roomType === 'ranked' && !gameUI.isPracticeMode) {
+          const participantIds = gameUI.rosterPlayers
+            .filter((p) => p.team === 'red' || p.team === 'blue')
+            .map((p) => p.nickname);
+          void userProfile
+            .startRankedMatch(
+              gameUI.activeRoom?.id || gameUI.matchId || 'ranked',
+              gameUI.selectedStadiumId || 'mediano',
+              participantIds
+            )
+            .then((token) => {
+              gameUI.activeMatchToken = token;
+            });
+        }
       } else if (!gameUI.isHost && gameApp.networkClient) {
         gameApp.networkClient.sendAdminAction('START_MATCH');
       }
@@ -259,9 +310,10 @@
       if (!engine) {
         engine = new EngineInstance('mediano');
         testEngine = engine;
-        engine.applyModifiers(gameUI.physicsModifiers);
         wireHostEngineEvents(engine);
       }
+      engine.isPracticeMode = true;
+      engine.applyModifiers(gameUI.physicsModifiers);
       engine.loadStadium('mediano');
       rendererInstance?.setStadium(createStadium('mediano'));
       syncEnginePlayers();
@@ -316,6 +368,11 @@
 
     // Conectar eventos del motor al sintetizador procedural Web Audio API, Screen Shake y Red P2P
     function wireHostEngineEvents(hostEngine: EngineInstance): void {
+      hostEngine.on('score_event', (evt: any) => {
+        handleFloatingScoreEvent(evt);
+        gameApp.networkHost?.broadcastScoreEvent(evt);
+      });
+
       hostEngine.on('goal', (payload: any) => {
         soundFX.playGoalHorn();
         soundFX.playWhistle();
@@ -326,6 +383,15 @@
 
         if (typeof payload?.redScore === 'number') gameUI.redScore = payload.redScore;
         if (typeof payload?.blueScore === 'number') gameUI.blueScore = payload.blueScore;
+
+        if (matchRecorder.isRecording) {
+          matchRecorder.recordGoalMarker(
+            payload?.scoringTeam ?? 'red',
+            payload?.redScore ?? gameUI.redScore,
+            payload?.blueScore ?? gameUI.blueScore,
+            payload?.scorerName ?? undefined
+          );
+        }
 
         // Si el gol no concluyó el partido (fase 3: GOAL), desplegar Banner de Gol (3.0s)
         if (hostEngine.fsm.state === MatchPhase.GOAL) {
@@ -450,6 +516,27 @@
         gameUI.redTeamStats = frozen.redStats;
         gameUI.blueTeamStats = frozen.blueStats;
 
+        if (gameUI.roomType === 'ranked' && gameUI.activeMatchToken) {
+          const tokenToReport = gameUI.activeMatchToken;
+          gameUI.activeMatchToken = null;
+          void userProfile.reportRankedMatch({
+            matchToken: tokenToReport,
+            redScore: frozen.snapshot.redScore,
+            blueScore: frozen.snapshot.blueScore,
+            winner: frozen.snapshot.winner,
+            durationSeconds: frozen.snapshot.matchDuration,
+            mvpPlayerId: frozen.theMVP?.nickname ? String(frozen.theMVP.nickname) : null,
+            playerStats: frozen.allStats.map((s: any) => ({
+              userId: String(s.nickname || s.playerId),
+              team: s.team === 'blue' ? 'blue' : 'red',
+              goals: Number(s.goals || 0),
+              assists: Number(s.assists || 0),
+              saves: Number(s.saves || 0),
+              points: Number(s.points || 0)
+            }))
+          });
+        }
+
         gameApp.syncMatchPhase(0);
         gameApp.networkHost?.broadcastMatchStats(
           frozen.snapshot,
@@ -485,12 +572,58 @@
     window.addEventListener('resize', handleResize);
     handleResize();
 
-    // 3. Captura y enrutamiento de inputs
+    // 3. Captura y enrutamiento de inputs (Teclado + Ratón)
     const keyState = new Map<string, boolean>();
     let dashTriggered = false;
+    let mouseScreenX = window.innerWidth / 2;
+    let mouseScreenY = window.innerHeight / 2;
 
     const onPointerDown = () => {
       soundFX.ensureContext();
+    };
+
+    const onContextMenu = (e: MouseEvent) => {
+      if (gameUI.currentScreen === 'IN_GAME' && gameUI.activeModal === 'NONE') {
+        e.preventDefault();
+      }
+    };
+
+    const onMouseMove = (e: MouseEvent) => {
+      mouseScreenX = e.clientX;
+      mouseScreenY = e.clientY;
+    };
+
+    const onMouseDown = (e: MouseEvent) => {
+      soundFX.ensureContext();
+      const targetEl = e.target as HTMLElement | null;
+      if (targetEl && (targetEl.tagName === 'INPUT' || targetEl.tagName === 'TEXTAREA' || targetEl.tagName === 'BUTTON' || targetEl.closest('button'))) {
+        return;
+      }
+      if (gameUI.currentScreen !== 'IN_GAME' || gameUI.activeModal !== 'NONE') return;
+      const code = e.button === 0 ? 'Mouse0' : e.button === 1 ? 'Mouse1' : e.button === 2 ? 'Mouse2' : '';
+      if (!code) return;
+
+      if (gameUI.keybinds.dash.includes(code)) {
+        dashTriggered = true;
+      }
+      const wasDown = Boolean(keyState.get(code));
+      keyState.set(code, true);
+      if (!wasDown && isGameplayBindCode(code)) {
+        dispatchImmediateGuestInput();
+      }
+    };
+
+    const onMouseUp = (e: MouseEvent) => {
+      const code = e.button === 0 ? 'Mouse0' : e.button === 1 ? 'Mouse1' : e.button === 2 ? 'Mouse2' : '';
+      if (!code) return;
+      if (gameUI.keybinds.dash.includes(code)) {
+        dashTriggered = false;
+      }
+      const wasDown = Boolean(keyState.get(code));
+      keyState.set(code, false);
+      if (wasDown && isGameplayBindCode(code)) {
+        dispatchImmediateGuestInput();
+      }
     };
 
     function isGameplayBindCode(code: string): boolean {
@@ -505,20 +638,30 @@
         kb.dash.includes(code) ||
         kb.curveLeft.includes(code) ||
         kb.curveRight.includes(code) ||
+        (kb.focusBall && kb.focusBall.includes(code)) ||
         code === 'KeyX' ||
         code === 'ShiftRight' ||
         code === 'KeyQ' ||
         code === 'KeyZ' ||
         code === 'KeyE' ||
-        code === 'KeyC'
+        code === 'KeyC' ||
+        code === 'Mouse0' ||
+        code === 'Mouse1' ||
+        code === 'Mouse2'
       );
     }
 
     function dispatchImmediateGuestInput(): void {
       if (gameUI.isHost || !gameApp.networkClient) return;
-      const mask = computeInputMask(false);
+      const inputObj = computeLocalInput(false);
       const tick = predEngine ? predEngine.currentTick + 1 : clientTick;
-      gameApp.networkClient.sendInput(mask, tick);
+      gameApp.networkClient.sendInput(
+        inputObj.inputMask ?? 0,
+        tick,
+        inputObj.dirX,
+        inputObj.dirY,
+        inputObj.useMouseDir
+      );
     }
 
     const onKeyDown = (e: KeyboardEvent) => {
@@ -595,6 +738,10 @@
     window.addEventListener('pointerdown', onPointerDown);
     window.addEventListener('keydown', onKeyDown);
     window.addEventListener('keyup', onKeyUp);
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mousedown', onMouseDown);
+    window.addEventListener('mouseup', onMouseUp);
+    canvasEl.addEventListener('contextmenu', onContextMenu);
 
     // 4. Bucle desacoplado: Simulación y Network a 60 Hz en Worker + Render en requestAnimationFrame
     const FIXED_DT_MS = 1000 / 60;
@@ -614,17 +761,66 @@
       );
     }
 
-    function computeInputMask(consumeDash: boolean): number {
+    function getLocalPlayerWorldPos(): { x: number; y: number } | null {
+      const localId = gameUI.localPlayerId;
+      if (gameUI.isHost && engine) {
+        const d = engine.players.get(localId);
+        if (d) return { x: d.pos.x, y: d.pos.y };
+      } else if (predEngine && predEngine.players.has(localId)) {
+        const d = predEngine.players.get(localId)!;
+        return { x: d.pos.x, y: d.pos.y };
+      } else if (currSnapshot && Array.isArray(currSnapshot.discs)) {
+        const d = currSnapshot.discs.find((item) => item.id === localId);
+        if (d) return { x: d.x, y: d.y };
+      }
+      return null;
+    }
+
+    function computeLocalInput(consumeDash: boolean): PlayerInput {
       let mask = 0;
+      let dirX: number | undefined;
+      let dirY: number | undefined;
+      let useMouseDir = false;
+
       const isInputActive = gameUI.currentScreen === 'IN_GAME' && gameUI.activeModal === 'NONE';
       const activeEl = document.activeElement;
       const isTyping = activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA');
 
       if (isInputActive && !isTyping) {
-        if (gameUI.keybinds.up.some((k) => keyState.get(k))) mask |= INPUT_FLAG_UP;
-        if (gameUI.keybinds.down.some((k) => keyState.get(k))) mask |= INPUT_FLAG_DOWN;
-        if (gameUI.keybinds.left.some((k) => keyState.get(k))) mask |= INPUT_FLAG_LEFT;
-        if (gameUI.keybinds.right.some((k) => keyState.get(k))) mask |= INPUT_FLAG_RIGHT;
+        if (gameUI.settings.movementMode === 'mouse') {
+          const playerPos = getLocalPlayerWorldPos();
+          if (playerPos) {
+            const rect = canvasEl.getBoundingClientRect();
+            const dpr = typeof window !== 'undefined' && window.devicePixelRatio ? window.devicePixelRatio : 1;
+            const safeBottomCss = renderer.getChatSafeArea() / dpr;
+            const usableHeightCss = Math.max(100, rect.height - safeBottomCss);
+            const relX = mouseScreenX - rect.left - rect.width / 2;
+            const relY = mouseScreenY - rect.top - usableHeightCss / 2;
+            const z = Math.max(0.1, renderer.camera.zoom || 1.0);
+            const worldMouseX = renderer.camera.x + relX / z;
+            const worldMouseY = renderer.camera.y + relY / z;
+
+            const dx = worldMouseX - playerPos.x;
+            const dy = worldMouseY - playerPos.y;
+            const L = Math.hypot(dx, dy);
+
+            useMouseDir = true;
+            mask |= INPUT_FLAG_MOUSE_DIR;
+            if (L <= 6) {
+              dirX = 0;
+              dirY = 0;
+            } else {
+              const damping = L < 42 ? (L - 6) / 36 : 1.0;
+              dirX = (dx / L) * damping;
+              dirY = (dy / L) * damping;
+            }
+          }
+        } else {
+          if (gameUI.keybinds.up.some((k) => keyState.get(k))) mask |= INPUT_FLAG_UP;
+          if (gameUI.keybinds.down.some((k) => keyState.get(k))) mask |= INPUT_FLAG_DOWN;
+          if (gameUI.keybinds.left.some((k) => keyState.get(k))) mask |= INPUT_FLAG_LEFT;
+          if (gameUI.keybinds.right.some((k) => keyState.get(k))) mask |= INPUT_FLAG_RIGHT;
+        }
 
         if (gameUI.keybinds.kick.some((k) => keyState.get(k)) || keyState.get('KeyX')) mask |= INPUT_FLAG_KICK;
 
@@ -643,8 +839,19 @@
         if (gameUI.keybinds.curveRight.some((k) => keyState.get(k)) || keyState.get('KeyE') || keyState.get('KeyC')) {
           mask |= INPUT_FLAG_MAGNUS_RIGHT;
         }
+        if (gameUI.keybinds.focusBall?.some((k) => keyState.get(k))) {
+          mask |= INPUT_FLAG_FOCUS_BALL;
+        }
       }
-      return mask;
+
+      renderer.isFocusingBall = (mask & INPUT_FLAG_FOCUS_BALL) !== 0;
+
+      return {
+        inputMask: mask,
+        dirX,
+        dirY,
+        useMouseDir
+      };
     }
 
     function syncHudTelemetryFromSnapshot(snap: GameStateSnapshot): void {
@@ -667,6 +874,7 @@
       syncHudTelemetryFromSnapshot(snap);
       if (!predEngine && !gameUI.isHost) {
         predEngine = new EngineInstance(gameUI.selectedStadiumId || 'mediano');
+        predEngine.isPracticeMode = gameUI.isPracticeMode;
         predEngine.applyModifiers(gameUI.physicsModifiers);
       }
       if (predEngine && gameUI.localPlayerId > 0) {
@@ -690,7 +898,8 @@
 
     const simTicker = new SimulationTicker((now) => {
       lastSimTimestamp = now;
-      const mask = computeInputMask(true);
+      const localInput = computeLocalInput(true);
+      const mask = localInput.inputMask ?? 0;
 
       if (!gameUI.isHost) {
         // Guest: Predicción local a 60 Hz + envío de input por canal no confiable
@@ -709,11 +918,24 @@
             prevPredLocalPos.y = localDiscBefore.pos.y;
 
             const nextTick = predEngine.currentTick + 1;
-            reconciler.recordInput(nextTick, mask);
-            gameApp.networkClient.sendInput(mask, nextTick);
+            reconciler.recordInput({
+              tick: nextTick,
+              mask,
+              inputMask: mask,
+              dirX: localInput.dirX,
+              dirY: localInput.dirY,
+              useMouseDir: localInput.useMouseDir
+            });
+            gameApp.networkClient.sendInput(
+              mask,
+              nextTick,
+              localInput.dirX,
+              localInput.dirY,
+              localInput.useMouseDir
+            );
 
             const localInputMap = new Map<number, PlayerInput>();
-            localInputMap.set(gameUI.localPlayerId, { inputMask: mask });
+            localInputMap.set(gameUI.localPlayerId, localInput);
             predEngine.step(localInputMap);
 
             const localDiscAfter = predEngine.players.get(gameUI.localPlayerId);
@@ -724,7 +946,13 @@
             }
             clientTick = predEngine.currentTick;
           } else {
-            gameApp.networkClient.sendInput(mask, ++clientTick);
+            gameApp.networkClient.sendInput(
+              mask,
+              ++clientTick,
+              localInput.dirX,
+              localInput.dirY,
+              localInput.useMouseDir
+            );
             if (predEngine && gameUI.localPlayerId > 0) {
               const localDisc = predEngine.players.get(gameUI.localPlayerId);
               if (localDisc) {
@@ -739,9 +967,10 @@
         }
       } else if (engine) {
         // Host: Sincronizar jugadores y procesar física autoritativa
+        engine.isPracticeMode = gameUI.isPracticeMode;
         syncEnginePlayers();
         const inputs = new Map<number, PlayerInput>();
-        inputs.set(gameUI.localPlayerId, { inputMask: mask });
+        inputs.set(gameUI.localPlayerId, localInput);
         for (const [rId, rInput] of gameApp.remoteInputs.entries()) {
           inputs.set(rId, rInput);
         }
@@ -878,6 +1107,21 @@
         renderer.render(prevSnapshot, currSnapshot, alpha, gameUI.localPlayerId);
       }
 
+      if (matchRecorder.isRecording && currSnapshot && Array.isArray(currSnapshot.discs)) {
+        matchRecorder.recordFrame({
+          redScore: currSnapshot.redScore ?? gameUI.redScore,
+          blueScore: currSnapshot.blueScore ?? gameUI.blueScore,
+          timerSeconds: currSnapshot.matchTimer ?? 0,
+          discs: currSnapshot.discs.map((d) => ({
+            id: d.id,
+            team: d.team,
+            x: d.x,
+            y: d.y,
+            radius: d.team === 0 ? renderer.discRenderer.ballRadius : renderer.discRenderer.playerRadius
+          }))
+        });
+      }
+
       // Actualizar telemetría reactiva en UI
       frameCount++;
       if (currentTime - lastFpsCalculation >= 500) {
@@ -926,6 +1170,10 @@
         clearTimeout(goBannerTimer);
         goBannerTimer = null;
       }
+      if (matchRecorder.isRecording) {
+        matchRecorder.stopRecording();
+      }
+      matchRecorder.attachCanvas(null);
       simTicker.stop();
       if (gameUI.isHost) {
         soundFX.stopHostKeepAlive();
@@ -933,12 +1181,17 @@
       if (gameApp.networkClient) {
         gameApp.networkClient.onSnapshotDecoded = undefined;
       }
+      gameApp.onScoreEvent = null;
       gameUI.onTriggerShake = null;
       cancelAnimationFrame(animFrameId);
       window.removeEventListener('resize', handleResize);
       window.removeEventListener('pointerdown', onPointerDown);
       window.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('keyup', onKeyUp);
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mousedown', onMouseDown);
+      window.removeEventListener('mouseup', onMouseUp);
+      canvasEl.removeEventListener('contextmenu', onContextMenu);
       renderer.destroy();
       rendererInstance = null;
       testEngine = null;
@@ -978,6 +1231,10 @@
       <SettingsModal />
     {:else if gameUI.activeModal === 'KEYBINDS' || gameUI.activeModal === 'keybinds'}
       <KeybindModal />
+    {/if}
+
+    {#if gameUI.showReplayModal}
+      <ReplayViewerModal />
     {/if}
 
     <!-- Tooltip Global Singleton (Portal) -->

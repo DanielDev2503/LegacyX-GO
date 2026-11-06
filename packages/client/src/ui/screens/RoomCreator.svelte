@@ -1,8 +1,10 @@
 <script lang="ts">
   import { gameUI } from '../state/gameUI.svelte.js';
+  import { userProfile } from '../state/userProfile.svelte.js';
   import { soundFX } from '../../audio/SoundFX.js';
   import { tooltip } from '../actions/tooltip.js';
   import { gameApp } from '../../net/GameApp.js';
+  import StadiumPreviewCanvas from '../components/StadiumPreviewCanvas.svelte';
 
   let roomName = $state(`${gameUI.nickname || 'Player'}'s room`);
   let playerCount = $state(12);
@@ -17,11 +19,17 @@
   let isCreating = $state(false);
 
   const stadiums = [
-    { name: 'Mediano', dims: '55x30m', desc: 'Campo Clásico Estándar 3v3' },
-    { name: 'AF 3v3 Official', dims: '60x35m', desc: 'Canónico Haxball 3v3' },
-    { name: 'Big Pitch', dims: '80x45m', desc: 'Gran Estadio 4v4 / 5v5' },
-    { name: 'Small Field', dims: '40x22m', desc: 'Cancha Reducida 1v1 / 2v2' }
+    { id: 'classic', name: 'Mediano', dims: '55x30m', desc: 'Campo Clásico Estándar 3v3' },
+    { id: 'classic', name: 'AF 3v3 Official', dims: '60x35m', desc: 'Canónico Haxball 3v3' },
+    { id: 'big', name: 'Big Pitch', dims: '80x45m', desc: 'Gran Estadio 4v4 / 5v5' },
+    { id: 'small', name: 'Small Field', dims: '40x22m', desc: 'Cancha Reducida 1v1 / 2v2' }
   ];
+
+  $effect(() => {
+    if (!userProfile.canCreateRankedRoom && gameUI.roomType === 'ranked') {
+      gameUI.roomType = 'casual';
+    }
+  });
 
   $effect(() => {
     if (gameUI.activeStadiumName) {
@@ -41,7 +49,7 @@
 
   function increasePlayers() {
     soundFX.playUIClick();
-    if (playerCount < 20) playerCount += 1;
+    if (playerCount < 30) playerCount += 1;
   }
 
   function formatTimeLimit(val: number): string {
@@ -56,17 +64,28 @@
     isCreating = true;
     soundFX.playUIClick();
     const activeStadium = gameUI.activeStadiumName || stadiums[selectedStadiumIndex].name;
+    const effectiveRoomType = userProfile.canCreateRankedRoom ? gameUI.roomType : 'casual';
     try {
+      gameUI.isPracticeMode = false;
+      gameUI.timeLimitMinutes = selectedTimeMinutes;
+      gameUI.scoreLimitGoals = selectedGoalsLimit;
+      gameUI.physicsModifiers.timeLimit = selectedTimeMinutes;
+      gameUI.physicsModifiers.scoreLimit = selectedGoalsLimit;
+      gameUI.teamsLocked = teamsLocked;
+      gameUI.allowCaptainKitSwitch = allowCaptainKitSwitch;
+      gameUI.roomType = effectiveRoomType;
+
       const success = await gameApp.createRoom({
         name: roomName.trim() || `${gameUI.nickname || 'Player'}'s room`,
         stadium: activeStadium || 'mediano',
-        isPublic: !isPasswordProtected,
+        isPublic: isPublic && !isPasswordProtected,
         password: isPasswordProtected ? roomPassword : undefined,
-        maxPlayers: playerCount || 12,
+        maxPlayers: Math.min(30, Math.max(2, playerCount || 12)),
         timeLimit: selectedTimeMinutes,
         scoreLimit: selectedGoalsLimit,
         teamsLocked: teamsLocked,
-        allowCaptainKitSwitch: allowCaptainKitSwitch
+        allowCaptainKitSwitch: allowCaptainKitSwitch,
+        roomType: effectiveRoomType
       });
       if (success) {
         gameUI.allowCaptainKitSwitch = allowCaptainKitSwitch;
@@ -138,7 +157,13 @@
 
           <div class="param-row">
             <div class="toggle-row">
-              <span class="toggle-label">🔒 Proteger con contraseña</span>
+              <span class="toggle-label flex-icon-label">
+                <svg class="inline-svg-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+                  <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+                </svg>
+                <span>Proteger con contraseña</span>
+              </span>
               <label class="switch">
                 <input
                   type="checkbox"
@@ -162,19 +187,92 @@
 
         <div class="section-divider"></div>
 
-        <!-- SECCIÓN 2: Límite de jugadores -->
+        <!-- SECCIÓN 1.5: Tipo de Sala (Casual vs Clasificatoria Ranked) -->
+        <div class="config-section">
+          <div class="param-row">
+            <div class="param-label-row">
+              <span class="param-name">Tipo de Sala</span>
+              {#if !userProfile.canCreateRankedRoom}
+                <span class="role-hint-tag">ROL: {userProfile.isGuest ? 'INVITADO' : 'JUGADOR'}</span>
+              {:else}
+                <span class="role-hint-tag verified">ROL: {userProfile.role.toUpperCase()}</span>
+              {/if}
+            </div>
+            <div class="room-type-segmented">
+              <button
+                type="button"
+                class="type-seg-btn"
+                class:active={gameUI.roomType === 'casual'}
+                onclick={() => { soundFX.playUIClick(); gameUI.roomType = 'casual'; }}
+              >
+                <svg class="inline-svg-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <circle cx="12" cy="12" r="9"></circle>
+                  <path d="M12 3a9 9 0 0 1 9 9"></path>
+                </svg>
+                <span>Casual</span>
+              </button>
+              <button
+                type="button"
+                class="type-seg-btn ranked-btn"
+                class:active={gameUI.roomType === 'ranked'}
+                class:locked={!userProfile.canCreateRankedRoom}
+                disabled={!userProfile.canCreateRankedRoom}
+                title={userProfile.canCreateRankedRoom ? 'Crear sala Clasificatoria oficial (suma ELO y estadísticas)' : 'Solo Representantes y Superadmins pueden crear salas Clasificatorias (Ranked)'}
+                onclick={() => {
+                  if (!userProfile.canCreateRankedRoom) return;
+                  soundFX.playUIClick();
+                  gameUI.roomType = 'ranked';
+                }}
+              >
+                {#if userProfile.canCreateRankedRoom}
+                  <svg class="inline-svg-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"></path>
+                    <path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"></path>
+                    <path d="M4 22h16"></path>
+                    <path d="M10 14.66V17c0 .55-.47.98-.97 1.21C7.85 18.75 7 20.24 7 22"></path>
+                    <path d="M14 14.66V17c0 .55.47.98.97 1.21C16.15 18.75 17 20.24 17 22"></path>
+                    <path d="M18 2H6v7a6 6 0 0 0 12 0V2Z"></path>
+                  </svg>
+                {:else}
+                  <svg class="inline-svg-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+                    <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+                  </svg>
+                {/if}
+                <span>Clasificatoria (Ranked)</span>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div class="section-divider"></div>
+
+        <!-- SECCIÓN 2: Límite de jugadores (hasta 30) -->
         <div class="config-section">
           <div class="param-row">
             <div class="param-label-row">
               <span class="param-name">Límite de jugadores</span>
+              <span class="block-hint">2 a 30 máx.</span>
             </div>
             <div class="stepper-box">
               <button type="button" class="stepper-btn" onclick={decreasePlayers}>−</button>
               <div class="stepper-display">
                 <span class="stepper-num">{playerCount}</span>
-                <span class="stepper-sub">Máximo 20 jugadores</span>
+                <span class="stepper-sub">Máximo 30 jugadores</span>
               </div>
               <button type="button" class="stepper-btn" onclick={increasePlayers}>+</button>
+            </div>
+            <div class="capacity-presets">
+              {#each [4, 6, 8, 12, 16, 20, 24, 30] as cap}
+                <button
+                  type="button"
+                  class="cap-preset-chip"
+                  class:active={playerCount === cap}
+                  onclick={() => { soundFX.playUIClick(); playerCount = cap; }}
+                >
+                  {cap}
+                </button>
+              {/each}
             </div>
           </div>
         </div>
@@ -186,7 +284,14 @@
           <div class="param-row">
             <div class="toggle-row">
               <div class="label-with-tooltip">
-                <span class="toggle-label">🌐 Mostrar en lista pública</span>
+                <span class="toggle-label flex-icon-label">
+                  <svg class="inline-svg-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="12" cy="12" r="10"></circle>
+                    <line x1="2" y1="12" x2="22" y2="12"></line>
+                    <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path>
+                  </svg>
+                  <span>Mostrar en lista pública</span>
+                </span>
                 <div
                   class="info-tooltip-wrapper"
                   tabindex="0"
@@ -224,7 +329,12 @@
         <div class="rules-grid">
           <!-- Time Selector (0 to 15) -->
           <div class="rule-select-box" title="Tiempo de partido">
-            <span class="rule-icon">⏱</span>
+            <span class="rule-icon">
+              <svg class="inline-svg-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="12" cy="12" r="10"></circle>
+                <polyline points="12 6 12 12 16 14"></polyline>
+              </svg>
+            </span>
             <select
               class="rule-select"
               bind:value={selectedTimeMinutes}
@@ -239,7 +349,12 @@
 
           <!-- Goals Selector (0 to 15) -->
           <div class="rule-select-box" title="Límite de goles">
-            <span class="rule-icon">⚽</span>
+            <span class="rule-icon">
+              <svg class="inline-svg-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="12" cy="12" r="10"></circle>
+                <polygon points="12 7 15 10 14 14 10 14 9 10 12 7"></polygon>
+              </svg>
+            </span>
             <select
               class="rule-select"
               bind:value={selectedGoalsLimit}
@@ -260,7 +375,21 @@
             title="Bloquear equipos para que solo los administradores puedan mover jugadores"
             onclick={() => { soundFX.playUIClick(); teamsLocked = !teamsLocked; }}
           >
-            <span class="lock-label">{teamsLocked ? '🔒 Bloqueados' : '🔓 Libres'}</span>
+            <span class="lock-label flex-icon-label">
+              {#if teamsLocked}
+                <svg class="inline-svg-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <rect x="3" y="11" width="18" height="11" rx="2"></rect>
+                  <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+                </svg>
+                <span>Bloqueados</span>
+              {:else}
+                <svg class="inline-svg-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <rect x="3" y="11" width="18" height="11" rx="2"></rect>
+                  <path d="M7 11V7a5 5 0 0 1 9.9-1"></path>
+                </svg>
+                <span>Libres</span>
+              {/if}
+            </span>
             <span class="lock-tag">{teamsLocked ? 'SOLO ADMINS' : 'TODOS'}</span>
           </button>
 
@@ -272,21 +401,31 @@
             title="Permitir o bloquear el cambio de camisetas para capitanes"
             onclick={() => { soundFX.playUIClick(); allowCaptainKitSwitch = !allowCaptainKitSwitch; }}
           >
-            <span class="lock-label whitespace-nowrap truncate text-xs font-semibold flex items-center justify-center gap-1.5">{allowCaptainKitSwitch ? '👕 Kits: Libres' : '👕 Kits: Bloq.'}</span>
+            <span class="lock-label flex-icon-label whitespace-nowrap truncate text-xs font-semibold">
+              <svg class="inline-svg-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M20.38 3.46 16 2a4 4 0 0 1-8 0L3.62 3.46a2 2 0 0 0-1.34 2.23l.58 3.47a1 1 0 0 0 .99.84H6v10c0 1.1.9 2 2 2h8a2 2 0 0 0 2-2V10h2.15a1 1 0 0 0 .99-.84l.58-3.47a2 2 0 0 0-1.34-2.23z"></path>
+              </svg>
+              <span>{allowCaptainKitSwitch ? 'Kits: Libres' : 'Kits: Bloq.'}</span>
+            </span>
             <span class="lock-tag">{allowCaptainKitSwitch ? 'CAPITANES' : 'BLOQUEADO'}</span>
           </button>
 
-          <!-- Modifiers Button (without PHYS_STD badge) -->
+          <!-- Modifiers Button -->
           <button
             type="button"
             class="rule-btn highlight"
             onclick={() => gameUI.openModal('PHYSICS_MODIFIERS')}
           >
-            <span>⚡ Modifiers</span>
+            <span class="flex-icon-label">
+              <svg class="inline-svg-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
+              </svg>
+              <span>Modifiers</span>
+            </span>
           </button>
         </div>
 
-        <!-- Subtítulo Escoger estadio y Previsualización Vectorial 2:1 -->
+        <!-- Subtítulo Escoger estadio y Previsualización Geométrica Real -->
         <div class="stadium-section">
           <div class="param-label-row">
             <span class="param-name">Escoger estadio</span>
@@ -307,19 +446,13 @@
             }}
             title="Dar click para cambiar de estadio"
           >
-            <!-- Tactical Pitch SVG in 2:1 ratio -->
-            <svg class="stadium-svg" viewBox="0 0 300 150" preserveAspectRatio="none">
-              <rect x="4" y="4" width="292" height="142" rx="4" fill="#092215" stroke="#00e5ff" stroke-opacity="0.45" stroke-width="1.5" />
-              <line x1="150" y1="4" x2="150" y2="146" stroke="#00e5ff" stroke-opacity="0.4" stroke-width="1.5" />
-              <circle cx="150" cy="75" r="32" fill="none" stroke="#00e5ff" stroke-opacity="0.4" stroke-width="1.5" />
-              <circle cx="150" cy="75" r="3" fill="#00e5ff" />
-              <!-- Left penalty & goal area -->
-              <rect x="4" y="40" width="36" height="70" fill="none" stroke="#00e5ff" stroke-opacity="0.35" stroke-width="1.2" />
-              <rect x="1" y="58" width="5" height="34" fill="rgba(0, 229, 255, 0.35)" stroke="#00e5ff" stroke-width="1" />
-              <!-- Right penalty & goal area -->
-              <rect x="260" y="40" width="36" height="70" fill="none" stroke="#00e5ff" stroke-opacity="0.35" stroke-width="1.2" />
-              <rect x="294" y="58" width="5" height="34" fill="rgba(0, 229, 255, 0.35)" stroke="#00e5ff" stroke-width="1" />
-            </svg>
+            <div class="stadium-canvas-wrap">
+              <StadiumPreviewCanvas
+                stadiumId={gameUI.selectedStadiumId || stadiums[selectedStadiumIndex].id || 'classic'}
+                width={320}
+                height={145}
+              />
+            </div>
 
             <!-- Superimposed overlay info -->
             <div class="stadium-overlay">
@@ -911,12 +1044,122 @@
     box-shadow: 0 0 16px rgba(0, 229, 255, 0.45);
   }
 
-  .stadium-svg {
+  .stadium-canvas-wrap {
     position: absolute;
     inset: 0;
     width: 100%;
     height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
     pointer-events: none;
+  }
+
+  .flex-icon-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .inline-svg-icon {
+    width: 14px;
+    height: 14px;
+    flex-shrink: 0;
+    color: #00e5ff;
+  }
+
+  .role-hint-tag {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 9px;
+    font-weight: 700;
+    padding: 2px 6px;
+    border-radius: 3px;
+    background: rgba(255, 255, 255, 0.08);
+    color: #94a3b8;
+  }
+
+  .role-hint-tag.verified {
+    background: rgba(255, 215, 0, 0.16);
+    color: #ffd700;
+    border: 1px solid rgba(255, 215, 0, 0.35);
+  }
+
+  .room-type-segmented {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+  }
+
+  .type-seg-btn {
+    height: 36px;
+    padding: 0 10px;
+    border-radius: 6px;
+    background: #080e18;
+    border: 1px solid rgba(0, 229, 255, 0.22);
+    color: #94a3b8;
+    font-family: 'Chivo', system-ui, sans-serif;
+    font-size: 11px;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+
+  .type-seg-btn.active {
+    background: rgba(0, 229, 255, 0.18);
+    border-color: #00e5ff;
+    color: #ffffff;
+    box-shadow: 0 0 10px rgba(0, 229, 255, 0.25);
+  }
+
+  .type-seg-btn.ranked-btn.active {
+    background: rgba(255, 215, 0, 0.18);
+    border-color: #ffd700;
+    color: #ffd700;
+    box-shadow: 0 0 10px rgba(255, 215, 0, 0.3);
+  }
+
+  .type-seg-btn.ranked-btn.active .inline-svg-icon {
+    color: #ffd700;
+  }
+
+  .type-seg-btn.locked {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .capacity-presets {
+    display: grid;
+    grid-template-columns: repeat(8, 1fr);
+    gap: 4px;
+    margin-top: 2px;
+  }
+
+  .cap-preset-chip {
+    height: 24px;
+    background: #0b1322;
+    border: 1px solid rgba(0, 229, 255, 0.2);
+    border-radius: 4px;
+    color: #8fa0b5;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: all 0.12s ease;
+  }
+
+  .cap-preset-chip:hover {
+    border-color: #00e5ff;
+    color: #ffffff;
+  }
+
+  .cap-preset-chip.active {
+    background: #00e5ff;
+    color: #070d18;
+    border-color: #00e5ff;
   }
 
   .stadium-overlay {

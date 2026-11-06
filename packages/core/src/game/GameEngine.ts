@@ -5,6 +5,7 @@ import { createStadium } from '../stadiums/StadiumRegistry';
 import { Disc, COLLISION_GROUP_BALL, COLLISION_GROUP_RED, COLLISION_GROUP_BLUE, POWER_SHOT_SPEED_THRESHOLD } from '../entities/Disc';
 import {
   Player,
+  DASH_TICKS,
   INPUT_UP,
   INPUT_DOWN,
   INPUT_LEFT,
@@ -14,7 +15,8 @@ import {
   INPUT_DASH,
   INPUT_MAGNUS_LEFT,
   INPUT_MAGNUS_RIGHT,
-  INPUT_TYPING
+  INPUT_TYPING,
+  INPUT_MOUSE_DIR
 } from './Player';
 import { GameFSM, MatchPhase } from './GameFSM';
 import { GameSnapshot, DiscSnapshot, MatchConfig, KickoffState, TouchHistoryEntry, PlayerMatchStats, GoalInfo } from './GameState';
@@ -55,6 +57,7 @@ export class GameEngine {
   public matchTimerSeconds: number = 180;
   public config: MatchConfig;
   public gameplayConfig: GameplayConfig;
+  public isPracticeMode: boolean = false;
   public lastScoringTeam: 'red' | 'blue' | null = null;
   public soundMask: number = 0;
   public isGoldenGoal: boolean = false;
@@ -65,9 +68,19 @@ export class GameEngine {
   public lastGoalInfo: GoalInfo | null = null;
   public pendingShot: { shooterId: string; shooterTeam: 'red' | 'blue'; tick: number; isPower: boolean; isCurve: boolean } | null = null;
   public lastPlayerTouchTick: Map<string, number> = new Map();
+  public lastShotPointsTick: Map<string, number> = new Map();
+  public lastPassPointsTick: Map<string, number> = new Map();
 
   // Event callbacks
-  public onScoreEvent?: (playerId: string, text: string, points: number, x: number, y: number, color?: string) => void;
+  public onScoreEvent?: (
+    playerId: string,
+    text: string,
+    points: number,
+    x: number,
+    y: number,
+    color?: string,
+    category?: 'goal' | 'assist' | 'save' | 'shot' | 'pass' | 'hattrick' | 'own_goal'
+  ) => void;
   public onGoal?: (scoringTeam: 'red' | 'blue', redScore: number, blueScore: number) => void;
   public onKick?: (playerDisc: Disc, ball: Disc) => void;
   public onPostHit?: (ball: Disc, post: Disc) => void;
@@ -141,7 +154,7 @@ export class GameEngine {
               if (bSpeed >= POWER_SHOT_SPEED_THRESHOLD) {
                 this.ball.isPowerShot = true;
               }
-              this.registerBallTouch(player.id, true);
+              this.registerBallTouch(player.id, false);
               if (this.kickoffState.active) {
                 this.kickoffState.active = false;
                 this.updatePhysicsKickoffContext();
@@ -205,7 +218,7 @@ export class GameEngine {
       const disc = this.playerDiscs.get(stats.playerId);
       const posX = disc ? disc.pos.x : 0;
       const posY = disc ? disc.pos.y : 0;
-      this.onScoreEvent?.(stats.playerId, '¡Hattrick Bonus +100!', 100, posX, posY);
+      this.onScoreEvent?.(stats.playerId, '¡Hattrick Bonus +100!', 100, posX, posY, '#ffd700', 'hattrick');
     }
   }
 
@@ -220,7 +233,7 @@ export class GameEngine {
     return mvp;
   }
 
-  public registerBallTouch(playerId: string, isShotOrPhysical: boolean = false): void {
+  public registerBallTouch(playerId: string, isExplicitKick: boolean = false): void {
     const player = this.players.get(playerId);
     if (!player || player.team === 'spec') return;
 
@@ -228,11 +241,18 @@ export class GameEngine {
     const lastTouchTick = this.lastPlayerTouchTick.get(playerId) ?? -999;
     const hasCooldownPassed = (this.tickCount - lastTouchTick) >= 15;
 
+    // Reset opponent shot cooldowns when this team touches the ball
+    for (const [otherId, otherPlayer] of this.players.entries()) {
+      if (otherPlayer.team !== playerTeam) {
+        this.lastShotPointsTick.delete(otherId);
+      }
+    }
+
     if (hasCooldownPassed) {
       this.lastPlayerTouchTick.set(playerId, this.tickCount);
       const stats = this.getOrCreatePlayerStats(playerId);
       stats.touches++;
-      stats.points += 2;
+      // Rebalanceo de scoring: 0 puntos por toque simple del balón
       const disc = this.playerDiscs.get(playerId);
       const px = disc ? disc.pos.x : this.ball.pos.x;
       const py = disc ? disc.pos.y : this.ball.pos.y;
@@ -240,15 +260,23 @@ export class GameEngine {
       if (this.touchHistory.length > 0) {
         const lastTouch = this.touchHistory[this.touchHistory.length - 1];
         if (lastTouch.team === playerTeam && lastTouch.playerId !== playerId) {
-          const passerStats = this.getOrCreatePlayerStats(lastTouch.playerId);
-          passerStats.passes++;
-          passerStats.points += 10;
-          const passerPlayer = this.players.get(lastTouch.playerId);
-          if (passerPlayer) passerPlayer.passes++;
-          const pDisc = this.playerDiscs.get(lastTouch.playerId);
-          const ppx = pDisc ? pDisc.pos.x : px;
-          const ppy = pDisc ? pDisc.pos.y : py;
-          this.onScoreEvent?.(lastTouch.playerId, 'Pase completado +10', 10, ppx, ppy);
+          const passDist = Math.hypot(
+            this.ball.pos.x - (lastTouch.x ?? this.ball.pos.x),
+            this.ball.pos.y - (lastTouch.y ?? this.ball.pos.y)
+          );
+          const lastPassTick = this.lastPassPointsTick.get(lastTouch.playerId) ?? -9999;
+          if (passDist >= 90 && (this.tickCount - lastPassTick) >= 180) {
+            this.lastPassPointsTick.set(lastTouch.playerId, this.tickCount);
+            const passerStats = this.getOrCreatePlayerStats(lastTouch.playerId);
+            passerStats.passes++;
+            passerStats.points += 10;
+            const passerPlayer = this.players.get(lastTouch.playerId);
+            if (passerPlayer) passerPlayer.passes++;
+            const pDisc = this.playerDiscs.get(lastTouch.playerId);
+            const ppx = pDisc ? pDisc.pos.x : px;
+            const ppy = pDisc ? pDisc.pos.y : py;
+            this.onScoreEvent?.(lastTouch.playerId, 'Pase completado +10', 10, ppx, ppy, '#2ed573', 'pass');
+          }
         }
       }
 
@@ -262,7 +290,7 @@ export class GameEngine {
         if (inOwnHalf) {
           stats.saves++;
           stats.points += 100;
-          this.onScoreEvent?.(playerId, 'Atajada +100', 100, px, py);
+          this.onScoreEvent?.(playerId, 'Atajada +100', 100, px, py, '#00e5ff', 'save');
           this.checkHattrickBonus(stats);
         }
         this.pendingShot = null;
@@ -274,7 +302,7 @@ export class GameEngine {
       this.ball.isPowerShot = true;
     }
 
-    if (isShotOrPhysical) {
+    if (isExplicitKick) {
       this.checkShotTrajectory(player);
     }
 
@@ -286,7 +314,10 @@ export class GameEngine {
       timestamp: Date.now(),
       wasCurve,
       wasPower,
-      tick: this.tickCount
+      tick: this.tickCount,
+      x: this.ball.pos.x,
+      y: this.ball.pos.y,
+      isKick: isExplicitKick
     });
     if (this.touchHistory.length > 60) {
       this.touchHistory.shift();
@@ -294,6 +325,11 @@ export class GameEngine {
   }
 
   public checkShotTrajectory(player: Player): void {
+    const lastShotTick = this.lastShotPointsTick.get(player.id) ?? -9999;
+    if (this.tickCount - lastShotTick < 240) {
+      return;
+    }
+
     const hw = this.stadium.halfWidth;
     const gh = this.stadium.goalHalfHeight;
     let isShotOnGoal = false;
@@ -313,6 +349,7 @@ export class GameEngine {
     }
 
     if (isShotOnGoal) {
+      this.lastShotPointsTick.set(player.id, this.tickCount);
       const shooterStats = this.getOrCreatePlayerStats(player.id);
       shooterStats.shots++;
       shooterStats.shotsNormal = (shooterStats.shotsNormal || 0) + 1;
@@ -321,7 +358,7 @@ export class GameEngine {
       const shooterDisc = this.playerDiscs.get(player.id);
       const sx = shooterDisc ? shooterDisc.pos.x : this.ball.pos.x;
       const sy = shooterDisc ? shooterDisc.pos.y : this.ball.pos.y;
-      this.onScoreEvent?.(player.id, 'Tiro a portería +20', 20, sx, sy);
+      this.onScoreEvent?.(player.id, 'Tiro a portería +20', 20, sx, sy, '#ffa502', 'shot');
       this.pendingShot = {
         shooterId: player.id,
         shooterTeam: player.team as 'red' | 'blue',
@@ -349,13 +386,22 @@ export class GameEngine {
   }
 
   public updateConfig(newConfig: Partial<MatchConfig>): void {
-    if (newConfig.scoreLimit !== undefined) this.config.scoreLimit = newConfig.scoreLimit;
+    if (newConfig.scoreLimit !== undefined) this.setScoreLimit(newConfig.scoreLimit);
     if (newConfig.timeLimitSeconds !== undefined) {
-      this.config.timeLimitSeconds = newConfig.timeLimitSeconds;
-      if (this.fsm.currentState === MatchPhase.STOPPED) {
-        this.matchTimerSeconds = this.config.timeLimitSeconds > 0 ? this.config.timeLimitSeconds : 0;
-      }
+      this.setTimeLimit(newConfig.timeLimitSeconds);
     }
+  }
+
+  public setTimeLimit(seconds: number): void {
+    const sec = Math.max(0, Math.round(seconds));
+    this.config.timeLimitSeconds = sec;
+    if (this.fsm.currentState === MatchPhase.STOPPED || this.activePlayTicks === 0) {
+      this.matchTimerSeconds = sec > 0 ? sec : 0;
+    }
+  }
+
+  public setScoreLimit(goals: number): void {
+    this.config.scoreLimit = Math.max(0, Math.round(goals));
   }
 
   public setGameplayConfig(newConfig: Partial<GameplayConfig>): void {
@@ -513,6 +559,8 @@ export class GameEngine {
     this.lastGoalInfo = null;
     this.pendingShot = null;
     this.lastPlayerTouchTick.clear();
+    this.lastShotPointsTick.clear();
+    this.lastPassPointsTick.clear();
     this.kickoffState = {
       active: true,
       mode: 'NEUTRAL',
@@ -538,6 +586,8 @@ export class GameEngine {
     this.lastGoalInfo = null;
     this.pendingShot = null;
     this.lastPlayerTouchTick.clear();
+    this.lastShotPointsTick.clear();
+    this.lastPassPointsTick.clear();
     this.kickoffState = {
       active: false,
       mode: 'NEUTRAL',
@@ -601,6 +651,7 @@ export class GameEngine {
       player.stamina = 100;
       player.isDashing = false;
       player.dashTicksRemaining = 0;
+      player.dashCooldownTimer = 0;
       player.isTurbo = false;
       player.triggerDash = false;
 
@@ -611,6 +662,7 @@ export class GameEngine {
       disc.kicking = false;
       disc.stamina = 100;
       disc.isDashing = false;
+      disc.dashCooldownTimer = 0;
       disc.isTurbo = false;
 
       const spawnDist = this.stadium.spawnDistance ?? 180;
@@ -696,18 +748,36 @@ export class GameEngine {
 
       let dirX = 0;
       let dirY = 0;
-      if (mask & INPUT_UP) dirY -= 1;
-      if (mask & INPUT_DOWN) dirY += 1;
-      if (mask & INPUT_LEFT) dirX -= 1;
-      if (mask & INPUT_RIGHT) dirX += 1;
-
-      const hasMoveInput = (dirX !== 0 || dirY !== 0);
+      let hasMoveInput = false;
       let uMoveX = 0;
       let uMoveY = 0;
-      if (hasMoveInput) {
+
+      if (player.moveDirX !== null && player.moveDirY !== null) {
+        dirX = player.moveDirX;
+        dirY = player.moveDirY;
         const len = Math.hypot(dirX, dirY);
-        uMoveX = dirX / len;
-        uMoveY = dirY / len;
+        hasMoveInput = len > 0.01;
+        if (hasMoveInput) {
+          const moveScale = Math.min(1, len);
+          uMoveX = (dirX / len) * moveScale;
+          uMoveY = (dirY / len) * moveScale;
+        }
+      } else {
+        if (mask & INPUT_UP) dirY -= 1;
+        if (mask & INPUT_DOWN) dirY += 1;
+        if (mask & INPUT_LEFT) dirX -= 1;
+        if (mask & INPUT_RIGHT) dirX += 1;
+
+        hasMoveInput = (dirX !== 0 || dirY !== 0);
+        if (hasMoveInput) {
+          const len = Math.hypot(dirX, dirY);
+          uMoveX = dirX / len;
+          uMoveY = dirY / len;
+        }
+      }
+
+      if (player.dashCooldownTimer > 0) {
+        player.dashCooldownTimer = Math.max(0, player.dashCooldownTimer - dt);
       }
 
       const vSpeed = Math.hypot(disc.vel.x, disc.vel.y);
@@ -717,17 +787,26 @@ export class GameEngine {
       const dashCost = 100 / (this.gameplayConfig.dashesPerFullBar || 4);
       const canDash = this.gameplayConfig.dashEnabled !== false;
 
-      if (canDash && wantsDash && !player.prevDashState && player.stamina >= dashCost && !player.isDashing) {
+      if (
+        canDash &&
+        wantsDash &&
+        !player.prevDashState &&
+        player.stamina >= dashCost &&
+        !player.isDashing &&
+        player.dashCooldownTimer <= 0
+      ) {
         player.stamina = Math.max(0, player.stamina - dashCost);
         player.isDashing = true;
-        player.dashTicksRemaining = 4;
+        player.dashTicksRemaining = DASH_TICKS;
+        player.dashCooldownTimer = this.gameplayConfig.dashCooldown ?? 1.0;
 
-        if (vSpeed > 0.05) {
+        if (hasMoveInput) {
+          const uLen = Math.hypot(uMoveX, uMoveY) || 1;
+          player.dashDirX = uMoveX / uLen;
+          player.dashDirY = uMoveY / uLen;
+        } else if (vSpeed > 0.05) {
           player.dashDirX = disc.vel.x / vSpeed;
           player.dashDirY = disc.vel.y / vSpeed;
-        } else if (hasMoveInput) {
-          player.dashDirX = uMoveX;
-          player.dashDirY = uMoveY;
         } else {
           player.dashDirX = player.team === 'red' ? 1 : -1;
           player.dashDirY = 0;
@@ -738,12 +817,15 @@ export class GameEngine {
 
       const isKicking = (mask & INPUT_KICK) !== 0;
       disc.kicking = isKicking;
-      const effectiveAccel = isKicking ? accel * (0.083 / 0.11) : accel;
+      const kickAccelRatio =
+        (this.gameplayConfig.kickingAcceleration ?? 0.108) /
+        (this.gameplayConfig.playerAcceleration || 0.14);
+      const effectiveAccel = isKicking ? accel * kickAccelRatio : accel;
 
       const wasDashing = player.isDashing;
       if (player.isDashing) {
         player.dashTicksRemaining--;
-        const dashSpeed = (this.gameplayConfig.dashDistance / 4) * 60;
+        const dashSpeed = (this.gameplayConfig.dashDistance / DASH_TICKS) * 60;
         disc.vel.x = player.dashDirX * dashSpeed;
         disc.vel.y = player.dashDirY * dashSpeed;
 
@@ -792,12 +874,22 @@ export class GameEngine {
       }
 
       const isMovingInput = hasMoveInput;
-      if (!isMovingInput && !player.isDashing && !wasDashing) {
-        player.stamina = Math.min(100, player.stamina + this.gameplayConfig.staminaRechargeRate * dt);
+      const isTryingTurboOrDash = Boolean(mask & (INPUT_TURBO | INPUT_DASH));
+      if (!player.isDashing && !wasDashing && !player.isTurbo && !isTryingTurboOrDash) {
+        if (!isMovingInput) {
+          player.stamina = Math.min(100, player.stamina + this.gameplayConfig.staminaRechargeRate * dt);
+        } else if (this.gameplayConfig.staminaRegenMoving !== false) {
+          const movingFactor = (this.gameplayConfig.staminaRegenMovingRate ?? 100) / 100;
+          player.stamina = Math.min(
+            100,
+            player.stamina + this.gameplayConfig.staminaRechargeRate * movingFactor * dt
+          );
+        }
       }
 
       disc.stamina = player.stamina;
       disc.isDashing = player.isDashing;
+      disc.dashCooldownTimer = player.dashCooldownTimer;
       disc.isTurbo = player.isTurbo;
 
       if (isKicking) {
@@ -852,9 +944,8 @@ export class GameEngine {
           this.ball.spin = 0;
           this.ball.isPowerShot = isKickPowerShot;
 
-          this.registerBallTouch(player.id, false);
+          this.registerBallTouch(player.id, true);
           this.ball.isPowerShot = isKickPowerShot;
-          this.checkShotTrajectory(player);
 
           let ex = player.curveX;
           let ey = player.curveY;
@@ -1040,7 +1131,7 @@ export class GameEngine {
           const scDisc = this.playerDiscs.get(scorerPlayerId);
           const scX = scDisc ? scDisc.pos.x : this.ball.pos.x;
           const scY = scDisc ? scDisc.pos.y : this.ball.pos.y;
-          this.onScoreEvent?.(scorerPlayerId, 'Autogol -50', -50, scX, scY, '#ff4757');
+          this.onScoreEvent?.(scorerPlayerId, 'Autogol -50', -50, scX, scY, '#ff4757', 'own_goal');
         } else {
           let scorerIndex = -1;
           for (let i = this.touchHistory.length - 1; i >= 0; i--) {
@@ -1063,10 +1154,10 @@ export class GameEngine {
 
               if (isMagnusActive) {
                 scorerStats.points += 120;
-                this.onScoreEvent?.(scorerPlayerId, '¡Gol con efecto! +120', 120, scX, scY);
+                this.onScoreEvent?.(scorerPlayerId, '¡Gol con efecto! +120', 120, scX, scY, '#ffd700', 'goal');
               } else {
                 scorerStats.points += 100;
-                this.onScoreEvent?.(scorerPlayerId, '¡Gol! +100', 100, scX, scY);
+                this.onScoreEvent?.(scorerPlayerId, '¡Gol! +100', 100, scX, scY, '#ffd700', 'goal');
               }
 
               this.checkHattrickBonus(scorerStats);
@@ -1096,11 +1187,11 @@ export class GameEngine {
                   if (touch.wasCurve) {
                     assisterStats.assistsCurve = (assisterStats.assistsCurve || 0) + 1;
                     assisterStats.points += 70;
-                    this.onScoreEvent?.(assisterPlayerId, 'Asistencia con efecto +70', 70, asX, asY);
+                    this.onScoreEvent?.(assisterPlayerId, 'Asistencia con efecto +70', 70, asX, asY, '#00e5ff', 'assist');
                   } else {
                     assisterStats.assistsNormal = (assisterStats.assistsNormal || 0) + 1;
                     assisterStats.points += 50;
-                    this.onScoreEvent?.(assisterPlayerId, 'Asistencia +50', 50, asX, asY);
+                    this.onScoreEvent?.(assisterPlayerId, 'Asistencia +50', 50, asX, asY, '#00e5ff', 'assist');
                   }
                   this.checkHattrickBonus(assisterStats);
                 }
@@ -1285,8 +1376,22 @@ export class GameEngine {
     };
   }
 
+  public shouldBypassKickoffBarriers(): boolean {
+    if (this.isPracticeMode) return true;
+    if (this.kickoffState.mode === 'TEAM_KICKOFF' && this.kickoffState.possessingTeam) {
+      let possessingTeamCount = 0;
+      for (const player of this.players.values()) {
+        if (player.team === this.kickoffState.possessingTeam) {
+          possessingTeamCount++;
+        }
+      }
+      if (possessingTeamCount === 0) return true;
+    }
+    return false;
+  }
+
   public updatePhysicsKickoffContext(): void {
-    if (this.kickoffState.active && this.kickoffState.possessingTeam) {
+    if (this.kickoffState.active && this.kickoffState.possessingTeam && !this.shouldBypassKickoffBarriers()) {
       this.physicsWorld.kickoffContext = {
         active: true,
         possessingTeam: this.kickoffState.possessingTeam,
@@ -1298,7 +1403,7 @@ export class GameEngine {
   }
 
   public applyKickoffBarriers(): void {
-    if (!this.kickoffState.active) {
+    if (!this.kickoffState.active || this.shouldBypassKickoffBarriers()) {
       if (this.physicsWorld.kickoffContext) {
         this.physicsWorld.kickoffContext = null;
       }

@@ -64,7 +64,9 @@ import {
   INPUT_DASH,
   INPUT_MAGNUS_LEFT,
   INPUT_MAGNUS_RIGHT,
-  INPUT_TYPING
+  INPUT_TYPING,
+  INPUT_MOUSE_DIR,
+  INPUT_FOCUS_BALL
 } from './game/Player';
 import {
   GameSnapshot,
@@ -102,7 +104,9 @@ import {
   INPUT_FLAG_DASH,
   INPUT_FLAG_MAGNUS_LEFT,
   INPUT_FLAG_MAGNUS_RIGHT,
-  INPUT_FLAG_TYPING
+  INPUT_FLAG_TYPING,
+  INPUT_FLAG_MOUSE_DIR,
+  INPUT_FLAG_FOCUS_BALL
 } from './protocol/BinaryProtocol';
 import { InputPacket, InputData } from './protocol/InputPacket';
 import { SnapshotPacket, ActiveRadiusConfig } from './protocol/SnapshotPacket';
@@ -143,7 +147,8 @@ export type GameEvent =
   | 'whistle'
   | 'victory_celebration'
   | 'state_change'
-  | 'match_end';
+  | 'match_end'
+  | 'score_event';
 
 export interface TouchPlayerRecord {
   id: number;
@@ -168,17 +173,30 @@ export class EngineInstance {
   public playerTeams: Map<number, 'red' | 'blue' | 'spec'> = new Map();
   public playerNames: Map<number, string> = new Map();
   public matchStats: Map<number, PlayerMatchStats> = new Map();
-  private touchHistory: Array<{ playerId: number; team: 'red' | 'blue'; tick: number; isKick: boolean }> = [];
+  private touchHistory: Array<{ playerId: number; team: 'red' | 'blue'; tick: number; isKick: boolean; x: number; y: number }> = [];
   public lastTouchPlayer: TouchPlayerRecord | null = null;
   public previousTouchPlayer: TouchPlayerRecord | null = null;
   public lastGoalDetails: GoalBannerDetails | null = null;
+  public lastShotPointsTick: Map<number, number> = new Map();
+  public lastPassPointsTick: Map<number, number> = new Map();
+  public pendingShot: { shooterId: number; shooterTeam: 'red' | 'blue'; tick: number; isPower: boolean; isCurve: boolean } | null = null;
   private frozenVictoryStats: PlayerMatchStats[] | null = null;
   private frozenVictoryMvp: PlayerMatchStats | null = null;
   private lastWallSoundTick: number = -10;
   public modifiers: PhysicsModifiers;
+  public isPracticeMode: boolean = false;
   public currentTick: number = 0;
   public soundMask: number = 0;
   public kickoffPossessingTeam: 'red' | 'blue' = 'red';
+  public onScoreEvent?: (
+    playerId: number,
+    text: string,
+    points: number,
+    x: number,
+    y: number,
+    color?: string,
+    category?: 'goal' | 'assist' | 'save' | 'shot' | 'pass' | 'hattrick' | 'own_goal'
+  ) => void;
 
   private eventListeners: Map<string, Array<(payload: any) => void>> = new Map();
 
@@ -429,10 +447,37 @@ export class EngineInstance {
       player.prevPos.set(spawnX, offset);
       player.vel.set(0, 0);
       player.stamina = 100;
+      player.isDashing = false;
+      player.dashTicksRemaining = 0;
+      player.dashCooldownTimer = 0;
+      player.isTurbo = false;
       if (isRed) redIndex++; else blueIndex++;
     }
 
     this.world.resetNets(false);
+  }
+
+  public setTimeLimit(seconds: number): void {
+    const sec = Math.max(0, Math.round(seconds));
+    this.modifiers.matchTimeMinutes = sec / 60;
+    this.fsm.matchTimeLimitTicks = Math.round(sec * 60);
+  }
+
+  public setScoreLimit(goals: number): void {
+    const g = Math.max(0, Math.round(goals));
+    this.modifiers.goalLimit = g;
+    this.fsm.scoreLimit = g;
+  }
+
+  public shouldBypassKickoffBarriers(): boolean {
+    if (this.isPracticeMode) return true;
+    let possessingTeamCount = 0;
+    for (const [, team] of this.playerTeams.entries()) {
+      if (team === this.kickoffPossessingTeam) {
+        possessingTeamCount++;
+      }
+    }
+    return possessingTeamCount === 0;
   }
 
   public startMatch(withIntro: boolean = false): void {
@@ -482,11 +527,18 @@ export class EngineInstance {
       for (const [id, player] of this.players.entries()) {
         const input = inputs.get(id);
 
+        if (player.dashCooldownTimer > 0) {
+          player.dashCooldownTimer = Math.max(0, player.dashCooldownTimer - CORE_DT);
+        }
+
         if (input) {
           let ix = input.dirX ?? 0;
           let iy = input.dirY ?? 0;
+          const useMouse = Boolean(input.useMouseDir || (input.inputMask && (input.inputMask & INPUT_FLAG_MOUSE_DIR)));
 
-          if (input.inputMask) {
+          if (!useMouse && input.inputMask) {
+            ix = 0;
+            iy = 0;
             if (input.inputMask & INPUT_FLAG_LEFT) ix -= 1;
             if (input.inputMask & INPUT_FLAG_RIGHT) ix += 1;
             if (input.inputMask & INPUT_FLAG_UP) iy -= 1;
@@ -503,15 +555,16 @@ export class EngineInstance {
           player.kicking = isKickRequested;
           player.isTyping = Boolean(input.inputMask && (input.inputMask & INPUT_FLAG_TYPING));
 
-          const accelBase = (this.modifiers as any).playerAcceleration !== undefined
-            ? ((this.modifiers as any).playerAcceleration / 0.11) * 2.4
-            : 2.4;
+          const pAccelCfg = (this.modifiers as any).playerAcceleration ?? 0.14;
+          const accelBase = (pAccelCfg / 0.11) * 2.4;
+          const kickAccelCfg = (this.modifiers as any).kickingAcceleration ?? 0.108;
+          const kickAccelRatio = kickAccelCfg / (pAccelCfg || 0.14);
           const canTurbo = (this.modifiers as any).turboEnabled !== false;
           const isTurboRequested = canTurbo && Boolean(input.inputMask && (input.inputMask & INPUT_FLAG_TURBO));
           const turboMultiplier = (this.modifiers as any).boostMultiplier ?? (this.modifiers as any).turboMultiplier ?? 2.0;
-          let accel = isKickRequested ? accelBase * (0.083 / 0.11) : accelBase;
+          let accel = isKickRequested ? accelBase * kickAccelRatio : accelBase;
 
-          if (isTurboRequested && inputLen > 0.1 && player.stamina > 0) {
+          if (isTurboRequested && inputLen > 0.05 && player.stamina > 0 && !player.isDashing) {
             accel *= Math.max(1.8, turboMultiplier * 1.2);
             player.stamina = Math.max(0, player.stamina - 0.6); // Gasto continuo de estamina
             player.isTurbo = true;
@@ -519,39 +572,64 @@ export class EngineInstance {
             player.isTurbo = false;
           }
 
-          player.vel.x += ix * accel;
-          player.vel.y += iy * accel;
-
-          const pMaxSpeedCfg = (this.modifiers as any).playerMaxSpeed ?? (this.modifiers as any).playerSpeed ?? 2.8;
-          const maxSpeedBase = (pMaxSpeedCfg / 2.8) * 168.0;
-          const currentMaxSpeed = player.isTurbo ? maxSpeedBase * turboMultiplier : maxSpeedBase;
-          const curSpeed = player.vel.len();
-          if (curSpeed > currentMaxSpeed) {
-            player.vel.x = (player.vel.x / curSpeed) * currentMaxSpeed;
-            player.vel.y = (player.vel.y / curSpeed) * currentMaxSpeed;
-          }
-
           const canDash = (this.modifiers as any).dashEnabled !== false;
           const isDashRequested = canDash && Boolean(input.dash || (input.inputMask && (input.inputMask & INPUT_FLAG_DASH)));
           const dashesPerFullBar = (this.modifiers as any).dashesPerFullBar ?? 4;
           const dashCost = 100 / Math.max(1, Math.min(6, dashesPerFullBar));
+          const curSpeedBefore = player.vel.len();
 
-          if (isDashRequested && !player.isDashing && player.stamina >= dashCost) {
+          if (
+            isDashRequested &&
+            !player.prevDashState &&
+            !player.isDashing &&
+            player.dashCooldownTimer <= 0 &&
+            player.stamina >= dashCost
+          ) {
             player.stamina = Math.max(0, player.stamina - dashCost);
-            const dashDirX = inputLen > 0.1 ? ix : (curSpeed > 0.1 ? player.vel.x / curSpeed : 1);
-            const dashDirY = inputLen > 0.1 ? iy : (curSpeed > 0.1 ? player.vel.y / curSpeed : 0);
-            const power = (this.modifiers as any).dashDistance !== undefined
-              ? ((this.modifiers as any).dashDistance / 11.3) * 280
-              : (this.modifiers.dashPower ?? 280);
-            player.vel.x += dashDirX * power;
-            player.vel.y += dashDirY * power;
+            const uLen = inputLen > 0.05 ? inputLen : 1;
+            player.dashDirX = inputLen > 0.05
+              ? ix / uLen
+              : (curSpeedBefore > 0.1 ? player.vel.x / curSpeedBefore : (this.playerTeams.get(id) === 'blue' ? -1 : 1));
+            player.dashDirY = inputLen > 0.05
+              ? iy / uLen
+              : (curSpeedBefore > 0.1 ? player.vel.y / curSpeedBefore : 0);
             player.isDashing = true;
-          } else if (!isDashRequested) {
+            player.dashTicksRemaining = DASH_TICKS;
+            player.dashCooldownTimer = (this.modifiers as any).dashCooldown ?? 1.0;
+          }
+          player.prevDashState = isDashRequested;
+
+          if (player.isDashing && player.dashTicksRemaining > 0) {
+            player.dashTicksRemaining--;
+            const dashDist = (this.modifiers as any).dashDistance ?? 37.5;
+            const dashStepVel = (dashDist / DASH_TICKS) * 1.65;
+            player.vel.x = player.dashDirX * dashStepVel;
+            player.vel.y = player.dashDirY * dashStepVel;
+            if (player.dashTicksRemaining <= 0) {
+              player.isDashing = false;
+            }
+          } else {
             player.isDashing = false;
+            player.vel.x += ix * accel;
+            player.vel.y += iy * accel;
+
+            const pMaxSpeedCfg = (this.modifiers as any).playerMaxSpeed ?? (this.modifiers as any).playerSpeed ?? 3.5;
+            const maxSpeedBase = (pMaxSpeedCfg / 2.8) * 168.0;
+            const currentMaxSpeed = player.isTurbo ? maxSpeedBase * turboMultiplier : maxSpeedBase;
+            const curSpeed = player.vel.len();
+            if (curSpeed > currentMaxSpeed) {
+              player.vel.x = (player.vel.x / curSpeed) * currentMaxSpeed;
+              player.vel.y = (player.vel.y / curSpeed) * currentMaxSpeed;
+            }
           }
 
-          if (inputLen === 0 && !player.isTurbo && !player.isDashing && player.stamina < 100) {
-            player.stamina = Math.min(100, player.stamina + rechargePerTick);
+          if (!player.isTurbo && !player.isDashing && player.stamina < 100) {
+            if (inputLen <= 0.01) {
+              player.stamina = Math.min(100, player.stamina + rechargePerTick);
+            } else if ((this.modifiers as any).staminaRegenMoving !== false) {
+              const movingRateFactor = ((this.modifiers as any).staminaRegenMovingRate ?? 100) / 100;
+              player.stamina = Math.min(100, player.stamina + rechargePerTick * movingRateFactor);
+            }
           }
 
           if (isKickRequested && this.world.isWithinKickDistance(player, this.ball)) {
@@ -628,7 +706,7 @@ export class EngineInstance {
           }
         }
 
-        if (this.fsm.state === MatchPhase.KICKOFF) {
+        if (this.fsm.state === MatchPhase.KICKOFF && !this.shouldBypassKickoffBarriers()) {
           const team = this.playerTeams.get(id);
           const centerR = this.stadium.centerRadius ?? 80;
           if (team === this.kickoffPossessingTeam) {
@@ -807,6 +885,19 @@ export class EngineInstance {
     return s;
   }
 
+  private emitScoreEvent(
+    playerId: number,
+    text: string,
+    points: number,
+    x: number,
+    y: number,
+    color: string,
+    category: 'goal' | 'assist' | 'save' | 'shot' | 'pass' | 'hattrick' | 'own_goal'
+  ): void {
+    this.onScoreEvent?.(playerId, text, points, x, y, color, category);
+    this.emit('score_event', { playerId, text, points, x, y, color, category });
+  }
+
   public recordTouch(id: number, isKick: boolean): void {
     const team = this.playerTeams.get(id);
     if (team !== 'red' && team !== 'blue') return;
@@ -821,36 +912,98 @@ export class EngineInstance {
       this.lastTouchPlayer.tick = this.currentTick;
     }
 
-    const stats = this.getOrCreateStats(id);
-    stats.touches++;
-
-    const lastTouch = this.touchHistory.length > 0 ? this.touchHistory[this.touchHistory.length - 1] : null;
-
-    // Detectar pase entre compañeros de equipo
-    if (lastTouch && lastTouch.playerId !== id && lastTouch.team === team) {
-      const prevStats = this.getOrCreateStats(lastTouch.playerId);
-      prevStats.passes++;
-      prevStats.points += 5;
-    }
-
-    if (isKick) {
-      stats.shots++;
-      stats.points += 10;
-    }
-
-    // Detectar parada defensiva en área propia
-    const hw = this.stadium.halfWidth;
-    const gh = this.stadium.goalHalfHeight;
-    const player = this.players.get(id);
-    if (player) {
-      const inOwnHalf = (team === 'red' && player.pos.x < -hw * 0.6) || (team === 'blue' && player.pos.x > hw * 0.6);
-      if (inOwnHalf && Math.abs(player.pos.y) < gh * 2.2) {
-        stats.saves++;
-        stats.points += 25;
+    // Reset opponent shot cooldowns when this team touches the ball
+    for (const [otherId, otherTeam] of this.playerTeams.entries()) {
+      if (otherTeam !== team) {
+        this.lastShotPointsTick.delete(otherId);
       }
     }
 
-    this.touchHistory.push({ playerId: id, team, tick: this.currentTick, isKick });
+    const stats = this.getOrCreateStats(id);
+    stats.touches++;
+    // Rebalanceo de scoring: 0 puntos por toque simple del balón
+
+    const player = this.players.get(id);
+    const px = player ? player.pos.x : this.ball.pos.x;
+    const py = player ? player.pos.y : this.ball.pos.y;
+    const hw = this.stadium.halfWidth;
+    const gh = this.stadium.goalHalfHeight;
+
+    const lastTouch = this.touchHistory.length > 0 ? this.touchHistory[this.touchHistory.length - 1] : null;
+
+    // Pase completado (+10 pts): requiere >= 90 px y 3.0s (180 ticks) de cooldown
+    if (lastTouch && lastTouch.playerId !== id && lastTouch.team === team) {
+      const passDist = Math.hypot(this.ball.pos.x - lastTouch.x, this.ball.pos.y - lastTouch.y);
+      const lastPassTick = this.lastPassPointsTick.get(lastTouch.playerId) ?? -9999;
+      if (passDist >= 90 && (this.currentTick - lastPassTick) >= 180) {
+        this.lastPassPointsTick.set(lastTouch.playerId, this.currentTick);
+        const prevStats = this.getOrCreateStats(lastTouch.playerId);
+        prevStats.passes++;
+        prevStats.points += 10;
+        const passerDisc = this.players.get(lastTouch.playerId);
+        const ppx = passerDisc ? passerDisc.pos.x : px;
+        const ppy = passerDisc ? passerDisc.pos.y : py;
+        this.emitScoreEvent(lastTouch.playerId, 'Pase completado +10', 10, ppx, ppy, '#2ed573', 'pass');
+      }
+    }
+
+    // Atajada defensiva (+100 pts) al interceptar tiro rival en campo propio
+    if (this.pendingShot && this.pendingShot.shooterTeam !== team) {
+      const inOwnHalf = (team === 'red' && px <= 0) || (team === 'blue' && px >= 0);
+      if (inOwnHalf) {
+        stats.saves++;
+        stats.points += 100;
+        this.emitScoreEvent(id, 'Atajada +100', 100, px, py, '#00e5ff', 'save');
+        if (stats.saves >= 3 && !stats.hasHattrickBonus) {
+          stats.hasHattrickBonus = true;
+          stats.hattrickBonus = 100;
+          stats.points += 100;
+          this.emitScoreEvent(id, '¡Hattrick Bonus +100!', 100, px, py, '#ffd700', 'hattrick');
+        }
+      }
+      this.pendingShot = null;
+    }
+
+    // Tiro al arco (+20 pts): solo si es patada explícita (isKick), en dirección entre los 3 palos y con cooldown de 4.0s (240 ticks)
+    if (isKick) {
+      const lastShotTick = this.lastShotPointsTick.get(id) ?? -9999;
+      if (this.currentTick - lastShotTick >= 240) {
+        let isShotOnGoal = false;
+        if (team === 'red' && this.ball.vel.x > 50 && this.ball.pos.x < hw) {
+          const t = (hw - this.ball.pos.x) / this.ball.vel.x;
+          const yPred = this.ball.pos.y + this.ball.vel.y * t;
+          if (Math.abs(yPred) <= gh + 5) isShotOnGoal = true;
+        } else if (team === 'blue' && this.ball.vel.x < -50 && this.ball.pos.x > -hw) {
+          const t = (-hw - this.ball.pos.x) / this.ball.vel.x;
+          const yPred = this.ball.pos.y + this.ball.vel.y * t;
+          if (Math.abs(yPred) <= gh + 5) isShotOnGoal = true;
+        }
+
+        if (isShotOnGoal) {
+          this.lastShotPointsTick.set(id, this.currentTick);
+          stats.shots++;
+          stats.shotsNormal = (stats.shotsNormal || 0) + 1;
+          stats.points += 20;
+          this.emitScoreEvent(id, 'Tiro a portería +20', 20, px, py, '#ffa502', 'shot');
+          this.pendingShot = {
+            shooterId: id,
+            shooterTeam: team,
+            tick: this.currentTick,
+            isPower: this.ball.isPowerShot,
+            isCurve: this.ball.isCurving
+          };
+        }
+      }
+    }
+
+    this.touchHistory.push({
+      playerId: id,
+      team,
+      tick: this.currentTick,
+      isKick,
+      x: this.ball.pos.x,
+      y: this.ball.pos.y
+    });
     if (this.touchHistory.length > 50) {
       this.touchHistory.shift();
     }
@@ -879,22 +1032,40 @@ export class EngineInstance {
       } else {
         // Autogol: el último toque perteneció al equipo que recibió el gol
         isOwnGoal = true;
-        scorerId = null;
+        scorerId = lastTouch.id;
         assisterId = null;
         scorerName = this.playerNames.get(lastTouch.id) || lastTouch.name;
         assisterName = null;
       }
     }
 
-    if (scorerId !== null && !isOwnGoal) {
+    if (scorerId !== null && isOwnGoal) {
+      const ogStats = this.getOrCreateStats(scorerId);
+      ogStats.points -= 50;
+      const ogDisc = this.players.get(scorerId);
+      this.emitScoreEvent(
+        scorerId,
+        'Autogol -50',
+        -50,
+        ogDisc ? ogDisc.pos.x : this.ball.pos.x,
+        ogDisc ? ogDisc.pos.y : this.ball.pos.y,
+        '#ff4757',
+        'own_goal'
+      );
+    } else if (scorerId !== null && !isOwnGoal) {
       const sStats = this.getOrCreateStats(scorerId);
       sStats.goals++;
       sStats.points += 100;
+      const scDisc = this.players.get(scorerId);
+      const sx = scDisc ? scDisc.pos.x : this.ball.pos.x;
+      const sy = scDisc ? scDisc.pos.y : this.ball.pos.y;
+      this.emitScoreEvent(scorerId, '¡Gol! +100', 100, sx, sy, '#ffd700', 'goal');
 
       if (sStats.goals >= 3 && !sStats.hasHattrickBonus) {
         sStats.hasHattrickBonus = true;
         sStats.hattrickBonus = 100;
         sStats.points += 100;
+        this.emitScoreEvent(scorerId, '¡Hattrick Bonus +100!', 100, sx, sy, '#ffd700', 'hattrick');
       }
     }
 
@@ -902,6 +1073,16 @@ export class EngineInstance {
       const aStats = this.getOrCreateStats(assisterId);
       aStats.assists++;
       aStats.points += 50;
+      const asDisc = this.players.get(assisterId);
+      this.emitScoreEvent(
+        assisterId,
+        'Asistencia +50',
+        50,
+        asDisc ? asDisc.pos.x : this.ball.pos.x,
+        asDisc ? asDisc.pos.y : this.ball.pos.y,
+        '#00e5ff',
+        'assist'
+      );
     }
 
     this.lastGoalDetails = {
@@ -911,6 +1092,7 @@ export class EngineInstance {
       isOwnGoal
     };
 
+    this.pendingShot = null;
     this.touchHistory = [];
     this.lastTouchPlayer = null;
     this.previousTouchPlayer = null;
@@ -950,6 +1132,9 @@ export class EngineInstance {
     this.lastTouchPlayer = null;
     this.previousTouchPlayer = null;
     this.lastGoalDetails = null;
+    this.lastShotPointsTick.clear();
+    this.lastPassPointsTick.clear();
+    this.pendingShot = null;
     this.frozenVictoryStats = null;
     this.frozenVictoryMvp = null;
   }
@@ -1070,6 +1255,9 @@ export class EngineInstance {
     if ((this.modifiers as any).kickMargin !== undefined) this.world.kickMargin = (this.modifiers as any).kickMargin;
     if (this.modifiers.goalCelebrationDuration !== undefined) this.fsm.celebrationDurationTicks = Math.round(this.modifiers.goalCelebrationDuration * 60);
     if (this.modifiers.goalLimit !== undefined) this.fsm.scoreLimit = this.modifiers.goalLimit;
+    if ((modifiers as any).scoreLimit !== undefined) this.setScoreLimit((modifiers as any).scoreLimit);
+    if (this.modifiers.matchTimeMinutes !== undefined) this.fsm.matchTimeLimitTicks = Math.round(this.modifiers.matchTimeMinutes * 60 * 60);
+    if ((modifiers as any).timeLimitSeconds !== undefined) this.setTimeLimit((modifiers as any).timeLimitSeconds);
     if (this.modifiers.goldenGoalOvertime !== undefined) this.fsm.goldenGoal = this.modifiers.goldenGoalOvertime;
 
     for (const player of this.players.values()) {
@@ -1141,6 +1329,8 @@ export {
   INPUT_MAGNUS_LEFT,
   INPUT_MAGNUS_RIGHT,
   INPUT_TYPING,
+  INPUT_MOUSE_DIR,
+  INPUT_FOCUS_BALL,
   GameEngine,
   BinaryProtocol,
   EventType,
@@ -1167,6 +1357,8 @@ export {
   INPUT_FLAG_MAGNUS_LEFT,
   INPUT_FLAG_MAGNUS_RIGHT,
   INPUT_FLAG_TYPING,
+  INPUT_FLAG_MOUSE_DIR,
+  INPUT_FLAG_FOCUS_BALL,
   DEFAULT_PHYSICS_MODIFIERS,
   DEFAULT_GAME_CONFIG,
   DEFAULT_GAMEPLAY_CONFIG,

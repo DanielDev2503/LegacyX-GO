@@ -35,6 +35,8 @@ const TURBO_TRAIL_CAPACITY = 16;
 interface GhostSlot {
   x: number;
   y: number;
+  vx: number;
+  vy: number;
   alpha: number;
   active: boolean;
   color: string;
@@ -527,12 +529,10 @@ export class DiscRenderer {
   private recordDashGhost(disc: DiscSnapshot): void {
     let slots = this.ghostMap.get(disc.id);
     if (!slots) {
-      slots = [
-        { x: 0, y: 0, alpha: 0, active: false, color: '', radius: disc.radius },
-        { x: 0, y: 0, alpha: 0, active: false, color: '', radius: disc.radius },
-        { x: 0, y: 0, alpha: 0, active: false, color: '', radius: disc.radius },
-        { x: 0, y: 0, alpha: 0, active: false, color: '', radius: disc.radius }
-      ];
+      slots = [];
+      for (let i = 0; i < 8; i++) {
+        slots.push({ x: 0, y: 0, vx: 0, vy: 0, alpha: 0, active: false, color: '', radius: disc.radius });
+      }
       this.ghostMap.set(disc.id, slots);
     }
 
@@ -545,7 +545,9 @@ export class DiscRenderer {
 
     targetSlot.x = disc.x;
     targetSlot.y = disc.y;
-    targetSlot.alpha = 0.65;
+    targetSlot.vx = disc.vx || 0;
+    targetSlot.vy = disc.vy || 0;
+    targetSlot.alpha = 0.72;
     targetSlot.active = true;
     targetSlot.color = disc.team === 1 ? '#FF0055' : '#00E5FF';
     targetSlot.radius = disc.radius;
@@ -560,12 +562,36 @@ export class DiscRenderer {
         ctx.save();
         ctx.globalAlpha = ghost.alpha;
         ctx.fillStyle = ghost.color;
+        const scale = 0.75 + 0.22 * (ghost.alpha / 0.72);
         ctx.beginPath();
-        ctx.arc(ghost.x, ghost.y, ghost.radius * 0.96, 0, Math.PI * 2);
+        ctx.arc(ghost.x, ghost.y, ghost.radius * scale, 0, Math.PI * 2);
         ctx.fill();
+
+        // Aerodynamic speed lines ("Stella" trail) along velocity vector
+        const speed = Math.hypot(ghost.vx, ghost.vy);
+        if (speed > 0.5) {
+          const ux = ghost.vx / speed;
+          const uy = ghost.vy / speed;
+          const nx = -uy;
+          const ny = ux;
+          const tailLen = Math.min(28, speed * 3.8) * (ghost.alpha / 0.72);
+
+          ctx.strokeStyle = '#ffffff';
+          ctx.lineWidth = 1.6;
+          ctx.lineCap = 'round';
+          ctx.globalAlpha = ghost.alpha * 0.75;
+
+          const off = ghost.radius * 0.65;
+          ctx.beginPath();
+          ctx.moveTo(ghost.x + nx * off, ghost.y + ny * off);
+          ctx.lineTo(ghost.x + nx * off - ux * tailLen, ghost.y + ny * off - uy * tailLen);
+          ctx.moveTo(ghost.x - nx * off, ghost.y - ny * off);
+          ctx.lineTo(ghost.x - nx * off - ux * tailLen, ghost.y - ny * off - uy * tailLen);
+          ctx.stroke();
+        }
         ctx.restore();
 
-        ghost.alpha *= 0.7;
+        ghost.alpha *= 0.72;
         if (ghost.alpha < 0.02) {
           ghost.active = false;
         }

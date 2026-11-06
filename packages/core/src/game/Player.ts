@@ -8,6 +8,8 @@ export const INPUT_DASH = 1 << 6;        // Bit 6: DashTrigger (Space) — Flanc
 export const INPUT_MAGNUS_LEFT = 1 << 7; // Bit 7: MagnusLeft (Z)
 export const INPUT_MAGNUS_RIGHT = 1 << 8;// Bit 8: MagnusRight (C)
 export const INPUT_TYPING = 1 << 9;       // Bit 9: Chat typing status
+export const INPUT_MOUSE_DIR = 1 << 10;   // Bit 10: Continuous 360° mouse movement vector
+export const INPUT_FOCUS_BALL = 1 << 11;  // Bit 11: Hold to focus camera on ball
 
 // Parámetros Cinemáticos del Dash (Zero-GC)
 export function getDashStaminaCost(dashesPerFullBar: number = 4): number {
@@ -16,7 +18,7 @@ export function getDashStaminaCost(dashesPerFullBar: number = 4): number {
 }
 
 export const DASH_STAMINA_COST = 25; // 100 / 4 dashes default
-export const DASH_TICKS = 4;
+export const DASH_TICKS = 7;
 export const DEFAULT_DASH_DISTANCE = 37.5; // Desplazamiento base calibrado (+100% de potencia)
 
 export type TeamType = 'red' | 'blue' | 'spec';
@@ -57,8 +59,11 @@ export class Player {
   public stamina: number = 100;
   public isDashing: boolean = false;
   public dashTicksRemaining: number = 0;
+  public dashCooldownTimer: number = 0;
   public dashDirX: number = 0;
   public dashDirY: number = 0;
+  public moveDirX: number | null = null;
+  public moveDirY: number | null = null;
   public isTurbo: boolean = false;
   public isTyping: boolean = false;
   public curveX: number = 0; // -1, 0, 1 (compatibilidad)

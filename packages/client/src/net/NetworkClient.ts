@@ -43,6 +43,14 @@ export class NetworkClient {
   public onEmote?: (playerId: number, emoji: string) => void;
   public onGameFx?: (fx: string, intensity?: number, countdownValue?: number) => void;
   public onMatchBanner?: (banner: Record<string, unknown>) => void;
+  public onScoreEvent?: (event: {
+    playerId: number;
+    points: number;
+    reason: string;
+    x: number;
+    y: number;
+    category?: string;
+  }) => void;
   public onSnapshotBuffer?: (buffer: ArrayBuffer) => void;
   public onSnapshotDecoded?: (snapshot: GameStateSnapshot) => void;
 
@@ -297,6 +305,15 @@ export class NetworkClient {
       if (msg.banner && typeof msg.banner === 'object') {
         this.onMatchBanner?.(msg.banner as Record<string, unknown>);
       }
+    } else if (msg.type === 'SCORE_EVENT') {
+      this.onScoreEvent?.({
+        playerId: Number(msg.playerId ?? 0),
+        points: Number(msg.points ?? 0),
+        reason: String(msg.reason ?? ''),
+        x: Number(msg.x ?? 0),
+        y: Number(msg.y ?? 0),
+        category: typeof msg.category === 'string' ? msg.category : undefined
+      });
     } else if (msg.type === 'MATCH_PAUSED') {
       this.jitterBuffer.setMatchState('PAUSED');
     } else if (msg.type === 'MATCH_RESUMED') {
@@ -310,13 +327,22 @@ export class NetworkClient {
     }
   }
 
-  public sendInput(inputMask: number, tick: number): void {
+  public sendInput(
+    inputMask: number,
+    tick: number,
+    dirX?: number,
+    dirY?: number,
+    useMouseDir?: boolean
+  ): void {
     if (!this.peer) return;
     const buffer = BinaryProtocol.encodeInput(
       {
         tick,
         inputMask,
-        aimAngle: 0
+        aimAngle: 0,
+        dirX,
+        dirY,
+        useMouseDir
       },
       this.reusableInputBuffer
     );

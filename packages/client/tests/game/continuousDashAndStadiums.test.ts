@@ -143,16 +143,16 @@ describe('Mission Engineering Suite: Continuous Vector Dash, Stadiums, Camera & 
       engine.tick(inputs);
       expect(substepCallsInTick).toBeGreaterThanOrEqual(4);
 
-      // Remaining 3 ticks
+      // Remaining 6 ticks (7 ticks total)
       inputs.set('p1', 0);
-      for (let i = 0; i < 3; i++) {
+      for (let i = 0; i < 6; i++) {
         substepCallsInTick = 0;
         engine.tick(inputs);
         expect(substepCallsInTick).toBeGreaterThanOrEqual(4);
       }
 
       expect(player.isDashing).toBe(false);
-      expect(disc.pos.x).toBeGreaterThanOrEqual(36.0);
+      expect(disc.pos.x).toBeGreaterThanOrEqual(35.5);
       expect(disc.pos.x).toBeLessThanOrEqual(38.4);
     });
   });

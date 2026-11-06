@@ -135,8 +135,20 @@ export interface MatchBannerPayload {
   durationMs?: number;
 }
 
+export interface FloatingTextFilters {
+  goal: boolean;
+  assist: boolean;
+  save: boolean;
+  shot: boolean;
+  pass: boolean;
+  hattrick: boolean;
+  own_goal: boolean;
+}
+
 export interface SettingsConfig {
   theme: 'dark' | 'light';
+  movementMode: 'keyboard' | 'mouse';
+  floatingTextFilters: FloatingTextFilters;
 
   // 4-Canal Audio Hierarchy
   masterVolume: number;
@@ -208,6 +220,16 @@ export interface SettingsConfig {
 
 export const DEFAULT_SETTINGS: SettingsConfig = {
   theme: 'dark',
+  movementMode: 'keyboard',
+  floatingTextFilters: {
+    goal: true,
+    assist: true,
+    save: true,
+    shot: true,
+    pass: true,
+    hattrick: true,
+    own_goal: true
+  },
   masterVolume: 0.5,
   chatVolume: 0.7,
   sfxVolume: 0.7,
@@ -301,6 +323,7 @@ export interface KeybindConfig {
   dash: string[];
   curveLeft: string[];
   curveRight: string[];
+  focusBall: string[];
   pause: string[];
   menu: string[];
   chat: string[];
@@ -316,6 +339,7 @@ export const DEFAULT_KEYBINDS: KeybindConfig = {
   dash: ['ArrowUp'],
   curveLeft: ['ArrowLeft'],
   curveRight: ['ArrowRight'],
+  focusBall: ['KeyV'],
   pause: ['KeyP'],
   menu: ['Escape'],
   chat: ['Enter']
@@ -327,6 +351,9 @@ export interface RoomInfo {
   playersCount: number;
   maxPlayers: number;
   ping: number;
+  hostPingMs?: number;
+  countryCode?: string;
+  roomType?: 'casual' | 'ranked';
   isPrivate: boolean;
   password?: string;
   stadium: string;
@@ -419,6 +446,7 @@ export interface PhysicsModifiers {
   // Full GameplayConfig parity fields
   playerMaxSpeed?: number;
   playerAcceleration?: number;
+  kickingAcceleration?: number;
   playerFriction?: number;
   ballFriction?: number;
   ballRestitution?: number;
@@ -428,6 +456,8 @@ export interface PhysicsModifiers {
   dashDistance?: number;
   dashesPerFullBar?: number;
   staminaRechargeRate?: number;
+  staminaRegenMoving?: boolean;
+  staminaRegenMovingRate?: number;
   magnusCurveStrength?: number;
   turboEnabled?: boolean;
   dashEnabled?: boolean;
@@ -441,7 +471,7 @@ export const DEFAULT_PHYSICS_MODIFIERS: Readonly<PhysicsModifiers> = {
   postBounciness: 0.5,
   baseKickStrength: 320.0,
   dashPower: 280.0,
-  dashCooldown: 1.5,
+  dashCooldown: 1.0,
   playerMass: 2.0,
   playerRadius: 15.0,
   ballMass: 1.0,
@@ -454,8 +484,9 @@ export const DEFAULT_PHYSICS_MODIFIERS: Readonly<PhysicsModifiers> = {
   matchTimeMinutes: 3.0,
   goldenGoalOvertime: true,
   airDensity: 1.0,
-  playerMaxSpeed: 2.8,
-  playerAcceleration: 0.11,
+  playerMaxSpeed: 3.5,
+  playerAcceleration: 0.14,
+  kickingAcceleration: 0.108,
   playerFriction: 0.96,
   ballFriction: 0.99,
   ballRestitution: 0.412,
@@ -465,11 +496,31 @@ export const DEFAULT_PHYSICS_MODIFIERS: Readonly<PhysicsModifiers> = {
   dashDistance: 37.5,
   dashesPerFullBar: 4,
   staminaRechargeRate: 22.0,
+  staminaRegenMoving: true,
+  staminaRegenMovingRate: 100,
   magnusCurveStrength: 0.35,
   turboEnabled: true,
   dashEnabled: true,
   magnusEnabled: true
 };
+
+export function detectUserCountryCode(): string {
+  try {
+    const tz = (Intl.DateTimeFormat().resolvedOptions().timeZone || '').toLowerCase();
+    if (tz.includes('bogota') || tz.includes('colombia')) return 'CO';
+    if (tz.includes('buenos_aires') || tz.includes('argentina') || tz.includes('cordoba') || tz.includes('mendoza')) return 'AR';
+    if (tz.includes('sao_paulo') || tz.includes('brazil') || tz.includes('rio')) return 'BR';
+    if (tz.includes('santiago') || tz.includes('chile')) return 'CL';
+    if (tz.includes('mexico') || tz.includes('cancun') || tz.includes('monterrey')) return 'MX';
+    if (tz.includes('madrid') || tz.includes('canary')) return 'ES';
+    if (tz.includes('lima') || tz.includes('peru')) return 'PE';
+    if (tz.includes('montevideo') || tz.includes('uruguay')) return 'UY';
+    if (tz.includes('new_york') || tz.includes('chicago') || tz.includes('los_angeles') || tz.includes('denver')) return 'US';
+    return 'CO';
+  } catch {
+    return 'CO';
+  }
+}
 
 export function detectUserRegion(): string {
   try {
@@ -543,6 +594,10 @@ class GameUIStore {
   // Navigation & Screens
   public currentScreen = $state<ScreenType>('GATEKEEPER');
   public activeModal = $state<ModalType>('NONE');
+  public isPracticeMode = $state<boolean>(false);
+  public roomType = $state<'casual' | 'ranked'>('casual');
+  public showReplayModal = $state<boolean>(false);
+  public activeMatchToken = $state<string | null>(null);
 
   // Player identity & Club
   public nickname = $state('');
@@ -592,6 +647,7 @@ class GameUIStore {
     dash: [...DEFAULT_KEYBINDS.dash],
     curveLeft: [...DEFAULT_KEYBINDS.curveLeft],
     curveRight: [...DEFAULT_KEYBINDS.curveRight],
+    focusBall: [...DEFAULT_KEYBINDS.focusBall],
     pause: [...DEFAULT_KEYBINDS.pause],
     menu: [...DEFAULT_KEYBINDS.menu],
     chat: [...DEFAULT_KEYBINDS.chat]
@@ -890,10 +946,17 @@ class GameUIStore {
           id: r.id || `R-${Math.random().toString(36).substring(2, 6)}`,
           name: r.name || 'Sala Pública',
           playersCount: r.playerCount ?? r.playersCount ?? 1,
-          maxPlayers: r.maxPlayers ?? 12,
-          ping: this.realPing ?? 20,
+          maxPlayers: r.maxPlayers ?? 30,
+          ping: typeof r.hostPingMs === 'number' && this.realPing !== null
+            ? Math.max(1, Math.round(r.hostPingMs + this.realPing))
+            : (r.hostPingMs ?? this.realPing ?? 20),
+          hostPingMs: r.hostPingMs ?? 20,
+          countryCode: r.countryCode || 'CO',
+          roomType: r.roomType === 'ranked' ? 'ranked' : 'casual',
           isPrivate: Boolean(r.isPrivate),
-          stadium: r.stadiumId || r.stadium || 'AF 3v3'
+          stadium: r.stadiumId || r.stadium || 'AF 3v3',
+          timeLimit: r.timeLimit,
+          scoreLimit: r.scoreLimit
         }));
       }
     });
@@ -960,6 +1023,11 @@ class GameUIStore {
         this.settings = {
           ...DEFAULT_SETTINGS,
           ...parsed,
+          movementMode: parsed.movementMode === 'mouse' ? 'mouse' : 'keyboard',
+          floatingTextFilters: {
+            ...DEFAULT_SETTINGS.floatingTextFilters,
+            ...(parsed.floatingTextFilters || {})
+          },
           cameraZoom: clampedZoom,
           localKit,
           visitorKit,
@@ -1053,7 +1121,23 @@ class GameUIStore {
     this.onProfileUpdated?.();
   }
 
-  public saveProfile(nick: string, avatar: string, type?: 'emoji' | 'text' | 'letters'): void {
+  public get playerNickname(): string {
+    return this.nickname;
+  }
+
+  public set playerNickname(val: string) {
+    this.setPlayerNickname(val);
+  }
+
+  public get playerAvatar(): string {
+    return this.avatarValue;
+  }
+
+  public set playerAvatar(val: string) {
+    this.setPlayerAvatar(val);
+  }
+
+  public saveProfile(nick: string = this.nickname, avatar: string = this.avatarValue, type?: 'emoji' | 'text' | 'letters'): void {
     this.nickname = nick;
     this.avatarValue = avatar;
     if (type) {
@@ -1174,12 +1258,17 @@ class GameUIStore {
   }
 
   public remapKey(action: keyof KeybindConfig, code: string): void {
-    // Remove duplicate binding across other actions (except Space which can be shared by kick/dash if user desires, or clean conflict)
+    const previousKeys = [...(this.keybinds[action] || [])];
+    // Strictly prevent duplicate key or mouse button across any other action
     for (const key of Object.keys(this.keybinds) as Array<keyof KeybindConfig>) {
-      if (key !== action) {
+      if (key !== action && this.keybinds[key].includes(code)) {
         const filtered = this.keybinds[key].filter((k) => k !== code);
         if (filtered.length > 0) {
           this.keybinds[key] = filtered;
+        } else {
+          // Swap with previous binding of target action if available, otherwise unbind
+          const fallback = previousKeys.find((k) => k !== code);
+          this.keybinds[key] = fallback ? [fallback] : [];
         }
       }
     }
@@ -1204,6 +1293,7 @@ class GameUIStore {
       dash: [...DEFAULT_KEYBINDS.dash],
       curveLeft: [...DEFAULT_KEYBINDS.curveLeft],
       curveRight: [...DEFAULT_KEYBINDS.curveRight],
+      focusBall: [...DEFAULT_KEYBINDS.focusBall],
       pause: [...DEFAULT_KEYBINDS.pause],
       menu: [...DEFAULT_KEYBINDS.menu],
       chat: [...DEFAULT_KEYBINDS.chat]
@@ -1271,11 +1361,27 @@ class GameUIStore {
     this.updateModifier('matchTimeMinutes', val);
   }
 
+  public get timeLimit(): number {
+    return this.modifiers.matchTimeMinutes;
+  }
+
+  public set timeLimit(val: number) {
+    this.updateModifier('matchTimeMinutes', val);
+  }
+
   public get scoreLimitGoals(): number {
     return this.modifiers.goalLimit;
   }
 
   public set scoreLimitGoals(val: number) {
+    this.updateModifier('goalLimit', val);
+  }
+
+  public get scoreLimit(): number {
+    return this.modifiers.goalLimit;
+  }
+
+  public set scoreLimit(val: number) {
     this.updateModifier('goalLimit', val);
   }
 
@@ -1488,6 +1594,7 @@ class GameUIStore {
 
   public leaveRoom(): void {
     soundFX.playUIClick();
+    this.isPracticeMode = false;
     this.onLeaveRoom?.();
     this.clearModalStack();
     this.navigateTo('LOBBY');
@@ -1792,6 +1899,7 @@ class GameUIStore {
     const cfg = this.gameplayConfig;
     this.modifiers.playerMaxSpeed = cfg.playerMaxSpeed;
     this.modifiers.playerAcceleration = cfg.playerAcceleration;
+    this.modifiers.kickingAcceleration = cfg.kickingAcceleration ?? 0.108;
     this.modifiers.playerFriction = cfg.playerFriction ?? 0.96;
     this.modifiers.playerRadius = cfg.playerRadius;
     this.modifiers.playerMass = cfg.playerMass ?? 2.0;
@@ -1807,8 +1915,11 @@ class GameUIStore {
     this.modifiers.boostMultiplier = cfg.boostMultiplier;
     this.modifiers.dashDistance = cfg.dashDistance;
     this.modifiers.dashPower = (cfg.dashDistance / 4) * 60;
+    this.modifiers.dashCooldown = cfg.dashCooldown ?? 1.0;
     this.modifiers.dashesPerFullBar = cfg.dashesPerFullBar ?? 4;
     this.modifiers.staminaRechargeRate = cfg.staminaRechargeRate;
+    this.modifiers.staminaRegenMoving = cfg.staminaRegenMoving !== false;
+    this.modifiers.staminaRegenMovingRate = cfg.staminaRegenMovingRate ?? 100;
     this.modifiers.magnusCurveStrength = cfg.magnusCurveStrength;
     this.modifiers.magnusCoefficient = cfg.magnusCurveStrength;
     this.modifiers.turboEnabled = cfg.turboEnabled !== false;
@@ -2027,6 +2138,8 @@ class GameUIStore {
 
   public joinRoomDirectly(room: RoomInfo): void {
     soundFX.playUIClick();
+    this.isPracticeMode = false;
+    this.roomType = room.roomType ?? 'casual';
     this.activeRoom = room;
     this.activeStadiumName = room.stadium;
     this.navigateTo('IN_GAME');
@@ -2034,6 +2147,10 @@ class GameUIStore {
 
   public enterPracticeMode(): void {
     soundFX.playUIClick();
+    this.isPracticeMode = true;
+    this.roomType = 'casual';
+    this.modifiers.matchTimeMinutes = 0;
+    this.modifiers.goalLimit = 0;
     this.activeRoom = {
       id: 'LOCAL-PRACTICE',
       name: 'Entrenamiento Táctico',
@@ -2041,7 +2158,10 @@ class GameUIStore {
       maxPlayers: 1,
       ping: 0,
       isPrivate: false,
-      stadium: 'Mediano'
+      stadium: 'Mediano',
+      roomType: 'casual',
+      timeLimit: 0,
+      scoreLimit: 0
     };
     this.activeStadiumName = 'Mediano';
     this.selectedStadiumId = 'mediano';
@@ -2093,32 +2213,47 @@ class GameUIStore {
     teamsLocked: boolean = false,
     password: string = '',
     timeLimit: number = 3,
-    scoreLimit: number = 3
+    scoreLimit: number = 3,
+    roomType: 'casual' | 'ranked' = this.roomType
   ): void {
     soundFX.playUIClick();
+    this.isPracticeMode = false;
+    this.roomType = roomType;
     this.teamsLocked = teamsLocked;
+    this.modifiers.matchTimeMinutes = timeLimit;
+    this.modifiers.goalLimit = scoreLimit;
+    const clampedMax = Math.max(2, Math.min(30, Number(maxPlayers) || 12));
+    const countryCode = detectUserCountryCode();
     const cleanRoomName = name.trim() || 'Nueva Sala';
     const newRoom: RoomInfo = {
       id: `R-${Date.now().toString().slice(-4)}`,
       name: cleanRoomName,
       playersCount: 1,
-      maxPlayers: maxPlayers,
+      maxPlayers: clampedMax,
       ping: this.realPing ?? 20,
+      hostPingMs: this.realPing ?? 20,
+      countryCode,
+      roomType,
       isPrivate: isPrivate,
       password: password,
-      stadium: stadium
+      stadium: stadium,
+      timeLimit,
+      scoreLimit
     };
 
     if (this.signaling && this.signaling.isOpen()) {
       this.signaling.createRoom(cleanRoomName, {
         name: cleanRoomName,
         stadiumId: stadium,
-        maxPlayers,
+        maxPlayers: clampedMax,
         isPrivate,
         password,
         teamsLocked,
         timeLimit,
-        scoreLimit
+        scoreLimit,
+        roomType,
+        countryCode,
+        hostPingMs: this.realPing ?? 20
       });
     }
 

@@ -15,6 +15,7 @@
     { key: 'kick', label: 'Patear Balón (X)' },
     { key: 'turbo', label: 'Sprint Turbo (Shift)' },
     { key: 'dash', label: 'Impulso Dash (Space)' },
+    { key: 'focusBall', label: 'Enfocar Balón (Mantener V)' },
     { key: 'curveLeft', label: 'Curva Magnus Izq. (Z)' },
     { key: 'curveRight', label: 'Curva Magnus Der. (C)' },
     { key: 'pause', label: 'Pausar Partido (P)' },
@@ -22,9 +23,14 @@
   ];
 
   let listeningKey = $state<keyof KeybindConfig | null>(null);
+  let listenStartedAt = 0;
 
   function formatKeyCode(code: string | string[]): string {
     const raw = Array.isArray(code) ? (code[0] ?? '') : code;
+    if (!raw) return 'Sin asignar';
+    if (raw === 'Mouse0') return 'Clic Izquierdo';
+    if (raw === 'Mouse1') return 'Clic Central';
+    if (raw === 'Mouse2') return 'Clic Derecho';
     return raw
       .replace('Arrow', 'Flecha ')
       .replace('Key', '')
@@ -37,12 +43,27 @@
     if (!listeningKey) return;
     e.preventDefault();
     e.stopPropagation();
-    gameUI.setKeybind(listeningKey, e.code);
+    if (e.key === 'Escape') {
+      listeningKey = null;
+      return;
+    }
+    gameUI.remapKey(listeningKey, e.code);
     listeningKey = null;
+  }
+
+  function handleWindowMouseDown(e: MouseEvent) {
+    if (!listeningKey) return;
+    if (Date.now() - listenStartedAt < 80) return;
+    if (e.button === 0 || e.button === 1 || e.button === 2) {
+      e.preventDefault();
+      e.stopPropagation();
+      gameUI.remapKey(listeningKey, `Mouse${e.button}`);
+      listeningKey = null;
+    }
   }
 </script>
 
-<svelte:window onkeydown={handleWindowKeyDown} />
+<svelte:window onkeydown={handleWindowKeyDown} onmousedown={handleWindowMouseDown} />
 
 {#if embedded}
   <div class="keybind-panel">
@@ -53,7 +74,10 @@
           <button
             class="bind-btn"
             class:listening={listeningKey === item.key}
-            onclick={() => (listeningKey = listeningKey === item.key ? null : item.key)}
+            onclick={() => {
+              listenStartedAt = Date.now();
+              listeningKey = listeningKey === item.key ? null : item.key;
+            }}
           >
             {listeningKey === item.key ? 'Presiona tecla...' : formatKeyCode(gameUI.keybinds[item.key])}
           </button>

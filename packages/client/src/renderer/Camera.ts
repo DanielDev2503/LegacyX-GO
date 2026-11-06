@@ -263,15 +263,19 @@ export class Camera {
     ctx.restore();
   }
 
-  public worldToScreen(worldX: number, worldY: number): { x: number; y: number } {
-    const sx = (worldX - this.x - this.shakeOffsetX) * this.scale + this.viewportWidth / 2;
-    const sy = (worldY - this.y - this.shakeOffsetY) * this.scale + this.viewportHeight / 2;
+  public worldToScreen(worldX: number, worldY: number, safeAreaBottom: number = 0): { x: number; y: number } {
+    const z = Math.max(0.1, this.zoom || this.scale || 1.0);
+    const usableH = safeAreaBottom > 0 ? Math.max(100, this.viewportHeight - safeAreaBottom) : this.viewportHeight;
+    const sx = (worldX - this.x) * z + this.viewportWidth / 2 + this.shakeOffsetX;
+    const sy = (worldY - this.y) * z + usableH / 2 + this.shakeOffsetY;
     return { x: sx, y: sy };
   }
 
-  public screenToWorld(screenX: number, screenY: number): { x: number; y: number } {
-    const wx = (screenX - this.viewportWidth / 2) / this.scale + this.x + this.shakeOffsetX;
-    const wy = (screenY - this.viewportHeight / 2) / this.scale + this.y + this.shakeOffsetY;
+  public screenToWorld(screenX: number, screenY: number, safeAreaBottom: number = 0): { x: number; y: number } {
+    const z = Math.max(0.1, this.zoom || this.scale || 1.0);
+    const usableH = safeAreaBottom > 0 ? Math.max(100, this.viewportHeight - safeAreaBottom) : this.viewportHeight;
+    const wx = (screenX - this.viewportWidth / 2 - this.shakeOffsetX) / z + this.x;
+    const wy = (screenY - usableH / 2 - this.shakeOffsetY) / z + this.y;
     return { x: wx, y: wy };
   }
 }
