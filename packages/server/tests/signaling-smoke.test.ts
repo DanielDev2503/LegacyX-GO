@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { WebSocket, WebSocketServer } from 'ws';
-import { startSignalingServer, registry } from '../src/index.js';
+import { startSignalingServer, registry, authService, AuthService } from '../src/index.js';
 import type { ServerSignalMessage, ClientSignalMessage } from '@legacyx/core';
 
 describe('Signaling Server - Shift-Left Smoke Test', () => {
@@ -157,5 +157,28 @@ describe('Signaling Server - Shift-Left Smoke Test', () => {
     // Como el host se desconectó, la sala debe haberse destruido en el RoomRegistry
     const roomAfterHostLeave = registry.getRoomById(createdRoomId);
     expect(roomAfterHostLeave).toBeUndefined();
+  });
+
+  it('soporta capacidad máxima de 30 jugadores, prefijo obligatorio inv_ y bloqueo de invitados en salas Ranked', () => {
+    // 1. Capacidad de 30 jugadores
+    const room30 = registry.createRoom('host-30', 'Mega Arena 30', 'AF 3v3', 30, false, {
+      roomType: 'ranked',
+      countryCode: 'CO'
+    });
+    expect(room30.maxPlayers).toBe(30);
+    expect(room30.roomType).toBe('ranked');
+    expect(room30.countryCode).toBe('CO');
+
+    // 2. Prefijo obligatorio inv_
+    expect(AuthService.enforceGuestPrefix('Carlos')).toBe('inv_Carlos');
+    expect(AuthService.enforceGuestPrefix('inv_Carlos')).toBe('inv_Carlos');
+    expect(AuthService.isGuestNickname('inv_Carlos')).toBe(true);
+
+    // 3. Bloqueo de invitados en salas Clasificatorias (Ranked)
+    const guestAccess = authService.canEnterRoom('ranked', true, undefined);
+    expect(guestAccess.allowed).toBe(false);
+    expect(guestAccess.reason).toContain('Esta sala es Clasificatoria');
+
+    registry.removeRoom(room30.id);
   });
 });

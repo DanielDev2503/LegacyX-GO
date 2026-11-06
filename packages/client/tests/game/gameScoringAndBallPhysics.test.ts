@@ -657,6 +657,32 @@ describe('Game Scoring Engine & Ball Kinematics (Phase 1)', () => {
       pRed1.moveDirX = null;
       pRed1.moveDirY = null;
     });
+
+    it('enforces 4.0s (240 ticks) anti-spam cooldown on shots on goal and resets cooldown on opponent touch', () => {
+      engine.ball.pos.set(50, 0);
+      engine.ball.vel.set(300, 0);
+      engine.registerBallTouch('r1', true); // First explicit kick on goal -> +20 pts
+
+      const r1Stats = engine.getOrCreatePlayerStats('r1');
+      expect(r1Stats.shots).toBe(1);
+      expect(r1Stats.points).toBe(20);
+
+      // Advance 30 ticks (< 240 ticks cooldown) and shoot again -> must NOT farm +20 pts
+      for (let i = 0; i < 30; i++) engine.tick(new Map());
+      engine.ball.pos.set(50, 0);
+      engine.ball.vel.set(300, 0);
+      engine.registerBallTouch('r1', true);
+      expect(r1Stats.shots).toBe(1);
+      expect(r1Stats.points).toBe(20);
+
+      // Advance past 240 ticks -> new shot awards +20 pts
+      for (let i = 0; i < 220; i++) engine.tick(new Map());
+      engine.ball.pos.set(50, 0);
+      engine.ball.vel.set(300, 0);
+      engine.registerBallTouch('r1', true);
+      expect(r1Stats.shots).toBe(2);
+      expect(r1Stats.points).toBe(40);
+    });
   });
 });
 

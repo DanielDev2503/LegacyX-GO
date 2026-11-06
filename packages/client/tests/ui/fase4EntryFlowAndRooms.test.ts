@@ -2,6 +2,8 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { NicknameGatekeeper, STORAGE_KEY_LEGACYX_NICKNAME, STORAGE_KEY_NICKNAME } from '../../src/controllers/components/NicknameGatekeeper';
 import { RoomLobby, RoomListItem } from '../../src/controllers/components/RoomLobby';
 import { CreateRoomModal } from '../../src/controllers/components/CreateRoomModal';
+import { gameUI } from '../../src/ui/state/gameUI.svelte';
+import { formatGuestNickname } from '../../src/ui/state/userProfile.svelte';
 
 describe('FASE 4: Flujo de Entrada, Explorador de Salas y Creador de Salas (I, L, C)', () => {
   let createdElements: Record<string, any>;
@@ -606,6 +608,31 @@ describe('FASE 4: Flujo de Entrada, Explorador de Salas y Creador de Salas (I, L
         teamsLocked: true,
         isPublic: true
       });
+    });
+
+    it('valida no duplicidad de controles (teclado y botones del ratón Mouse0/Mouse1/Mouse2) y prefijo inv_ obligatorio', () => {
+      gameUI.resetKeysToDefault();
+      expect(gameUI.keyBindings.kick).toBe('Space');
+      expect(gameUI.keyBindings.dash).toBe('KeyE');
+      expect(gameUI.keyBindings.focusBall).toBe('KeyV');
+
+      // Asignar Mouse0 a kick y luego intentar asignarlo a dash -> debe intercambiar (cero duplicados)
+      gameUI.remapKey('kick', 'Mouse0');
+      expect(gameUI.keyBindings.kick).toBe('Mouse0');
+
+      const result = gameUI.remapKey('dash', 'Mouse0');
+      expect(result.swappedWith).toBe('kick');
+      expect(gameUI.keyBindings.dash).toBe('Mouse0');
+      expect(gameUI.keyBindings.kick).toBe('KeyE');
+
+      // Verificar que no existan dos acciones con el mismo código
+      const values = Object.values(gameUI.keyBindings);
+      expect(new Set(values).size).toBe(values.length);
+
+      // Prefijo obligatorio inv_ para invitados
+      expect(formatGuestNickname('Daniel')).toBe('inv_Daniel');
+      expect(formatGuestNickname('inv_Daniel')).toBe('inv_Daniel');
+      gameUI.resetKeysToDefault();
     });
   });
 });

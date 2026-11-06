@@ -603,7 +603,7 @@ export class AuthService {
           p_blue_score: 0,
           p_winner: 'draw',
           p_status: 'ABORTED',
-          p_participants: []
+          p_player_updates: []
         })
       }).catch(() => {});
     }
@@ -695,7 +695,7 @@ export class AuthService {
           p_blue_score: params.blueScore,
           p_winner: params.winner,
           p_status: 'COMPLETED',
-          p_participants: rpcParticipants
+          p_player_updates: rpcParticipants
         })
       }).catch(() => {});
     }
