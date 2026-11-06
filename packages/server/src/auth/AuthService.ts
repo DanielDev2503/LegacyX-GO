@@ -78,11 +78,11 @@ export interface RankedParticipantResult {
 }
 
 const DEFAULT_SUPABASE_URL =
-  process.env.SUPABASE_URL || 'https://imdyyahjqntkcjdliywt.supabase.co';
+  process.env.SUPABASE_URL || 'https://jeopwutoxmaagxlebpsl.supabase.co';
 const DEFAULT_SUPABASE_KEY =
   process.env.SUPABASE_ANON_KEY ||
   process.env.SUPABASE_PUBLISHABLE_KEY ||
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImltZHl5YWhqcW50a2NqZGxpeXd0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODE0ODk0MjgsImV4cCI6MjA5NzA2NTQyOH0.qI0Sethg0U5S67rzzwpi2vchI7FoyYSr7THNmWLNNX0';
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Implb3B3dXRveG1hYWd4bGVicHNsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTM5MzYwNjksImV4cCI6MjEwOTUxMjA2OX0.0UXtRV9_wiKtHh5Dm5ypiLDIfKHTw81FkinmwkrJFvI';
 const JWT_SECRET = process.env.JWT_SECRET || 'legacyx-go-cyber-pitch-jwt-secret-2026';
 
 export class AuthService {
