@@ -29,6 +29,9 @@ export interface TouchHistoryEntry {
   wasCurve: boolean;
   wasPower: boolean;
   tick: number;
+  ballX?: number | undefined;
+  ballY?: number | undefined;
+  isKick?: boolean | undefined;
 }
 
 export interface PlayerMatchStats {

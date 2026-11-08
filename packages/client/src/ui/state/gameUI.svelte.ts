@@ -23,12 +23,14 @@ export type ModalType =
   | 'STADIUM_SELECT'
   | 'STATS'
   | 'TEAM_SELECT'
+  | 'REPLAY_VIEWER'
   | 'settings'
   | 'keybinds'
   | 'physics'
   | 'teamSelect'
   | 'stadiumSelect'
-  | 'stats';
+  | 'stats'
+  | 'replayViewer';
 
 export type BallSkinType = 'classic' | 'retro' | 'neon';
 export type StadiumPresetKey =
@@ -167,11 +169,21 @@ export interface SettingsConfig {
   chatOpacity: number;
   minimapOpacity: number;
 
+  // Controles — Modo de Movimiento
+  movementMode: 'keyboard' | 'mouse';
+
   // Togglers Visuales de Jugabilidad
   magnusTrailEnabled: boolean;
   ballTrailEnabled: boolean;
   fireShotEnabled: boolean;
   floatingPointsEnabled: boolean;
+  floatingGoals: boolean;
+  floatingAssists: boolean;
+  floatingSaves: boolean;
+  floatingShots: boolean;
+  floatingPasses: boolean;
+  floatingHattricks: boolean;
+  floatingOwnGoals: boolean;
   minimapEnabled: boolean;
   offscreenIndicatorsEnabled: boolean;
   offscreenIndicators: boolean;
@@ -232,10 +244,19 @@ export const DEFAULT_SETTINGS: SettingsConfig = {
   chatOpacity: 85,
   minimapOpacity: 90,
 
+  movementMode: 'keyboard',
+
   magnusTrailEnabled: true,
   ballTrailEnabled: true,
   fireShotEnabled: true,
   floatingPointsEnabled: true,
+  floatingGoals: true,
+  floatingAssists: true,
+  floatingSaves: true,
+  floatingShots: true,
+  floatingPasses: true,
+  floatingHattricks: true,
+  floatingOwnGoals: true,
   minimapEnabled: true,
   offscreenIndicatorsEnabled: true,
   offscreenIndicators: true,
@@ -301,6 +322,7 @@ export interface KeybindConfig {
   dash: string[];
   curveLeft: string[];
   curveRight: string[];
+  focusBall: string[];
   pause: string[];
   menu: string[];
   chat: string[];
@@ -316,10 +338,108 @@ export const DEFAULT_KEYBINDS: KeybindConfig = {
   dash: ['ArrowUp'],
   curveLeft: ['ArrowLeft'],
   curveRight: ['ArrowRight'],
+  focusBall: ['KeyV', 'Tab'],
   pause: ['KeyP'],
   menu: ['Escape'],
   chat: ['Enter']
 };
+
+export function formatKeybindCode(code: string): string {
+  if (!code) return '---';
+  if (code === 'Mouse0') return 'Click Izquierdo';
+  if (code === 'Mouse1') return 'Click Central';
+  if (code === 'Mouse2') return 'Click Derecho';
+  if (code === 'Space') return 'ESPACIO';
+  if (code === 'ShiftLeft') return 'SHIFT IZQ';
+  if (code === 'ShiftRight') return 'SHIFT DER';
+  if (code === 'ControlLeft') return 'CTRL IZQ';
+  if (code === 'ControlRight') return 'CTRL DER';
+  if (code === 'AltLeft') return 'ALT IZQ';
+  if (code === 'AltRight') return 'ALT DER';
+  if (code === 'Tab') return 'TAB';
+  if (code === 'ArrowUp') return 'FLECHA ARRIBA';
+  if (code === 'ArrowDown') return 'FLECHA ABAJO';
+  if (code === 'ArrowLeft') return 'FLECHA IZQ';
+  if (code === 'ArrowRight') return 'FLECHA DER';
+  if (code.startsWith('Key')) return code.slice(3).toUpperCase();
+  if (code.startsWith('Digit')) return code.slice(5);
+  return code.toUpperCase();
+}
+
+export function assignUniqueKeybind(
+  current: KeybindConfig,
+  action: keyof KeybindConfig,
+  newCode: string
+): { keybinds: KeybindConfig; swappedAction: keyof KeybindConfig | null } {
+  const next = {} as KeybindConfig;
+  const keys = Object.keys(current) as Array<keyof KeybindConfig>;
+  for (const k of keys) {
+    next[k] = [...(current[k] || [])];
+  }
+
+  const prevCodesForAction = [...(next[action] || [])];
+  let swappedAction: keyof KeybindConfig | null = null;
+
+  for (const k of keys) {
+    if (k === action) continue;
+    if (next[k].includes(newCode)) {
+      if (!swappedAction) {
+        swappedAction = k;
+      }
+      const remaining = next[k].filter((c) => c !== newCode);
+      if (remaining.length > 0) {
+        next[k] = remaining;
+      } else {
+        const replacement = prevCodesForAction.find((c) => c !== newCode);
+        next[k] = replacement ? [replacement] : [];
+      }
+    }
+  }
+
+  next[action] = [newCode];
+  return { keybinds: next, swappedAction };
+}
+
+export function isFloatingScoreCategoryEnabled(
+  settings: SettingsConfig,
+  category?: string
+): boolean {
+  if (!settings.floatingPointsEnabled) return false;
+  switch (category) {
+    case 'goal':
+      return settings.floatingGoals !== false;
+    case 'assist':
+      return settings.floatingAssists !== false;
+    case 'save':
+      return settings.floatingSaves !== false;
+    case 'shot':
+      return settings.floatingShots !== false;
+    case 'pass':
+      return settings.floatingPasses !== false;
+    case 'hattrick':
+      return settings.floatingHattricks !== false;
+    case 'ownGoal':
+      return settings.floatingOwnGoals !== false;
+    default:
+      return true;
+  }
+}
+
+export function estimateRoomPing(
+  clientPingMs: number | null | undefined,
+  hostPingMs?: number | null
+): { ms: number; label: string; tier: 'optimal' | 'good' | 'high' } {
+  const cPing = typeof clientPingMs === 'number' && clientPingMs >= 0 ? clientPingMs : 20;
+  const hPing = typeof hostPingMs === 'number' && hostPingMs >= 0 ? hostPingMs : 18;
+  const ms = Math.max(1, Math.round(cPing + hPing));
+  if (ms < 65) {
+    return { ms, label: 'Óptimo', tier: 'optimal' };
+  }
+  if (ms <= 130) {
+    return { ms, label: 'Estable', tier: 'good' };
+  }
+  return { ms, label: 'Alto', tier: 'high' };
+}
 
 export interface RoomInfo {
   id: string;
@@ -327,6 +447,9 @@ export interface RoomInfo {
   playersCount: number;
   maxPlayers: number;
   ping: number;
+  hostPingMs?: number;
+  countryCode?: string;
+  roomType?: 'casual' | 'ranked';
   isPrivate: boolean;
   password?: string;
   stadium: string;
@@ -418,7 +541,9 @@ export interface PhysicsModifiers {
   scoreLimit?: number;
   // Full GameplayConfig parity fields
   playerMaxSpeed?: number;
+  playerSpeed?: number;
   playerAcceleration?: number;
+  kickingAcceleration?: number;
   playerFriction?: number;
   ballFriction?: number;
   ballRestitution?: number;
@@ -428,6 +553,8 @@ export interface PhysicsModifiers {
   dashDistance?: number;
   dashesPerFullBar?: number;
   staminaRechargeRate?: number;
+  staminaRegenMoving?: boolean;
+  staminaRegenMovingRate?: number;
   magnusCurveStrength?: number;
   turboEnabled?: boolean;
   dashEnabled?: boolean;
@@ -441,12 +568,12 @@ export const DEFAULT_PHYSICS_MODIFIERS: Readonly<PhysicsModifiers> = {
   postBounciness: 0.5,
   baseKickStrength: 320.0,
   dashPower: 280.0,
-  dashCooldown: 1.5,
+  dashCooldown: 1.0,
   playerMass: 2.0,
   playerRadius: 15.0,
   ballMass: 1.0,
   ballRadius: 5.8,
-  magnusCoefficient: 0.35,
+  magnusCoefficient: 1.05,
   netElasticity: 0.45,
   netDamping: 0.12,
   goalCelebrationDuration: 3.0,
@@ -454,8 +581,10 @@ export const DEFAULT_PHYSICS_MODIFIERS: Readonly<PhysicsModifiers> = {
   matchTimeMinutes: 3.0,
   goldenGoalOvertime: true,
   airDensity: 1.0,
-  playerMaxSpeed: 2.8,
-  playerAcceleration: 0.11,
+  playerMaxSpeed: 3.5,
+  playerSpeed: 1.25,
+  playerAcceleration: 0.14,
+  kickingAcceleration: 0.108,
   playerFriction: 0.96,
   ballFriction: 0.99,
   ballRestitution: 0.412,
@@ -464,8 +593,10 @@ export const DEFAULT_PHYSICS_MODIFIERS: Readonly<PhysicsModifiers> = {
   boostMultiplier: 1.75,
   dashDistance: 37.5,
   dashesPerFullBar: 4,
-  staminaRechargeRate: 22.0,
-  magnusCurveStrength: 0.35,
+  staminaRechargeRate: 25.0,
+  staminaRegenMoving: true,
+  staminaRegenMovingRate: 100,
+  magnusCurveStrength: 1.05,
   turboEnabled: true,
   dashEnabled: true,
   magnusEnabled: true
@@ -576,6 +707,11 @@ class GameUIStore {
   public onlineUsersCount = $state<number>(1);
   public signaling: SignalingClient | null = null;
   public createRoomTeamsLocked = $state<boolean>(false);
+  public isPracticeMode = $state<boolean>(false);
+  public roomType = $state<'casual' | 'ranked'>('casual');
+  public lobbyError = $state<string | null>(null);
+  public isFocusingBall = $state<boolean>(false);
+  public lastKeybindSwapNotice = $state<string | null>(null);
 
   // Settings & Keybinds
   public settings = $state<SettingsConfig>({ ...DEFAULT_SETTINGS });
@@ -592,6 +728,7 @@ class GameUIStore {
     dash: [...DEFAULT_KEYBINDS.dash],
     curveLeft: [...DEFAULT_KEYBINDS.curveLeft],
     curveRight: [...DEFAULT_KEYBINDS.curveRight],
+    focusBall: [...DEFAULT_KEYBINDS.focusBall],
     pause: [...DEFAULT_KEYBINDS.pause],
     menu: [...DEFAULT_KEYBINDS.menu],
     chat: [...DEFAULT_KEYBINDS.chat]
@@ -886,15 +1023,24 @@ class GameUIStore {
         this.onlineUsersCount = data.onlineCount;
       }
       if (Array.isArray(data.rooms)) {
-        this.rooms = data.rooms.map((r: any) => ({
-          id: r.id || `R-${Math.random().toString(36).substring(2, 6)}`,
-          name: r.name || 'Sala Pública',
-          playersCount: r.playerCount ?? r.playersCount ?? 1,
-          maxPlayers: r.maxPlayers ?? 12,
-          ping: this.realPing ?? 20,
-          isPrivate: Boolean(r.isPrivate),
-          stadium: r.stadiumId || r.stadium || 'AF 3v3'
-        }));
+        this.rooms = data.rooms.map((r: any) => {
+          const hostPing = typeof r.hostPingMs === 'number' ? r.hostPingMs : 18;
+          const est = estimateRoomPing(this.realPing, hostPing);
+          return {
+            id: r.id || `R-${Math.random().toString(36).substring(2, 6)}`,
+            name: r.name || 'Sala Pública',
+            playersCount: r.playerCount ?? r.playersCount ?? 1,
+            maxPlayers: Math.min(30, Math.max(2, r.maxPlayers ?? 12)),
+            ping: est.ms,
+            hostPingMs: hostPing,
+            countryCode: r.countryCode || 'UN',
+            roomType: r.roomType === 'ranked' ? 'ranked' : 'casual',
+            isPrivate: Boolean(r.isPrivate),
+            stadium: r.stadiumId || r.stadium || 'AF 3v3',
+            timeLimit: r.timeLimit,
+            scoreLimit: r.scoreLimit
+          };
+        });
       }
     });
 
@@ -1004,7 +1150,14 @@ class GameUIStore {
         localStorage.setItem(SETTINGS_VERSION_KEY, String(SETTINGS_VERSION));
       } else {
         const parsedKeys = JSON.parse(rawKeybinds) as Partial<KeybindConfig>;
-        this.keybinds = { ...DEFAULT_KEYBINDS, ...parsedKeys };
+        this.keybinds = {
+          ...DEFAULT_KEYBINDS,
+          ...parsedKeys,
+          focusBall:
+            Array.isArray(parsedKeys.focusBall) && parsedKeys.focusBall.length > 0
+              ? parsedKeys.focusBall
+              : [...DEFAULT_KEYBINDS.focusBall]
+        };
       }
     } catch {
       // Ignore corrupt localStorage
@@ -1156,6 +1309,13 @@ class GameUIStore {
     this.settings.ballTrailEnabled = DEFAULT_SETTINGS.ballTrailEnabled;
     this.settings.fireShotEnabled = DEFAULT_SETTINGS.fireShotEnabled;
     this.settings.floatingPointsEnabled = DEFAULT_SETTINGS.floatingPointsEnabled;
+    this.settings.floatingGoals = DEFAULT_SETTINGS.floatingGoals;
+    this.settings.floatingAssists = DEFAULT_SETTINGS.floatingAssists;
+    this.settings.floatingSaves = DEFAULT_SETTINGS.floatingSaves;
+    this.settings.floatingShots = DEFAULT_SETTINGS.floatingShots;
+    this.settings.floatingPasses = DEFAULT_SETTINGS.floatingPasses;
+    this.settings.floatingHattricks = DEFAULT_SETTINGS.floatingHattricks;
+    this.settings.floatingOwnGoals = DEFAULT_SETTINGS.floatingOwnGoals;
     this.settings.minimapEnabled = DEFAULT_SETTINGS.minimapEnabled;
     this.settings.offscreenIndicatorsEnabled = DEFAULT_SETTINGS.offscreenIndicatorsEnabled;
     this.settings.offscreenIndicators = DEFAULT_SETTINGS.offscreenIndicators;
@@ -1173,17 +1333,14 @@ class GameUIStore {
     this.saveSettings();
   }
 
-  public remapKey(action: keyof KeybindConfig, code: string): void {
-    // Remove duplicate binding across other actions (except Space which can be shared by kick/dash if user desires, or clean conflict)
-    for (const key of Object.keys(this.keybinds) as Array<keyof KeybindConfig>) {
-      if (key !== action) {
-        const filtered = this.keybinds[key].filter((k) => k !== code);
-        if (filtered.length > 0) {
-          this.keybinds[key] = filtered;
-        }
-      }
+  public remapKey(action: keyof KeybindConfig, code: string): keyof KeybindConfig | null {
+    const { keybinds: nextKeybinds, swappedAction } = assignUniqueKeybind(this.keybinds, action, code);
+    this.keybinds = nextKeybinds;
+    if (swappedAction) {
+      this.lastKeybindSwapNotice = `${formatKeybindCode(code)} estaba en otra acción y se intercambió automáticamente.`;
+    } else {
+      this.lastKeybindSwapNotice = null;
     }
-    this.keybinds[action] = [code];
     if (typeof localStorage !== 'undefined') {
       try {
         localStorage.setItem(KEYBINDS_STORAGE_KEY, JSON.stringify(this.keybinds));
@@ -1191,9 +1348,11 @@ class GameUIStore {
         // Ignore storage error
       }
     }
+    return swappedAction;
   }
 
   public resetKeybinds(): void {
+    this.lastKeybindSwapNotice = null;
     this.keybinds = {
       up: [...DEFAULT_KEYBINDS.up],
       down: [...DEFAULT_KEYBINDS.down],
@@ -1204,6 +1363,7 @@ class GameUIStore {
       dash: [...DEFAULT_KEYBINDS.dash],
       curveLeft: [...DEFAULT_KEYBINDS.curveLeft],
       curveRight: [...DEFAULT_KEYBINDS.curveRight],
+      focusBall: [...DEFAULT_KEYBINDS.focusBall],
       pause: [...DEFAULT_KEYBINDS.pause],
       menu: [...DEFAULT_KEYBINDS.menu],
       chat: [...DEFAULT_KEYBINDS.chat]
@@ -1268,7 +1428,17 @@ class GameUIStore {
   }
 
   public set timeLimitMinutes(val: number) {
-    this.updateModifier('matchTimeMinutes', val);
+    const clean = Math.max(0, Math.min(15, Number.isFinite(val) ? val : 0));
+    this.modifiers.timeLimit = clean;
+    this.updateModifier('matchTimeMinutes', clean);
+  }
+
+  public get timeLimit(): number {
+    return this.modifiers.matchTimeMinutes;
+  }
+
+  public set timeLimit(val: number) {
+    this.timeLimitMinutes = val;
   }
 
   public get scoreLimitGoals(): number {
@@ -1276,7 +1446,17 @@ class GameUIStore {
   }
 
   public set scoreLimitGoals(val: number) {
-    this.updateModifier('goalLimit', val);
+    const clean = Math.max(0, Math.min(15, Number.isFinite(val) ? Math.round(val) : 0));
+    this.modifiers.scoreLimit = clean;
+    this.updateModifier('goalLimit', clean);
+  }
+
+  public get scoreLimit(): number {
+    return this.modifiers.goalLimit;
+  }
+
+  public set scoreLimit(val: number) {
+    this.scoreLimitGoals = val;
   }
 
   public get physicsModifiers(): PhysicsModifiers {
@@ -1488,6 +1668,8 @@ class GameUIStore {
 
   public leaveRoom(): void {
     soundFX.playUIClick();
+    this.isPracticeMode = false;
+    this.roomType = 'casual';
     this.onLeaveRoom?.();
     this.clearModalStack();
     this.navigateTo('LOBBY');
@@ -1592,7 +1774,9 @@ class GameUIStore {
       STADIUM_SELECT: 'STADIUM_SELECTOR',
       STADIUM_SELECTOR: 'STADIUM_SELECTOR',
       stats: 'STATS',
-      STATS: 'STATS'
+      STATS: 'STATS',
+      replayViewer: 'REPLAY_VIEWER',
+      REPLAY_VIEWER: 'REPLAY_VIEWER'
     };
     return map[modal] ?? (modal as ModalType);
   }
@@ -1612,7 +1796,7 @@ class GameUIStore {
 
   /** Overlays `#` de mayor jerarquía que nunca deben ser pisados por la FSM. */
   public get isSecondaryOverlayOpen(): boolean {
-    return ['SETTINGS', 'KEYBINDS', 'PHYSICS_MODIFIERS', 'STADIUM_SELECTOR'].includes(this.activeModal);
+    return ['SETTINGS', 'KEYBINDS', 'PHYSICS_MODIFIERS', 'STADIUM_SELECTOR', 'REPLAY_VIEWER'].includes(this.activeModal);
   }
 
   /** Contenedor central unificado (menú de sala / estadísticas) visible. */
@@ -1791,7 +1975,9 @@ class GameUIStore {
   private syncGameplayConfigToModifiers(): void {
     const cfg = this.gameplayConfig;
     this.modifiers.playerMaxSpeed = cfg.playerMaxSpeed;
+    this.modifiers.playerSpeed = cfg.playerSpeed ?? cfg.playerMaxSpeed / 2.8;
     this.modifiers.playerAcceleration = cfg.playerAcceleration;
+    this.modifiers.kickingAcceleration = cfg.kickingAcceleration ?? cfg.playerAcceleration * (0.108 / 0.14);
     this.modifiers.playerFriction = cfg.playerFriction ?? 0.96;
     this.modifiers.playerRadius = cfg.playerRadius;
     this.modifiers.playerMass = cfg.playerMass ?? 2.0;
@@ -1806,9 +1992,12 @@ class GameUIStore {
     this.modifiers.kickMargin = cfg.kickMargin ?? 4.0;
     this.modifiers.boostMultiplier = cfg.boostMultiplier;
     this.modifiers.dashDistance = cfg.dashDistance;
-    this.modifiers.dashPower = (cfg.dashDistance / 4) * 60;
+    this.modifiers.dashPower = (cfg.dashDistance / 7) * 60;
+    this.modifiers.dashCooldown = cfg.dashCooldown ?? 1.0;
     this.modifiers.dashesPerFullBar = cfg.dashesPerFullBar ?? 4;
     this.modifiers.staminaRechargeRate = cfg.staminaRechargeRate;
+    this.modifiers.staminaRegenMoving = cfg.staminaRegenMoving !== false;
+    this.modifiers.staminaRegenMovingRate = cfg.staminaRegenMovingRate ?? 100;
     this.modifiers.magnusCurveStrength = cfg.magnusCurveStrength;
     this.modifiers.magnusCoefficient = cfg.magnusCurveStrength;
     this.modifiers.turboEnabled = cfg.turboEnabled !== false;
@@ -2027,6 +2216,9 @@ class GameUIStore {
 
   public joinRoomDirectly(room: RoomInfo): void {
     soundFX.playUIClick();
+    this.lobbyError = null;
+    this.isPracticeMode = false;
+    this.roomType = room.roomType === 'ranked' ? 'ranked' : 'casual';
     this.activeRoom = room;
     this.activeStadiumName = room.stadium;
     this.navigateTo('IN_GAME');
@@ -2034,14 +2226,26 @@ class GameUIStore {
 
   public enterPracticeMode(): void {
     soundFX.playUIClick();
+    this.lobbyError = null;
+    this.isPracticeMode = true;
+    this.roomType = 'casual';
+    this.teamsLocked = false;
+    this.allowCaptainKitSwitch = false;
+    this.modifiers.matchTimeMinutes = 0;
+    this.modifiers.timeLimit = 0;
+    this.modifiers.goalLimit = 0;
+    this.modifiers.scoreLimit = 0;
     this.activeRoom = {
       id: 'LOCAL-PRACTICE',
       name: 'Entrenamiento Táctico',
       playersCount: 1,
       maxPlayers: 1,
       ping: 0,
+      roomType: 'casual',
       isPrivate: false,
-      stadium: 'Mediano'
+      stadium: 'Mediano',
+      timeLimit: 0,
+      scoreLimit: 0
     };
     this.activeStadiumName = 'Mediano';
     this.selectedStadiumId = 'mediano';
@@ -2093,32 +2297,55 @@ class GameUIStore {
     teamsLocked: boolean = false,
     password: string = '',
     timeLimit: number = 3,
-    scoreLimit: number = 3
+    scoreLimit: number = 3,
+    roomType: 'casual' | 'ranked' = 'casual'
   ): void {
     soundFX.playUIClick();
+    this.lobbyError = null;
+    this.isPracticeMode = false;
+    this.roomType = roomType;
     this.teamsLocked = teamsLocked;
+    const clampedMax = Math.max(2, Math.min(30, Math.round(maxPlayers || 12)));
+    const cleanTime = Math.max(0, Math.min(15, Number.isFinite(timeLimit) ? timeLimit : 3));
+    const cleanScore = Math.max(0, Math.min(15, Number.isFinite(scoreLimit) ? Math.round(scoreLimit) : 3));
+    this.modifiers.matchTimeMinutes = cleanTime;
+    this.modifiers.timeLimit = cleanTime;
+    this.modifiers.goalLimit = cleanScore;
+    this.modifiers.scoreLimit = cleanScore;
+
     const cleanRoomName = name.trim() || 'Nueva Sala';
     const newRoom: RoomInfo = {
       id: `R-${Date.now().toString().slice(-4)}`,
       name: cleanRoomName,
       playersCount: 1,
-      maxPlayers: maxPlayers,
+      maxPlayers: clampedMax,
       ping: this.realPing ?? 20,
+      roomType,
       isPrivate: isPrivate,
       password: password,
-      stadium: stadium
+      stadium: stadium,
+      timeLimit: cleanTime,
+      scoreLimit: cleanScore
     };
 
     if (this.signaling && this.signaling.isOpen()) {
+      let tz = '';
+      try {
+        tz = Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+      } catch {
+        tz = '';
+      }
       this.signaling.createRoom(cleanRoomName, {
         name: cleanRoomName,
         stadiumId: stadium,
-        maxPlayers,
+        maxPlayers: clampedMax,
         isPrivate,
         password,
         teamsLocked,
-        timeLimit,
-        scoreLimit
+        timeLimit: cleanTime,
+        scoreLimit: cleanScore,
+        roomType,
+        timeZone: tz
       });
     }
 

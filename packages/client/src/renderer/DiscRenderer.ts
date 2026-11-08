@@ -527,46 +527,106 @@ export class DiscRenderer {
   private recordDashGhost(disc: DiscSnapshot): void {
     let slots = this.ghostMap.get(disc.id);
     if (!slots) {
-      slots = [
-        { x: 0, y: 0, alpha: 0, active: false, color: '', radius: disc.radius },
-        { x: 0, y: 0, alpha: 0, active: false, color: '', radius: disc.radius },
-        { x: 0, y: 0, alpha: 0, active: false, color: '', radius: disc.radius },
-        { x: 0, y: 0, alpha: 0, active: false, color: '', radius: disc.radius }
-      ];
+      slots = Array.from({ length: 7 }, () => ({
+        x: 0,
+        y: 0,
+        alpha: 0,
+        active: false,
+        color: '',
+        radius: disc.radius
+      }));
       this.ghostMap.set(disc.id, slots);
     }
 
-    let targetSlot = slots[0]!;
-    for (let i = 1; i < slots.length; i++) {
-      if (!slots[i]!.active || slots[i]!.alpha < targetSlot.alpha) {
-        targetSlot = slots[i]!;
-      }
+    const newest = slots[slots.length - 1]!;
+    if (newest.active && Math.hypot(disc.x - newest.x, disc.y - newest.y) < 1.2) {
+      newest.alpha = 0.78;
+      newest.radius = disc.radius;
+      return;
     }
 
-    targetSlot.x = disc.x;
-    targetSlot.y = disc.y;
-    targetSlot.alpha = 0.65;
-    targetSlot.active = true;
-    targetSlot.color = disc.team === 1 ? '#FF0055' : '#00E5FF';
-    targetSlot.radius = disc.radius;
+    const recycled = slots.shift()!;
+    recycled.x = disc.x;
+    recycled.y = disc.y;
+    recycled.alpha = 0.78;
+    recycled.active = true;
+    recycled.color = disc.team === 1 ? '#FF0055' : '#00E5FF';
+    recycled.radius = disc.radius;
+    slots.push(recycled);
   }
 
   private renderDashGhosts(ctx: CanvasRenderingContext2D): void {
     for (const slots of this.ghostMap.values()) {
+      let activeCount = 0;
+      for (let i = 0; i < slots.length; i++) {
+        if (slots[i]!.active) activeCount++;
+      }
+      if (activeCount === 0) continue;
+
+      // 1. Aerodynamic Stella slipstream lines between consecutive traversed positions
+      if (activeCount >= 2 && typeof ctx.moveTo === 'function' && typeof ctx.lineTo === 'function') {
+        ctx.save();
+        ctx.globalCompositeOperation = 'lighter';
+        ctx.lineCap = 'round';
+        let prevGhost: GhostSlot | null = null;
+        for (let i = 0; i < slots.length; i++) {
+          const curr = slots[i]!;
+          if (!curr.active) continue;
+          if (prevGhost) {
+            const dx = curr.x - prevGhost.x;
+            const dy = curr.y - prevGhost.y;
+            const len = Math.hypot(dx, dy);
+            if (len > 0.5) {
+              const nx = -dy / len;
+              const ny = dx / len;
+              const wingOffset = curr.radius * 0.74;
+
+              // Central white-hot core streak
+              ctx.globalAlpha = Math.min(1, curr.alpha * 0.85);
+              ctx.strokeStyle = '#ffffff';
+              ctx.lineWidth = 2.4;
+              ctx.beginPath();
+              ctx.moveTo(prevGhost.x, prevGhost.y);
+              ctx.lineTo(curr.x, curr.y);
+              ctx.stroke();
+
+              // Flanking aerodynamic slipstream lines
+              ctx.globalAlpha = Math.min(1, curr.alpha * 0.68);
+              ctx.strokeStyle = curr.color;
+              ctx.lineWidth = 1.75;
+              ctx.beginPath();
+              ctx.moveTo(prevGhost.x + nx * wingOffset, prevGhost.y + ny * wingOffset);
+              ctx.lineTo(curr.x + nx * wingOffset * 0.82, curr.y + ny * wingOffset * 0.82);
+              ctx.moveTo(prevGhost.x - nx * wingOffset, prevGhost.y - ny * wingOffset);
+              ctx.lineTo(curr.x - nx * wingOffset * 0.82, curr.y - ny * wingOffset * 0.82);
+              ctx.stroke();
+            }
+          }
+          prevGhost = curr;
+        }
+        ctx.restore();
+      }
+
+      // 2. Decreasing silhouette ghosts with smooth alpha fade
+      let seenIdx = 0;
       for (let i = 0; i < slots.length; i++) {
         const ghost = slots[i]!;
         if (!ghost.active) continue;
+        seenIdx++;
+        const ratio = seenIdx / activeCount;
+        const ghostRadius = ghost.radius * (0.48 + 0.48 * ratio);
 
         ctx.save();
-        ctx.globalAlpha = ghost.alpha;
+        ctx.globalCompositeOperation = 'lighter';
+        ctx.globalAlpha = ghost.alpha * (0.45 + 0.55 * ratio);
         ctx.fillStyle = ghost.color;
         ctx.beginPath();
-        ctx.arc(ghost.x, ghost.y, ghost.radius * 0.96, 0, Math.PI * 2);
+        ctx.arc(ghost.x, ghost.y, ghostRadius, 0, Math.PI * 2);
         ctx.fill();
         ctx.restore();
 
-        ghost.alpha *= 0.7;
-        if (ghost.alpha < 0.02) {
+        ghost.alpha *= 0.76;
+        if (ghost.alpha < 0.025) {
           ghost.active = false;
         }
       }

@@ -4,12 +4,11 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
 import { setupSignalingServer, registry } from './signalingServer.js';
+import { authService, type LeaderboardCategory, type UserRole } from './auth/AuthService.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Determinar la ruta de compilación del cliente
-// En Docker/producción suele estar en /app/packages/client/dist o relativo a server
 const possibleClientDistPaths = [
   path.resolve(__dirname, '../../client/dist'),
   path.resolve(__dirname, '../client/dist'),
@@ -35,25 +34,134 @@ const MIME_TYPES: Record<string, string> = {
 
 const PORT = Number(process.env.PORT) || 8080;
 
-// 1. Crear servidor HTTP nativo para servir SPA estático y healthcheck
+function readJsonBody(req: http.IncomingMessage): Promise<any> {
+  return new Promise((resolve, reject) => {
+    let raw = '';
+    req.on('data', (chunk) => {
+      raw += chunk.toString();
+      if (raw.length > 256_000) {
+        reject(new Error('Payload demasiado grande'));
+      }
+    });
+    req.on('end', () => {
+      try {
+        resolve(raw ? JSON.parse(raw) : {});
+      } catch {
+        reject(new Error('JSON inválido'));
+      }
+    });
+    req.on('error', reject);
+  });
+}
+
+function sendJson(res: http.ServerResponse, status: number, body: unknown): void {
+  res.writeHead(status, {
+    'Content-Type': 'application/json; charset=utf-8',
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization'
+  });
+  res.end(JSON.stringify(body));
+}
+
 export function createHttpServer(distPath: string = clientDistPath): http.Server {
-  return http.createServer((req, res) => {
+  return http.createServer(async (req, res) => {
     if (!req.url) {
       res.writeHead(400);
       return res.end('Bad Request');
     }
 
-    // Healthcheck simple para balanceadores
-    if (req.url === '/healthz' || req.url === '/api/health') {
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      return res.end(JSON.stringify({ status: 'ok', time: Date.now() }));
+    if (req.method === 'OPTIONS' && req.url.startsWith('/api/')) {
+      res.writeHead(204, {
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+        'Access-Control-Allow-Headers': 'Content-Type, Authorization'
+      });
+      return res.end();
     }
 
-    // Sanitizar ruta solicitada
+    if (req.url === '/healthz' || req.url === '/api/health') {
+      return sendJson(res, 200, { status: 'ok', time: Date.now() });
+    }
+
     const parsedUrl = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+
+    // Endpoints de Cuentas, Verificación por 6 Dígitos, Roles y Leaderboard Competitivo
+    if (parsedUrl.pathname.startsWith('/api/')) {
+      try {
+        if (parsedUrl.pathname === '/api/auth/register' && req.method === 'POST') {
+          const body = await readJsonBody(req);
+          const result = await authService.register({
+            username: body.username,
+            email: body.email,
+            password: body.password
+          });
+          return sendJson(res, result.success ? 200 : 400, result);
+        }
+
+        if (parsedUrl.pathname === '/api/auth/verify' && req.method === 'POST') {
+          const body = await readJsonBody(req);
+          const result = await authService.verifyCode({
+            email: body.email,
+            code: body.code,
+            password: body.password
+          });
+          return sendJson(res, result.success ? 200 : 400, result);
+        }
+
+        if (parsedUrl.pathname === '/api/auth/resend' && req.method === 'POST') {
+          const body = await readJsonBody(req);
+          const result = await authService.resendVerificationCode(body.email);
+          return sendJson(res, result.success ? 200 : 400, result);
+        }
+
+        if (parsedUrl.pathname === '/api/auth/login' && req.method === 'POST') {
+          const body = await readJsonBody(req);
+          const result = await authService.login({
+            identifier: body.identifier ?? body.username ?? body.email,
+            password: body.password
+          });
+          return sendJson(res, result.success ? 200 : 401, result);
+        }
+
+        if (parsedUrl.pathname === '/api/auth/session' && req.method === 'GET') {
+          const authHeader = req.headers.authorization || '';
+          const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : '';
+          const profile = await authService.verifySession(token);
+          if (!profile) {
+            return sendJson(res, 401, { success: false, error: 'Sesión expirada o no válida.' });
+          }
+          return sendJson(res, 200, { success: true, profile });
+        }
+
+        if (parsedUrl.pathname === '/api/auth/role' && req.method === 'POST') {
+          const authHeader = req.headers.authorization || '';
+          const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : '';
+          const body = await readJsonBody(req);
+          const result = await authService.setUserRole({
+            accessToken: token,
+            targetUsername: body.username,
+            newRole: body.role as UserRole
+          });
+          return sendJson(res, result.success ? 200 : 403, result);
+        }
+
+        if (parsedUrl.pathname === '/api/leaderboard' && req.method === 'GET') {
+          const category = (parsedUrl.searchParams.get('category') || 'elo') as LeaderboardCategory;
+          const limit = Number(parsedUrl.searchParams.get('limit') || 50);
+          const playerId = parsedUrl.searchParams.get('playerId') || undefined;
+          const data = await authService.getLeaderboard(category, limit, playerId);
+          return sendJson(res, 200, { success: true, ...data });
+        }
+
+        return sendJson(res, 404, { success: false, error: 'Endpoint API no encontrado.' });
+      } catch (err: any) {
+        return sendJson(res, 500, { success: false, error: err?.message || 'Error interno del servidor.' });
+      }
+    }
+
     let filePath = path.join(distPath, parsedUrl.pathname);
 
-    // Seguridad: evitar directory traversal
     const normalizedDistPath = path.resolve(distPath);
     let normalizedFilePath = path.resolve(filePath);
     if (!normalizedFilePath.startsWith(normalizedDistPath)) {
@@ -61,17 +169,14 @@ export function createHttpServer(distPath: string = clientDistPath): http.Server
       return res.end('Forbidden');
     }
 
-    // Si es un directorio o la raíz, servir index.html
     if (fs.existsSync(normalizedFilePath) && fs.statSync(normalizedFilePath).isDirectory()) {
       normalizedFilePath = path.join(normalizedFilePath, 'index.html');
     }
 
-    // SPA Fallback: si el archivo no existe, servir index.html
     if (!fs.existsSync(normalizedFilePath)) {
       normalizedFilePath = path.join(normalizedDistPath, 'index.html');
     }
 
-    // Leer y despachar archivo
     fs.readFile(normalizedFilePath, (err, data) => {
       if (err) {
         res.writeHead(404, { 'Content-Type': 'text/plain' });
@@ -81,7 +186,6 @@ export function createHttpServer(distPath: string = clientDistPath): http.Server
       const ext = path.extname(normalizedFilePath).toLowerCase();
       const contentType = MIME_TYPES[ext] || 'application/octet-stream';
 
-      // Cache headers: index.html sin cache, assets hasheados con cache largo
       const headers: Record<string, string> = {
         'Content-Type': contentType
       };
@@ -98,7 +202,6 @@ export function createHttpServer(distPath: string = clientDistPath): http.Server
   });
 }
 
-// 2. Asociar WebSocketServer a la instancia HTTP unificada
 export function startSignalingServer(port: number = PORT, customHttpServer?: http.Server): WebSocketServer {
   const server = customHttpServer || createHttpServer();
   const wss = new WebSocketServer({ server });
@@ -110,7 +213,6 @@ export function startSignalingServer(port: number = PORT, customHttpServer?: htt
     });
   }
 
-  // Interceptar close para limpiar servidor HTTP unificado
   const originalClose = wss.close.bind(wss);
   wss.close = function (this: WebSocketServer, cb?: (err?: Error) => void) {
     if (server.listening) {
@@ -122,7 +224,6 @@ export function startSignalingServer(port: number = PORT, customHttpServer?: htt
   };
   (wss as any).httpServer = server;
 
-  // Conectar lógica de señalización y salas
   setupSignalingServer(wss);
 
   return wss;
@@ -130,18 +231,34 @@ export function startSignalingServer(port: number = PORT, customHttpServer?: htt
 
 export { registry };
 export {
+  authService,
+  AuthService,
+  formatGuestNickname,
+  isGuestNickname,
+  validateRegistrationUsername,
+  canCreateRankedRoom,
+  canJoinRankedRoom,
+  calculateEloDelta,
+  RANKED_GUEST_REJECT_MESSAGE,
+  type UserRole,
+  type UserProfileRecord,
+  type LeaderboardCategory,
+  type LeaderboardEntry
+} from './auth/AuthService.js';
+export { MAX_ROOM_PLAYERS } from './rooms/RoomRegistry.js';
+export {
   getMeteredIceServers,
   resetCachedIceServers,
   getProvisionedIceServers,
   getRuntimeIceServers,
   setupSignalingServer,
   setupSignaling,
+  resolveCountryCode,
   type RoomConfig,
   type Room,
   type RTCIceServer
 } from './signalingServer.js';
 
-// Inicialización directa si se ejecuta como script principal
 const isDirectExecution = process.argv[1] && (
   process.argv[1].endsWith('index.ts') ||
   process.argv[1].endsWith('index.js')

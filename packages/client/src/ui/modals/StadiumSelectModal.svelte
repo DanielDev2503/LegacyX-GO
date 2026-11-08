@@ -2,19 +2,13 @@
   import { gameUI, type StadiumPresetKey } from '../state/gameUI.svelte.js';
   import { soundFX } from '../../audio/SoundFX.js';
   import { $roomConfig as roomConfigStore } from '../../controllers/stores/gameStore.js';
+  import StadiumPreviewCanvas from '../components/StadiumPreviewCanvas.svelte';
 
   let {
     onSelectStadium = (_id: StadiumPresetKey) => {}
   }: {
     onSelectStadium?: (id: StadiumPresetKey) => void;
   } = $props();
-
-  interface ArenaSpawn {
-    label: string;
-    x: number;
-    y: number;
-    role: string;
-  }
 
   interface ArenaOption {
     id: string;
@@ -26,8 +20,6 @@
     goalWidth: string;
     measuresText: string;
     colorHue: string;
-    spawnRed: ArenaSpawn[];
-    spawnBlue: ArenaSpawn[];
   }
 
   const ARENA_CATALOG: ArenaOption[] = [
@@ -40,13 +32,7 @@
       fieldSize: '800 x 380 px',
       goalWidth: '120 px',
       measuresText: '800 x 380 px | Arcos: 120 px',
-      colorHue: '#0d1d1a',
-      spawnRed: [
-        { label: 'R1', x: 170, y: 125, role: 'SOLO' }
-      ],
-      spawnBlue: [
-        { label: 'B1', x: 410, y: 125, role: 'SOLO' }
-      ]
+      colorHue: '#0d1d1a'
     },
     {
       id: 'small',
@@ -57,15 +43,7 @@
       fieldSize: '1000 x 460 px',
       goalWidth: '130 px',
       measuresText: '1000 x 460 px | Arcos: 130 px',
-      colorHue: '#0a1926',
-      spawnRed: [
-        { label: 'R1', x: 140, y: 100, role: 'GK' },
-        { label: 'R2', x: 200, y: 150, role: 'FWD' }
-      ],
-      spawnBlue: [
-        { label: 'B1', x: 440, y: 100, role: 'GK' },
-        { label: 'B2', x: 380, y: 150, role: 'FWD' }
-      ]
+      colorHue: '#0a1926'
     },
     {
       id: 'classic',
@@ -76,17 +54,7 @@
       fieldSize: '1200 x 540 px',
       goalWidth: '140 px',
       measuresText: '1200 x 540 px | Arcos: 140 px',
-      colorHue: '#081d14',
-      spawnRed: [
-        { label: 'R1', x: 130, y: 125, role: 'GK' },
-        { label: 'R2', x: 190, y: 75, role: 'DEF' },
-        { label: 'R3', x: 210, y: 175, role: 'ATT' }
-      ],
-      spawnBlue: [
-        { label: 'B1', x: 450, y: 125, role: 'GK' },
-        { label: 'B2', x: 390, y: 75, role: 'DEF' },
-        { label: 'B3', x: 370, y: 175, role: 'ATT' }
-      ]
+      colorHue: '#081d14'
     },
     {
       id: 'big',
@@ -97,19 +65,7 @@
       fieldSize: '1600 x 720 px',
       goalWidth: '160 px',
       measuresText: '1600 x 720 px | Arcos: 160 px',
-      colorHue: '#061816',
-      spawnRed: [
-        { label: 'R1', x: 110, y: 125, role: 'GK' },
-        { label: 'R2', x: 170, y: 65, role: 'DEF' },
-        { label: 'R3', x: 170, y: 185, role: 'MID' },
-        { label: 'R4', x: 220, y: 125, role: 'FWD' }
-      ],
-      spawnBlue: [
-        { label: 'B1', x: 470, y: 125, role: 'GK' },
-        { label: 'B2', x: 410, y: 65, role: 'DEF' },
-        { label: 'B3', x: 410, y: 185, role: 'MID' },
-        { label: 'B4', x: 360, y: 125, role: 'FWD' }
-      ]
+      colorHue: '#061816'
     }
   ];
 
@@ -236,7 +192,14 @@
 
       <div class="header-right">
         {#if isMatchLocked}
-          <span class="warning-pill">⚠️ PARTIDO EN CURSO (BLOQUEADO)</span>
+          <span class="warning-pill">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:-2px;margin-right:4px;">
+              <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+              <line x1="12" y1="9" x2="12" y2="13" />
+              <line x1="12" y1="17" x2="12.01" y2="17" />
+            </svg>
+            PARTIDO EN CURSO (BLOQUEADO)
+          </span>
         {/if}
       </div>
     </header>
@@ -292,79 +255,25 @@
         </div>
       </aside>
 
-      <!-- RIGHT COLUMN: Vista Previa Táctica e Información del Mapa -->
+      <!-- RIGHT COLUMN: Vista Previa Táctica a Escala Real e Información del Mapa -->
       <section class="stadium-detail-panel">
-        <!-- Tactical Pitch Preview -->
         <div
           class="tactical-pitch-surface"
           style="background-color: {inspectedArena.colorHue};"
         >
-          <div class="pitch-turf-overlay"></div>
-
-          <svg class="tactical-pitch-svg" viewBox="0 0 580 250" fill="none">
-            <defs>
-              <pattern id="stadium-red-net" width="8" height="8" patternUnits="userSpaceOnUse">
-                <path d="M 0 0 L 8 8 M 8 0 L 0 8" fill="none" stroke="#e74c3c" stroke-opacity="0.45" stroke-width="0.7"></path>
-              </pattern>
-              <pattern id="stadium-blue-net" width="8" height="8" patternUnits="userSpaceOnUse">
-                <path d="M 0 0 L 8 8 M 8 0 L 0 8" fill="none" stroke="#3498db" stroke-opacity="0.45" stroke-width="0.7"></path>
-              </pattern>
-            </defs>
-
-            <!-- Outer Pitch Boundary -->
-            <rect x="50" y="20" width="480" height="210" rx="14" stroke="#00e5ff" stroke-opacity="0.85" stroke-width="1.8" />
-            <!-- Center Line -->
-            <line x1="290" y1="20" x2="290" y2="230" stroke="#00e5ff" stroke-opacity="0.75" stroke-width="1.4" />
-            <!-- Center Circle & Spot -->
-            <circle cx="290" cy="125" r="44" stroke="#00e5ff" stroke-opacity="0.75" stroke-width="1.4" />
-            <circle cx="290" cy="125" r="3.5" fill="#00e5ff" />
-
-            <!-- LEFT GOAL (RED TEAM) -->
-            <rect x="20" y="85" width="30" height="80" rx="4" fill="url(#stadium-red-net)" stroke="#e74c3c" stroke-opacity="0.7" stroke-width="1.2" />
-            <line x1="50" y1="85" x2="50" y2="165" stroke="#ffffff" stroke-dasharray="3 3" stroke-opacity="0.5" stroke-width="2" />
-            <circle cx="50" cy="85" r="4.5" fill="#ffffff" stroke="#e74c3c" stroke-width="2" />
-            <circle cx="50" cy="165" r="4.5" fill="#ffffff" stroke="#e74c3c" stroke-width="2" />
-            <path d="M 50 60 H 105 V 190 H 50" stroke="#00e5ff" stroke-opacity="0.6" stroke-width="1.2" />
-            <circle cx="88" cy="125" r="2.5" fill="#00e5ff" opacity="0.8" />
-
-            <!-- RIGHT GOAL (BLUE TEAM) -->
-            <rect x="530" y="85" width="30" height="80" rx="4" fill="url(#stadium-blue-net)" stroke="#3498db" stroke-opacity="0.7" stroke-width="1.2" />
-            <line x1="530" y1="85" x2="530" y2="165" stroke="#ffffff" stroke-dasharray="3 3" stroke-opacity="0.5" stroke-width="2" />
-            <circle cx="530" cy="85" r="4.5" fill="#ffffff" stroke="#3498db" stroke-width="2" />
-            <circle cx="530" cy="165" r="4.5" fill="#ffffff" stroke="#3498db" stroke-width="2" />
-            <path d="M 530 60 H 475 V 190 H 530" stroke="#00e5ff" stroke-opacity="0.6" stroke-width="1.2" />
-            <circle cx="492" cy="125" r="2.5" fill="#00e5ff" opacity="0.8" />
-
-            <!-- Spawns (Red & Blue) -->
-            {#each inspectedArena.spawnRed as s}
-              <g transform="translate({s.x}, {s.y})">
-                <circle r="12" fill="#e74c3c" fill-opacity="0.25" stroke="#ff4d4d" stroke-width="1.5" />
-                <circle r="8" fill="#e74c3c" />
-                <text text-anchor="middle" dy="3.5" fill="#ffffff" font-size="8.5" font-weight="700" font-family="'JetBrains Mono', monospace">{s.label}</text>
-              </g>
-            {/each}
-
-            {#each inspectedArena.spawnBlue as s}
-              <g transform="translate({s.x}, {s.y})">
-                <circle r="12" fill="#3498db" fill-opacity="0.25" stroke="#00e5ff" stroke-width="1.5" />
-                <circle r="8" fill="#3498db" />
-                <text text-anchor="middle" dy="3.5" fill="#ffffff" font-size="8.5" font-weight="700" font-family="'JetBrains Mono', monospace">{s.label}</text>
-              </g>
-            {/each}
-
-            <!-- Central Ball -->
-            <g transform="translate(290, 125)">
-              <circle r="11" fill="#ffe16d" fill-opacity="0.2" />
-              <circle r="6.5" fill="#ffffff" stroke="#e9c400" stroke-width="1.8" />
-              <circle r="2" fill="#0e141e" />
-            </g>
-          </svg>
+          <StadiumPreviewCanvas stadiumId={inspectedArena.canonicalId} />
         </div>
 
         <!-- Panel Formal: Información del mapa -->
         <div class="technical-specs-panel">
           <div class="specs-header">
-            <span class="terminal-icon">🏟</span>
+            <span class="terminal-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="#00e5ff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="2" y="4" width="20" height="16" rx="2" />
+                <line x1="12" y1="4" x2="12" y2="20" />
+                <circle cx="12" cy="12" r="3.2" />
+              </svg>
+            </span>
             <span class="specs-title">Información del mapa</span>
           </div>
 
@@ -413,7 +322,7 @@
       </button>
 
       {#if !canSelect && !isMatchLocked}
-        <p class="guest-notice">⚠️ Solo el anfitrión de la sala tiene permisos para cambiar el estadio.</p>
+        <p class="guest-notice">Solo el anfitrión de la sala tiene permisos para cambiar el estadio.</p>
       {/if}
     </footer>
 
@@ -783,20 +692,6 @@
     display: flex;
     align-items: center;
     justify-content: center;
-  }
-
-  .pitch-turf-overlay {
-    position: absolute;
-    inset: 0;
-    background: radial-gradient(circle at center, transparent 30%, rgba(0, 0, 0, 0.4) 100%);
-    pointer-events: none;
-  }
-
-  .tactical-pitch-svg {
-    width: 100%;
-    height: 100%;
-    max-height: 240px;
-    z-index: 1;
   }
 
   /* Information Panel */

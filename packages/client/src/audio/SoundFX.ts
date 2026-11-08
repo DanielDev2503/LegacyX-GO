@@ -727,6 +727,28 @@ export class SoundFX {
     }
   }
 
+  private mediaStreamDest: MediaStreamAudioDestinationNode | null = null;
+
+  /**
+   * Expone un MediaStream de salida conectado al masterGain para capturar audio
+   * procedural del juego junto al video de canvas en MatchRecorder (.webm).
+   */
+  public getAudioStream(): MediaStream | null {
+    const ctx = this.ensureContext();
+    if (!ctx || !this.masterGain) return null;
+    if (typeof ctx.createMediaStreamDestination !== 'function') return null;
+
+    try {
+      if (!this.mediaStreamDest) {
+        this.mediaStreamDest = ctx.createMediaStreamDestination();
+        this.masterGain.connect(this.mediaStreamDest);
+      }
+      return this.mediaStreamDest.stream;
+    } catch {
+      return null;
+    }
+  }
+
   /**
    * Mantiene activo un oscilador inaudible de ganancia casi cero (0.00001) para el Host.
    * Evita que el navegador suspenda o ralentice la pestaña del Host cuando está en segundo plano.

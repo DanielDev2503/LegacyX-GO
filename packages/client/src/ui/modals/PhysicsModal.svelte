@@ -23,7 +23,7 @@
       min: 0.7,
       max: 11.2,
       step: 0.1,
-      defaultVal: 2.8,
+      defaultVal: 3.5,
       unit: 'px/tick'
     },
     {
@@ -33,7 +33,7 @@
       min: 0.03,
       max: 0.55,
       step: 0.01,
-      defaultVal: 0.11
+      defaultVal: 0.14
     },
     {
       key: 'kickStrength',
@@ -137,7 +137,7 @@
     {
       key: 'dashDistance',
       label: 'Distancia del dash',
-      sublabel: 'Distancia cinemática recorrida en impulso rápido',
+      sublabel: 'Distancia cinemática recorrida en impulso rápido (7 ticks con Estela)',
       min: 3.75,
       max: 112.5,
       step: 0.25,
@@ -145,14 +145,34 @@
       unit: 'px'
     },
     {
+      key: 'dashCooldown',
+      label: 'Enfriamiento de Dash (Cooldown)',
+      sublabel: 'Tiempo mínimo de espera entre impulsos Dash (1.0s por defecto)',
+      min: 0.0,
+      max: 5.0,
+      step: 0.25,
+      defaultVal: 1.0,
+      unit: 's'
+    },
+    {
       key: 'staminaRechargeRate',
       label: 'Tasa de recarga de estamina',
-      sublabel: 'Porcentaje regenerado por segundo en reposo',
+      sublabel: 'Porcentaje base regenerado por segundo',
       min: 5.0,
       max: 100.0,
       step: 1.0,
       defaultVal: 25.0,
       unit: '%/s'
+    },
+    {
+      key: 'staminaRegenMovingRate',
+      label: 'Velocidad de recarga en movimiento',
+      sublabel: 'Porcentaje relativo de recarga al desplazarse sin usar Turbo (0% - 200%)',
+      min: 0,
+      max: 200,
+      step: 5,
+      defaultVal: 100,
+      unit: '%'
     },
     {
       key: 'magnusCurveStrength',
@@ -227,7 +247,10 @@
     gameUI.updateGameplayConfig(key, clamped as any);
   }
 
-  function handleToggle(key: 'turboEnabled' | 'dashEnabled' | 'magnusEnabled', e: Event) {
+  function handleToggle(
+    key: 'turboEnabled' | 'dashEnabled' | 'magnusEnabled' | 'staminaRegenMoving',
+    e: Event
+  ) {
     if (!gameUI.isHost) return;
     const target = e.target as HTMLInputElement;
     soundFX.playUIClick();
@@ -297,7 +320,11 @@
       <div>
         <!-- Sidebar Header -->
         <div class="sidebar-header">
-          <span class="lightning-box">⚡</span>
+          <span class="lightning-box" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="#00e5ff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
+            </svg>
+          </span>
           <div>
             <h2 id="modifiers-dialog-title" class="main-header">Modificadores de partida</h2>
             <span class="sub-header">Física y Mecánicas</span>
@@ -312,7 +339,12 @@
             class:active={gameUI.activeModifiersTab === 'player'}
             onclick={() => handleTabClick('player')}
           >
-            <span class="tab-icon">🏃</span>
+            <span class="tab-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="8" r="4" />
+                <path d="M5 20a7 7 0 0 1 14 0" />
+              </svg>
+            </span>
             <span>Variables del Jugador</span>
           </button>
 
@@ -322,7 +354,12 @@
             class:active={gameUI.activeModifiersTab === 'ball'}
             onclick={() => handleTabClick('ball')}
           >
-            <span class="tab-icon">⚽</span>
+            <span class="tab-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="9" />
+                <polygon points="12 8 15 10.5 14 14 10 14 9 10.5" />
+              </svg>
+            </span>
             <span>Variables del Balón</span>
           </button>
 
@@ -332,7 +369,11 @@
             class:active={gameUI.activeModifiersTab === 'mechanics'}
             onclick={() => handleTabClick('mechanics')}
           >
-            <span class="tab-icon">⚡</span>
+            <span class="tab-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
+              </svg>
+            </span>
             <span>Variables de Mecánicas</span>
           </button>
         </nav>
@@ -374,7 +415,7 @@
 
         {#if !gameUI.isHost}
           <div class="guest-warning-banner">
-            ⚠️ Modo invitado: Solo el anfitrión de la sala puede alterar las variables físicas de la simulación.
+            Modo lectura: Solo el anfitrión de la sala puede alterar las variables físicas de la simulación.
           </div>
         {/if}
       </div>
@@ -567,13 +608,13 @@
         <!-- CATEGORY 3: MECHANICS & SKILLS -->
         {#if gameUI.activeModifiersTab === 'mechanics'}
           <div class="grid-controls-2col">
-            <!-- Togglers de Habilidades (Fila de 3 switches) -->
+            <!-- Togglers de Habilidades (Rejilla de 4 switches) -->
             <div class="toggles-panel-card">
               <div class="toggles-row">
                 <!-- Toggle 1: Turbo -->
                 <label class="toggle-item" class:disabled={!gameUI.isHost}>
                   <div class="toggle-text">
-                    <span class="toggle-name">🔥 Turbo</span>
+                    <span class="toggle-name">Turbo</span>
                     <span class="toggle-sub">Sprint con estamina</span>
                   </div>
                   <input
@@ -591,7 +632,7 @@
                 <!-- Toggle 2: Dash -->
                 <label class="toggle-item" class:disabled={!gameUI.isHost}>
                   <div class="toggle-text">
-                    <span class="toggle-name">⚡ Dash</span>
+                    <span class="toggle-name">Dash (Estela)</span>
                     <span class="toggle-sub">Impulso direccional</span>
                   </div>
                   <input
@@ -609,7 +650,7 @@
                 <!-- Toggle 3: Magnus -->
                 <label class="toggle-item" class:disabled={!gameUI.isHost}>
                   <div class="toggle-text">
-                    <span class="toggle-name">🌀 Magnus</span>
+                    <span class="toggle-name">Magnus</span>
                     <span class="toggle-sub">Curvatura balística</span>
                   </div>
                   <input
@@ -620,6 +661,24 @@
                     onchange={(e) => handleToggle('magnusEnabled', e)}
                   />
                   <span class="switch-capsule" class:active={gameUI.gameplayConfig.magnusEnabled}>
+                    <span class="switch-thumb"></span>
+                  </span>
+                </label>
+
+                <!-- Toggle 4: Recarga de Estamina en Movimiento -->
+                <label class="toggle-item" class:disabled={!gameUI.isHost}>
+                  <div class="toggle-text">
+                    <span class="toggle-name">Estamina en Movimiento</span>
+                    <span class="toggle-sub">Recargar al desplazarse</span>
+                  </div>
+                  <input
+                    type="checkbox"
+                    class="sr-only"
+                    checked={gameUI.gameplayConfig.staminaRegenMoving}
+                    disabled={!gameUI.isHost}
+                    onchange={(e) => handleToggle('staminaRegenMoving', e)}
+                  />
+                  <span class="switch-capsule" class:active={gameUI.gameplayConfig.staminaRegenMoving}>
                     <span class="switch-thumb"></span>
                   </span>
                 </label>
@@ -1281,7 +1340,7 @@
 
   .toggles-row {
     display: grid;
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: repeat(2, 1fr);
     gap: 0.75rem;
   }
 

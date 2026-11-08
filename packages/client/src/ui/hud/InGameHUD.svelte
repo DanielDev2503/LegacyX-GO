@@ -1,8 +1,17 @@
 <script lang="ts">
-  import { gameUI, type ChatEntry } from '../state/gameUI.svelte.js';
+  import { gameUI } from '../state/gameUI.svelte.js';
   import { soundFX } from '../../audio/SoundFX.js';
+  import { matchRecorder } from '../../recorder/MatchRecorder.svelte.js';
+  import {
+    applyMentionCandidate,
+    findActiveMentionToken,
+    getMentionCandidates,
+    segmentChatMentions
+  } from '../utils/chatMentions.js';
 
   let chatMessage = $state('');
+  let chatCursor = $state(0);
+  let mentionIndex = $state(0);
   let isChatInputActive = $state(false);
   let chatInputEl = $state<HTMLInputElement | null>(null);
   let chatScrollEl = $state<HTMLDivElement | null>(null);
@@ -27,9 +36,6 @@
   let redKitTertiary = $derived(
     redActiveKit?.tertiaryColor || gameUI.redTeamKit?.tertiaryColor || '#ffffff'
   );
-  let redKitOutline = $derived(
-    redActiveKit?.outlineColor || gameUI.redTeamKit?.outlineColor || '#000000'
-  );
   let redHasOutline = $derived(
     Boolean(redActiveKit?.outline === true || redActiveKit?.hasOutline === true)
   );
@@ -42,9 +48,6 @@
   );
   let blueKitTertiary = $derived(
     blueActiveKit?.tertiaryColor || gameUI.blueTeamKit?.tertiaryColor || '#ffffff'
-  );
-  let blueKitOutline = $derived(
-    blueActiveKit?.outlineColor || gameUI.blueTeamKit?.outlineColor || '#000000'
   );
   let blueHasOutline = $derived(
     Boolean(blueActiveKit?.outline === true || blueActiveKit?.hasOutline === true)
@@ -94,6 +97,29 @@
         : '#1e293b'
   );
 
+  let knownRosterNames = $derived(gameUI.rosterPlayers.map((p) => p.name));
+
+  let activeMentionToken = $derived(
+    isChatInputActive ? findActiveMentionToken(chatMessage, chatCursor) : null
+  );
+
+  let mentionCandidates = $derived(
+    activeMentionToken ? getMentionCandidates(activeMentionToken.query, gameUI.rosterPlayers) : []
+  );
+
+  let isMentionMenuOpen = $derived(
+    Boolean(isChatInputActive && activeMentionToken && mentionCandidates.length > 0)
+  );
+
+  $effect(() => {
+    const total = mentionCandidates.length;
+    if (total === 0) {
+      mentionIndex = 0;
+    } else if (mentionIndex >= total) {
+      mentionIndex = 0;
+    }
+  });
+
   // Ancho dinámico del minimapa (0px si está desactivado)
   let minimapWidth = $derived.by(() => {
     if (!gameUI.settings.minimapEnabled) return 0;
@@ -138,12 +164,37 @@
     }
   });
 
+  function syncChatCursor() {
+    chatCursor = chatInputEl?.selectionStart ?? chatMessage.length;
+  }
+
+  function selectMentionCandidate(index: number) {
+    const candidate = mentionCandidates[index];
+    if (!candidate || !activeMentionToken) return;
+    soundFX.playUIClick();
+    const { nextText, nextCursor } = applyMentionCandidate(
+      chatMessage,
+      activeMentionToken,
+      candidate.handle
+    );
+    chatMessage = nextText;
+    chatCursor = nextCursor;
+    mentionIndex = 0;
+    queueMicrotask(() => {
+      if (chatInputEl) {
+        chatInputEl.focus();
+        chatInputEl.setSelectionRange(nextCursor, nextCursor);
+      }
+    });
+  }
+
   function handleSendChat() {
     const text = chatMessage.trim();
     if (text) {
       soundFX.playUIClick();
       if (gameUI.handleChatCommand(text)) {
         chatMessage = '';
+        chatCursor = 0;
         isChatInputActive = false;
         gameUI.isChatFocused = false;
         chatInputEl?.blur();
@@ -154,12 +205,34 @@
       }
     }
     chatMessage = '';
+    chatCursor = 0;
     isChatInputActive = false;
     gameUI.isChatFocused = false;
     chatInputEl?.blur();
   }
 
   function handleChatKeyDown(e: KeyboardEvent) {
+    if (isMentionMenuOpen) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        e.stopPropagation();
+        mentionIndex = (mentionIndex + 1) % mentionCandidates.length;
+        return;
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        e.stopPropagation();
+        mentionIndex = (mentionIndex - 1 + mentionCandidates.length) % mentionCandidates.length;
+        return;
+      }
+      if (e.key === 'Tab' || e.key === 'Enter' || e.code === 'NumpadEnter') {
+        e.preventDefault();
+        e.stopPropagation();
+        selectMentionCandidate(mentionIndex);
+        return;
+      }
+    }
+
     if (e.key === 'Enter' || e.code === 'NumpadEnter') {
       e.preventDefault();
       e.stopPropagation();
@@ -168,6 +241,7 @@
       e.preventDefault();
       e.stopPropagation();
       chatMessage = '';
+      chatCursor = 0;
       isChatInputActive = false;
       gameUI.isChatFocused = false;
       chatInputEl?.blur();
@@ -178,6 +252,7 @@
     isChatInputActive = true;
     gameUI.isChatFocused = true;
     chatInputEl?.focus();
+    syncChatCursor();
   }
 
   $effect(() => {
@@ -239,6 +314,31 @@
     gameUI.openOverlay('SETTINGS');
   }
 
+  function toggleMatchRecording() {
+    soundFX.playUIClick();
+    const canvas =
+      typeof document !== 'undefined'
+        ? (document.querySelector('.canvas-layer canvas') as HTMLCanvasElement | null)
+        : null;
+    matchRecorder.toggle(canvas, {
+      roomName: gameUI.activeRoomName || 'Partida LegacyX-GO',
+      stadiumId: gameUI.selectedStadiumId || 'mediano',
+      redKit: (redActiveKit ?? gameUI.redTeamKit) as any,
+      blueKit: (blueActiveKit ?? gameUI.blueTeamKit) as any,
+      players: gameUI.rosterPlayers.map((p, idx) => ({
+        id: Number(p.id) || idx + 1,
+        nickname: p.name ?? p.nickname ?? 'Jugador',
+        avatar: p.avatar ?? undefined,
+        team: p.team === 'red' || p.team === 'blue' ? p.team : 'spectator'
+      }))
+    });
+  }
+
+  function openReplayViewerFromToast() {
+    soundFX.playUIClick();
+    gameUI.openOverlay('REPLAY_VIEWER');
+  }
+
   function handleResizePointerDown(e: PointerEvent) {
     e.preventDefault();
     isResizingChat = true;
@@ -247,7 +347,6 @@
 
     const onPointerMove = (moveEv: PointerEvent) => {
       if (!isResizingChat) return;
-      // Arrastrar hacia arriba disminuye clientY y debe AUMENTAR la altura del chat
       const deltaY = startY - moveEv.clientY;
       const nextH = Math.max(100, Math.min(450, startH + deltaY));
       gameUI.chatHeight = nextH;
@@ -271,7 +370,7 @@
   <!-- 1. TOP BAR: 3 CÁPSULAS FLOTANTES           -->
   <!-- ========================================== -->
   <div class="top-bar-container">
-    <!-- A) Cartucho Izquierdo: Únicamente Nombre de Sala -->
+    <!-- A) Cartucho Izquierdo: Nombre de Sala -->
     <div class="top-card top-card-left">
       <div class="room-title-block">
         <h1 class="room-title">
@@ -283,7 +382,7 @@
     <!-- B) Cartucho Central: Marcador y Reloj -->
     <div class="top-card top-card-center">
       <div class="scoreboard-main-row">
-        <!-- Tarjeta de Siglas RED (Total y continua, sin cajas anidadas) -->
+        <!-- Tarjeta de Siglas RED -->
         <div
           class="team-acronym-card red-acronym"
           style="
@@ -297,22 +396,24 @@
           {redActiveKit?.tag || 'RED'}
         </div>
 
-        <!-- Goles RED (Blanco puro tabular) -->
         <span class="team-score-number" id="hud-score-red">{gameUI.redScore}</span>
 
         <!-- Reloj Central -->
         <div class="timer-center-block">
-          <span class="timer-glyph">⏱</span>
+          <svg class="timer-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true">
+            <circle cx="12" cy="13" r="8"></circle>
+            <polyline points="12 9 12 13 14.5 14.5"></polyline>
+            <line x1="9" y1="2" x2="15" y2="2"></line>
+          </svg>
           <span class="timer-clock" id="hud-timer">{gameUI.matchPhase === 0 ? '00:00' : gameUI.matchTimeFormatted}</span>
           {#if gameUI.isGoldenGoal}
             <span class="golden-goal-chip">GOL DE ORO</span>
           {/if}
         </div>
 
-        <!-- Goles BLUE (Blanco puro tabular) -->
         <span class="team-score-number" id="hud-score-blue">{gameUI.blueScore}</span>
 
-        <!-- Tarjeta de Siglas BLUE (Total y continua, sin cajas anidadas) -->
+        <!-- Tarjeta de Siglas BLUE -->
         <div
           class="team-acronym-card blue-acronym"
           style="
@@ -328,8 +429,28 @@
       </div>
     </div>
 
-    <!-- C) Cartucho Derecho: 3 Botones de Acción Cyber-Pitch -->
+    <!-- C) Cartucho Derecho: Grabadora + 3 Botones de Acción Cyber-Pitch -->
     <div class="top-card top-card-right">
+      <!-- 0. Grabadora en Vivo (.webm/.mp4 + .lxr) -->
+      <button
+        type="button"
+        id="btn-hud-record"
+        class="hud-rec-btn"
+        class:is-recording={matchRecorder.isRecording}
+        title={matchRecorder.isRecording ? 'Detener grabación (Video + Replay .lxr)' : 'Grabar partida en vivo (Video + Replay .lxr)'}
+        aria-label={matchRecorder.isRecording ? 'Detener grabación' : 'Iniciar grabación'}
+        onmouseenter={() => soundFX.playUIHover()}
+        onclick={toggleMatchRecording}
+      >
+        {#if matchRecorder.isRecording}
+          <span class="rec-stop-square" aria-hidden="true"></span>
+          <span class="rec-label">GRABANDO {matchRecorder.formattedElapsed}</span>
+        {:else}
+          <span class="rec-dot" aria-hidden="true"></span>
+          <span class="rec-label">REC</span>
+        {/if}
+      </button>
+
       <!-- 1. Silenciar / Audio Toggle -->
       <button
         type="button"
@@ -372,7 +493,7 @@
         </svg>
       </button>
 
-      <!-- 3. Ajustes Generales [⚙] -->
+      <!-- 3. Ajustes Generales -->
       <button
         type="button"
         class="hud-action-btn"
@@ -387,6 +508,64 @@
         </svg>
       </button>
     </div>
+
+    {#if matchRecorder.showPostRecordPrompt && matchRecorder.hasRecordedClip && !matchRecorder.isRecording}
+      <div class="rec-export-toast" role="region" aria-label="Exportar grabación">
+        <div class="rec-export-head">
+          <span class="rec-export-title">GRABACIÓN LISTA</span>
+          <button
+            type="button"
+            class="rec-export-close"
+            aria-label="Cerrar aviso de grabación"
+            onclick={() => matchRecorder.dismissPrompt()}
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+              <line x1="18" y1="6" x2="6" y2="18"></line>
+              <line x1="6" y1="6" x2="18" y2="18"></line>
+            </svg>
+          </button>
+        </div>
+        <div class="rec-export-actions">
+          <button
+            type="button"
+            class="rec-dl-btn"
+            disabled={!matchRecorder.lastVideoUrl}
+            onclick={() => matchRecorder.downloadVideo()}
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polygon points="23 7 16 12 23 17 23 7"></polygon>
+              <rect x="1" y="5" width="15" height="14" rx="2" ry="2"></rect>
+            </svg>
+            <span>VIDEO (.{matchRecorder.lastVideoExt.toUpperCase()})</span>
+          </button>
+          <button
+            type="button"
+            class="rec-dl-btn rec-dl-lxr"
+            disabled={!matchRecorder.lastReplayData}
+            onclick={() => matchRecorder.downloadReplay()}
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+              <polyline points="7 10 12 15 17 10"></polyline>
+              <line x1="12" y1="15" x2="12" y2="3"></line>
+            </svg>
+            <span>REPLAY (.LXR)</span>
+          </button>
+          {#if matchRecorder.lastReplayData}
+            <button
+              type="button"
+              class="rec-dl-btn rec-dl-view"
+              onclick={openReplayViewerFromToast}
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polygon points="5 3 19 12 5 21 5 3"></polygon>
+              </svg>
+              <span>REPRODUCIR</span>
+            </button>
+          {/if}
+        </div>
+      </div>
+    {/if}
   </div>
 
   <!-- ========================================== -->
@@ -394,7 +573,12 @@
   <!-- ========================================== -->
   {#if showPauseBanner}
     <div class="cyber-banner-pause" id="hud-banner-pause" role="status" aria-live="polite">
-      <div class="pause-icon-badge" aria-hidden="true">⏸</div>
+      <div class="pause-icon-badge" aria-hidden="true">
+        <svg class="pause-svg" viewBox="0 0 24 24" fill="currentColor">
+          <rect x="6" y="4" width="4" height="16" rx="1"></rect>
+          <rect x="14" y="4" width="4" height="16" rx="1"></rect>
+        </svg>
+      </div>
       <div class="pause-copy-col">
         <span class="pause-banner-title">PARTIDO EN PAUSA</span>
         <span class="pause-banner-subtitle">Esperando reanudación del administrador...</span>
@@ -408,9 +592,11 @@
         <div
           class="vs-team-half vs-local"
           style="
-            background: linear-gradient(90deg, {redKitPrimary} 0%, {redKitPrimary} 25%, {redKitSecondary} 75%, {redKitSecondary} 100%);
+            opacity: 1;
+            background-color: {redKitPrimary};
+            background-image: linear-gradient(135deg, {redKitPrimary} 0%, {redKitPrimary} 38%, {redKitSecondary} 78%, {redKitSecondary} 100%);
             border: 2px solid {redKitTertiary};
-            box-shadow: 0 0 16px {redKitPrimary}66, inset 0 0 8px {redKitPrimary}33;
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.78), 0 0 18px {redKitPrimary}66;
             color: {redKitTertiary};
           "
         >
@@ -419,30 +605,36 @@
             style="
               color: {redKitTertiary};
               border-color: {redKitTertiary};
-              {redHasOutline ? '-webkit-text-stroke: 3px #000000; text-stroke: 3px #000000; paint-order: stroke fill; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);' : '-webkit-text-stroke: 0px transparent; text-shadow: none;'}
+              {redHasOutline ? '-webkit-text-stroke: 3px #000000; paint-order: stroke fill; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);' : '-webkit-text-stroke: 0px transparent; text-shadow: 0 1px 3px rgba(0, 0, 0, 0.65);'}
             "
           >{redTeamTag}</span>
           <span
             class="vs-team-name"
             style="
               color: {redKitTertiary};
-              {redHasOutline ? '-webkit-text-stroke: 3px #000000; text-stroke: 3px #000000; paint-order: stroke fill; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);' : '-webkit-text-stroke: 0px transparent; text-shadow: none;'}
+              {redHasOutline ? '-webkit-text-stroke: 3px #000000; paint-order: stroke fill; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);' : '-webkit-text-stroke: 0px transparent; text-shadow: 0 1px 3px rgba(0, 0, 0, 0.72);'}
             "
           >{redTeamName}</span>
         </div>
 
         <div class="vs-bolt-badge">
-          <span class="vs-bolt">⚡</span>
+          <svg class="vs-bolt-svg" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
+          </svg>
           <span class="vs-text">VS</span>
-          <span class="vs-bolt">⚡</span>
+          <svg class="vs-bolt-svg" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
+          </svg>
         </div>
 
         <div
           class="vs-team-half vs-visitor"
           style="
-            background: linear-gradient(90deg, {blueKitPrimary} 0%, {blueKitPrimary} 25%, {blueKitSecondary} 75%, {blueKitSecondary} 100%);
+            opacity: 1;
+            background-color: {blueKitPrimary};
+            background-image: linear-gradient(135deg, {blueKitPrimary} 0%, {blueKitPrimary} 38%, {blueKitSecondary} 78%, {blueKitSecondary} 100%);
             border: 2px solid {blueKitTertiary};
-            box-shadow: 0 0 16px {blueKitPrimary}66, inset 0 0 8px {blueKitPrimary}33;
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.78), 0 0 18px {blueKitPrimary}66;
             color: {blueKitTertiary};
           "
         >
@@ -450,7 +642,7 @@
             class="vs-team-name"
             style="
               color: {blueKitTertiary};
-              {blueHasOutline ? '-webkit-text-stroke: 3px #000000; text-stroke: 3px #000000; paint-order: stroke fill; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);' : '-webkit-text-stroke: 0px transparent; text-shadow: none;'}
+              {blueHasOutline ? '-webkit-text-stroke: 3px #000000; paint-order: stroke fill; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);' : '-webkit-text-stroke: 0px transparent; text-shadow: 0 1px 3px rgba(0, 0, 0, 0.72);'}
             "
           >{blueTeamName}</span>
           <span
@@ -458,7 +650,7 @@
             style="
               color: {blueKitTertiary};
               border-color: {blueKitTertiary};
-              {blueHasOutline ? '-webkit-text-stroke: 3px #000000; text-stroke: 3px #000000; paint-order: stroke fill; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);' : '-webkit-text-stroke: 0px transparent; text-shadow: none;'}
+              {blueHasOutline ? '-webkit-text-stroke: 3px #000000; paint-order: stroke fill; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);' : '-webkit-text-stroke: 0px transparent; text-shadow: 0 1px 3px rgba(0, 0, 0, 0.65);'}
             "
           >{blueTeamTag}</span>
         </div>
@@ -482,7 +674,13 @@
         style="--goal-c1: {goalPrimaryColor}; --goal-c2: {goalSecondaryColor}; --goal-c3: {goalTertiaryColor};"
       >
         <div class="goal-accent-strip"></div>
-        <h2 class="goal-banner-title">⚽ ¡GOOOOL DE {goalTeamName.toUpperCase()}!</h2>
+        <h2 class="goal-banner-title">
+          <svg class="banner-inline-svg text-cyan" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+            <circle cx="12" cy="12" r="10"></circle>
+            <polygon points="12 7 16.5 10.2 14.8 15.5 9.2 15.5 7.5 10.2 12 7"></polygon>
+          </svg>
+          <span>¡GOOOOL DE {goalTeamName.toUpperCase()}!</span>
+        </h2>
         <div class="goal-credits-row">
           <span class="goal-scorer-pill" class:own-goal={activeBanner.isOwnGoal}>
             {activeBanner.isOwnGoal ? 'Autogol de:' : 'Gol de:'}
@@ -490,7 +688,11 @@
           </span>
           {#if activeBanner.assisterName && !activeBanner.isOwnGoal}
             <span class="goal-assist-pill">
-              👟 Asistencia: <strong>{activeBanner.assisterName}</strong>
+              <svg class="credit-inline-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                <path d="M5 12h14"></path>
+                <path d="M13 6l6 6-6 6"></path>
+              </svg>
+              Asistencia: <strong>{activeBanner.assisterName}</strong>
             </span>
           {/if}
         </div>
@@ -504,10 +706,18 @@
       >
         <div class="victory-gold-crown">FINAL DEL ENCUENTRO</div>
         <h2 class="victory-banner-title">
+          <svg class="banner-inline-svg text-gold" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+            <path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"></path>
+            <path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"></path>
+            <path d="M4 22h16"></path>
+            <path d="M10 14.66V17c0 .55-.47.98-.97 1.21C7.85 18.75 7 20.24 7 22"></path>
+            <path d="M14 14.66V17c0 .55.47.98.97 1.21C16.15 18.75 17 20.24 17 22"></path>
+            <path d="M18 2H6v7a6 6 0 0 0 12 0V2Z"></path>
+          </svg>
           {#if activeBanner.winner === 'draw'}
-            🏆 ¡EMPATE FINAL! 🏆
+            <span>¡EMPATE FINAL!</span>
           {:else}
-            🏆 ¡VICTORIA DE {victoryWinnerName.toUpperCase()}! 🏆
+            <span>¡VICTORIA DE {victoryWinnerName.toUpperCase()}!</span>
           {/if}
         </h2>
         <div class="victory-score-strip">
@@ -523,7 +733,7 @@
             <strong>{activeBanner.scorerName}</strong>
             {#if activeBanner.assisterName && !activeBanner.isOwnGoal}
               <span class="victory-assist-sep">·</span>
-              <span>👟 {activeBanner.assisterName}</span>
+              <span>Asist: {activeBanner.assisterName}</span>
             {/if}
           </div>
         {/if}
@@ -578,37 +788,75 @@
     <div class="chat-messages-scroll custom-scrollbar" bind:this={chatScrollEl}>
       {#if gameUI.chatMessages.length === 0}
         <div class="chat-empty-state">
-          <span class="chat-empty-hint">Sala iniciada. Presiona Enter para escribir...</span>
+          <span class="chat-empty-hint">Sala iniciada. Presiona Enter para escribir (@all / @usuario)...</span>
         </div>
       {:else}
         {#each gameUI.chatMessages as msg (msg.id)}
           {#if msg.isSystem || msg.team === 'SYSTEM' || msg.senderTeam === 'system'}
             <div class="chat-line chat-line-system">
-              <span class="chat-system-notice">⚡ {msg.text}</span>
+              <span class="chat-system-notice">
+                <svg class="sys-bolt-svg" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                  <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
+                </svg>
+                {msg.text}
+              </span>
             </div>
           {:else}
             <div class="chat-line">
               <span class="chat-sender {msg.team.toLowerCase()} font-bold">
                 {msg.sender}:
               </span>
-              <span class="chat-text">{msg.text}</span>
+              <span class="chat-text">
+                {#each segmentChatMentions(msg.text, gameUI.nickname, knownRosterNames) as seg}
+                  {#if seg.kind === 'mention'}
+                    <span class="chat-mention-pill" class:is-self={seg.isSelf} class:is-all={seg.isAll}>{seg.value}</span>
+                  {:else}
+                    {seg.value}
+                  {/if}
+                {/each}
+              </span>
             </div>
           {/if}
         {/each}
       {/if}
     </div>
 
+    {#if isMentionMenuOpen}
+      <div class="mention-popup" role="listbox" aria-label="Autocompletar mención">
+        {#each mentionCandidates as candidate, idx (candidate.handle)}
+          <button
+            type="button"
+            role="option"
+            aria-selected={idx === mentionIndex}
+            class="mention-option"
+            class:is-active={idx === mentionIndex}
+            onmousedown={(e) => {
+              e.preventDefault();
+              selectMentionCandidate(idx);
+            }}
+          >
+            <span class="mention-handle">@{candidate.handle}</span>
+            <span class="mention-meta">{candidate.handle === 'all' ? 'Todos' : candidate.team.toUpperCase()}</span>
+          </button>
+        {/each}
+      </div>
+    {/if}
+
     <div class="chat-input-bar">
       <input
         bind:this={chatInputEl}
         type="text"
         class="chat-text-input"
-        placeholder="Presiona Enter para escribir (/extrapolation 0-250)..."
+        placeholder="Presiona Enter para escribir (@usuario, @all, /extrapolation)..."
         bind:value={chatMessage}
+        oninput={syncChatCursor}
+        onclick={syncChatCursor}
+        onkeyup={syncChatCursor}
         onkeydown={handleChatKeyDown}
         onfocus={() => {
           isChatInputActive = true;
           gameUI.isChatFocused = true;
+          syncChatCursor();
         }}
         onblur={() => {
           isChatInputActive = false;
@@ -650,7 +898,6 @@
     overflow: hidden;
   }
 
-  /* TOP BAR - Pestañas Colgantes Ancladas a top: 0 */
   .top-bar-container {
     position: fixed;
     top: 0;
@@ -662,15 +909,14 @@
 
   .top-card {
     pointer-events: auto;
-    background: rgba(10, 16, 26, 0.95);
+    background: #0a101a;
     border: 1px solid rgba(0, 229, 255, 0.25);
     border-top: none;
     border-radius: 0 0 8px 8px;
-    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.6);
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.65);
     box-sizing: border-box;
   }
 
-  /* 1. Nombre de Sala (Superior Izquierda) */
   .top-card-left {
     position: fixed;
     top: 0;
@@ -719,8 +965,8 @@
   .text-amber { color: #ffdb3c; }
   .text-crimson { color: #ff3366; }
   .text-cyan { color: #00e5ff; }
+  .text-gold { color: #ffd700; }
 
-  /* 2. Marcador y Tiempo (Superior Centro) */
   .top-card-center {
     position: fixed;
     top: 0;
@@ -788,9 +1034,11 @@
     border-radius: 0.375rem;
   }
 
-  .timer-glyph {
+  .timer-svg {
+    width: 0.9rem;
+    height: 0.9rem;
     color: #ffb703;
-    font-size: 0.85rem;
+    flex-shrink: 0;
   }
 
   .timer-clock {
@@ -813,7 +1061,6 @@
     animation: pulseGlow 1.5s infinite;
   }
 
-  /* 3. Pestaña de los 3 Botones (Superior Derecha) */
   .top-card-right {
     position: fixed;
     top: 0;
@@ -823,10 +1070,175 @@
     padding: 0 0.65rem;
     display: flex;
     align-items: center;
-    gap: 0.5rem;
+    gap: 0.45rem;
     border-top: 0;
     border-top-left-radius: 0;
     border-top-right-radius: 0;
+  }
+
+  .hud-rec-btn {
+    height: 2.15rem;
+    padding: 0 0.65rem;
+    border-radius: 0.45rem;
+    background: #161c26;
+    border: 1px solid rgba(255, 51, 102, 0.45);
+    color: #f8fafc;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.38rem;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.7rem;
+    font-weight: 800;
+    letter-spacing: 0.05em;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+
+  .hud-rec-btn:hover {
+    background: #221a24;
+    border-color: #ff3366;
+    box-shadow: 0 0 12px rgba(255, 51, 102, 0.35);
+  }
+
+  .hud-rec-btn.is-recording {
+    background: #2a1019;
+    border-color: #ff3366;
+    color: #ffccd7;
+    box-shadow: 0 0 14px rgba(255, 51, 102, 0.45);
+  }
+
+  .rec-dot {
+    width: 0.55rem;
+    height: 0.55rem;
+    border-radius: 9999px;
+    background: #ff3366;
+    box-shadow: 0 0 6px #ff3366;
+  }
+
+  .rec-stop-square {
+    width: 0.55rem;
+    height: 0.55rem;
+    border-radius: 2px;
+    background: #ff3366;
+    box-shadow: 0 0 8px #ff3366;
+    animation: pulseGlow 1s infinite;
+  }
+
+  .rec-label {
+    white-space: nowrap;
+  }
+
+  .rec-export-toast {
+    pointer-events: auto;
+    position: fixed;
+    top: 52px;
+    right: 16px;
+    z-index: 45;
+    background: #0b1220;
+    border: 1px solid rgba(0, 229, 255, 0.45);
+    border-radius: 0.6rem;
+    padding: 0.55rem 0.7rem;
+    box-shadow: 0 10px 28px rgba(0, 0, 0, 0.8);
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+    animation: chatMsgSlideIn 180ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+
+  .rec-export-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+  }
+
+  .rec-export-title {
+    font-family: 'Space Grotesk', system-ui, sans-serif;
+    font-size: 0.72rem;
+    font-weight: 900;
+    letter-spacing: 0.08em;
+    color: #00e5ff;
+  }
+
+  .rec-export-close {
+    width: 1.35rem;
+    height: 1.35rem;
+    border: 1px solid rgba(148, 163, 184, 0.25);
+    border-radius: 0.3rem;
+    background: #131c2b;
+    color: #94a3b8;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    padding: 0;
+  }
+
+  .rec-export-close:hover {
+    color: #ffffff;
+    border-color: #ff3366;
+  }
+
+  .rec-export-close svg {
+    width: 0.8rem;
+    height: 0.8rem;
+  }
+
+  .rec-export-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+  }
+
+  .rec-dl-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.32rem;
+    padding: 0.3rem 0.55rem;
+    border-radius: 0.38rem;
+    background: #131e30;
+    border: 1px solid rgba(0, 229, 255, 0.35);
+    color: #e2e8f0;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.66rem;
+    font-weight: 800;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+
+  .rec-dl-btn:hover:not(:disabled) {
+    background: #00e5ff;
+    color: #04131a;
+  }
+
+  .rec-dl-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+
+  .rec-dl-btn svg {
+    width: 0.82rem;
+    height: 0.82rem;
+  }
+
+  .rec-dl-lxr {
+    border-color: rgba(255, 215, 0, 0.45);
+    color: #ffd700;
+  }
+
+  .rec-dl-lxr:hover:not(:disabled) {
+    background: #ffd700;
+    color: #161100;
+  }
+
+  .rec-dl-view {
+    border-color: rgba(46, 204, 113, 0.45);
+    color: #2ecc71;
+  }
+
+  .rec-dl-view:hover:not(:disabled) {
+    background: #2ecc71;
+    color: #041a0d;
   }
 
   .hud-action-btn {
@@ -876,7 +1288,6 @@
     height: 1.15rem;
   }
 
-  /* TELEMETRÍA EN VIVO (ESQUINA INFERIOR IZQUIERDA) */
   .hud-telemetry-corner {
     pointer-events: auto;
     position: fixed;
@@ -887,7 +1298,7 @@
     align-items: center;
     gap: 0.45rem;
     padding: 0.35rem 0.75rem;
-    background: rgba(10, 16, 26, 0.95);
+    background: #0a101a;
     border: 1px solid rgba(0, 229, 255, 0.3);
     border-radius: 0.5rem;
     box-shadow: 0 4px 16px rgba(0, 0, 0, 0.6);
@@ -913,7 +1324,6 @@
     margin: 0 0.1rem;
   }
 
-  /* CHAT TÁCTICO FLOTANTE (ADAPTATIVO RESPONSIVE) */
   .hud-chat-container {
     pointer-events: auto;
     position: fixed;
@@ -929,11 +1339,10 @@
     box-shadow: 0 4px 20px rgba(0, 0, 0, 0.6);
     display: flex;
     flex-direction: column;
-    overflow: hidden;
+    overflow: visible;
     box-sizing: border-box;
   }
 
-  /* Tirador de redimensionamiento */
   .chat-resize-handle {
     height: 8px;
     width: 100%;
@@ -941,8 +1350,9 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    background: rgba(8, 14, 24, 0.6);
+    background: #080e18;
     border-bottom: 1px solid rgba(0, 229, 255, 0.15);
+    border-radius: 0.75rem 0.75rem 0 0;
     user-select: none;
     touch-action: none;
     flex-shrink: 0;
@@ -979,7 +1389,7 @@
     overflow-y: auto;
     display: flex;
     flex-direction: column;
-    gap: 0.4rem;
+    gap: 0.38rem;
     font-family: 'Chivo', system-ui, sans-serif;
     font-size: 0.8rem;
     line-height: 1.35;
@@ -999,6 +1409,7 @@
     display: flex;
     align-items: baseline;
     gap: 0.4rem;
+    animation: chatMsgSlideIn 180ms cubic-bezier(0.22, 1, 0.36, 1) both;
   }
 
   .chat-sender {
@@ -1017,16 +1428,95 @@
     word-break: break-word;
   }
 
+  .chat-mention-pill {
+    display: inline-block;
+    padding: 0.04rem 0.34rem;
+    margin: 0 0.06rem;
+    border-radius: 0.28rem;
+    background: rgba(0, 229, 255, 0.14);
+    border: 1px solid rgba(0, 229, 255, 0.4);
+    color: #00e5ff;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.73rem;
+    font-weight: 700;
+  }
+
+  .chat-mention-pill.is-self {
+    background: rgba(255, 215, 0, 0.2);
+    border-color: #ffd700;
+    color: #ffd700;
+  }
+
   .chat-line-system {
     padding: 0.1rem 0;
   }
 
   .chat-system-notice {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.32rem;
     color: #00e5ff;
     font-family: 'JetBrains Mono', monospace;
     font-size: 0.74rem;
     font-weight: 700;
     letter-spacing: 0.02em;
+  }
+
+  .sys-bolt-svg {
+    width: 0.8rem;
+    height: 0.8rem;
+    color: #ffd700;
+    flex-shrink: 0;
+  }
+
+  .mention-popup {
+    position: absolute;
+    left: 0.65rem;
+    right: 0.65rem;
+    bottom: 2.55rem;
+    z-index: 130;
+    max-height: 170px;
+    overflow-y: auto;
+    background: #0b1322;
+    border: 1px solid rgba(0, 229, 255, 0.5);
+    border-radius: 0.5rem;
+    box-shadow: 0 10px 26px rgba(0, 0, 0, 0.85);
+    padding: 0.25rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+  }
+
+  .mention-option {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+    padding: 0.35rem 0.55rem;
+    border-radius: 0.35rem;
+    border: none;
+    background: transparent;
+    color: #cbd5e1;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.74rem;
+    cursor: pointer;
+    text-align: left;
+  }
+
+  .mention-option:hover,
+  .mention-option.is-active {
+    background: rgba(0, 229, 255, 0.18);
+    color: #ffffff;
+  }
+
+  .mention-handle {
+    font-weight: 800;
+    color: #00e5ff;
+  }
+
+  .mention-meta {
+    font-size: 0.65rem;
+    color: #94a3b8;
   }
 
   /* ========================================== */
@@ -1043,7 +1533,7 @@
     align-items: center;
     gap: 0.85rem;
     padding: 0.65rem 1.35rem;
-    background: rgba(10, 16, 26, 0.96);
+    background: #0a101a;
     border: 1.5px solid #00e5ff;
     border-radius: 0.65rem;
     box-shadow: 0 0 24px rgba(0, 229, 255, 0.28), 0 8px 28px rgba(0, 0, 0, 0.75);
@@ -1060,9 +1550,12 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 1.05rem;
-    font-weight: 900;
     flex-shrink: 0;
+  }
+
+  .pause-svg {
+    width: 1.15rem;
+    height: 1.15rem;
   }
 
   .pause-copy-col {
@@ -1098,16 +1591,17 @@
     align-items: center;
   }
 
-  /* 1. Banner VS Rápido (1.8s) */
+  /* 1. Banner VS Sólido (Cero Transparencia) */
   .vs-card {
     display: flex;
     align-items: stretch;
     gap: 0.5rem;
-    background: transparent;
-    border: none;
+    opacity: 1;
+    background: #080e18;
+    padding: 0.35rem;
+    border: 1.5px solid rgba(0, 229, 255, 0.38);
     border-radius: 0.75rem;
-    overflow: visible;
-    box-shadow: none;
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.85);
     animation: bannerElasticIn 0.34s cubic-bezier(0.22, 1, 0.36, 1);
   }
 
@@ -1116,8 +1610,9 @@
     align-items: center;
     gap: 0.65rem;
     padding: 0.85rem 1.4rem;
-    min-width: 190px;
+    min-width: 195px;
     border-radius: 0.5rem;
+    opacity: 1;
     box-sizing: border-box;
   }
 
@@ -1149,16 +1644,16 @@
     align-items: center;
     justify-content: center;
     gap: 0.3rem;
-    padding: 0 1.1rem;
-    background: #080e18;
-    border: 1.5px solid rgba(0, 229, 255, 0.45);
+    padding: 0 1rem;
+    background: #0d1524;
+    border: 1.5px solid rgba(0, 229, 255, 0.55);
     border-radius: 0.5rem;
-    box-shadow: 0 0 16px rgba(0, 229, 255, 0.25);
   }
 
-  .vs-bolt {
+  .vs-bolt-svg {
+    width: 0.95rem;
+    height: 0.95rem;
     color: #ffd700;
-    font-size: 1rem;
   }
 
   .vs-text {
@@ -1169,14 +1664,14 @@
     color: #00e5ff;
   }
 
-  /* 2. Banner de Cuenta Regresiva (3, 2, 1, ¡JUEGUEN!) */
+  /* 2. Banner de Cuenta Regresiva */
   .countdown-card {
     display: flex;
     flex-direction: column;
     align-items: center;
     gap: 0.25rem;
     padding: 0.7rem 1.8rem 0.85rem;
-    background: rgba(10, 16, 26, 0.96);
+    background: #0a101a;
     border: 1.5px solid #00e5ff;
     border-radius: 0.75rem;
     box-shadow: 0 8px 30px rgba(0, 0, 0, 0.78), 0 0 26px rgba(0, 229, 255, 0.28);
@@ -1215,7 +1710,7 @@
     text-shadow: 0 0 18px rgba(46, 204, 113, 0.55);
   }
 
-  /* 3. Banner de Gol con Goleador y Asistidor (3.0s) */
+  /* 3. Banner de Gol */
   .goal-banner-card {
     position: relative;
     display: flex;
@@ -1224,7 +1719,7 @@
     gap: 0.5rem;
     padding: 0.9rem 2rem 1rem;
     min-width: 340px;
-    background: rgba(10, 16, 26, 0.96);
+    background: #0a101a;
     border: 2px solid var(--goal-c1);
     border-radius: 0.8rem;
     overflow: hidden;
@@ -1243,6 +1738,9 @@
 
   .goal-banner-title {
     margin: 0.15rem 0 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
     font-family: 'Space Grotesk', system-ui, sans-serif;
     font-size: 1.45rem;
     font-weight: 900;
@@ -1250,6 +1748,20 @@
     color: #ffffff;
     text-transform: uppercase;
     text-shadow: 0 2px 10px rgba(0, 0, 0, 0.8);
+  }
+
+  .banner-inline-svg {
+    width: 1.35rem;
+    height: 1.35rem;
+    flex-shrink: 0;
+  }
+
+  .credit-inline-svg {
+    width: 0.85rem;
+    height: 0.85rem;
+    color: #ffd700;
+    vertical-align: -2px;
+    margin-right: 0.2rem;
   }
 
   .goal-credits-row {
@@ -1293,7 +1805,7 @@
     margin-left: 0.2rem;
   }
 
-  /* 4. Banner de Victoria / Final de Partido (5.0s) */
+  /* 4. Banner de Victoria */
   .victory-banner-card {
     display: flex;
     flex-direction: column;
@@ -1301,7 +1813,7 @@
     gap: 0.48rem;
     padding: 0.95rem 2.2rem 1.05rem;
     min-width: 370px;
-    background: linear-gradient(180deg, rgba(16, 23, 38, 0.97) 0%, rgba(8, 13, 23, 0.98) 100%);
+    background: linear-gradient(180deg, #101726 0%, #080d17 100%);
     border: 2px solid #ffd700;
     border-radius: 0.85rem;
     box-shadow: 0 14px 40px rgba(0, 0, 0, 0.85), 0 0 32px rgba(255, 215, 0, 0.28);
@@ -1322,6 +1834,9 @@
 
   .victory-banner-title {
     margin: 0.1rem 0 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
     font-family: 'Space Grotesk', system-ui, sans-serif;
     font-size: 1.5rem;
     font-weight: 900;
@@ -1372,6 +1887,17 @@
     color: #64748b;
   }
 
+  @keyframes chatMsgSlideIn {
+    0% {
+      opacity: 0;
+      transform: translateY(6px);
+    }
+    100% {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
   @keyframes pulseGlow {
     0%, 100% {
       opacity: 1;
@@ -1408,8 +1934,9 @@
     align-items: center;
     gap: 0.5rem;
     padding: 0.4rem 0.65rem;
-    background: rgba(8, 14, 24, 0.9);
+    background: #080e18;
     border-top: 1px solid rgba(0, 229, 255, 0.2);
+    border-radius: 0 0 0.75rem 0.75rem;
     flex-shrink: 0;
   }
 
@@ -1450,7 +1977,6 @@
     box-shadow: 0 0 10px rgba(0, 229, 255, 0.4);
   }
 
-  /* Custom Scrollbar */
   .custom-scrollbar::-webkit-scrollbar {
     width: 4px;
   }

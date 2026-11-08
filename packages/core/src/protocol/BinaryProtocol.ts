@@ -34,12 +34,14 @@ export const INPUT_FLAG_DASH = 1 << 6;
 export const INPUT_FLAG_MAGNUS_LEFT = 1 << 7;
 export const INPUT_FLAG_MAGNUS_RIGHT = 1 << 8;
 export const INPUT_FLAG_TYPING = 1 << 9;
+export const INPUT_FLAG_MOUSE_AIM = 1 << 10;
 
 export interface PlayerInput {
   tick?: number;
   sequence?: number;
   inputMask?: number;
   aimAngle?: number;
+  aimThrottle?: number;
   clientTimestamp?: number;
   dirX?: number;
   dirY?: number;
@@ -94,6 +96,7 @@ export class BinaryProtocol {
   public static readonly PKT_INPUT = OP_INPUT;
   public static readonly PKT_SNAPSHOT = OP_SNAPSHOT;
   public static readonly INPUT_SIZE = 9;
+  public static readonly MOUSE_INPUT_SIZE = 12;
   public static readonly SNAPSHOT_HEADER_SIZE = 12;
   public static readonly DISC_RECORD_SIZE = 18;
 
@@ -103,27 +106,44 @@ export class BinaryProtocol {
   }
 
   public static encodeInput(input: PlayerInput, outBuffer?: ArrayBuffer): ArrayBuffer {
-    const buf = outBuffer && outBuffer.byteLength >= this.INPUT_SIZE ? outBuffer : new ArrayBuffer(this.INPUT_SIZE);
-    const view = new DataView(buf);
-
     let mask = input.inputMask || 0;
-    if (input.dirX !== undefined) {
-      if (input.dirX < -0.3) mask |= INPUT_FLAG_LEFT;
-      if (input.dirX > 0.3) mask |= INPUT_FLAG_RIGHT;
-    }
-    if (input.dirY !== undefined) {
-      if (input.dirY < -0.3) mask |= INPUT_FLAG_UP;
-      if (input.dirY > 0.3) mask |= INPUT_FLAG_DOWN;
+    const hasMouseAim =
+      (mask & INPUT_FLAG_MOUSE_AIM) !== 0 ||
+      (input.aimAngle !== undefined && (input.aimThrottle ?? 1) > 0);
+
+    if (hasMouseAim) {
+      mask |= INPUT_FLAG_MOUSE_AIM;
+      mask &= ~(INPUT_FLAG_UP | INPUT_FLAG_DOWN | INPUT_FLAG_LEFT | INPUT_FLAG_RIGHT);
+    } else {
+      if (input.dirX !== undefined) {
+        if (input.dirX < -0.3) mask |= INPUT_FLAG_LEFT;
+        if (input.dirX > 0.3) mask |= INPUT_FLAG_RIGHT;
+      }
+      if (input.dirY !== undefined) {
+        if (input.dirY < -0.3) mask |= INPUT_FLAG_UP;
+        if (input.dirY > 0.3) mask |= INPUT_FLAG_DOWN;
+      }
     }
     if (input.kick) mask |= INPUT_FLAG_KICK;
     if (input.dash) mask |= INPUT_FLAG_DASH;
     if (input.magnusLeft) mask |= INPUT_FLAG_MAGNUS_LEFT;
     if (input.magnusRight) mask |= INPUT_FLAG_MAGNUS_RIGHT;
 
+    const size = hasMouseAim ? this.MOUSE_INPUT_SIZE : this.INPUT_SIZE;
+    const buf = outBuffer && outBuffer.byteLength === size ? outBuffer : new ArrayBuffer(size);
+    const view = new DataView(buf);
+
     view.setUint8(0, OP_INPUT);
     view.setUint32(1, input.sequence ?? input.tick ?? 0, false);
     view.setUint16(5, mask, false);
     view.setUint16(7, (input.clientTimestamp ?? 0) & 0xffff, false);
+
+    if (hasMouseAim) {
+      const qAngle = Math.max(-32767, Math.min(32767, Math.round((input.aimAngle ?? 0) * 10000)));
+      const qThrottle = Math.max(0, Math.min(255, Math.round((input.aimThrottle ?? 1) * 255)));
+      view.setInt16(9, qAngle, false);
+      view.setUint8(11, qThrottle);
+    }
 
     return buf;
   }
@@ -140,21 +160,33 @@ export class BinaryProtocol {
 
     let dirX = 0;
     let dirY = 0;
-    if (inputMask & INPUT_FLAG_LEFT) dirX -= 1;
-    if (inputMask & INPUT_FLAG_RIGHT) dirX += 1;
-    if (inputMask & INPUT_FLAG_UP) dirY -= 1;
-    if (inputMask & INPUT_FLAG_DOWN) dirY += 1;
+    let aimAngle: number | undefined;
+    let aimThrottle: number | undefined;
 
-    const len = Math.hypot(dirX, dirY);
-    if (len > 1.0) {
-      dirX /= len;
-      dirY /= len;
+    if ((inputMask & INPUT_FLAG_MOUSE_AIM) !== 0 && view.byteLength >= this.MOUSE_INPUT_SIZE) {
+      aimAngle = view.getInt16(9, false) / 10000;
+      aimThrottle = view.getUint8(11) / 255;
+      dirX = Math.cos(aimAngle) * aimThrottle;
+      dirY = Math.sin(aimAngle) * aimThrottle;
+    } else {
+      if (inputMask & INPUT_FLAG_LEFT) dirX -= 1;
+      if (inputMask & INPUT_FLAG_RIGHT) dirX += 1;
+      if (inputMask & INPUT_FLAG_UP) dirY -= 1;
+      if (inputMask & INPUT_FLAG_DOWN) dirY += 1;
+
+      const len = Math.hypot(dirX, dirY);
+      if (len > 1.0) {
+        dirX /= len;
+        dirY /= len;
+      }
     }
 
     return {
       tick: sequence,
       sequence,
       inputMask,
+      aimAngle,
+      aimThrottle,
       clientTimestamp,
       dirX,
       dirY,

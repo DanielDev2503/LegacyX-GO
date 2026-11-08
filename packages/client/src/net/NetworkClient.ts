@@ -6,6 +6,8 @@ import type { PlayerInfo } from './NetworkHost';
 import { gameUI } from '../ui/state/gameUI.svelte.js';
 
 export interface ClientProfileOptions {
+  userId?: string | null;
+  isGuest?: boolean;
   avatar?: string;
   avatarType?: string;
   kit?: any;
@@ -43,12 +45,13 @@ export class NetworkClient {
   public onEmote?: (playerId: number, emoji: string) => void;
   public onGameFx?: (fx: string, intensity?: number, countdownValue?: number) => void;
   public onMatchBanner?: (banner: Record<string, unknown>) => void;
+  public onScoreEvent?: (payload: Record<string, unknown>) => void;
   public onSnapshotBuffer?: (buffer: ArrayBuffer) => void;
   public onSnapshotDecoded?: (snapshot: GameStateSnapshot) => void;
 
   private nickname: string;
   private number: number;
-  private reusableInputBuffer = new ArrayBuffer(BinaryProtocol.INPUT_SIZE);
+  private reusableInputBuffer = new ArrayBuffer(BinaryProtocol.MOUSE_INPUT_SIZE);
   private pingIntervalId: ReturnType<typeof setInterval> | null = null;
 
   constructor(
@@ -85,6 +88,8 @@ export class NetworkClient {
       type: 'CLIENT_HELLO',
       name: this.nickname,
       nickname: this.nickname,
+      userId: this.profile.userId ?? null,
+      isGuest: this.profile.isGuest ?? true,
       number: this.number,
       avatar: this.profile.avatar,
       avatarType: this.profile.avatarType,
@@ -297,6 +302,8 @@ export class NetworkClient {
       if (msg.banner && typeof msg.banner === 'object') {
         this.onMatchBanner?.(msg.banner as Record<string, unknown>);
       }
+    } else if (msg.type === 'SCORE_EVENT') {
+      this.onScoreEvent?.(msg);
     } else if (msg.type === 'MATCH_PAUSED') {
       this.jitterBuffer.setMatchState('PAUSED');
     } else if (msg.type === 'MATCH_RESUMED') {
@@ -310,13 +317,19 @@ export class NetworkClient {
     }
   }
 
-  public sendInput(inputMask: number, tick: number): void {
+  public sendInput(
+    inputMask: number,
+    tick: number,
+    aimAngle: number = 0,
+    aimThrottle: number = 1
+  ): void {
     if (!this.peer) return;
     const buffer = BinaryProtocol.encodeInput(
       {
         tick,
         inputMask,
-        aimAngle: 0
+        aimAngle,
+        aimThrottle
       },
       this.reusableInputBuffer
     );

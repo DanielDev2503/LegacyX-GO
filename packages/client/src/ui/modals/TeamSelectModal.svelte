@@ -2,6 +2,7 @@
   import { gameUI, type TeamSlot, type RosterPlayer, type MatchStatsSnapshot } from '../state/gameUI.svelte';
   import { soundFX } from '../../audio/SoundFX';
   import { gameApp } from '../../net/GameApp';
+  import StadiumPreviewCanvas from '../components/StadiumPreviewCanvas.svelte';
 
   let {
     onStartMatch = () => {},
@@ -303,6 +304,12 @@
 
   let roomCapacity = $state(gameUI.activeRoom?.maxPlayers || 12);
 
+  $effect(() => {
+    if (gameUI.activeRoom?.maxPlayers) {
+      roomCapacity = gameUI.activeRoom.maxPlayers;
+    }
+  });
+
   function handleCopyLink() {
     soundFX.playUIClick();
     const roomCode = gameUI.matchId || gameUI.activeRoom?.id || 'CTNYRS';
@@ -317,11 +324,12 @@
   function changeCapacity(delta: number) {
     if (!gameUI.isHost) return;
     soundFX.playUIClick();
-    const next = Math.max(2, Math.min(20, roomCapacity + delta));
+    const next = Math.max(2, Math.min(30, roomCapacity + delta));
     roomCapacity = next;
     if (gameUI.activeRoom) {
       gameUI.activeRoom.maxPlayers = next;
     }
+    gameApp.updateRoomConfig({ maxPlayers: next });
     gameUI.onRoomConfigChanged?.({ maxPlayers: next });
   }
 
@@ -416,7 +424,9 @@
             <div class="stats-center-zone">
               {#if gameUI.mvp}
                 <div class="mvp-golden-plaque">
-                  <span class="crown-icon">👑</span>
+                  <svg class="crown-svg" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                    <path d="M3 18h18v2H3v-2zm0-2l2-9 5 4 2-6 2 6 5-4 2 9H3z"></path>
+                  </svg>
                   <span class="mvp-title">MVP: {gameUI.mvp.nickname}</span>
                   <span class="mvp-points-chip">({gameUI.mvp.points} pts)</span>
                 </div>
@@ -425,7 +435,7 @@
 
             <!-- Zona Derecha: Duración del Partido -->
             <div class="match-status-meta">
-              <span class="match-time-chip">⏱ {matchDurationFormatted}</span>
+              <span class="match-time-chip">{matchDurationFormatted}</span>
             </div>
           </header>
 
@@ -472,7 +482,7 @@
                       >
                         <span class="col-player bold">
                           {#if player.isCaptain}
-                            <span class="badge-cap red">©</span>
+                            <span class="badge-cap red">C</span>
                           {/if}
                           {player.nickname}
                         </span>
@@ -489,7 +499,7 @@
                           <div class="drawer-grid">
                             <div class="drawer-chip">
                               <span class="chip-label">Toques</span>
-                              <span class="chip-val text-cyan">+{(player.touches ?? 14) * 2}</span>
+                              <span class="chip-val text-muted">0</span>
                             </div>
                             <div class="drawer-chip">
                               <span class="chip-label">Pases</span>
@@ -560,9 +570,11 @@
                       >
                         <span class="col-player bold" class:gold-player={player.isMvp}>
                           {#if player.isMvp}
-                            <span class="crown-sm">👑</span>
+                            <svg class="crown-svg-sm" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                              <path d="M3 18h18v2H3v-2zm0-2l2-9 5 4 2-6 2 6 5-4 2 9H3z"></path>
+                            </svg>
                           {:else if player.isCaptain}
-                            <span class="badge-cap blue">©</span>
+                            <span class="badge-cap blue">C</span>
                           {/if}
                           {player.nickname}
                           {#if player.isHost}
@@ -584,7 +596,7 @@
                           <div class="drawer-grid">
                             <div class="drawer-chip">
                               <span class="chip-label">Toques</span>
-                              <span class="chip-val text-cyan">+{(player.touches ?? 14) * 2}</span>
+                              <span class="chip-val text-muted">0</span>
                             </div>
                             <div class="drawer-chip">
                               <span class="chip-label">Pases</span>
@@ -638,28 +650,36 @@
 
         <!-- Tarjeta Central del Menú de Sala -->
         <div class="team-modal-card lobby-modal-card">
-            <!-- 1. Cabecera Limpia (Sin prefijos 'SALA:' ni emojis) -->
+            <!-- 1. Cabecera Limpia -->
             <header class="modal-header">
               <div class="room-identity">
                 <h2 class="room-title">{gameUI.activeRoomName || 'TORNEO NOCTURNO #12'}</h2>
                 <span class="header-divider">|</span>
-                <span class="room-id-badge">ID: {gameUI.matchId || gameUI.activeRoom?.id || 'CTNYRS'}</span>
+                {#if gameUI.isPracticeMode}
+                  <span class="practice-offline-badge" id="practice-offline-badge">
+                    MODO ENTRENAMIENTO (OFFLINE) — Sala local individual (nadie externo puede unirse)
+                  </span>
+                {:else}
+                  <span class="room-id-badge">ID: {gameUI.matchId || gameUI.activeRoom?.id || 'CTNYRS'}</span>
+                {/if}
               </div>
 
               <div class="header-actions">
-                <button
-                  type="button"
-                  id="btn-header-copy-link"
-                  class="btn-copy-link"
-                  onclick={handleCopyLink}
-                  title="Copiar enlace directo a la sala"
-                >
-                  <svg class="header-btn-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
-                    <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
-                  </svg>
-                  <span>{copyStatus === 'copied' ? '¡COPIADO!' : 'COPIAR LINK'}</span>
-                </button>
+                {#if !gameUI.isPracticeMode}
+                  <button
+                    type="button"
+                    id="btn-header-copy-link"
+                    class="btn-copy-link"
+                    onclick={handleCopyLink}
+                    title="Copiar enlace directo a la sala"
+                  >
+                    <svg class="header-btn-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
+                      <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
+                    </svg>
+                    <span>{copyStatus === 'copied' ? '¡COPIADO!' : 'COPIAR LINK'}</span>
+                  </button>
+                {/if}
 
                 <!-- Botón Abandonar -->
                 <button
@@ -703,7 +723,11 @@
                     <!-- Tiempo -->
                     <div class="rule-cartouche" title="Tiempo de partido">
                       <span class="rule-cartouche-content">
-                        <span class="rule-icon">⏱</span>
+                        <svg class="rule-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                          <circle cx="12" cy="13" r="8"></circle>
+                          <polyline points="12 9 12 13 14.5 14.5"></polyline>
+                          <line x1="9" y1="2" x2="15" y2="2"></line>
+                        </svg>
                         <span class="rule-value">{formatTimeLimit(gameUI.timeLimitMinutes)}</span>
                       </span>
                       <span class="rule-arrow">▾</span>
@@ -718,6 +742,9 @@
                           gameUI.timeLimitMinutes = val;
                           gameUI.physicsModifiers.timeLimit = val;
                           if (gameUI.activeRoom) gameUI.activeRoom.timeLimit = val;
+                          if (gameUI.isHost && !gameUI.isPracticeMode) {
+                            gameApp.updateRoomConfig({ timeLimit: val });
+                          }
                           gameUI.onRoomConfigChanged?.({ timeLimit: val });
                         }}
                       >
@@ -730,7 +757,10 @@
                     <!-- Goles -->
                     <div class="rule-cartouche" title="Límite de goles">
                       <span class="rule-cartouche-content">
-                        <span class="rule-icon">⚽</span>
+                        <svg class="rule-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                          <circle cx="12" cy="12" r="9"></circle>
+                          <polygon points="12 7.5 15.8 10.3 14.4 14.8 9.6 14.8 8.2 10.3 12 7.5"></polygon>
+                        </svg>
                         <span class="rule-value">{formatGoalsLimit(gameUI.scoreLimitGoals)}</span>
                       </span>
                       <span class="rule-arrow">▾</span>
@@ -745,6 +775,9 @@
                           gameUI.scoreLimitGoals = val;
                           gameUI.physicsModifiers.scoreLimit = val;
                           if (gameUI.activeRoom) gameUI.activeRoom.scoreLimit = val;
+                          if (gameUI.isHost && !gameUI.isPracticeMode) {
+                            gameApp.updateRoomConfig({ scoreLimit: val });
+                          }
                           gameUI.onRoomConfigChanged?.({ scoreLimit: val });
                         }}
                       >
@@ -754,47 +787,49 @@
                       </select>
                     </div>
 
-                    <!-- Bloqueo de Equipos -->
-                    <button
-                      type="button"
-                      id="btn-lock-teams"
-                      class="rule-cartouche-btn lock-teams-btn"
-                      class:active-locked={gameUI.teamsLocked}
-                      disabled={(!gameUI.isAdmin && !gameUI.isHost) || gameUI.isMatchActive}
-                      title="Bloquear equipos para que solo los administradores puedan mover jugadores"
-                      onclick={() => {
-                        soundFX.playUIClick();
-                        gameUI.toggleTeamsLock();
-                        gameUI.onRoomConfigChanged?.({ teamsLocked: gameUI.teamsLocked });
-                      }}
-                    >
-                      <span class="lock-label">{gameUI.teamsLocked ? '🔒 Bloqueados' : '🔓 Libres'}</span>
-                      <span class="lock-tag">{gameUI.teamsLocked ? 'SOLO ADMINS' : 'TODOS'}</span>
-                    </button>
+                    {#if !gameUI.isPracticeMode}
+                      <!-- Bloqueo de Equipos -->
+                      <button
+                        type="button"
+                        id="btn-lock-teams"
+                        class="rule-cartouche-btn lock-teams-btn"
+                        class:active-locked={gameUI.teamsLocked}
+                        disabled={(!gameUI.isAdmin && !gameUI.isHost) || gameUI.isMatchActive}
+                        title="Bloquear equipos para que solo los administradores puedan mover jugadores"
+                        onclick={() => {
+                          soundFX.playUIClick();
+                          gameUI.toggleTeamsLock();
+                          gameUI.onRoomConfigChanged?.({ teamsLocked: gameUI.teamsLocked });
+                        }}
+                      >
+                        <span class="lock-label">{gameUI.teamsLocked ? 'Bloqueados' : 'Equipos Libres'}</span>
+                        <span class="lock-tag">{gameUI.teamsLocked ? 'ADMINS' : 'TODOS'}</span>
+                      </button>
 
-                    <!-- Bloqueo de Equipaciones por Capitanes -->
-                    <button
-                      type="button"
-                      id="btn-lock-captain-kits"
-                      class="rule-cartouche-btn lock-teams-btn"
-                      class:active-locked={!gameUI.allowCaptainKitSwitch}
-                      disabled={(!gameUI.isAdmin && !gameUI.isHost) || gameUI.isMatchActive}
-                      title="Permitir o bloquear el cambio de camisetas para capitanes"
-                      onclick={() => {
-                        soundFX.playUIClick();
-                        gameUI.allowCaptainKitSwitch = !gameUI.allowCaptainKitSwitch;
-                        if (gameUI.isHost) {
-                          gameApp.updateRoomConfig({ allowCaptainKitSwitch: gameUI.allowCaptainKitSwitch });
-                        } else {
-                          gameApp.dispatchAdminAction('TOGGLE_CAPTAIN_KIT_SWITCH', { allowCaptainKitSwitch: gameUI.allowCaptainKitSwitch });
-                        }
-                      }}
-                    >
-                      <span class="lock-label">{gameUI.allowCaptainKitSwitch ? '👕 Camisetas Libres' : '🔒 Camisetas Fijas'}</span>
-                      <span class="lock-tag">{gameUI.allowCaptainKitSwitch ? 'CAPITANES' : 'BLOQUEADO'}</span>
-                    </button>
+                      <!-- Bloqueo de Equipaciones por Capitanes -->
+                      <button
+                        type="button"
+                        id="btn-lock-captain-kits"
+                        class="rule-cartouche-btn lock-teams-btn"
+                        class:active-locked={!gameUI.allowCaptainKitSwitch}
+                        disabled={(!gameUI.isAdmin && !gameUI.isHost) || gameUI.isMatchActive}
+                        title="Permitir o bloquear el cambio de camisetas para capitanes"
+                        onclick={() => {
+                          soundFX.playUIClick();
+                          gameUI.allowCaptainKitSwitch = !gameUI.allowCaptainKitSwitch;
+                          if (gameUI.isHost) {
+                            gameApp.updateRoomConfig({ allowCaptainKitSwitch: gameUI.allowCaptainKitSwitch });
+                          } else {
+                            gameApp.dispatchAdminAction('TOGGLE_CAPTAIN_KIT_SWITCH', { allowCaptainKitSwitch: gameUI.allowCaptainKitSwitch });
+                          }
+                        }}
+                      >
+                        <span class="lock-label">{gameUI.allowCaptainKitSwitch ? 'Kits Libres' : 'Kits Fijos'}</span>
+                        <span class="lock-tag">{gameUI.allowCaptainKitSwitch ? 'CAPITÁN' : 'FIJO'}</span>
+                      </button>
+                    {/if}
 
-                    <!-- Balanceo Automático y Reset de Equipos (mitad de ancho cada uno: Auto -> Reset -> Modifiers) -->
+                    <!-- Balanceo Automático y Reset de Equipos -->
                     <div class="grid grid-cols-2 gap-1.5 w-full h-10 auto-reset-container">
                       <button
                         type="button"
@@ -806,7 +841,7 @@
                           gameUI.autoBalanceSpectators();
                         }}
                       >
-                        <span class="lock-label">⚖️ Auto</span>
+                        <span class="lock-label">Auto</span>
                       </button>
 
                       <button
@@ -819,7 +854,7 @@
                           gameUI.resetTeamsToSpectators();
                         }}
                       >
-                        <span class="lock-label">🔄 Reset</span>
+                        <span class="lock-label">Reset</span>
                       </button>
                     </div>
 
@@ -835,7 +870,10 @@
                       }}
                       title="Abrir panel de modificadores de física (Solo Host)"
                     >
-                      <span>⚡ Modifiers</span>
+                      <svg class="rule-svg" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                        <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
+                      </svg>
+                      <span>Modifiers</span>
                     </button>
                   </div>
 
@@ -865,16 +903,9 @@
                       }}
                       title="Dar click para cambiar de estadio"
                     >
-                      <svg class="stadium-svg" viewBox="0 0 300 150" preserveAspectRatio="none">
-                        <rect x="4" y="4" width="292" height="142" rx="4" fill="#092215" stroke="#00e5ff" stroke-opacity="0.45" stroke-width="1.5" />
-                        <line x1="150" y1="4" x2="150" y2="146" stroke="#00e5ff" stroke-opacity="0.4" stroke-width="1.5" />
-                        <circle cx="150" cy="75" r="32" fill="none" stroke="#00e5ff" stroke-opacity="0.4" stroke-width="1.5" />
-                        <circle cx="150" cy="75" r="3" fill="#00e5ff" />
-                        <rect x="4" y="40" width="36" height="70" fill="none" stroke="#00e5ff" stroke-opacity="0.35" stroke-width="1.2" />
-                        <rect x="1" y="58" width="5" height="34" fill="rgba(0, 229, 255, 0.35)" stroke="#00e5ff" stroke-width="1" />
-                        <rect x="260" y="40" width="36" height="70" fill="none" stroke="#00e5ff" stroke-opacity="0.35" stroke-width="1.2" />
-                        <rect x="294" y="58" width="5" height="34" fill="rgba(0, 229, 255, 0.35)" stroke="#00e5ff" stroke-width="1" />
-                      </svg>
+                      <div class="stadium-canvas-wrap">
+                        <StadiumPreviewCanvas stadiumId={gameUI.selectedStadiumId || 'mediano'} compact={true} />
+                      </div>
 
                       <div class="stadium-overlay">
                         <span class="stadium-name">{gameUI.activeStadiumName || 'Mediano'}</span>
@@ -883,102 +914,104 @@
                     </div>
                   </div>
 
-                  <!-- Ajustes Avanzados de Sala con Toggle Pública/Privada y Contraseña Condicional (Exclusivo Host) -->
-                  <div class="advanced-settings-card w-full">
-                    <span class="card-micro-title">⚙️ AJUSTES DE SALA {#if !gameUI.isHost}<span class="text-xs text-muted">(Solo Host)</span>{/if}</span>
+                  {#if !gameUI.isPracticeMode}
+                    <!-- Ajustes Avanzados de Sala con Toggle Pública/Privada y Contraseña Condicional (Exclusivo Host) -->
+                    <div class="advanced-settings-card w-full">
+                      <span class="card-micro-title">AJUSTES DE SALA {#if !gameUI.isHost}<span class="text-xs text-muted">(Solo Host)</span>{/if}</span>
 
-                    <div class="adv-row">
-                      <label for="room-name-input">Nombre de Sala</label>
-                      <input
-                        id="room-name-input"
-                        type="text"
-                        maxlength="50"
-                        class="styled-adv-input"
-                        bind:value={gameUI.activeRoomName}
-                        disabled={!gameUI.isHost || gameUI.isMatchActive}
-                        oninput={() => gameUI.onRoomConfigChanged?.({ name: gameUI.activeRoomName })}
-                      />
-                    </div>
-
-                    <div class="adv-capacity-row">
-                      <span class="adv-label">Capacidad Jugadores:</span>
-                      <div class="cap-stepper">
-                        <button
-                          type="button"
-                          id="btn-cap-minus"
-                          class="cap-step-btn"
-                          disabled={!gameUI.isHost || gameUI.isMatchActive}
-                          onclick={() => changeCapacity(-1)}
-                        >
-                          -
-                        </button>
-                        <span id="capacity-value" class="cap-num-val">{roomCapacity}</span>
-                        <button
-                          type="button"
-                          id="btn-cap-plus"
-                          class="cap-step-btn"
-                          disabled={!gameUI.isHost || gameUI.isMatchActive}
-                          onclick={() => changeCapacity(1)}
-                        >
-                          +
-                        </button>
-                      </div>
-                    </div>
-
-                    <div class="toggle-row">
-                      <span class="toggle-label">{isRoomPublic ? '🌐 Sala pública' : '🔒 Sala privada'}</span>
-                      <label class="switch">
+                      <div class="adv-row">
+                        <label for="room-name-input">Nombre de Sala</label>
                         <input
-                          type="checkbox"
-                          bind:checked={isRoomPublic}
-                          disabled={!gameUI.isHost || gameUI.isMatchActive}
-                          onchange={() => {
-                            soundFX.playUIClick();
-                            if (isRoomPublic) {
-                              roomPassword = '';
-                              if (gameUI.activeRoom) {
-                                gameUI.activeRoom.isPrivate = false;
-                                gameUI.activeRoom.password = '';
-                              }
-                            } else {
-                              if (gameUI.activeRoom) {
-                                gameUI.activeRoom.isPrivate = true;
-                              }
-                            }
-                            gameUI.onRoomConfigChanged?.({
-                              isPrivate: !isRoomPublic,
-                              password: roomPassword
-                            });
-                          }}
-                        />
-                        <span class="slider"></span>
-                      </label>
-                    </div>
-
-                    {#if !isRoomPublic}
-                      <div class="adv-row password-row">
-                        <label for="room-password-input">Contraseña de Sala</label>
-                        <input
-                          id="room-password-input"
+                          id="room-name-input"
                           type="text"
-                          maxlength="30"
-                          placeholder="Escribe la clave de acceso..."
+                          maxlength="50"
                           class="styled-adv-input"
-                          bind:value={roomPassword}
+                          bind:value={gameUI.activeRoomName}
                           disabled={!gameUI.isHost || gameUI.isMatchActive}
-                          oninput={(e) => {
-                            const val = (e.currentTarget as HTMLInputElement).value;
-                            roomPassword = val;
-                            if (gameUI.activeRoom) gameUI.activeRoom.password = val;
-                            gameUI.onRoomConfigChanged?.({
-                              isPrivate: true,
-                              password: val
-                            });
-                          }}
+                          oninput={() => gameUI.onRoomConfigChanged?.({ name: gameUI.activeRoomName })}
                         />
                       </div>
-                    {/if}
-                  </div>
+
+                      <div class="adv-capacity-row">
+                        <span class="adv-label">Capacidad Jugadores (Máx 30):</span>
+                        <div class="cap-stepper">
+                          <button
+                            type="button"
+                            id="btn-cap-minus"
+                            class="cap-step-btn"
+                            disabled={!gameUI.isHost || gameUI.isMatchActive}
+                            onclick={() => changeCapacity(-1)}
+                          >
+                            -
+                          </button>
+                          <span id="capacity-value" class="cap-num-val">{roomCapacity}</span>
+                          <button
+                            type="button"
+                            id="btn-cap-plus"
+                            class="cap-step-btn"
+                            disabled={!gameUI.isHost || gameUI.isMatchActive}
+                            onclick={() => changeCapacity(1)}
+                          >
+                            +
+                          </button>
+                        </div>
+                      </div>
+
+                      <div class="toggle-row">
+                        <span class="toggle-label">{isRoomPublic ? 'Sala pública' : 'Sala privada'}</span>
+                        <label class="switch">
+                          <input
+                            type="checkbox"
+                            bind:checked={isRoomPublic}
+                            disabled={!gameUI.isHost || gameUI.isMatchActive}
+                            onchange={() => {
+                              soundFX.playUIClick();
+                              if (isRoomPublic) {
+                                roomPassword = '';
+                                if (gameUI.activeRoom) {
+                                  gameUI.activeRoom.isPrivate = false;
+                                  gameUI.activeRoom.password = '';
+                                }
+                              } else {
+                                if (gameUI.activeRoom) {
+                                  gameUI.activeRoom.isPrivate = true;
+                                }
+                              }
+                              gameUI.onRoomConfigChanged?.({
+                                isPrivate: !isRoomPublic,
+                                password: roomPassword
+                              });
+                            }}
+                          />
+                          <span class="slider"></span>
+                        </label>
+                      </div>
+
+                      {#if !isRoomPublic}
+                        <div class="adv-row password-row">
+                          <label for="room-password-input">Contraseña de Sala</label>
+                          <input
+                            id="room-password-input"
+                            type="text"
+                            maxlength="30"
+                            placeholder="Escribe la clave de acceso..."
+                            class="styled-adv-input"
+                            bind:value={roomPassword}
+                            disabled={!gameUI.isHost || gameUI.isMatchActive}
+                            oninput={(e) => {
+                              const val = (e.currentTarget as HTMLInputElement).value;
+                              roomPassword = val;
+                              if (gameUI.activeRoom) gameUI.activeRoom.password = val;
+                              gameUI.onRoomConfigChanged?.({
+                                isPrivate: true,
+                                password: val
+                              });
+                            }}
+                          />
+                        </div>
+                      {/if}
+                    </div>
+                  {/if}
                 </div>
 
                 <!-- Footer FSM -->
@@ -991,7 +1024,7 @@
                       disabled={!gameUI.isAdmin && !gameUI.isHost}
                       onclick={handleStartMatch}
                     >
-                      <span>▶ INICIAR PARTIDO</span>
+                      <span>INICIAR PARTIDO</span>
                     </button>
                   {:else}
                     <div class="fsm-running-grid">
@@ -1002,7 +1035,7 @@
                         disabled={!gameUI.isAdmin && !gameUI.isHost}
                         onclick={handleStopMatch}
                       >
-                        <span>■ DETENER PARTIDO</span>
+                        <span>DETENER PARTIDO</span>
                       </button>
 
                       <button
@@ -1013,7 +1046,7 @@
                         disabled={(!gameUI.isAdmin && !gameUI.isHost) || isPauseLocked}
                         onclick={handlePauseToggle}
                       >
-                        <span>{isResumeCountdown ? '⏱ REANUDANDO...' : isMatchPaused ? '▶ REANUDAR' : '⏸ PAUSAR'}</span>
+                        <span>{isResumeCountdown ? 'REANUDANDO...' : isMatchPaused ? 'REANUDAR' : 'PAUSAR'}</span>
                       </button>
                     </div>
                   {/if}
@@ -1097,7 +1130,11 @@
                         {#if p.isAdmin || p.isHost || isCaptain}
                           <div class="card-badges-cluster">
                             {#if p.isAdmin || p.isHost}
-                              <span class="admin-crown-badge" title={p.isHost ? 'Anfitrión de la sala' : 'Administrador'}>👑</span>
+                              <span class="admin-crown-badge" title={p.isHost ? 'Anfitrión de la sala' : 'Administrador'}>
+                                <svg class="crown-svg-sm" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                                  <path d="M3 18h18v2H3v-2zm0-2l2-9 5 4 2-6 2 6 5-4 2 9H3z"></path>
+                                </svg>
+                              </span>
                             {/if}
                             {#if isCaptain}
                               <span
@@ -1150,11 +1187,15 @@
                           }
                         }}
                       >
-                        <div class="slot-avatar spec">{p.avatar || p.number || '👁'}</div>
+                        <div class="slot-avatar spec">{p.avatar || p.number || 'S'}</div>
                         <span class="slot-nickname">{p.name || p.nickname}</span>
                         {#if p.isAdmin || p.isHost}
                           <div class="card-badges-cluster">
-                            <span class="admin-crown-badge" title={p.isHost ? 'Anfitrión de la sala' : 'Administrador'}>👑</span>
+                            <span class="admin-crown-badge" title={p.isHost ? 'Anfitrión de la sala' : 'Administrador'}>
+                              <svg class="crown-svg-sm" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                                <path d="M3 18h18v2H3v-2zm0-2l2-9 5 4 2-6 2 6 5-4 2 9H3z"></path>
+                              </svg>
+                            </span>
                           </div>
                         {/if}
                       </div>
@@ -1232,7 +1273,11 @@
                         {#if p.isAdmin || p.isHost || isCaptain}
                           <div class="card-badges-cluster">
                             {#if p.isAdmin || p.isHost}
-                              <span class="admin-crown-badge" title={p.isHost ? 'Anfitrión de la sala' : 'Administrador'}>👑</span>
+                              <span class="admin-crown-badge" title={p.isHost ? 'Anfitrión de la sala' : 'Administrador'}>
+                                <svg class="crown-svg-sm" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                                  <path d="M3 18h18v2H3v-2zm0-2l2-9 5 4 2-6 2 6 5-4 2 9H3z"></path>
+                                </svg>
+                              </span>
                             {/if}
                             {#if isCaptain}
                               <span
@@ -1312,7 +1357,7 @@
         {/if}
       {:else}
         <div class="context-menu-item disabled">
-          <span>👑 Anfitrión (Inmutable)</span>
+          <span>Anfitrión (Inmutable)</span>
         </div>
       {/if}
     </div>
@@ -1521,6 +1566,47 @@
     border: 1px solid rgba(0, 229, 255, 0.35);
   }
 
+  .practice-offline-badge {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.68rem;
+    font-weight: 800;
+    color: #ffd700;
+    background: rgba(255, 215, 0, 0.12);
+    padding: 0.22rem 0.65rem;
+    border-radius: 0.28rem;
+    border: 1px solid rgba(255, 215, 0, 0.45);
+    letter-spacing: 0.03em;
+  }
+
+  .rule-svg {
+    width: 0.85rem;
+    height: 0.85rem;
+    color: #00e5ff;
+    flex-shrink: 0;
+  }
+
+  .stadium-canvas-wrap {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+  }
+
+  .crown-svg {
+    width: 1.05rem;
+    height: 1.05rem;
+    color: #ffe16d;
+    flex-shrink: 0;
+  }
+
+  .crown-svg-sm {
+    width: 0.85rem;
+    height: 0.85rem;
+    color: #ffe16d;
+    flex-shrink: 0;
+  }
+
   .header-actions {
     display: flex;
     align-items: center;
@@ -1668,11 +1754,6 @@
     min-width: 0;
   }
 
-  .rule-icon {
-    font-size: 13px;
-    line-height: 1;
-  }
-
   .rule-value {
     font-family: 'JetBrains Mono', monospace;
     font-size: 11px;
@@ -1805,14 +1886,6 @@
   .stadium-preview-box:hover {
     border-color: #00e5ff;
     box-shadow: 0 0 16px rgba(0, 229, 255, 0.45);
-  }
-
-  .stadium-svg {
-    position: absolute;
-    inset: 0;
-    width: 100%;
-    height: 100%;
-    pointer-events: none;
   }
 
   .stadium-overlay {
@@ -2566,10 +2639,6 @@
     box-shadow: 0 0 16px rgba(255, 215, 0, 0.4);
   }
 
-  .crown-icon {
-    font-size: 1.1rem;
-  }
-
   .mvp-title {
     font-family: 'Space Grotesk', system-ui, sans-serif;
     font-size: 0.85rem;
@@ -2719,7 +2788,6 @@
   .badge-cap.red { color: #ff4757; }
   .badge-cap.blue { color: #00e5ff; }
 
-  .crown-sm { font-size: 0.85rem; }
   .host-tag { font-size: 0.65rem; color: #849396; font-weight: normal; }
 
   .col-pts.red-txt { color: #ff4757; font-weight: 800; }

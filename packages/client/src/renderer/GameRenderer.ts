@@ -61,9 +61,10 @@ export class GameRenderer {
   public scale: number = 1.0;
   public offsetX: number = 0;
   public offsetY: number = 0;
-  private safeAreaBottom: number = 160;
+  public safeAreaBottom: number = 160;
   public chatHeight: number = 130;
   public theme: 'dark' | 'light' = 'dark';
+  public focusBallOnly: boolean = false;
 
   // Visual toggles
   public netDeformationEnabled: boolean = true;
@@ -244,6 +245,30 @@ export class GameRenderer {
     this.triggerShake(7, 220);
   }
 
+  public clientToWorld(clientX: number, clientY: number): { x: number; y: number } {
+    const rect =
+      typeof this.canvas.getBoundingClientRect === 'function'
+        ? this.canvas.getBoundingClientRect()
+        : { left: 0, top: 0, width: this.canvas.width || 800, height: this.canvas.height || 600 };
+    const cssW = rect.width || this.canvas.width || 800;
+    const cssH = rect.height || this.canvas.height || 600;
+    const canvasW = this.canvas.width || cssW;
+    const canvasH = this.canvas.height || cssH;
+
+    const canvasX = (clientX - rect.left) * (canvasW / cssW);
+    const canvasY = (clientY - rect.top) * (canvasH / cssH);
+
+    const usableHeight = Math.max(100, canvasH - this.safeAreaBottom);
+    const cx = canvasW / 2;
+    const cy = usableHeight / 2;
+    const renderScale = Math.max(0.1, this.camera.scale || this.scale || 1.0);
+
+    return {
+      x: (canvasX - cx - this.camera.shakeOffsetX) / renderScale + this.camera.x,
+      y: (canvasY - cy - this.camera.shakeOffsetY) / renderScale + this.camera.y
+    };
+  }
+
   public addFloatingScore(text: string, x: number, y: number, color?: string): void {
     let slot = this.floatingScores.find((f) => !f.active);
     if (!slot) {
@@ -275,21 +300,29 @@ export class GameRenderer {
         continue;
       }
 
+      if (this.vfx && this.vfx.floatingPointsEnabled === false) {
+        continue;
+      }
+
       const progress = 1 - ft.life / ft.maxLife;
-      const currentY = ft.startY - progress * 24;
-      const alpha = Math.max(0, ft.life / ft.maxLife);
+      const eased = 1 - Math.pow(1 - progress, 2);
+      const currentY = ft.startY - 18 - eased * 30;
+      const alpha = Math.max(0, Math.min(1, ft.life / (ft.maxLife * 0.65)));
 
       ctx.save();
-      ctx.font = '700 13px "Inter", "Segoe UI", sans-serif';
+      ctx.globalAlpha = alpha;
+      ctx.font = '800 13px "Space Grotesk", "Inter", sans-serif';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
 
-      if (ft.color === '#ff4757') {
-        ctx.fillStyle = `rgba(255, 71, 87, ${alpha})`;
-      } else {
-        ctx.fillStyle = `rgba(255, 215, 0, ${alpha})`;
+      if (typeof ctx.strokeText === 'function') {
+        ctx.strokeStyle = 'rgba(5, 8, 17, 0.92)';
+        ctx.lineWidth = 3.5;
+        ctx.lineJoin = 'round';
+        ctx.strokeText(ft.text, ft.x, currentY);
       }
 
+      ctx.fillStyle = ft.color || '#ffd700';
       if (typeof ctx.fillText === 'function') {
         ctx.fillText(ft.text, ft.x, currentY);
       }
@@ -410,8 +443,10 @@ export class GameRenderer {
       snapDisc.spin = d1.spin ?? 0;
     }
 
-    // Dual-target camera with 180px leash
-    if (hasLocalPlayer && hasBall) {
+    // Hold-to-focus ball override or dual-target camera with 180px leash
+    if (this.focusBallOnly && hasBall) {
+      this.camera.follow(ballX, ballY);
+    } else if (hasLocalPlayer && hasBall) {
       this.camera.followDual(localPlayerX, localPlayerY, ballX, ballY, 0.25, 180);
     } else if (hasLocalPlayer) {
       this.camera.follow(localPlayerX, localPlayerY);
@@ -545,7 +580,9 @@ export class GameRenderer {
     const localPlayer =
       localDiscId !== null && localDiscId !== undefined ? snapshot.discs?.find((d) => d.id === localDiscId) : null;
 
-    if (localPlayer && ball) {
+    if (this.focusBallOnly && ball) {
+      this.camera.follow(ball.x, ball.y);
+    } else if (localPlayer && ball) {
       this.camera.followDual(localPlayer.x, localPlayer.y, ball.x, ball.y, 0.25, 180);
     } else {
       const target = localPlayer ?? ball;

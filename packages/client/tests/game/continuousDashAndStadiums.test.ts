@@ -143,9 +143,9 @@ describe('Mission Engineering Suite: Continuous Vector Dash, Stadiums, Camera & 
       engine.tick(inputs);
       expect(substepCallsInTick).toBeGreaterThanOrEqual(4);
 
-      // Remaining 3 ticks
+      // Remaining 6 ticks (7 ticks total for smooth Estela dash)
       inputs.set('p1', 0);
-      for (let i = 0; i < 3; i++) {
+      for (let i = 0; i < 6; i++) {
         substepCallsInTick = 0;
         engine.tick(inputs);
         expect(substepCallsInTick).toBeGreaterThanOrEqual(4);

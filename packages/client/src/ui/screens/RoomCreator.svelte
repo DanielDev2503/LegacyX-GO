@@ -1,32 +1,48 @@
 <script lang="ts">
   import { gameUI } from '../state/gameUI.svelte.js';
+  import { userProfile } from '../state/userProfile.svelte.js';
   import { soundFX } from '../../audio/SoundFX.js';
   import { tooltip } from '../actions/tooltip.js';
   import { gameApp } from '../../net/GameApp.js';
+  import StadiumPreviewCanvas from '../components/StadiumPreviewCanvas.svelte';
 
   let roomName = $state(`${gameUI.nickname || 'Player'}'s room`);
   let playerCount = $state(12);
+  let roomType = $state<'casual' | 'ranked'>('casual');
   let isPasswordProtected = $state(false);
   let roomPassword = $state('');
   let isPublic = $state(true);
   let teamsLocked = $state(true);
   let allowCaptainKitSwitch = $state(false);
-  let selectedTimeMinutes = $state(3);
-  let selectedGoalsLimit = $state(3);
+  let selectedTimeMinutes = $state(gameUI.timeLimitMinutes ?? 3);
+  let selectedGoalsLimit = $state(gameUI.scoreLimitGoals ?? 3);
   let selectedStadiumIndex = $state(0);
   let isCreating = $state(false);
+  let createError = $state<string | null>(null);
 
   const stadiums = [
-    { name: 'Mediano', dims: '55x30m', desc: 'Campo Clásico Estándar 3v3' },
-    { name: 'AF 3v3 Official', dims: '60x35m', desc: 'Canónico Haxball 3v3' },
-    { name: 'Big Pitch', dims: '80x45m', desc: 'Gran Estadio 4v4 / 5v5' },
-    { name: 'Small Field', dims: '40x22m', desc: 'Cancha Reducida 1v1 / 2v2' }
+    { id: 'mediano', name: 'Mediano', dims: '1200x540', desc: 'Campo Clásico Estándar 3v3' },
+    { id: 'AF 3v3', name: 'AF 3v3 Official', dims: '840x400', desc: 'Canónico Haxball 3v3' },
+    { id: 'big', name: 'Big Pitch', dims: '1600x720', desc: 'Gran Estadio 4v4 / 5v5' },
+    { id: 'small', name: 'Small Field', dims: '1000x460', desc: 'Cancha Reducida 1v1 / 2v2' }
   ];
+
+  const activePreviewStadiumId = $derived(
+    gameUI.selectedStadiumId || gameUI.activeStadiumName || stadiums[selectedStadiumIndex]?.id || 'mediano'
+  );
+
+  $effect(() => {
+    if (!userProfile.canCreateRanked && roomType === 'ranked') {
+      roomType = 'casual';
+    }
+  });
 
   $effect(() => {
     if (gameUI.activeStadiumName) {
       const idx = stadiums.findIndex(
-        (s) => s.name === gameUI.activeStadiumName || s.name.toLowerCase().includes(gameUI.activeStadiumName.toLowerCase())
+        (s) =>
+          s.name === gameUI.activeStadiumName ||
+          s.name.toLowerCase().includes(gameUI.activeStadiumName.toLowerCase())
       );
       if (idx !== -1) {
         selectedStadiumIndex = idx;
@@ -41,7 +57,27 @@
 
   function increasePlayers() {
     soundFX.playUIClick();
-    if (playerCount < 20) playerCount += 1;
+    if (playerCount < 30) playerCount += 1;
+  }
+
+  function handleTimeChange(e: Event) {
+    soundFX.playUIClick();
+    const nextVal = Math.max(0, Math.min(15, Number((e.currentTarget as HTMLSelectElement).value)));
+    selectedTimeMinutes = nextVal;
+    gameUI.timeLimitMinutes = nextVal;
+  }
+
+  function handleGoalsChange(e: Event) {
+    soundFX.playUIClick();
+    const nextVal = Math.max(0, Math.min(15, Number((e.currentTarget as HTMLSelectElement).value)));
+    selectedGoalsLimit = nextVal;
+    gameUI.scoreLimitGoals = nextVal;
+  }
+
+  function selectRoomType(next: 'casual' | 'ranked') {
+    if (next === 'ranked' && !userProfile.canCreateRanked) return;
+    soundFX.playUIClick();
+    roomType = next;
   }
 
   function formatTimeLimit(val: number): string {
@@ -54,27 +90,36 @@
 
   async function handleCreateRoom() {
     isCreating = true;
+    createError = null;
     soundFX.playUIClick();
-    const activeStadium = gameUI.activeStadiumName || stadiums[selectedStadiumIndex].name;
+    const activeStadium =
+      gameUI.selectedStadiumId || gameUI.activeStadiumName || stadiums[selectedStadiumIndex]!.id;
+    const effectiveRoomType = userProfile.canCreateRanked ? roomType : 'casual';
+    gameUI.timeLimitMinutes = selectedTimeMinutes;
+    gameUI.scoreLimitGoals = selectedGoalsLimit;
+
     try {
       const success = await gameApp.createRoom({
         name: roomName.trim() || `${gameUI.nickname || 'Player'}'s room`,
         stadium: activeStadium || 'mediano',
-        isPublic: !isPasswordProtected,
+        isPublic: isPublic && !isPasswordProtected,
         password: isPasswordProtected ? roomPassword : undefined,
-        maxPlayers: playerCount || 12,
+        maxPlayers: Math.max(2, Math.min(30, playerCount || 12)),
         timeLimit: selectedTimeMinutes,
         scoreLimit: selectedGoalsLimit,
-        teamsLocked: teamsLocked,
-        allowCaptainKitSwitch: allowCaptainKitSwitch
+        teamsLocked,
+        allowCaptainKitSwitch,
+        roomType: effectiveRoomType
       });
       if (success) {
         gameUI.allowCaptainKitSwitch = allowCaptainKitSwitch;
         gameUI.currentScreen = 'IN_GAME';
         gameUI.activeModal = 'TEAM_SELECT';
+      } else {
+        createError = gameApp.lastJoinError || 'No se pudo crear la sala.';
       }
-    } catch (err) {
-      console.error('Error al crear sala:', err);
+    } catch {
+      createError = 'Error al crear la sala.';
     } finally {
       isCreating = false;
     }
@@ -82,7 +127,6 @@
 </script>
 
 <div class="creator-root">
-  <!-- Top Navigation Header -->
   <header class="top-header">
     <button
       type="button"
@@ -91,7 +135,7 @@
       onclick={() => gameUI.navigateTo('LOBBY')}
       title="Volver"
     >
-      <svg class="back-arrow-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+      <svg class="back-arrow-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
         <line x1="19" y1="12" x2="5" y2="12"></line>
         <polyline points="12 19 5 12 12 5"></polyline>
       </svg>
@@ -99,27 +143,80 @@
     </button>
   </header>
 
-  <!-- Main Card -->
   <main class="creator-card">
     <div class="card-header">
       <div class="title-with-bar">
         <div class="accent-bar"></div>
         <div>
           <h1 class="card-title">Ajustes de la sala</h1>
-          <p class="card-subtitle">Define los accesos, la normativa de partido y el terreno de juego</p>
+          <p class="card-subtitle">Define el tipo de sala, accesos, normativa de partido y terreno de juego</p>
         </div>
       </div>
     </div>
 
-    <!-- Dual Column Grid -->
+    {#if createError}
+      <div class="creator-err-banner">{createError}</div>
+    {/if}
+
     <div class="columns-grid">
-      <!-- LEFT COLUMN: Ajustes de la sala -->
+      <!-- LEFT COLUMN -->
       <div class="config-column">
         <div class="column-header">
           <span class="column-title">AJUSTES DE LA SALA</span>
         </div>
 
-        <!-- SECCIÓN 1: Nombre de la sala y contraseña -->
+        <!-- Selector Tipo de Sala: Casual | Clasificatoria (Ranked) -->
+        <div class="config-section">
+          <div class="block-header">
+            <span class="block-label">TIPO DE SALA</span>
+            {#if !userProfile.canCreateRanked}
+              <span class="role-lock-hint">Ranked: Representante / Superadmin</span>
+            {/if}
+          </div>
+          <div class="room-type-grid">
+            <button
+              type="button"
+              class="type-btn"
+              class:selected={roomType === 'casual'}
+              onclick={() => selectRoomType('casual')}
+            >
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="12" cy="12" r="9"></circle>
+                <polygon points="10 8 16 12 10 16 10 8"></polygon>
+              </svg>
+              <span>Casual</span>
+            </button>
+
+            <button
+              type="button"
+              class="type-btn ranked-opt"
+              class:selected={roomType === 'ranked'}
+              disabled={!userProfile.canCreateRanked}
+              title={
+                userProfile.canCreateRanked
+                  ? 'Partida oficial con actualización de ELO y estadísticas globales'
+                  : 'Solo cuentas con rol Representante o Superadmin pueden abrir salas Clasificatorias'
+              }
+              onclick={() => selectRoomType('ranked')}
+            >
+              {#if userProfile.canCreateRanked}
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M12 2l2.9 6.1L22 9.2l-5 4.8 1.2 6.9L12 17.7 5.8 20.9 7 14 2 9.2l7.1-1.1L12 2z"></path>
+                </svg>
+              {:else}
+                <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2">
+                  <rect x="3" y="11" width="18" height="11" rx="2"></rect>
+                  <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+                </svg>
+              {/if}
+              <span>Clasificatoria (Ranked)</span>
+            </button>
+          </div>
+        </div>
+
+        <div class="section-divider"></div>
+
+        <!-- Nombre y contraseña -->
         <div class="config-section">
           <div class="input-block">
             <div class="block-header">
@@ -138,7 +235,13 @@
 
           <div class="param-row">
             <div class="toggle-row">
-              <span class="toggle-label">🔒 Proteger con contraseña</span>
+              <span class="toggle-label">
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="#00e5ff" stroke-width="2">
+                  <rect x="3" y="11" width="18" height="11" rx="2"></rect>
+                  <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+                </svg>
+                <span>Proteger con contraseña</span>
+              </span>
               <label class="switch">
                 <input
                   type="checkbox"
@@ -162,7 +265,7 @@
 
         <div class="section-divider"></div>
 
-        <!-- SECCIÓN 2: Límite de jugadores -->
+        <!-- Límite de jugadores (hasta 30) -->
         <div class="config-section">
           <div class="param-row">
             <div class="param-label-row">
@@ -172,7 +275,7 @@
               <button type="button" class="stepper-btn" onclick={decreasePlayers}>−</button>
               <div class="stepper-display">
                 <span class="stepper-num">{playerCount}</span>
-                <span class="stepper-sub">Máximo 20 jugadores</span>
+                <span class="stepper-sub">Máximo 30 jugadores</span>
               </div>
               <button type="button" class="stepper-btn" onclick={increasePlayers}>+</button>
             </div>
@@ -181,20 +284,27 @@
 
         <div class="section-divider"></div>
 
-        <!-- SECCIÓN 3: Opciones de privacidad y lista pública -->
+        <!-- Mostrar en lista pública -->
         <div class="config-section">
           <div class="param-row">
             <div class="toggle-row">
               <div class="label-with-tooltip">
-                <span class="toggle-label">🌐 Mostrar en lista pública</span>
+                <span class="toggle-label">
+                  <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="#00e5ff" stroke-width="2">
+                    <circle cx="12" cy="12" r="10"></circle>
+                    <line x1="2" y1="12" x2="22" y2="12"></line>
+                    <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path>
+                  </svg>
+                  <span>Mostrar en lista pública</span>
+                </span>
                 <div
                   class="info-tooltip-wrapper"
                   tabindex="0"
                   role="button"
                   aria-label="Información sobre visibilidad en lista pública"
-                  use:tooltip={"Si se desactiva, la sala no aparecerá en la lista pública y solo se podrá acceder buscándola por su ID en el lobby."}
+                  use:tooltip={'Si se desactiva, la sala no aparecerá en la lista pública y solo se podrá acceder por su ID.'}
                 >
-                  <svg class="info-help-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <svg class="info-help-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <circle cx="12" cy="12" r="10"></circle>
                     <line x1="12" y1="16" x2="12" y2="12"></line>
                     <line x1="12" y1="8" x2="12.01" y2="8"></line>
@@ -214,22 +324,20 @@
         </div>
       </div>
 
-      <!-- RIGHT COLUMN: Reglas de partido y Escoger estadio -->
+      <!-- RIGHT COLUMN -->
       <div class="config-column right-panel-scroll">
         <div class="column-header">
           <span class="column-title">REGLAS DE PARTIDO</span>
         </div>
 
-        <!-- Rules Grid -->
         <div class="rules-grid">
-          <!-- Time Selector (0 to 15) -->
+          <!-- Tiempo (0 a 15) -->
           <div class="rule-select-box" title="Tiempo de partido">
-            <span class="rule-icon">⏱</span>
-            <select
-              class="rule-select"
-              bind:value={selectedTimeMinutes}
-              onchange={() => soundFX.playUIClick()}
-            >
+            <svg class="rule-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="9"></circle>
+              <polyline points="12 7 12 12 15 15"></polyline>
+            </svg>
+            <select class="rule-select" value={selectedTimeMinutes} onchange={handleTimeChange}>
               {#each Array.from({ length: 16 }, (_, i) => i) as t}
                 <option value={t}>{formatTimeLimit(t)}</option>
               {/each}
@@ -237,14 +345,13 @@
             <span class="rule-arrow">▾</span>
           </div>
 
-          <!-- Goals Selector (0 to 15) -->
+          <!-- Goles (0 a 15) -->
           <div class="rule-select-box" title="Límite de goles">
-            <span class="rule-icon">⚽</span>
-            <select
-              class="rule-select"
-              bind:value={selectedGoalsLimit}
-              onchange={() => soundFX.playUIClick()}
-            >
+            <svg class="rule-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="9"></circle>
+              <circle cx="12" cy="12" r="3"></circle>
+            </svg>
+            <select class="rule-select" value={selectedGoalsLimit} onchange={handleGoalsChange}>
               {#each Array.from({ length: 16 }, (_, i) => i) as g}
                 <option value={g}>{formatGoalsLimit(g)}</option>
               {/each}
@@ -252,41 +359,68 @@
             <span class="rule-arrow">▾</span>
           </div>
 
-          <!-- Bloquear Equipos Toggle -->
+          <!-- Bloquear Equipos -->
           <button
             type="button"
             class="rule-btn lock-teams-btn"
             class:active-locked={teamsLocked}
-            title="Bloquear equipos para que solo los administradores puedan mover jugadores"
-            onclick={() => { soundFX.playUIClick(); teamsLocked = !teamsLocked; }}
+            onclick={() => {
+              soundFX.playUIClick();
+              teamsLocked = !teamsLocked;
+            }}
           >
-            <span class="lock-label">{teamsLocked ? '🔒 Bloqueados' : '🔓 Libres'}</span>
+            <span class="lock-label">
+              <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2">
+                <rect x="3" y="11" width="18" height="11" rx="2"></rect>
+                {#if teamsLocked}
+                  <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+                {:else}
+                  <path d="M7 11V7a5 5 0 0 1 9.9-1"></path>
+                {/if}
+              </svg>
+              <span>{teamsLocked ? 'Equipos Bloq.' : 'Equipos Libres'}</span>
+            </span>
             <span class="lock-tag">{teamsLocked ? 'SOLO ADMINS' : 'TODOS'}</span>
           </button>
 
-          <!-- Bloqueo de Equipaciones por Capitanes -->
+          <!-- Bloquear Kits -->
           <button
             type="button"
-            class="rule-btn lock-teams-btn h-10 px-3 overflow-hidden"
+            class="rule-btn lock-teams-btn"
             class:active-locked={!allowCaptainKitSwitch}
-            title="Permitir o bloquear el cambio de camisetas para capitanes"
-            onclick={() => { soundFX.playUIClick(); allowCaptainKitSwitch = !allowCaptainKitSwitch; }}
+            onclick={() => {
+              soundFX.playUIClick();
+              allowCaptainKitSwitch = !allowCaptainKitSwitch;
+            }}
           >
-            <span class="lock-label whitespace-nowrap truncate text-xs font-semibold flex items-center justify-center gap-1.5">{allowCaptainKitSwitch ? '👕 Kits: Libres' : '👕 Kits: Bloq.'}</span>
+            <span class="lock-label">
+              <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M20.38 3.46L16 2a4 4 0 0 1-8 0L3.62 3.46a2 2 0 0 0-1.34 2.23l.58 3.47a1 1 0 0 0 .99.84H6v10c0 1.1.9 2 2 2h8a2 2 0 0 0 2-2V10h2.15a1 1 0 0 0 .99-.84l.58-3.47a2 2 0 0 0-1.34-2.23z"></path>
+              </svg>
+              <span>{allowCaptainKitSwitch ? 'Kits Libres' : 'Kits Bloq.'}</span>
+            </span>
             <span class="lock-tag">{allowCaptainKitSwitch ? 'CAPITANES' : 'BLOQUEADO'}</span>
           </button>
 
-          <!-- Modifiers Button (without PHYS_STD badge) -->
+          <!-- Modifiers -->
           <button
             type="button"
             class="rule-btn highlight"
             onclick={() => gameUI.openModal('PHYSICS_MODIFIERS')}
           >
-            <span>⚡ Modifiers</span>
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2">
+              <line x1="4" y1="21" x2="4" y2="14"></line>
+              <line x1="4" y1="10" x2="4" y2="3"></line>
+              <line x1="12" y1="21" x2="12" y2="12"></line>
+              <line x1="12" y1="8" x2="12" y2="3"></line>
+              <line x1="20" y1="21" x2="20" y2="16"></line>
+              <line x1="20" y1="12" x2="20" y2="3"></line>
+            </svg>
+            <span>Modifiers Físicos</span>
           </button>
         </div>
 
-        <!-- Subtítulo Escoger estadio y Previsualización Vectorial 2:1 -->
+        <!-- Previsualización Real de Estadio -->
         <div class="stadium-section">
           <div class="param-label-row">
             <span class="param-name">Escoger estadio</span>
@@ -297,7 +431,10 @@
             tabindex="0"
             role="button"
             onmouseenter={() => soundFX.playUIHover()}
-            onclick={() => { soundFX.playUIClick(); gameUI.openModal('STADIUM_SELECTOR'); }}
+            onclick={() => {
+              soundFX.playUIClick();
+              gameUI.openModal('STADIUM_SELECTOR');
+            }}
             onkeydown={(e) => {
               if (e.key === 'Enter' || e.key === ' ') {
                 e.preventDefault();
@@ -305,33 +442,19 @@
                 gameUI.openModal('STADIUM_SELECTOR');
               }
             }}
-            title="Dar click para cambiar de estadio"
+            title="Click para cambiar de estadio"
           >
-            <!-- Tactical Pitch SVG in 2:1 ratio -->
-            <svg class="stadium-svg" viewBox="0 0 300 150" preserveAspectRatio="none">
-              <rect x="4" y="4" width="292" height="142" rx="4" fill="#092215" stroke="#00e5ff" stroke-opacity="0.45" stroke-width="1.5" />
-              <line x1="150" y1="4" x2="150" y2="146" stroke="#00e5ff" stroke-opacity="0.4" stroke-width="1.5" />
-              <circle cx="150" cy="75" r="32" fill="none" stroke="#00e5ff" stroke-opacity="0.4" stroke-width="1.5" />
-              <circle cx="150" cy="75" r="3" fill="#00e5ff" />
-              <!-- Left penalty & goal area -->
-              <rect x="4" y="40" width="36" height="70" fill="none" stroke="#00e5ff" stroke-opacity="0.35" stroke-width="1.2" />
-              <rect x="1" y="58" width="5" height="34" fill="rgba(0, 229, 255, 0.35)" stroke="#00e5ff" stroke-width="1" />
-              <!-- Right penalty & goal area -->
-              <rect x="260" y="40" width="36" height="70" fill="none" stroke="#00e5ff" stroke-opacity="0.35" stroke-width="1.2" />
-              <rect x="294" y="58" width="5" height="34" fill="rgba(0, 229, 255, 0.35)" stroke="#00e5ff" stroke-width="1" />
-            </svg>
+            <StadiumPreviewCanvas stadiumId={activePreviewStadiumId} />
 
-            <!-- Superimposed overlay info -->
             <div class="stadium-overlay">
-              <span class="stadium-name">{gameUI.activeStadiumName || stadiums[selectedStadiumIndex].name}</span>
-              <span class="stadium-action-text">Dar click para cambiar de estadio</span>
+              <span class="stadium-name">{gameUI.activeStadiumName || stadiums[selectedStadiumIndex]!.name}</span>
+              <span class="stadium-action-text">Click para cambiar de estadio</span>
             </div>
           </div>
         </div>
       </div>
     </div>
 
-    <!-- Bottom Launch CTA -->
     <div class="footer-cta">
       <button
         type="button"
@@ -340,7 +463,7 @@
         onmouseenter={() => soundFX.playUIHover()}
         onclick={handleCreateRoom}
       >
-        <span>{isCreating ? 'CREANDO...' : 'CREAR SALA'}</span>
+        <span>{isCreating ? 'CREANDO...' : roomType === 'ranked' ? 'CREAR SALA CLASIFICATORIA' : 'CREAR SALA'}</span>
       </button>
     </div>
   </main>
@@ -359,7 +482,7 @@
     display: flex;
     flex-direction: column;
     justify-content: space-between;
-    padding: 20px 28px;
+    padding: 18px 24px;
     box-sizing: border-box;
     pointer-events: auto;
     user-select: none;
@@ -368,88 +491,60 @@
   .top-header {
     display: flex;
     align-items: center;
-    justify-content: flex-start;
-    width: 100%;
-    z-index: 30;
   }
 
   .nav-pill-btn {
     display: inline-flex;
     align-items: center;
     gap: 0.5rem;
-    padding: 0.6rem 1.15rem;
-    background: rgba(10, 16, 26, 0.9);
-    border: 1px solid rgba(0, 229, 255, 0.3);
+    padding: 0.55rem 1.05rem;
+    background: #0a101a;
+    border: 1px solid rgba(0, 229, 255, 0.35);
     border-radius: 9999px;
     color: #67e8f9;
-    font-family: 'Chivo', system-ui, sans-serif;
-    font-size: 0.875rem;
+    font-family: 'Chivo', sans-serif;
+    font-size: 0.85rem;
     font-weight: 700;
-    letter-spacing: 0.02em;
     cursor: pointer;
-    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5), 0 0 12px rgba(0, 229, 255, 0.15);
-    transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
-    user-select: none;
   }
 
   .nav-pill-btn:hover {
-    background: rgba(0, 229, 255, 0.15);
     border-color: #00e5ff;
     color: #ffffff;
-    box-shadow: 0 0 16px rgba(0, 229, 255, 0.45), 0 6px 24px rgba(0, 0, 0, 0.6);
-    transform: translateY(-1px);
-  }
-
-  .nav-pill-btn:active {
-    transform: scale(0.95);
   }
 
   .back-arrow-svg {
-    width: 1.1rem;
-    height: 1.1rem;
-    flex-shrink: 0;
+    width: 1rem;
+    height: 1rem;
   }
 
   .creator-card {
-    width: min(94vw, 780px);
+    width: min(94vw, 820px);
     max-height: 90vh;
     overflow-y: auto;
-    background: rgba(10, 16, 26, 0.95);
+    background: #0a101a;
     border: 1px solid #00e5ff;
-    border-radius: 0.5rem;
-    box-shadow: 0 0 24px rgba(0, 229, 255, 0.35), inset 0 0 12px rgba(0, 229, 255, 0.15);
-    padding: 22px;
+    border-radius: 8px;
+    box-shadow: 0 18px 44px rgba(0, 0, 0, 0.65);
+    padding: 20px;
     margin: auto;
     display: flex;
     flex-direction: column;
-    gap: 16px;
+    gap: 14px;
     box-sizing: border-box;
-    scrollbar-width: thin;
-    scrollbar-color: rgba(0, 229, 255, 0.35) rgba(8, 14, 24, 0.6);
   }
 
-  .creator-card::-webkit-scrollbar,
-  .right-panel-scroll::-webkit-scrollbar {
-    width: 4px;
-  }
-
-  .creator-card::-webkit-scrollbar-track,
-  .right-panel-scroll::-webkit-scrollbar-track {
-    background: rgba(8, 14, 24, 0.6);
-    border-radius: 4px;
-  }
-
-  .creator-card::-webkit-scrollbar-thumb,
-  .right-panel-scroll::-webkit-scrollbar-thumb {
-    background: rgba(0, 229, 255, 0.35);
-    border-radius: 4px;
+  .creator-err-banner {
+    padding: 8px 12px;
+    border-radius: 6px;
+    background: #2b1118;
+    border: 1px solid #ff4757;
+    color: #ff98a3;
+    font-size: 12px;
   }
 
   .card-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    border-bottom: 1px solid rgba(0, 229, 255, 0.15);
+    border-bottom: 1px solid rgba(0, 229, 255, 0.16);
     padding-bottom: 10px;
   }
 
@@ -461,26 +556,23 @@
 
   .accent-bar {
     width: 4px;
-    height: 30px;
+    height: 28px;
     background: #00e5ff;
     border-radius: 2px;
-    box-shadow: 0 0 10px #00e5ff;
   }
 
   .card-title {
-    font-family: 'Space Grotesk', system-ui, sans-serif;
+    margin: 0;
+    font-family: 'Space Grotesk', sans-serif;
     font-size: 18px;
     font-weight: 800;
     color: #c3f5ff;
-    letter-spacing: 0.05em;
-    margin: 0;
   }
 
   .card-subtitle {
-    font-family: 'Chivo', system-ui, sans-serif;
-    font-size: 11px;
+    margin: 2px 0 0;
+    font-size: 11.5px;
     color: #8fa0b5;
-    margin: 2px 0 0 0;
   }
 
   .columns-grid {
@@ -489,57 +581,44 @@
     gap: 16px;
   }
 
-  @media (max-width: 680px) {
+  @media (max-width: 720px) {
     .columns-grid {
       grid-template-columns: 1fr;
     }
   }
 
   .config-column {
-    background: rgba(18, 26, 41, 0.75);
+    background: #101827;
     border: 1px solid rgba(0, 229, 255, 0.18);
-    border-radius: 0.5rem;
+    border-radius: 8px;
     padding: 14px;
     display: flex;
     flex-direction: column;
-    gap: 12px;
-    box-sizing: border-box;
+    gap: 11px;
   }
 
   .column-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-    padding-bottom: 8px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    padding-bottom: 7px;
   }
 
   .column-title {
-    font-family: 'Space Grotesk', system-ui, sans-serif;
+    font-family: 'Space Grotesk', sans-serif;
     font-size: 11px;
     font-weight: 700;
     letter-spacing: 0.08em;
     color: #00e5ff;
-    text-transform: uppercase;
   }
 
   .config-section {
     display: flex;
     flex-direction: column;
-    gap: 10px;
+    gap: 8px;
   }
 
   .section-divider {
-    width: 100%;
     height: 1px;
-    background: rgba(255, 255, 255, 0.1);
-    margin: 2px 0;
-  }
-
-  .input-block {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
+    background: rgba(255, 255, 255, 0.08);
   }
 
   .block-header {
@@ -550,38 +629,76 @@
 
   .block-label {
     font-family: 'JetBrains Mono', monospace;
-    font-size: 11px;
-    font-weight: 600;
+    font-size: 10.5px;
+    font-weight: 700;
     color: #ffffff;
-    letter-spacing: 0.06em;
+  }
+
+  .role-lock-hint {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 9.5px;
+    color: #ffd700;
+  }
+
+  .room-type-grid {
+    display: grid;
+    grid-template-columns: 1fr 1.25fr;
+    gap: 8px;
+  }
+
+  .type-btn {
+    height: 36px;
+    border-radius: 6px;
+    border: 1px solid #263850;
+    background: #0a101b;
+    color: #9cb0ca;
+    font-family: 'Space Grotesk', sans-serif;
+    font-size: 11.5px;
+    font-weight: 700;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    cursor: pointer;
+  }
+
+  .type-btn.selected {
+    border-color: #00e5ff;
+    background: rgba(0, 229, 255, 0.16);
+    color: #00e5ff;
+  }
+
+  .type-btn.ranked-opt.selected {
+    border-color: #ffd700;
+    background: rgba(255, 215, 0, 0.16);
+    color: #ffd700;
+  }
+
+  .type-btn:disabled {
+    opacity: 0.42;
+    cursor: not-allowed;
   }
 
   .block-hint {
     font-family: 'JetBrains Mono', monospace;
-    font-variant-numeric: tabular-nums;
     font-size: 10px;
-    color: rgba(0, 229, 255, 0.65);
+    color: rgba(0, 229, 255, 0.7);
   }
 
-  .styled-input {
+  .styled-input,
+  .styled-sub-input {
     width: 100%;
-    height: 40px;
-    padding: 0 14px;
-    background: #121a29;
+    height: 38px;
+    padding: 0 12px;
+    background: #09101c;
     border: 1px solid rgba(0, 229, 255, 0.3);
-    border-radius: 0.5rem;
+    border-radius: 6px;
     color: #00e5ff;
-    font-family: 'Chivo', system-ui, sans-serif;
-    font-size: 14px;
+    font-family: 'Chivo', sans-serif;
+    font-size: 13.5px;
     font-weight: 700;
     outline: none;
     box-sizing: border-box;
-    transition: border-color 0.15s, box-shadow 0.15s;
-  }
-
-  .styled-input:focus {
-    border-color: #00e5ff;
-    box-shadow: 0 0 12px rgba(0, 229, 255, 0.35);
   }
 
   .param-row {
@@ -597,65 +714,9 @@
   }
 
   .param-name {
-    font-family: 'Chivo', system-ui, sans-serif;
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 700;
-    letter-spacing: 0.06em;
-    color: #ffffff;
-  }
-
-  .stepper-box {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    background: #080e18;
-    border: 1px solid rgba(0, 229, 255, 0.25);
-    border-radius: 0.5rem;
-    padding: 4px 8px;
-  }
-
-  .stepper-btn {
-    width: 32px;
-    height: 32px;
-    border-radius: 4px;
-    background: #1a202a;
-    border: 1px solid rgba(0, 229, 255, 0.3);
-    color: #00e5ff;
-    font-family: 'JetBrains Mono', monospace;
-    font-weight: 700;
-    font-size: 16px;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    transition: background 0.15s, color 0.15s;
-  }
-
-  .stepper-btn:hover {
-    background: #00e5ff;
-    color: #080e18;
-  }
-
-  .stepper-display {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-  }
-
-  .stepper-num {
-    font-family: 'JetBrains Mono', monospace;
-    font-variant-numeric: tabular-nums;
-    font-size: 18px;
-    font-weight: 800;
-    color: #00e5ff;
-    line-height: 1;
-  }
-
-  .stepper-sub {
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 9px;
-    color: #8fa0b5;
-    margin-top: 2px;
+    color: #e2e8f0;
   }
 
   .toggle-row {
@@ -665,17 +726,30 @@
   }
 
   .toggle-label {
-    font-family: 'Chivo', system-ui, sans-serif;
-    font-size: 12px;
-    font-weight: 600;
-    color: #dde2f1;
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 12.5px;
+    color: #dbe7f5;
+  }
+
+  .label-with-tooltip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .info-help-icon {
+    width: 14px;
+    height: 14px;
+    color: #67e8f9;
   }
 
   .switch {
     position: relative;
     display: inline-block;
-    width: 38px;
-    height: 20px;
+    width: 40px;
+    height: 22px;
   }
 
   .switch input {
@@ -686,91 +760,72 @@
 
   .slider {
     position: absolute;
-    cursor: pointer;
     inset: 0;
-    background-color: #1a202a;
-    border: 1px solid rgba(0, 229, 255, 0.3);
-    border-radius: 20px;
+    cursor: pointer;
+    background-color: #1c293d;
+    border-radius: 999px;
     transition: 0.2s;
   }
 
-  .slider:before {
+  .slider::before {
     position: absolute;
-    content: "";
-    height: 14px;
-    width: 14px;
-    left: 2px;
-    bottom: 2px;
+    content: '';
+    height: 16px;
+    width: 16px;
+    left: 3px;
+    bottom: 3px;
     background-color: #ffffff;
     border-radius: 50%;
     transition: 0.2s;
   }
 
-  input:checked + .slider {
-    background-color: rgba(0, 229, 255, 0.4);
-    border-color: #00e5ff;
-  }
-
-  input:checked + .slider:before {
-    transform: translateX(18px);
+  .switch input:checked + .slider {
     background-color: #00e5ff;
-    box-shadow: 0 0 8px #00e5ff;
   }
 
-  .styled-sub-input {
-    width: 100%;
-    height: 36px;
-    padding: 0 12px;
-    background: #080e18;
-    border: 1px solid rgba(0, 229, 255, 0.35);
-    border-radius: 0.5rem;
-    color: #00e5ff;
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 13px;
-    outline: none;
-    box-sizing: border-box;
-    margin-top: 4px;
+  .switch input:checked + .slider::before {
+    transform: translateX(18px);
+    background-color: #050811;
   }
 
-  .styled-sub-input:focus {
-    border-color: #00e5ff;
-    box-shadow: 0 0 8px rgba(0, 229, 255, 0.4);
-  }
-
-  .label-with-tooltip {
+  .stepper-box {
     display: flex;
     align-items: center;
-    gap: 6px;
+    justify-content: space-between;
+    background: #09101c;
+    border: 1px solid rgba(0, 229, 255, 0.28);
+    border-radius: 6px;
+    padding: 4px;
   }
 
-  .info-tooltip-wrapper {
-    position: relative;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    cursor: help;
-    outline: none;
-  }
-
-  .info-help-icon {
-    width: 14px;
-    height: 14px;
-    color: #8fa0b5;
-    transition: color 0.15s ease, transform 0.15s ease;
-  }
-
-  .info-tooltip-wrapper:hover .info-help-icon,
-  .info-tooltip-wrapper:focus-visible .info-help-icon {
+  .stepper-btn {
+    width: 34px;
+    height: 32px;
+    border-radius: 4px;
+    border: 1px solid rgba(0, 229, 255, 0.25);
+    background: #121e31;
     color: #00e5ff;
-    transform: scale(1.15);
+    font-size: 16px;
+    font-weight: 800;
+    cursor: pointer;
   }
 
+  .stepper-display {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
 
-  .right-panel-scroll {
-    overflow-y: auto;
-    max-height: 480px;
-    scrollbar-width: thin;
-    scrollbar-color: rgba(0, 229, 255, 0.35) rgba(8, 14, 24, 0.6);
+  .stepper-num {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 15px;
+    font-weight: 800;
+    color: #ffffff;
+  }
+
+  .stepper-sub {
+    font-size: 10px;
+    color: #7d92b0;
   }
 
   .rules-grid {
@@ -781,208 +836,142 @@
 
   .rule-select-box {
     position: relative;
-    height: 40px;
-    background: #121a29;
-    border: 1px solid rgba(0, 229, 255, 0.25);
-    border-radius: 0.5rem;
     display: flex;
     align-items: center;
-    padding: 0 12px;
-    box-sizing: border-box;
-    overflow: hidden;
-    transition: border-color 0.15s, background-color 0.15s;
+    height: 38px;
+    background: #09101c;
+    border: 1px solid rgba(0, 229, 255, 0.28);
+    border-radius: 6px;
+    padding: 0 10px;
+    gap: 6px;
   }
 
-  .rule-select-box:hover {
-    border-color: #00e5ff;
-    background: rgba(0, 229, 255, 0.08);
-  }
-
-  .rule-icon {
-    font-size: 13px;
-    margin-right: 6px;
+  .rule-svg {
+    width: 14px;
+    height: 14px;
+    color: #00e5ff;
+    flex-shrink: 0;
   }
 
   .rule-select {
     flex: 1;
-    height: 100%;
-    background: transparent;
+    background: #09101c;
     border: none;
-    color: #c3f5ff;
-    font-family: 'JetBrains Mono', monospace;
-    font-variant-numeric: tabular-nums;
-    font-size: 11px;
-    font-weight: 600;
-    outline: none;
-    cursor: pointer;
-    appearance: none;
-    -webkit-appearance: none;
-  }
-
-  .rule-select option {
-    background: #0a101a;
     color: #ffffff;
+    font-family: 'Space Grotesk', sans-serif;
+    font-size: 12px;
+    font-weight: 700;
+    outline: none;
+    appearance: none;
+    cursor: pointer;
   }
 
   .rule-arrow {
-    color: #8fa0b5;
+    color: #00e5ff;
     font-size: 11px;
     pointer-events: none;
-    margin-left: 4px;
   }
 
   .rule-btn {
-    height: 40px;
-    padding: 0 12px;
-    border-radius: 0.5rem;
-    background: #121a29;
-    border: 1px solid rgba(0, 229, 255, 0.25);
-    color: #c3f5ff;
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 11px;
-    font-weight: 600;
-    cursor: pointer;
+    height: 42px;
+    border-radius: 6px;
+    border: 1px solid rgba(0, 229, 255, 0.28);
+    background: #09101c;
+    color: #dbe7f5;
+    padding: 4px 10px;
     display: flex;
+    flex-direction: column;
     align-items: center;
-    justify-content: space-between;
-    overflow: hidden;
-    transition: border-color 0.15s, background 0.15s;
-    box-sizing: border-box;
+    justify-content: center;
+    gap: 2px;
+    cursor: pointer;
   }
 
-  .rule-btn:hover {
-    border-color: #00e5ff;
-    background: rgba(0, 229, 255, 0.1);
+  .rule-btn.active-locked {
+    border-color: #ffd700;
+    color: #ffd700;
   }
 
-  .lock-teams-btn.active-locked {
-    background: rgba(0, 229, 255, 0.2);
-    border-color: #00e5ff;
-    color: #00e5ff;
-    box-shadow: 0 0 10px rgba(0, 229, 255, 0.25);
+  .lock-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 11.5px;
+    font-weight: 700;
   }
 
   .lock-tag {
+    font-family: 'JetBrains Mono', monospace;
     font-size: 9px;
-    background: #0e1726;
-    color: #00e5ff;
-    padding: 2px 5px;
-    border-radius: 3px;
+    opacity: 0.78;
   }
 
   .rule-btn.highlight {
-    border-color: rgba(255, 219, 60, 0.4);
-    color: #ffe16d;
-    justify-content: center;
-  }
-
-  .rule-btn.highlight:hover {
-    background: rgba(255, 219, 60, 0.15);
-    border-color: #ffdb3c;
+    grid-column: span 2;
+    flex-direction: row;
+    gap: 7px;
+    border-color: #00e5ff;
+    color: #00e5ff;
+    font-weight: 800;
+    font-size: 12px;
   }
 
   .stadium-section {
     display: flex;
     flex-direction: column;
     gap: 6px;
-    margin-top: 4px;
   }
 
   .stadium-preview-box {
     position: relative;
-    width: 100%;
-    aspect-ratio: 2 / 1;
-    min-height: 120px;
-    max-height: 150px;
-    border-radius: 0.5rem;
-    overflow: hidden;
-    background: #07170e;
+    height: 152px;
+    border-radius: 6px;
     border: 1px solid rgba(0, 229, 255, 0.35);
+    overflow: hidden;
     cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    box-sizing: border-box;
-    transition: border-color 0.15s, box-shadow 0.15s, transform 0.1s;
-  }
-
-  .stadium-preview-box:hover {
-    border-color: #00e5ff;
-    box-shadow: 0 0 16px rgba(0, 229, 255, 0.45);
-  }
-
-  .stadium-svg {
-    position: absolute;
-    inset: 0;
-    width: 100%;
-    height: 100%;
-    pointer-events: none;
   }
 
   .stadium-overlay {
-    position: relative;
-    z-index: 2;
+    position: absolute;
+    inset: auto 0 0 0;
+    padding: 6px 10px;
+    background: linear-gradient(180deg, rgba(5, 8, 17, 0) 0%, rgba(5, 8, 17, 0.92) 100%);
     display: flex;
-    flex-direction: column;
     align-items: center;
-    justify-content: center;
-    gap: 6px;
-    background: rgba(10, 16, 26, 0.95);
-    border: 1px solid rgba(0, 229, 255, 0.4);
-    padding: 8px 16px;
-    border-radius: 0.5rem;
-    pointer-events: none;
-    box-shadow: 0 0 14px rgba(0, 0, 0, 0.6);
+    justify-content: space-between;
   }
 
   .stadium-name {
-    font-family: 'Space Grotesk', system-ui, sans-serif;
-    font-size: 15px;
+    font-family: 'Space Grotesk', sans-serif;
+    font-size: 12.5px;
     font-weight: 800;
     color: #ffffff;
-    letter-spacing: 0.04em;
-    text-shadow: 0 0 8px rgba(0, 229, 255, 0.6);
   }
 
   .stadium-action-text {
-    font-family: 'Chivo', system-ui, sans-serif;
-    font-size: 11px;
-    font-weight: 600;
+    font-size: 10.5px;
     color: #00e5ff;
-    background: rgba(0, 229, 255, 0.15);
-    border: 1px solid rgba(0, 229, 255, 0.35);
-    padding: 3px 10px;
-    border-radius: 4px;
   }
 
   .footer-cta {
-    margin-top: 2px;
+    display: flex;
   }
 
   .launch-btn {
     width: 100%;
-    height: 46px;
-    border-radius: 0.5rem;
-    background: #00e5ff;
+    height: 44px;
     border: none;
-    color: #0a101a;
-    font-family: 'Space Grotesk', system-ui, sans-serif;
-    font-weight: 800;
+    border-radius: 6px;
+    background: #00e5ff;
+    color: #050811;
+    font-family: 'Space Grotesk', sans-serif;
     font-size: 14px;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
+    font-weight: 800;
+    letter-spacing: 0.06em;
     cursor: pointer;
-    box-shadow: 0 0 20px rgba(0, 229, 255, 0.45);
-    transition: transform 0.1s, box-shadow 0.15s, filter 0.15s;
   }
 
-  .launch-btn:hover {
-    filter: brightness(1.12);
-    box-shadow: 0 0 26px rgba(0, 229, 255, 0.75);
-    transform: translateY(-1px);
-  }
-
-  .launch-btn:active {
-    transform: scale(0.98);
+  .launch-btn:hover:not(:disabled) {
+    filter: brightness(1.1);
   }
 </style>

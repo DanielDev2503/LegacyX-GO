@@ -1,9 +1,11 @@
-import { EngineInstance, type GameStateSnapshot } from '@legacyx/core';
+import { EngineInstance, INPUT_FLAG_MOUSE_AIM, type GameStateSnapshot } from '@legacyx/core';
 
 export interface BufferedClientInput {
   tick: number;
   mask: number;
   inputMask?: number;
+  aimAngle?: number;
+  aimThrottle?: number;
   curve?: { x: number; y: number };
   isTurbo?: boolean;
   triggerDash?: boolean;
@@ -28,7 +30,10 @@ export class ClientPredictionReconciler {
 
   public inputBuffer: BufferedClientInput[] = [];
   public visualOffset: { x: number; y: number } = { x: 0, y: 0 };
-  private readonly replayMap = new Map<number, { inputMask: number }>();
+  private readonly replayMap = new Map<
+    number,
+    { inputMask: number; aimAngle?: number; aimThrottle?: number }
+  >();
 
   public get pendingInputs(): BufferedClientInput[] {
     return this.inputBuffer;
@@ -43,14 +48,21 @@ export class ClientPredictionReconciler {
   }
 
   public recordInput(input: BufferedClientInput): void;
-  public recordInput(tick: number, mask: number): void;
-  public recordInput(inputOrTick: BufferedClientInput | number, maskArg?: number): void {
+  public recordInput(tick: number, mask: number, aimAngle?: number, aimThrottle?: number): void;
+  public recordInput(
+    inputOrTick: BufferedClientInput | number,
+    maskArg?: number,
+    aimAngle?: number,
+    aimThrottle?: number
+  ): void {
     if (typeof inputOrTick === 'number') {
       const mask = maskArg ?? 0;
       this.inputBuffer.push({
         tick: inputOrTick,
         mask,
-        inputMask: mask
+        inputMask: mask,
+        aimAngle,
+        aimThrottle
       });
     } else {
       const mask = inputOrTick.inputMask ?? inputOrTick.mask ?? 0;
@@ -130,7 +142,11 @@ export class ClientPredictionReconciler {
     this.replayMap.clear();
     for (let i = 0; i < this.inputBuffer.length; i++) {
       const pending = this.inputBuffer[i]!;
-      this.replayMap.set(localDiscId, { inputMask: pending.inputMask ?? pending.mask ?? 0 });
+      this.replayMap.set(localDiscId, {
+        inputMask: pending.inputMask ?? pending.mask ?? 0,
+        aimAngle: pending.aimAngle,
+        aimThrottle: pending.aimThrottle
+      });
       engine.step(this.replayMap, true);
     }
 
@@ -159,7 +175,7 @@ export class ClientPredictionReconciler {
       // cancel that opposing pullback component so disc glides to rest with pure friction (0.96)
       const latestInput = this.inputBuffer.length > 0 ? this.inputBuffer[this.inputBuffer.length - 1] : null;
       const latestMask = latestInput ? (latestInput.inputMask ?? latestInput.mask ?? 0) : 0;
-      const isMovementReleased = (latestMask & 0x0f) === 0;
+      const isMovementReleased = (latestMask & 0x0f) === 0 && (latestMask & INPUT_FLAG_MOUSE_AIM) === 0;
 
       if (isMovementReleased && postDistSq < 324) {
         const vSpeed = Math.hypot(prevVx, prevVy);

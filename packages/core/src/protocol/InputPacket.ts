@@ -4,7 +4,8 @@ import {
   INPUT_DASH,
   INPUT_MAGNUS_LEFT,
   INPUT_MAGNUS_RIGHT,
-  INPUT_TYPING
+  INPUT_TYPING,
+  INPUT_MOUSE_AIM
 } from '../game/Player';
 
 export interface InputData {
@@ -17,35 +18,26 @@ export interface InputData {
   isTurbo?: boolean | undefined;
   triggerDash?: boolean | undefined;
   isTyping?: boolean | undefined;
+  aimAngle?: number | undefined;    // Ángulo continuo en radianes [-PI, PI]
+  aimThrottle?: number | undefined; // Magnitud proporcional [0..1] (amortiguación fina cerca del cursor)
 }
 
 export class InputPacket {
   public static readonly BYTE_LENGTH = 9;
+  public static readonly MOUSE_BYTE_LENGTH = 12;
 
   /**
-   * Encodes an input message into a clean 9-byte ArrayBuffer without bit overlap.
+   * Encodes an input message into a clean 9-byte ArrayBuffer (or 12-byte when INPUT_MOUSE_AIM is active).
    * Byte 0: OP_INPUT (0x01)
    * Bytes 1-4: sequence (uint32)
-   * Bytes 5-6: inputMask (uint16: bits 0-9 sin colisiones)
-   *   Bit 0: ArrowUp
-   *   Bit 1: ArrowDown
-   *   Bit 2: ArrowLeft
-   *   Bit 3: ArrowRight
-   *   Bit 4: Kick (X)
-   *   Bit 5: Turbo (Shift)
-   *   Bit 6: DashTrigger (Space) — Flanco ascendente exclusivo
-   *   Bit 7: MagnusLeft (Z)
-   *   Bit 8: MagnusRight (C)
-   *   Bit 9: Chat Typing Indicator
+   * Bytes 5-6: inputMask (uint16: bits 0-10 sin colisiones)
+   *   Bit 0..9: teclas y acciones
+   *   Bit 10: INPUT_MOUSE_AIM (vector continuo 360°)
    * Bytes 7-8: clientTimestamp (uint16)
+   * Optional Bytes 9-10: quantized aimAngle int16 (rad * 10000)
+   * Optional Byte 11: quantized aimThrottle uint8 (0..255)
    */
   public static encode(data: InputData, buffer?: ArrayBuffer): ArrayBuffer {
-    const buf = buffer ?? new ArrayBuffer(InputPacket.BYTE_LENGTH);
-    const view = new DataView(buf);
-
-    view.setUint8(0, OP_INPUT);
-    view.setUint32(1, data.sequence, false); // Big-endian
-
     let mask = data.inputMask || 0;
     if (data.isTurbo) mask |= INPUT_TURBO;
     if (data.triggerDash) mask |= INPUT_DASH;
@@ -53,14 +45,37 @@ export class InputPacket {
     if (data.curveInput === 2 || data.curveX === 1) mask |= INPUT_MAGNUS_RIGHT;
     if (data.isTyping) mask |= INPUT_TYPING;
 
+    const hasMouseAim =
+      (mask & INPUT_MOUSE_AIM) !== 0 ||
+      (data.aimAngle !== undefined && (data.aimThrottle ?? 1) > 0);
+    if (hasMouseAim) {
+      mask |= INPUT_MOUSE_AIM;
+    }
+
+    const neededBytes = hasMouseAim ? InputPacket.MOUSE_BYTE_LENGTH : InputPacket.BYTE_LENGTH;
+    const buf =
+      buffer && buffer.byteLength === neededBytes
+        ? buffer
+        : new ArrayBuffer(neededBytes);
+    const view = new DataView(buf);
+
+    view.setUint8(0, OP_INPUT);
+    view.setUint32(1, data.sequence, false);
     view.setUint16(5, mask, false);
-    view.setUint16(7, data.clientTimestamp, false);
+    view.setUint16(7, data.clientTimestamp & 0xffff, false);
+
+    if (hasMouseAim) {
+      const qAngle = Math.max(-32767, Math.min(32767, Math.round((data.aimAngle ?? 0) * 10000)));
+      const qThrottle = Math.max(0, Math.min(255, Math.round((data.aimThrottle ?? 1) * 255)));
+      view.setInt16(9, qAngle, false);
+      view.setUint8(11, qThrottle);
+    }
 
     return buf;
   }
 
   /**
-   * Decodes an input message from a DataView or ArrayBuffer with backwards compatibility for 8-byte packets.
+   * Decodes an input message from a DataView or ArrayBuffer with backwards compatibility for 8/9/12-byte packets.
    */
   public static decode(buffer: ArrayBuffer | DataView): InputData | null {
     const view = buffer instanceof DataView ? buffer : new DataView(buffer);
@@ -77,7 +92,6 @@ export class InputPacket {
       inputMask = view.getUint16(5, false);
       clientTimestamp = view.getUint16(7, false);
     } else {
-      // Legacy 8-byte fallback
       inputMask = view.getUint8(5);
       clientTimestamp = view.getUint16(6, false);
     }
@@ -87,10 +101,18 @@ export class InputPacket {
     const magnusLeft = (inputMask & INPUT_MAGNUS_LEFT) !== 0;
     const magnusRight = (inputMask & INPUT_MAGNUS_RIGHT) !== 0;
     const isTyping = (inputMask & INPUT_TYPING) !== 0;
+    const hasMouseAim = (inputMask & INPUT_MOUSE_AIM) !== 0 && view.byteLength >= InputPacket.MOUSE_BYTE_LENGTH;
 
     const curveInput = magnusLeft ? 1 : (magnusRight ? 2 : 0);
     const curveX = magnusLeft ? -1 : (magnusRight ? 1 : 0);
     const curveY = 0;
+
+    let aimAngle: number | undefined;
+    let aimThrottle: number | undefined;
+    if (hasMouseAim) {
+      aimAngle = view.getInt16(9, false) / 10000;
+      aimThrottle = view.getUint8(11) / 255;
+    }
 
     return {
       sequence,
@@ -101,7 +123,9 @@ export class InputPacket {
       curveY,
       isTurbo,
       triggerDash,
-      isTyping
+      isTyping,
+      aimAngle,
+      aimThrottle
     };
   }
 }

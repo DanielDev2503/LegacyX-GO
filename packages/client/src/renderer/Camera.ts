@@ -35,6 +35,7 @@ export class Camera {
 
   public viewportWidth: number = 800;
   public viewportHeight: number = 600;
+  public isFocusingBall: boolean = false;
 
   private bounds: CameraBounds = {
     minX: -600,
@@ -263,15 +264,34 @@ export class Camera {
     ctx.restore();
   }
 
-  public worldToScreen(worldX: number, worldY: number): { x: number; y: number } {
-    const sx = (worldX - this.x - this.shakeOffsetX) * this.scale + this.viewportWidth / 2;
-    const sy = (worldY - this.y - this.shakeOffsetY) * this.scale + this.viewportHeight / 2;
+  public updateFocusTarget(
+    playerX: number,
+    playerY: number,
+    ballX: number,
+    ballY: number,
+    focusBallOnly: boolean = this.isFocusingBall
+  ): void {
+    this.isFocusingBall = focusBallOnly;
+    if (focusBallOnly) {
+      this.follow(ballX, ballY);
+    } else {
+      this.followDual(playerX, playerY, ballX, ballY, 0.25, 180);
+    }
+  }
+
+  public worldToScreen(worldX: number, worldY: number, safeAreaBottom: number = 0): { x: number; y: number } {
+    const usableH = safeAreaBottom > 0 ? Math.max(100, this.viewportHeight - safeAreaBottom) : this.viewportHeight;
+    const s = Math.max(0.1, this.scale || this.zoom || 1.0);
+    const sx = (worldX - this.x) * s + this.viewportWidth / 2 + this.shakeOffsetX;
+    const sy = (worldY - this.y) * s + usableH / 2 + this.shakeOffsetY;
     return { x: sx, y: sy };
   }
 
-  public screenToWorld(screenX: number, screenY: number): { x: number; y: number } {
-    const wx = (screenX - this.viewportWidth / 2) / this.scale + this.x + this.shakeOffsetX;
-    const wy = (screenY - this.viewportHeight / 2) / this.scale + this.y + this.shakeOffsetY;
+  public screenToWorld(screenX: number, screenY: number, safeAreaBottom: number = 0): { x: number; y: number } {
+    const usableH = safeAreaBottom > 0 ? Math.max(100, this.viewportHeight - safeAreaBottom) : this.viewportHeight;
+    const s = Math.max(0.1, this.scale || this.zoom || 1.0);
+    const wx = (screenX - this.viewportWidth / 2 - this.shakeOffsetX) / s + this.x;
+    const wy = (screenY - usableH / 2 - this.shakeOffsetY) / s + this.y;
     return { x: wx, y: wy };
   }
 }

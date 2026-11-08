@@ -34,6 +34,7 @@ export class PhysicsWorld {
   public onCollision?: (event: CollisionEvent) => void;
   public onSubstep?: (subDt: number) => void;
   public kickoffContext?: KickoffPhysicsContext | null = null;
+  public isPracticeMode: boolean = false;
 
   constructor(config: PhysicsWorldConfig = {}) {
     this.fixedDt = 1 / 60; // Invariable
@@ -285,11 +286,33 @@ export class PhysicsWorld {
     }
   }
 
-  public enforceMidfieldBarrier(disc: Disc, team: 'red' | 'blue'): void {
+  public shouldBypassKickoffBarrier(
+    kickoffTeam: 'red' | 'blue' | null = null,
+    kickoffTeamCount?: number
+  ): boolean {
+    if (this.isPracticeMode) return true;
+    if (kickoffTeam && kickoffTeamCount !== undefined && kickoffTeamCount <= 0) return true;
+    return false;
+  }
+
+  public enforceMidfieldBarrier(
+    disc: Disc,
+    team: 'red' | 'blue',
+    kickoffTeam: 'red' | 'blue' | null = null,
+    kickoffTeamCount?: number
+  ): void {
+    if (this.shouldBypassKickoffBarrier(kickoffTeam, kickoffTeamCount)) return;
     PhysicsWorld.enforceMidfieldBarrierStatic(disc.pos, disc.vel, disc.radius, team);
   }
 
-  public enforceKickoffPossessionBarrier(disc: Disc, team: 'red' | 'blue', centerRadius: number): void {
+  public enforceKickoffPossessionBarrier(
+    disc: Disc,
+    team: 'red' | 'blue',
+    centerRadius: number,
+    kickoffTeam: 'red' | 'blue' | null = null,
+    kickoffTeamCount?: number
+  ): void {
+    if (this.shouldBypassKickoffBarrier(kickoffTeam, kickoffTeamCount)) return;
     PhysicsWorld.enforceKickoffPossessionBarrierStatic(disc.pos, disc.vel, disc.radius, team, centerRadius);
   }
 

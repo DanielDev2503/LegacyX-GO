@@ -47,12 +47,13 @@ export type ControlMessageType =
 
 export interface RoomConfig {
   name: string;
-  maxPlayers: number; // 2 a 16
+  maxPlayers: number; // 2 a 30
   isPrivate: boolean;
   password?: string | undefined;
   timeLimit: number; // En minutos; 0 = Indefinido
   scoreLimit: number; // Goles; 0 = Indefinido
   teamsLocked: boolean;
+  roomType?: 'casual' | 'ranked' | undefined;
 }
 
 export interface KickPlayerMessage {
@@ -133,6 +134,8 @@ export interface ClientHelloMessage {
   type: 'client_hello' | 'CLIENT_HELLO';
   nickname: string;
   avatar?: string | undefined;
+  userId?: string | undefined;
+  isGuest?: boolean | undefined;
 }
 
 export interface ClientReadyMessage {
@@ -238,6 +241,15 @@ export interface PeerDisconnectMessage {
   reason?: string | undefined;
 }
 
+export type ScoreEventCategory =
+  | 'goal'
+  | 'assist'
+  | 'save'
+  | 'shot'
+  | 'pass'
+  | 'hattrick'
+  | 'ownGoal';
+
 export interface ScoreEventPacket {
   type: 'SCORE_EVENT';
   playerId: string;
@@ -246,6 +258,7 @@ export interface ScoreEventPacket {
   x: number;
   y: number;
   color?: string | undefined;
+  category?: ScoreEventCategory | undefined;
 }
 
 export interface MatchEndStatsPacket {

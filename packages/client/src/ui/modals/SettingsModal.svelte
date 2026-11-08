@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { gameUI, type BallSkinType, type PatternType } from '../state/gameUI.svelte.js';
+  import { gameUI, formatKeybindCode, type BallSkinType, type PatternType } from '../state/gameUI.svelte.js';
+  import { mouseButtonToCode } from '../../controllers/InputManager.js';
   import { soundFX } from '../../audio/SoundFX.js';
   import { EMOJI_CATALOG } from '../utils/constants.js';
   import { tooltip } from '../actions/tooltip.js';
@@ -100,6 +101,12 @@
     rebindingAction = action;
   }
 
+  function setMovementMode(mode: 'keyboard' | 'mouse') {
+    soundFX.playUIClick();
+    gameUI.settings.movementMode = mode;
+    gameUI.saveSettings();
+  }
+
   function handleKeyDown(e: KeyboardEvent) {
     if (rebindingAction) {
       e.preventDefault();
@@ -114,26 +121,31 @@
     }
 
     if (e.key === 'Escape') {
-      e.preventDefault();      handleClose();
+      e.preventDefault();
+      handleClose();
       e.stopPropagation();
+    }
+  }
+
+  function handleWindowMouseDown(e: MouseEvent) {
+    if (!rebindingAction) return;
+    const code = mouseButtonToCode(e.button);
+    if (!code) return;
+    e.preventDefault();
+    e.stopPropagation();
+    gameUI.remapKey(rebindingAction as any, code);
+    rebindingAction = null;
+  }
+
+  function handleWindowContextMenu(e: MouseEvent) {
+    if (rebindingAction) {
+      e.preventDefault();
     }
   }
 
   function getKeyLabel(codes: string[] | undefined): string {
     if (!codes || codes.length === 0) return 'Sin asignar';
-    const code = codes[0]!;
-    if (code === 'Space') return 'Espacio';
-    if (code === 'ShiftLeft') return 'Shift Izq';
-    if (code === 'ShiftRight') return 'Shift Der';
-    if (code === 'ArrowUp') return 'Flecha Arriba';
-    if (code === 'ArrowDown') return 'Flecha Abajo';
-    if (code === 'ArrowLeft') return 'Flecha Izq';
-    if (code === 'ArrowRight') return 'Flecha Der';
-    if (code === 'Enter') return 'Enter';
-    if (code === 'Escape') return 'Esc';
-    if (code.startsWith('Key')) return code.slice(3);
-    if (code.startsWith('Digit')) return code.slice(5);
-    return code;
+    return formatKeybindCode(codes[0]!) || 'Sin asignar';
   }
 
   function handleResetControls() {
@@ -203,7 +215,11 @@
   }
 </script>
 
-<svelte:window onkeydown={handleKeyDown} />
+<svelte:window
+  onkeydown={handleKeyDown}
+  onmousedown={handleWindowMouseDown}
+  oncontextmenu={handleWindowContextMenu}
+/>
 
 <!-- Botón flotante Volver en la parte superior izquierda de la pantalla -->
 <button
@@ -228,7 +244,12 @@
     <!-- Panel Izquierdo: Encabezado y Lista vertical continua de 5 Pestañas -->
     <aside class="tabs-sidebar">
       <div class="sidebar-header">
-        <span class="settings-icon-box">⚙️</span>
+        <span class="settings-icon-box" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="#00e5ff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="3" />
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9c.26.6.85 1 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+          </svg>
+        </span>
         <div>
           <h2 id="settings-dialog-title" class="main-header">Ajustes generales</h2>
           <span class="sub-header">CONFIGURACIÓN</span>
@@ -242,7 +263,15 @@
           class:active={activeTab === 'controls'}
           onclick={() => switchTab('controls')}
         >
-          <span class="tab-icon">🎮</span>
+          <span class="tab-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="2" y="6" width="20" height="12" rx="4" />
+              <line x1="6" y1="12" x2="10" y2="12" />
+              <line x1="8" y1="10" x2="8" y2="14" />
+              <circle cx="15.5" cy="11" r="1" fill="currentColor" />
+              <circle cx="18" cy="13" r="1" fill="currentColor" />
+            </svg>
+          </span>
           <span class="tab-label">Controles</span>
         </button>
 
@@ -252,7 +281,13 @@
           class:active={activeTab === 'audio'}
           onclick={() => switchTab('audio')}
         >
-          <span class="tab-icon">🔊</span>
+          <span class="tab-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
+              <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
+              <path d="M19.07 4.93a10 10 0 0 1 0 14.14" />
+            </svg>
+          </span>
           <span class="tab-label">Sonido</span>
         </button>
 
@@ -262,7 +297,13 @@
           class:active={activeTab === 'video'}
           onclick={() => switchTab('video')}
         >
-          <span class="tab-icon">🖥️</span>
+          <span class="tab-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="2" y="3" width="20" height="14" rx="2" />
+              <line x1="8" y1="21" x2="16" y2="21" />
+              <line x1="12" y1="17" x2="12" y2="21" />
+            </svg>
+          </span>
           <span class="tab-label">Video y gráficos</span>
         </button>
 
@@ -272,7 +313,11 @@
           class:active={activeTab === 'kits'}
           onclick={() => switchTab('kits')}
         >
-          <span class="tab-icon">👕</span>
+          <span class="tab-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M20.38 3.46L16 2a4 4 0 0 1-8 0L3.62 3.46a2 2 0 0 0-1.34 2.23l.58 3.47a1 1 0 0 0 .99.84H6v10c0 1.1.9 2 2 2h8a2 2 0 0 0 2-2V10h2.15a1 1 0 0 0 .99-.84l.58-3.47a2 2 0 0 0-1.34-2.23z" />
+            </svg>
+          </span>
           <span class="tab-label">Equipaciones</span>
         </button>
 
@@ -282,7 +327,14 @@
           class:active={activeTab === 'avatar'}
           onclick={() => switchTab('avatar')}
         >
-          <span class="tab-icon">🎭</span>
+          <span class="tab-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="9" />
+              <path d="M8.5 14.5s1.5 2 3.5 2 3.5-2 3.5-2" />
+              <line x1="9" y1="9.5" x2="9.01" y2="9.5" />
+              <line x1="15" y1="9.5" x2="15.01" y2="9.5" />
+            </svg>
+          </span>
           <span class="tab-label">Avatar y emotes</span>
         </button>
       </nav>
@@ -298,14 +350,57 @@
           <div class="section-header-row">
             <h3 class="section-heading">Configuración de Controles</h3>
             {#if rebindingAction}
-              <span class="pulse-rebinding">Presiona una tecla para asignar...</span>
+              <span class="pulse-rebinding">Presiona una tecla o click del ratón (Esc para cancelar)...</span>
             {/if}
           </div>
 
+          {#if gameUI.lastKeybindSwapNotice}
+            <div class="swap-notice-pill">{gameUI.lastKeybindSwapNotice}</div>
+          {/if}
+
           <div class="controls-scroll-area">
+            <!-- Selector de Modo de Movimiento (Teclado vs Ratón 360°) -->
+            <div class="controls-card movement-mode-card">
+              <div class="movement-mode-header">
+                <div>
+                  <h4 class="card-title">Modo de Movimiento</h4>
+                  <small class="bind-hint">
+                    {#if gameUI.settings.movementMode === 'mouse'}
+                      Dirección continua 360° hacia el puntero con zona muerta central (6 px). Puedes asignar acciones a Click Izquierdo, Central o Derecho.
+                    {:else}
+                      Desplazamiento direccional clásico mediante teclado (WASD o Flechas).
+                    {/if}
+                  </small>
+                </div>
+                <div class="segmented-pills">
+                  <button
+                    type="button"
+                    class="seg-pill"
+                    class:active={gameUI.settings.movementMode === 'keyboard'}
+                    onclick={() => setMovementMode('keyboard')}
+                  >
+                    Teclado
+                  </button>
+                  <button
+                    type="button"
+                    class="seg-pill"
+                    class:active={gameUI.settings.movementMode === 'mouse'}
+                    onclick={() => setMovementMode('mouse')}
+                  >
+                    Ratón (Seguir Puntero)
+                  </button>
+                </div>
+              </div>
+            </div>
+
             <!-- Desplazamiento y Movimiento -->
-            <div class="controls-card">
-              <h4 class="card-title">Desplazamiento y Movimiento</h4>
+            <div class="controls-card" class:dimmed-controls={gameUI.settings.movementMode === 'mouse'}>
+              <h4 class="card-title">
+                Desplazamiento y Movimiento
+                {#if gameUI.settings.movementMode === 'mouse'}
+                  <span class="card-mode-tag">CONTROLADO POR PUNTERO 360°</span>
+                {/if}
+              </h4>
               <div class="grid-2col">
                 <div class="bind-row">
                   <span class="bind-name">Arriba</span>
@@ -313,7 +408,8 @@
                     type="button"
                     class="key-badge"
                     class:rebinding={rebindingAction === 'up'}
-                    onclick={() => startRebind('up')}
+                    onmousedown={(e) => { if (rebindingAction !== 'up') e.stopPropagation(); }}
+                    onclick={() => { if (rebindingAction !== 'up') startRebind('up'); }}
                   >
                     {rebindingAction === 'up' ? '...' : getKeyLabel(gameUI.keybinds.up)}
                   </button>
@@ -324,7 +420,8 @@
                     type="button"
                     class="key-badge"
                     class:rebinding={rebindingAction === 'down'}
-                    onclick={() => startRebind('down')}
+                    onmousedown={(e) => { if (rebindingAction !== 'down') e.stopPropagation(); }}
+                    onclick={() => { if (rebindingAction !== 'down') startRebind('down'); }}
                   >
                     {rebindingAction === 'down' ? '...' : getKeyLabel(gameUI.keybinds.down)}
                   </button>
@@ -335,7 +432,8 @@
                     type="button"
                     class="key-badge"
                     class:rebinding={rebindingAction === 'left'}
-                    onclick={() => startRebind('left')}
+                    onmousedown={(e) => { if (rebindingAction !== 'left') e.stopPropagation(); }}
+                    onclick={() => { if (rebindingAction !== 'left') startRebind('left'); }}
                   >
                     {rebindingAction === 'left' ? '...' : getKeyLabel(gameUI.keybinds.left)}
                   </button>
@@ -346,7 +444,8 @@
                     type="button"
                     class="key-badge"
                     class:rebinding={rebindingAction === 'right'}
-                    onclick={() => startRebind('right')}
+                    onmousedown={(e) => { if (rebindingAction !== 'right') e.stopPropagation(); }}
+                    onclick={() => { if (rebindingAction !== 'right') startRebind('right'); }}
                   >
                     {rebindingAction === 'right' ? '...' : getKeyLabel(gameUI.keybinds.right)}
                   </button>
@@ -361,13 +460,14 @@
                 <div class="bind-row">
                   <div>
                     <span class="bind-name">Patear / Remate</span>
-                    <small class="bind-hint">Contacto balístico o pase</small>
+                    <small class="bind-hint">Contacto balístico o pase (admite Click)</small>
                   </div>
                   <button
                     type="button"
                     class="key-badge"
                     class:rebinding={rebindingAction === 'kick'}
-                    onclick={() => startRebind('kick')}
+                    onmousedown={(e) => { if (rebindingAction !== 'kick') e.stopPropagation(); }}
+                    onclick={() => { if (rebindingAction !== 'kick') startRebind('kick'); }}
                   >
                     {rebindingAction === 'kick' ? '...' : getKeyLabel(gameUI.keybinds.kick)}
                   </button>
@@ -382,7 +482,8 @@
                     type="button"
                     class="key-badge"
                     class:rebinding={rebindingAction === 'turbo'}
-                    onclick={() => startRebind('turbo')}
+                    onmousedown={(e) => { if (rebindingAction !== 'turbo') e.stopPropagation(); }}
+                    onclick={() => { if (rebindingAction !== 'turbo') startRebind('turbo'); }}
                   >
                     {rebindingAction === 'turbo' ? '...' : getKeyLabel(gameUI.keybinds.turbo)}
                   </button>
@@ -391,15 +492,32 @@
                 <div class="bind-row">
                   <div>
                     <span class="bind-name">Dash (Impulso)</span>
-                    <small class="bind-hint">Aceleración explosiva instantánea</small>
+                    <small class="bind-hint">Impulso explosivo con Estela</small>
                   </div>
                   <button
                     type="button"
                     class="key-badge"
                     class:rebinding={rebindingAction === 'dash'}
-                    onclick={() => startRebind('dash')}
+                    onmousedown={(e) => { if (rebindingAction !== 'dash') e.stopPropagation(); }}
+                    onclick={() => { if (rebindingAction !== 'dash') startRebind('dash'); }}
                   >
                     {rebindingAction === 'dash' ? '...' : getKeyLabel(gameUI.keybinds.dash)}
+                  </button>
+                </div>
+
+                <div class="bind-row">
+                  <div>
+                    <span class="bind-name">Enfocar Balón (Mantener)</span>
+                    <small class="bind-hint">Centra la cámara en el balón</small>
+                  </div>
+                  <button
+                    type="button"
+                    class="key-badge"
+                    class:rebinding={rebindingAction === 'focusBall'}
+                    onmousedown={(e) => { if (rebindingAction !== 'focusBall') e.stopPropagation(); }}
+                    onclick={() => { if (rebindingAction !== 'focusBall') startRebind('focusBall'); }}
+                  >
+                    {rebindingAction === 'focusBall' ? '...' : getKeyLabel(gameUI.keybinds.focusBall)}
                   </button>
                 </div>
 
@@ -412,7 +530,8 @@
                     type="button"
                     class="key-badge"
                     class:rebinding={rebindingAction === 'curveLeft'}
-                    onclick={() => startRebind('curveLeft')}
+                    onmousedown={(e) => { if (rebindingAction !== 'curveLeft') e.stopPropagation(); }}
+                    onclick={() => { if (rebindingAction !== 'curveLeft') startRebind('curveLeft'); }}
                   >
                     {rebindingAction === 'curveLeft' ? '...' : getKeyLabel(gameUI.keybinds.curveLeft)}
                   </button>
@@ -427,7 +546,8 @@
                     type="button"
                     class="key-badge"
                     class:rebinding={rebindingAction === 'curveRight'}
-                    onclick={() => startRebind('curveRight')}
+                    onmousedown={(e) => { if (rebindingAction !== 'curveRight') e.stopPropagation(); }}
+                    onclick={() => { if (rebindingAction !== 'curveRight') startRebind('curveRight'); }}
                   >
                     {rebindingAction === 'curveRight' ? '...' : getKeyLabel(gameUI.keybinds.curveRight)}
                   </button>
@@ -448,7 +568,8 @@
                     type="button"
                     class="key-badge"
                     class:rebinding={rebindingAction === 'pause'}
-                    onclick={() => startRebind('pause')}
+                    onmousedown={(e) => { if (rebindingAction !== 'pause') e.stopPropagation(); }}
+                    onclick={() => { if (rebindingAction !== 'pause') startRebind('pause'); }}
                   >
                     {rebindingAction === 'pause' ? '...' : getKeyLabel(gameUI.keybinds.pause)}
                   </button>
@@ -463,7 +584,8 @@
                     type="button"
                     class="key-badge"
                     class:rebinding={rebindingAction === 'menu'}
-                    onclick={() => startRebind('menu')}
+                    onmousedown={(e) => { if (rebindingAction !== 'menu') e.stopPropagation(); }}
+                    onclick={() => { if (rebindingAction !== 'menu') startRebind('menu'); }}
                   >
                     {rebindingAction === 'menu' ? '...' : getKeyLabel(gameUI.keybinds.menu)}
                   </button>
@@ -478,7 +600,8 @@
                     type="button"
                     class="key-badge"
                     class:rebinding={rebindingAction === 'chat'}
-                    onclick={() => startRebind('chat')}
+                    onmousedown={(e) => { if (rebindingAction !== 'chat') e.stopPropagation(); }}
+                    onclick={() => { if (rebindingAction !== 'chat') startRebind('chat'); }}
                   >
                     {rebindingAction === 'chat' ? '...' : getKeyLabel(gameUI.keybinds.chat)}
                   </button>
@@ -513,7 +636,13 @@
             <div class="master-volume-card">
               <div class="master-header">
                 <div class="master-title-box">
-                  <span class="master-icon">🔊</span>
+                  <span class="master-icon" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="#00e5ff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
+                      <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
+                      <path d="M19.07 4.93a10 10 0 0 1 0 14.14" />
+                    </svg>
+                  </span>
                   <div>
                     <strong class="master-title">Audio General (Master)</strong>
                     <span class="master-desc">Control maestro de ganancia acústica</span>
@@ -1295,7 +1424,7 @@
                           tabindex="0"
                           role="button"
                           aria-label="Info textos flotantes"
-                          use:tooltip={"Notificaciones dinámicas de puntos y eventos en pantalla"}
+                          use:tooltip={"Notificaciones dinámicas de puntos y eventos en pantalla (personalizables por categoría)"}
                         >
                           <svg class="info-help-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                             <circle cx="12" cy="12" r="10"></circle>
@@ -1316,6 +1445,88 @@
                         <span class="toggle-slider"></span>
                       </label>
                     </div>
+
+                    {#if gameUI.settings.floatingPointsEnabled}
+                      <div class="floating-subtoggles-grid" aria-label="Categorías de textos flotantes">
+                        <label class="floating-subtoggle-chip">
+                          <input
+                            type="checkbox"
+                            checked={gameUI.settings.floatingGoals}
+                            onchange={(e) => {
+                              gameUI.settings.floatingGoals = (e.currentTarget as HTMLInputElement).checked;
+                              gameUI.saveSettings();
+                            }}
+                          />
+                          <span>Goles (+100)</span>
+                        </label>
+                        <label class="floating-subtoggle-chip">
+                          <input
+                            type="checkbox"
+                            checked={gameUI.settings.floatingAssists}
+                            onchange={(e) => {
+                              gameUI.settings.floatingAssists = (e.currentTarget as HTMLInputElement).checked;
+                              gameUI.saveSettings();
+                            }}
+                          />
+                          <span>Asistencias (+50)</span>
+                        </label>
+                        <label class="floating-subtoggle-chip">
+                          <input
+                            type="checkbox"
+                            checked={gameUI.settings.floatingSaves}
+                            onchange={(e) => {
+                              gameUI.settings.floatingSaves = (e.currentTarget as HTMLInputElement).checked;
+                              gameUI.saveSettings();
+                            }}
+                          />
+                          <span>Atajadas (+30)</span>
+                        </label>
+                        <label class="floating-subtoggle-chip">
+                          <input
+                            type="checkbox"
+                            checked={gameUI.settings.floatingShots}
+                            onchange={(e) => {
+                              gameUI.settings.floatingShots = (e.currentTarget as HTMLInputElement).checked;
+                              gameUI.saveSettings();
+                            }}
+                          />
+                          <span>Tiros al arco (+20)</span>
+                        </label>
+                        <label class="floating-subtoggle-chip">
+                          <input
+                            type="checkbox"
+                            checked={gameUI.settings.floatingPasses}
+                            onchange={(e) => {
+                              gameUI.settings.floatingPasses = (e.currentTarget as HTMLInputElement).checked;
+                              gameUI.saveSettings();
+                            }}
+                          />
+                          <span>Pases (+10)</span>
+                        </label>
+                        <label class="floating-subtoggle-chip">
+                          <input
+                            type="checkbox"
+                            checked={gameUI.settings.floatingHattricks}
+                            onchange={(e) => {
+                              gameUI.settings.floatingHattricks = (e.currentTarget as HTMLInputElement).checked;
+                              gameUI.saveSettings();
+                            }}
+                          />
+                          <span>Hat-Tricks</span>
+                        </label>
+                        <label class="floating-subtoggle-chip">
+                          <input
+                            type="checkbox"
+                            checked={gameUI.settings.floatingOwnGoals}
+                            onchange={(e) => {
+                              gameUI.settings.floatingOwnGoals = (e.currentTarget as HTMLInputElement).checked;
+                              gameUI.saveSettings();
+                            }}
+                          />
+                          <span>Autogoles (-50)</span>
+                        </label>
+                      </div>
+                    {/if}
 
                     <div class="toggle-item">
                       <span class="label-with-tooltip">
@@ -1571,7 +1782,11 @@
               class:active={activeKitTab === 'local'}
               onclick={() => (activeKitTab = 'local')}
             >
-              🏠 Local
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:-2px;margin-right:5px;">
+                <path d="M3 10.5L12 3l9 7.5" />
+                <path d="M5 9.5V20h14V9.5" />
+              </svg>
+              Local
             </button>
             <button
               type="button"
@@ -1579,7 +1794,11 @@
               class:active={activeKitTab === 'visitor'}
               onclick={() => (activeKitTab = 'visitor')}
             >
-              ✈️ Visitante
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:-2px;margin-right:5px;">
+                <path d="M22 2L11 13" />
+                <polygon points="22 2 15 22 11 13 2 9 22 2" />
+              </svg>
+              Visitante
             </button>
           </div>
 
@@ -3836,6 +4055,76 @@
     color: #94a3b8;
     padding-right: 0.15rem;
     user-select: none;
+  }
+
+  .movement-mode-card {
+    border-color: rgba(0, 229, 255, 0.35);
+    background: #0d1626;
+  }
+
+  .movement-mode-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    flex-wrap: wrap;
+  }
+
+  .swap-notice-pill {
+    font-size: 0.76rem;
+    font-weight: 600;
+    color: #ffd700;
+    background: rgba(255, 215, 0, 0.08);
+    border: 1px solid rgba(255, 215, 0, 0.35);
+    border-radius: 6px;
+    padding: 0.45rem 0.75rem;
+    margin-bottom: 0.65rem;
+  }
+
+  .dimmed-controls {
+    opacity: 0.68;
+  }
+
+  .card-mode-tag {
+    display: inline-block;
+    margin-left: 0.5rem;
+    padding: 0.12rem 0.45rem;
+    border-radius: 4px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.65rem;
+    font-weight: 800;
+    letter-spacing: 0.06em;
+    color: #00e5ff;
+    background: rgba(0, 229, 255, 0.12);
+    border: 1px solid rgba(0, 229, 255, 0.3);
+    vertical-align: middle;
+  }
+
+  .floating-subtoggles-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.4rem;
+    padding: 0.55rem 0.65rem;
+    background: #090f1b;
+    border: 1px solid rgba(0, 229, 255, 0.18);
+    border-radius: 0.45rem;
+  }
+
+  .floating-subtoggle-chip {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    font-size: 0.74rem;
+    color: #cbd5e1;
+    cursor: pointer;
+    user-select: none;
+  }
+
+  .floating-subtoggle-chip input[type='checkbox'] {
+    accent-color: #00e5ff;
+    width: 14px;
+    height: 14px;
+    cursor: pointer;
   }
 
   /* Responsive Adjustments */

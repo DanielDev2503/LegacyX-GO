@@ -182,11 +182,13 @@
               </div>
             </div>
 
-            <!-- Zona Centro: Placa Dorada Destacada MVP con Glow Neón (#ffd700) -->
+                <!-- Zona Centro: Placa Dorada Destacada MVP con Glow Neón (#ffd700) -->
             <div class="stats-center-zone">
               {#if gameUI.mvp}
                 <div class="mvp-golden-plaque">
-                  <span class="crown-icon">👑</span>
+                  <svg class="crown-svg" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                    <path d="M3 18h18v2H3v-2zm0-2l2-9 5 4 2-6 2 6 5-4 2 9H3z"></path>
+                  </svg>
                   <span class="mvp-title">MVP: {gameUI.mvp.nickname}</span>
                   <span class="mvp-points-chip">({gameUI.mvp.points} pts)</span>
                 </div>
@@ -195,7 +197,7 @@
 
             <!-- Zona Derecha: Duración del Partido -->
             <div class="match-status-meta">
-              <span class="match-time-chip">⏱ {matchDurationFormatted}</span>
+              <span class="match-time-chip">{matchDurationFormatted}</span>
             </div>
           </div>
 
@@ -237,7 +239,7 @@
                     >
                       <span class="col-player bold">
                         {#if player.isCaptain}
-                          <span class="badge-cap red">©</span>
+                          <span class="badge-cap red">C</span>
                         {/if}
                         {player.nickname}
                       </span>
@@ -255,7 +257,7 @@
                         <div class="drawer-grid">
                           <div class="drawer-chip">
                             <span class="chip-label">Toques</span>
-                            <span class="chip-val text-cyan">+{(player.touches ?? 14) * 2}</span>
+                            <span class="chip-val text-muted">0</span>
                           </div>
                           <div class="drawer-chip">
                             <span class="chip-label">Pases</span>
@@ -321,9 +323,11 @@
                     >
                       <span class="col-player bold" class:gold-player={player.isMvp}>
                         {#if player.isMvp}
-                          <span class="crown-sm">👑</span>
+                          <svg class="crown-svg-sm" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                            <path d="M3 18h18v2H3v-2zm0-2l2-9 5 4 2-6 2 6 5-4 2 9H3z"></path>
+                          </svg>
                         {:else if player.isCaptain}
-                          <span class="badge-cap blue">©</span>
+                          <span class="badge-cap blue">C</span>
                         {/if}
                         {player.nickname}
                         {#if player.isHost}
@@ -346,7 +350,7 @@
                         <div class="drawer-grid">
                           <div class="drawer-chip">
                             <span class="chip-label">Toques</span>
-                            <span class="chip-val text-cyan">+{(player.touches ?? 14) * 2}</span>
+                            <span class="chip-val text-muted">0</span>
                           </div>
                           <div class="drawer-chip">
                             <span class="chip-label">Pases</span>
@@ -397,26 +401,32 @@
           <div class="lobby-header-row">
             <div class="room-title-identity">
               <span class="pulse-live-dot"></span>
-              <h2 class="room-title-text">
-                [ {gameUI.activeRoomName || 'Torneo Nocturno'} - ID: <span class="text-cyan">{gameUI.matchId || 'CTNYRS'}</span> ]
-              </h2>
+              {#if gameUI.isPracticeMode}
+                <h2 class="room-title-text">MODO ENTRENAMIENTO (OFFLINE)</h2>
+              {:else}
+                <h2 class="room-title-text">
+                  [ {gameUI.activeRoomName || 'Torneo Nocturno'} - ID: <span class="text-cyan">{gameUI.matchId || 'CTNYRS'}</span> ]
+                </h2>
+              {/if}
             </div>
             <div class="header-action-group">
-              <button
-                type="button"
-                class="btn-hdr-action"
-                title="Copiar enlace de sala"
-                onclick={copyRoomLink}
-              >
-                <span>🔗 Copiar Link</span>
-              </button>
+              {#if !gameUI.isPracticeMode}
+                <button
+                  type="button"
+                  class="btn-hdr-action"
+                  title="Copiar enlace de sala"
+                  onclick={copyRoomLink}
+                >
+                  <span>Copiar Link</span>
+                </button>
+              {/if}
               <button
                 type="button"
                 class="btn-hdr-action"
                 title="Ajustes Generales"
                 onclick={openSettings}
               >
-                <span>⚙ Ajustes</span>
+                <span>Ajustes</span>
               </button>
               <button
                 type="button"
@@ -424,7 +434,7 @@
                 title="Salir de la sala"
                 onclick={handleLeaveRoom}
               >
-                <span>✕ Salir</span>
+                <span>Salir</span>
               </button>
             </div>
           </div>
@@ -441,20 +451,18 @@
                     <select
                       id="slide-dur-select"
                       class="cyber-select"
-                      value={gameUI.physicsModifiers.matchTimeMinutes}
+                      value={gameUI.timeLimitMinutes}
                       disabled={!gameUI.isHost}
                       onchange={(e) => {
                         const val = Number((e.currentTarget as HTMLSelectElement).value);
+                        gameUI.timeLimitMinutes = val;
                         gameUI.physicsModifiers.matchTimeMinutes = val;
+                        gameUI.onRoomConfigChanged?.({ timeLimit: val });
                       }}
                     >
-                      <option value={1}>⏱ 1 min</option>
-                      <option value={2}>⏱ 2 min</option>
-                      <option value={3}>⏱ 3 min</option>
-                      <option value={5}>⏱ 5 min</option>
-                      <option value={7}>⏱ 7 min</option>
-                      <option value={10}>⏱ 10 min</option>
-                      <option value={15}>⏱ 15 min</option>
+                      {#each Array.from({ length: 16 }, (_, i) => i) as t}
+                        <option value={t}>{t === 0 ? '0 (Indefinido)' : `${t} min`}</option>
+                      {/each}
                     </select>
                   </div>
 
@@ -463,37 +471,37 @@
                     <select
                       id="slide-goal-select"
                       class="cyber-select"
-                      value={gameUI.physicsModifiers.goalLimit}
+                      value={gameUI.scoreLimitGoals}
                       disabled={!gameUI.isHost}
                       onchange={(e) => {
                         const val = Number((e.currentTarget as HTMLSelectElement).value);
+                        gameUI.scoreLimitGoals = val;
                         gameUI.physicsModifiers.goalLimit = val;
+                        gameUI.onRoomConfigChanged?.({ scoreLimit: val });
                       }}
                     >
-                      <option value={1}>⚽ 1 gol</option>
-                      <option value={2}>⚽ 2 goles</option>
-                      <option value={3}>⚽ 3 goles</option>
-                      <option value={5}>⚽ 5 goles</option>
-                      <option value={7}>⚽ 7 goles</option>
-                      <option value={10}>⚽ 10 goles</option>
-                      <option value={0}>⚽ Gol de Oro</option>
+                      {#each Array.from({ length: 16 }, (_, i) => i) as g}
+                        <option value={g}>{g === 0 ? '0 (Sin límite)' : `${g} ${g === 1 ? 'gol' : 'goles'}`}</option>
+                      {/each}
                     </select>
                   </div>
 
-                  <!-- Toggle Equipos Libres -->
-                  <div class="teams-lock-toggle-box">
-                    <span class="toggle-text">Equipos Libres 🔓</span>
-                    <button
-                      type="button"
-                      class="mini-switch"
-                      class:is-active={!gameUI.teamsLocked}
-                      disabled={!gameUI.isHost}
-                      onclick={() => gameUI.toggleTeamsLock()}
-                      aria-label="Bloquear o desbloquear equipos"
-                    >
-                      <span class="switch-thumb"></span>
-                    </button>
-                  </div>
+                  {#if !gameUI.isPracticeMode}
+                    <!-- Toggle Equipos Libres -->
+                    <div class="teams-lock-toggle-box">
+                      <span class="toggle-text">Equipos Libres</span>
+                      <button
+                        type="button"
+                        class="mini-switch"
+                        class:is-active={!gameUI.teamsLocked}
+                        disabled={!gameUI.isHost}
+                        onclick={() => gameUI.toggleTeamsLock()}
+                        aria-label="Bloquear o desbloquear equipos"
+                      >
+                        <span class="switch-thumb"></span>
+                      </button>
+                    </div>
+                  {/if}
 
                   <!-- Botón Modificadores Físicos -->
                   <button
@@ -501,7 +509,7 @@
                     class="btn-open-modifiers"
                     onclick={openModifiers}
                   >
-                    <span>Modifiers (19) ⚡</span>
+                    <span>Modifiers</span>
                   </button>
                 </div>
 
@@ -513,37 +521,39 @@
                 >
                   <div class="stadium-meta">
                     <span class="stadium-lbl">ESTADIO SELECCIONADO</span>
-                    <span class="stadium-name">🏟 {gameUI.activeStadiumName || 'AF 3v3 Official'}</span>
+                    <span class="stadium-name">{gameUI.activeStadiumName || 'AF 3v3 Official'}</span>
                   </div>
                   <span class="stadium-chevron">▾</span>
                 </button>
 
-                <!-- Ajustes Rápidos de Sala -->
-                <div class="room-quick-params-card">
-                  <span class="params-title">Ajustes de Sala</span>
-                  <div class="param-row">
-                    <span class="param-lbl">Capacidad:</span>
-                    <div class="capacity-stepper">
-                      <button
-                        type="button"
-                        class="step-btn"
-                        disabled={!gameUI.isHost || (gameUI.activeRoom?.maxPlayers ?? 12) <= 2}
-                        onclick={() => {
-                          if (gameUI.activeRoom) gameUI.activeRoom.maxPlayers = Math.max(2, gameUI.activeRoom.maxPlayers - 2);
-                        }}
-                      >[-]</button>
-                      <span class="cap-val">{gameUI.activeRoom?.maxPlayers ?? 12}</span>
-                      <button
-                        type="button"
-                        class="step-btn"
-                        disabled={!gameUI.isHost || (gameUI.activeRoom?.maxPlayers ?? 12) >= 20}
-                        onclick={() => {
-                          if (gameUI.activeRoom) gameUI.activeRoom.maxPlayers = Math.min(20, gameUI.activeRoom.maxPlayers + 2);
-                        }}
-                      >[+]</button>
+                {#if !gameUI.isPracticeMode}
+                  <!-- Ajustes Rápidos de Sala -->
+                  <div class="room-quick-params-card">
+                    <span class="params-title">Ajustes de Sala</span>
+                    <div class="param-row">
+                      <span class="param-lbl">Capacidad:</span>
+                      <div class="capacity-stepper">
+                        <button
+                          type="button"
+                          class="step-btn"
+                          disabled={!gameUI.isHost || (gameUI.activeRoom?.maxPlayers ?? 12) <= 2}
+                          onclick={() => {
+                            if (gameUI.activeRoom) gameUI.activeRoom.maxPlayers = Math.max(2, gameUI.activeRoom.maxPlayers - 2);
+                          }}
+                        >[-]</button>
+                        <span class="cap-val">{gameUI.activeRoom?.maxPlayers ?? 12}</span>
+                        <button
+                          type="button"
+                          class="step-btn"
+                          disabled={!gameUI.isHost || (gameUI.activeRoom?.maxPlayers ?? 12) >= 30}
+                          onclick={() => {
+                            if (gameUI.activeRoom) gameUI.activeRoom.maxPlayers = Math.min(30, gameUI.activeRoom.maxPlayers + 2);
+                          }}
+                        >[+]</button>
+                      </div>
                     </div>
                   </div>
-                </div>
+                {/if}
               </div>
 
               <!-- Subpanel inferior anclado FSM (Iniciar, Detener, Pausar) -->
@@ -555,7 +565,6 @@
                   disabled={!gameUI.isHost}
                   onclick={handleStartMatch}
                 >
-                  <span class="play-icon">▶</span>
                   <span>INICIAR PARTIDO</span>
                 </button>
                 <div class="fsm-secondary-grid">
@@ -565,7 +574,7 @@
                     disabled={!gameUI.isHost}
                     onclick={handleStopMatch}
                   >
-                    ■ DETENER
+                    DETENER
                   </button>
                   <button
                     type="button"
@@ -573,7 +582,7 @@
                     disabled={!gameUI.isHost}
                     onclick={handlePauseToggle}
                   >
-                    ⏸ PAUSAR
+                    PAUSAR
                   </button>
                 </div>
               </div>
@@ -590,9 +599,9 @@
                     disabled={gameUI.teamsLocked && !gameUI.isHost}
                     onclick={() => joinTeam('red')}
                   >
-                    Red ▶
+                    Red
                   </button>
-                  <span class="count-chip red">{redPlayers.length}/3</span>
+                  <span class="count-chip red">{redPlayers.length}</span>
                 </div>
                 <div class="bench-player-list custom-scrollbar">
                   {#each redPlayers as p (p.id)}
@@ -600,7 +609,7 @@
                       <div class="bench-avatar red">{p.avatar || p.number}</div>
                       <div class="bench-meta">
                         <span class="b-name">{p.name || p.nickname}</span>
-                        {#if p.isAdmin}<span class="b-role red">Capitán ©</span>{:else}<span class="b-role muted">Player</span>{/if}
+                        {#if p.isAdmin}<span class="b-role red">Capitán C</span>{:else}<span class="b-role muted">Player</span>{/if}
                       </div>
                     </div>
                   {:else}
@@ -645,22 +654,22 @@
                     disabled={gameUI.teamsLocked && !gameUI.isHost}
                     onclick={() => joinTeam('blue')}
                   >
-                    ◀ Blue
+                    Blue
                   </button>
-                  <span class="count-chip blue">{bluePlayers.length}/3</span>
+                  <span class="count-chip blue">{bluePlayers.length}</span>
                 </div>
                 <div class="bench-player-list custom-scrollbar">
                   {#each bluePlayers as p (p.id)}
                     <div class="bench-item blue-border" class:is-host-gold={p.isHost}>
                       <div class="bench-avatar" class:gold={p.isHost} class:blue={!p.isHost}>
-                        {p.isHost ? '👑' : (p.avatar || p.number)}
+                        {p.avatar || p.number || 'H'}
                       </div>
                       <div class="bench-meta">
                         <span class="b-name" class:gold-text={p.isHost}>{p.name || p.nickname}</span>
                         {#if p.isHost}
                           <span class="b-role gold">Host</span>
                         {:else if p.isAdmin}
-                          <span class="b-role blue">Capitán ©</span>
+                          <span class="b-role blue">Capitán C</span>
                         {:else}
                           <span class="b-role muted">Player</span>
                         {/if}
@@ -901,8 +910,18 @@
     box-shadow: 0 0 16px rgba(255, 215, 0, 0.4);
   }
 
-  .crown-icon {
-    font-size: 1.1rem;
+  .crown-svg {
+    width: 1.05rem;
+    height: 1.05rem;
+    color: #ffe16d;
+    flex-shrink: 0;
+  }
+
+  .crown-svg-sm {
+    width: 0.85rem;
+    height: 0.85rem;
+    color: #ffe16d;
+    flex-shrink: 0;
   }
 
   .mvp-title {
@@ -1075,7 +1094,6 @@
   .badge-cap.red { color: #ff4757; }
   .badge-cap.blue { color: #00e5ff; }
 
-  .crown-sm { font-size: 0.85rem; }
   .host-tag { font-size: 0.65rem; color: #849396; font-weight: normal; }
 
   .col-pts.red-txt { color: #ff4757; font-weight: 800; }

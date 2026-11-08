@@ -7,7 +7,8 @@ export const INPUT_TURBO = 1 << 5;       // Bit 5: Turbo (Shift)
 export const INPUT_DASH = 1 << 6;        // Bit 6: DashTrigger (Space) — Flanco ascendente exclusivo
 export const INPUT_MAGNUS_LEFT = 1 << 7; // Bit 7: MagnusLeft (Z)
 export const INPUT_MAGNUS_RIGHT = 1 << 8;// Bit 8: MagnusRight (C)
-export const INPUT_TYPING = 1 << 9;       // Bit 9: Chat typing status
+export const INPUT_TYPING = 1 << 9;      // Bit 9: Chat typing status
+export const INPUT_MOUSE_AIM = 1 << 10;  // Bit 10: Continuous 360° mouse pointer movement
 
 // Parámetros Cinemáticos del Dash (Zero-GC)
 export function getDashStaminaCost(dashesPerFullBar: number = 4): number {
@@ -16,8 +17,8 @@ export function getDashStaminaCost(dashesPerFullBar: number = 4): number {
 }
 
 export const DASH_STAMINA_COST = 25; // 100 / 4 dashes default
-export const DASH_TICKS = 4;
-export const DEFAULT_DASH_DISTANCE = 37.5; // Desplazamiento base calibrado (+100% de potencia)
+export const DASH_TICKS = 7;         // Desplazamiento ultrarrápido continuo durante ~7 ticks
+export const DEFAULT_DASH_DISTANCE = 37.5;
 
 export type TeamType = 'red' | 'blue' | 'spec';
 
@@ -53,19 +54,28 @@ export class Player {
   public shots: number = 0;
   public passes: number = 0;
 
-  // Sistema de Estamina, Turbo, Dash y Comba (Ponytail: escalares puros)
+  // Sistema de Estamina, Turbo, Dash con Cooldown y Dirección 360° (Ponytail: escalares puros)
   public stamina: number = 100;
   public isDashing: boolean = false;
   public dashTicksRemaining: number = 0;
+  public dashCooldownTimer: number = 0;
   public dashDirX: number = 0;
   public dashDirY: number = 0;
   public isTurbo: boolean = false;
   public isTyping: boolean = false;
-  public curveX: number = 0; // -1, 0, 1 (compatibilidad)
-  public curveY: number = 0; // -1, 0, 1 (compatibilidad)
-  public curveInput: number = 0; // 00 (ninguno), 01 (A - Izquierda), 10 (D - Derecha)
+  public curveX: number = 0;
+  public curveY: number = 0;
+  public curveInput: number = 0;
   public triggerDash: boolean = false;
   public prevDashState: boolean = false;
+
+  // Dirección continua 360° (Modo Ratón)
+  public aimAngle: number = 0;
+  public aimThrottle: number = 0;
+
+  // Cooldowns anti-farmeo de puntaje (ticks a 60 Hz)
+  public lastShotAwardTick: number = -9999;
+  public lastPassAwardTick: number = -9999;
 
   constructor(data: PlayerData) {
     this.id = data.id;

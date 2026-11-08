@@ -1,25 +1,30 @@
 export const defaultStadium = 'mediano';
 
 export interface GameplayConfig {
-  playerMaxSpeed: number;       // min: 0.7, max: 11.2, def: 2.8 (px/tick, 0.25x - 4.0x)
-  playerAcceleration: number;   // min: 0.03, max: 0.55, def: 0.11 (0.25x - 5.0x)
-  kickStrength: number;         // min: 0.9, max: 18.2, def: 4.545 (0.2x - 4.0x)
-  kickMargin: number;           // min: 0.0, max: 15.0, def: 4.0 (px)
-  playerRadius: number;         // min: 8.0, max: 30.0, def: 15.0 (px)
-  ballRadius: number;           // min: 3.0, max: 16.0, def: 5.8 (px)
-  ballRestitution: number;      // min: 0.0, max: 1.8, def: 0.5 (bCoef)
-  boostMultiplier: number;      // min: 1.1, max: 4.0, def: 2.0 (Turbo Multiplier)
-  dashDistance: number;         // min: 3.75, max: 112.5, def: 37.5 (px, 0.1x - 3.0x de 37.5px)
-  staminaRechargeRate: number;  // min: 5.0, max: 100.0, def: 25.0 (%/s)
-  magnusCurveStrength: number;  // min: 0.0, max: 5.0, def: 1.05 (0.0x - 5.0x)
-  ballMass: number;             // min: 0.1, max: 10.0, def: 1.0
-  playerMass: number;           // min: 0.1, max: 10.0, def: 2.0
-  playerFriction: number;       // min: 0.80, max: 0.999, def: 0.96 (damping jugador)
-  ballFriction: number;         // min: 0.80, max: 0.999, def: 0.99 (damping balón)
-  turboEnabled: boolean;        // default: true
-  dashEnabled: boolean;         // default: true
-  magnusEnabled: boolean;       // default: true
-  dashesPerFullBar: number;     // min: 1, max: 6, def: 4 (dashes con 100% de estamina)
+  playerMaxSpeed: number;          // min: 0.7, max: 11.2, def: 3.5 (px/tick, 1.25x de 2.8)
+  playerSpeed: number;             // min: 0.25, max: 4.0, def: 1.25 (multiplicador base de velocidad)
+  playerAcceleration: number;      // min: 0.03, max: 0.55, def: 0.14
+  kickingAcceleration: number;     // min: 0.02, max: 0.45, def: 0.108
+  kickStrength: number;            // min: 0.9, max: 18.2, def: 4.545 (0.2x - 4.0x)
+  kickMargin: number;              // min: 0.0, max: 15.0, def: 4.0 (px)
+  playerRadius: number;            // min: 8.0, max: 30.0, def: 15.0 (px)
+  ballRadius: number;              // min: 3.0, max: 16.0, def: 5.8 (px)
+  ballRestitution: number;         // min: 0.0, max: 1.8, def: 0.412 (bCoef)
+  boostMultiplier: number;         // min: 1.1, max: 4.0, def: 2.0 (Turbo Multiplier)
+  dashDistance: number;            // min: 3.75, max: 112.5, def: 37.5 (px, ~7 ticks continuos)
+  dashCooldown: number;            // min: 0.0, max: 5.0, def: 1.0 (s)
+  staminaRechargeRate: number;     // min: 5.0, max: 100.0, def: 25.0 (%/s)
+  staminaRegenMoving: boolean;     // default: true
+  staminaRegenMovingRate: number;  // min: 0, max: 200, def: 100 (% respecto a reposo)
+  magnusCurveStrength: number;     // min: 0.0, max: 5.0, def: 1.05 (0.0x - 5.0x)
+  ballMass: number;                // min: 0.1, max: 10.0, def: 0.67
+  playerMass: number;              // min: 0.1, max: 10.0, def: 2.0
+  playerFriction: number;          // min: 0.80, max: 0.999, def: 0.96 (damping jugador)
+  ballFriction: number;            // min: 0.80, max: 0.999, def: 0.99 (damping balón)
+  turboEnabled: boolean;           // default: true
+  dashEnabled: boolean;            // default: true
+  magnusEnabled: boolean;          // default: true
+  dashesPerFullBar: number;        // min: 1, max: 6, def: 4 (dashes con 100% de estamina)
 }
 
 export interface ConfigLimits {
@@ -32,26 +37,49 @@ export interface ConfigLimits {
   description: string;
 }
 
+export type BooleanGameplayConfigKey =
+  | 'turboEnabled'
+  | 'dashEnabled'
+  | 'magnusEnabled'
+  | 'staminaRegenMoving';
+
 export const GAMEPLAY_CONFIG_LIMITS: Record<
-  keyof Omit<GameplayConfig, 'turboEnabled' | 'dashEnabled' | 'magnusEnabled'>,
+  keyof Omit<GameplayConfig, BooleanGameplayConfigKey>,
   ConfigLimits
 > = {
   playerMaxSpeed: {
     min: 0.7,
     max: 11.2,
     step: 0.1,
-    default: 2.8,
+    default: 3.5,
     label: 'Velocidad Jugador',
     unit: 'px/tick',
-    description: 'Escala 0.25x - 4.0x sobre velocidad base del jugador.'
+    description: 'Escala 0.25x - 4.0x sobre velocidad terminal del jugador (3.5 = 1.25x).'
+  },
+  playerSpeed: {
+    min: 0.25,
+    max: 4.0,
+    step: 0.05,
+    default: 1.25,
+    label: 'Escala Velocidad Base',
+    unit: 'x',
+    description: 'Multiplicador directo de velocidad máxima base del jugador.'
   },
   playerAcceleration: {
     min: 0.03,
     max: 0.55,
     step: 0.01,
-    default: 0.11,
+    default: 0.14,
     label: 'Aceleración Jugador',
-    description: 'Escala 0.25x - 5.0x sobre aceleración motriz base.'
+    description: 'Aceleración motriz base del jugador por tick.'
+  },
+  kickingAcceleration: {
+    min: 0.02,
+    max: 0.45,
+    step: 0.005,
+    default: 0.108,
+    label: 'Aceleración Pateando',
+    description: 'Aceleración motriz mientras se mantiene presionado Patear.'
   },
   kickStrength: {
     min: 0.9,
@@ -111,7 +139,16 @@ export const GAMEPLAY_CONFIG_LIMITS: Record<
     default: 37.5,
     label: 'Distancia de Dash',
     unit: 'px',
-    description: 'Desplazamiento total instantáneo en ráfaga (0.1x - 3.0x de 37.5 px).'
+    description: 'Desplazamiento ultrarrápido continuo durante ~7 ticks.'
+  },
+  dashCooldown: {
+    min: 0.0,
+    max: 5.0,
+    step: 0.25,
+    default: 1.0,
+    label: 'Cooldown de Dash',
+    unit: 's',
+    description: 'Tiempo mínimo de espera entre impulsos de Dash consecutivos (0.0s - 5.0s).'
   },
   staminaRechargeRate: {
     min: 5.0,
@@ -120,7 +157,16 @@ export const GAMEPLAY_CONFIG_LIMITS: Record<
     default: 25.0,
     label: 'Tasa Recarga Estamina',
     unit: '%/s',
-    description: 'Tasa de recuperación pasiva en reposo de teclas.'
+    description: 'Tasa base de recuperación de estamina por segundo.'
+  },
+  staminaRegenMovingRate: {
+    min: 0,
+    max: 200,
+    step: 5,
+    default: 100,
+    label: 'Velocidad Recarga en Movimiento',
+    unit: '%',
+    description: 'Porcentaje de recarga al desplazarse sin usar Turbo (100% = igual que en reposo).'
   },
   magnusCurveStrength: {
     min: 0.0,
@@ -128,7 +174,7 @@ export const GAMEPLAY_CONFIG_LIMITS: Record<
     step: 0.05,
     default: 1.05,
     label: 'Fuerza de Curva Magnus',
-    description: 'Intensidad de curvatura lateral durante la pulsación activa de Z / C.'
+    description: 'Intensidad de curvatura lateral durante la pulsación activa de Curva.'
   },
   ballMass: {
     min: 0.1,
@@ -174,8 +220,10 @@ export const GAMEPLAY_CONFIG_LIMITS: Record<
 };
 
 export const DEFAULT_GAMEPLAY_CONFIG: Readonly<GameplayConfig> = Object.freeze({
-  playerMaxSpeed: 2.8,
-  playerAcceleration: 0.11,
+  playerMaxSpeed: 3.5,
+  playerSpeed: 1.25,
+  playerAcceleration: 0.14,
+  kickingAcceleration: 0.108,
   kickStrength: 4.545,
   kickMargin: 4.0,
   playerRadius: 15.0,
@@ -183,7 +231,10 @@ export const DEFAULT_GAMEPLAY_CONFIG: Readonly<GameplayConfig> = Object.freeze({
   ballRestitution: 0.412,
   boostMultiplier: 2.0,
   dashDistance: 37.5,
+  dashCooldown: 1.0,
   staminaRechargeRate: 25.0,
+  staminaRegenMoving: true,
+  staminaRegenMovingRate: 100,
   magnusCurveStrength: 1.05,
   ballMass: 0.67,
   playerMass: 2.0,
@@ -203,25 +254,57 @@ export function sanitizeGameplayConfig(partial?: Partial<GameplayConfig> | null)
   const result: GameplayConfig = { ...DEFAULT_GAMEPLAY_CONFIG };
   if (!partial) return result;
 
+  const hasMaxSpeed = typeof partial.playerMaxSpeed === 'number' && Number.isFinite(partial.playerMaxSpeed);
+  const hasPlayerSpeed = typeof partial.playerSpeed === 'number' && Number.isFinite(partial.playerSpeed);
+  const hasAccel = typeof partial.playerAcceleration === 'number' && Number.isFinite(partial.playerAcceleration);
+  const hasKickAccel = typeof partial.kickingAcceleration === 'number' && Number.isFinite(partial.kickingAcceleration);
+
   for (const key of Object.keys(DEFAULT_GAMEPLAY_CONFIG) as Array<keyof GameplayConfig>) {
     const val = partial[key];
-    if (key === 'turboEnabled' || key === 'dashEnabled' || key === 'magnusEnabled') {
+    if (
+      key === 'turboEnabled' ||
+      key === 'dashEnabled' ||
+      key === 'magnusEnabled' ||
+      key === 'staminaRegenMoving'
+    ) {
       if (typeof val === 'boolean') {
         result[key] = val;
       }
     } else if (typeof val === 'number' && Number.isFinite(val)) {
-      const limits = (GAMEPLAY_CONFIG_LIMITS as any)[key];
+      const limits = (GAMEPLAY_CONFIG_LIMITS as Record<string, ConfigLimits>)[key];
       if (limits) {
         (result as any)[key] = Math.max(limits.min, Math.min(limits.max, val));
       }
     }
   }
 
+  if (hasPlayerSpeed && !hasMaxSpeed) {
+    const derivedMax = result.playerSpeed * 2.8;
+    result.playerMaxSpeed = Math.max(
+      GAMEPLAY_CONFIG_LIMITS.playerMaxSpeed.min,
+      Math.min(GAMEPLAY_CONFIG_LIMITS.playerMaxSpeed.max, Number(derivedMax.toFixed(4)))
+    );
+  } else if (hasMaxSpeed && !hasPlayerSpeed) {
+    const derivedScale = result.playerMaxSpeed / 2.8;
+    result.playerSpeed = Math.max(
+      GAMEPLAY_CONFIG_LIMITS.playerSpeed.min,
+      Math.min(GAMEPLAY_CONFIG_LIMITS.playerSpeed.max, Number(derivedScale.toFixed(4)))
+    );
+  }
+
+  if (hasAccel && !hasKickAccel) {
+    const derivedKickAccel = result.playerAcceleration * (0.108 / 0.14);
+    result.kickingAcceleration = Math.max(
+      GAMEPLAY_CONFIG_LIMITS.kickingAcceleration.min,
+      Math.min(GAMEPLAY_CONFIG_LIMITS.kickingAcceleration.max, Number(derivedKickAccel.toFixed(4)))
+    );
+  }
+
   return result;
 }
 
 /**
- * Catálogo Canónico de los 19 Modificadores Físicos y Configuración de Juego
+ * Catálogo Canónico de los Modificadores Físicos y Configuración de Juego
  * Definidos en docs/GDD.md (mantenido para compatibilidad con EngineInstance y DedicatedHost)
  */
 export interface PhysicsModifiers {
@@ -231,7 +314,7 @@ export interface PhysicsModifiers {
   postBounciness: number;          // 4. Rebote de postes (0.20..1.30)
   baseKickStrength: number;        // 5. Fuerza de patada base (200..900)
   dashPower: number;               // 6. Potencia de Dash / Sprint (100..600)
-  dashCooldown: number;            // 7. Cooldown de Dash en segundos (0.2..5.0)
+  dashCooldown: number;            // 7. Cooldown de Dash en segundos (0.0..5.0)
   playerMass: number;              // 8. Masa de jugadores (0.5..3.0)
   playerRadius: number;            // 9. Radio de jugadores (10.0..25.0)
   ballMass: number;                // 10. Masa del balón (0.05..1.00)
@@ -240,8 +323,8 @@ export interface PhysicsModifiers {
   netElasticity: number;           // 13. Elasticidad de redes (0.10..0.90)
   netDamping: number;              // 14. Amortiguamiento de redes (0.02..0.50)
   goalCelebrationDuration: number; // 15. Tiempo de celebración de gol en segundos (1.0..6.0)
-  goalLimit: number;               // 16. Límite de goles por partido (1..15, 0 = sin límite)
-  matchTimeMinutes: number;        // 17. Tiempo reglamentario en minutos (1.0..15.0)
+  goalLimit: number;               // 16. Límite de goles por partido (0 = sin límite)
+  matchTimeMinutes: number;        // 17. Tiempo reglamentario en minutos (0 = indefinido)
   goldenGoalOvertime: boolean;     // 18. Modo Overtime / Gol de Oro (true/false)
   airDensity: number;              // 19. Densidad del aire (0.0..3.0)
 }
@@ -253,7 +336,7 @@ export const DEFAULT_PHYSICS_MODIFIERS: PhysicsModifiers = {
   postBounciness: 0.85,
   baseKickStrength: 450.0,
   dashPower: 280.0,
-  dashCooldown: 1.5,
+  dashCooldown: 1.0,
   playerMass: 1.0,
   playerRadius: 15.0,
   ballMass: 0.20,

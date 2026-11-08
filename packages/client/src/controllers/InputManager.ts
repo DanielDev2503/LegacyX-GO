@@ -7,11 +7,40 @@ import {
   INPUT_TURBO,
   INPUT_DASH,
   INPUT_MAGNUS_LEFT,
-  INPUT_MAGNUS_RIGHT
+  INPUT_MAGNUS_RIGHT,
+  INPUT_MOUSE_AIM
 } from '../../../core/src/game/Player';
 import { MatchPhase } from '../../../core/src/game/GameFSM';
 import { UIStateMachine } from './UIStateMachine';
 import { $matchPhase } from './stores/gameStore';
+
+export const MOUSE_DEADZONE_PX = 6;
+export const MOUSE_FINE_CONTROL_RADIUS_PX = 42;
+
+export function mouseButtonToCode(button: number): 'Mouse0' | 'Mouse1' | 'Mouse2' | null {
+  if (button === 0) return 'Mouse0';
+  if (button === 1) return 'Mouse1';
+  if (button === 2) return 'Mouse2';
+  return null;
+}
+
+export function computeMouseMovementVector(
+  playerX: number,
+  playerY: number,
+  mouseWorldX: number,
+  mouseWorldY: number
+): { active: boolean; angle: number; throttle: number; distance: number } {
+  const dx = mouseWorldX - playerX;
+  const dy = mouseWorldY - playerY;
+  const dist = Math.hypot(dx, dy);
+  if (!Number.isFinite(dist) || dist <= MOUSE_DEADZONE_PX) {
+    return { active: false, angle: 0, throttle: 0, distance: Number.isFinite(dist) ? dist : 0 };
+  }
+  const angle = Math.atan2(dy, dx);
+  const span = MOUSE_FINE_CONTROL_RADIUS_PX - MOUSE_DEADZONE_PX; // 36 px
+  const throttle = dist < MOUSE_FINE_CONTROL_RADIUS_PX ? (dist - MOUSE_DEADZONE_PX) / span : 1.0;
+  return { active: true, angle, throttle, distance: dist };
+}
 
 export interface KeyBinds {
   up: string[];
@@ -23,6 +52,7 @@ export interface KeyBinds {
   dash: string[];
   curveLeft: string[];
   curveRight: string[];
+  focusBall: string[];
   menu: string[];
   pause: string[];
   chat: string[];
@@ -38,6 +68,7 @@ export const DEFAULT_KEYBINDS: KeyBinds = {
   dash: ['ArrowUp'],
   curveLeft: ['ArrowLeft'],
   curveRight: ['ArrowRight'],
+  focusBall: ['KeyV', 'Tab'],
   menu: ['Escape'],
   pause: ['KeyP'],
   chat: ['Enter', 'NumpadEnter']
@@ -53,6 +84,12 @@ export class InputManager {
   public onKickImmediate?: () => void;
   public keyBinds: KeyBinds;
   public isEnabled: boolean = false;
+  public movementMode: 'keyboard' | 'mouse' = 'keyboard';
+  public mouseScreenX: number = 0;
+  public mouseScreenY: number = 0;
+  public currentAimAngle: number = 0;
+  public currentAimThrottle: number = 0;
+  public isFocusingBall: boolean = false;
   private dashTriggered: boolean = false;
   private curveVec = { x: 0, y: 0 };
 
@@ -97,6 +134,7 @@ export class InputManager {
           dash: Array.isArray(parsed.dash) ? parsed.dash : DEFAULT_KEYBINDS.dash,
           curveLeft: Array.isArray(parsed.curveLeft) ? parsed.curveLeft : DEFAULT_KEYBINDS.curveLeft,
           curveRight: Array.isArray(parsed.curveRight) ? parsed.curveRight : DEFAULT_KEYBINDS.curveRight,
+          focusBall: Array.isArray(parsed.focusBall) ? parsed.focusBall : DEFAULT_KEYBINDS.focusBall,
           menu: Array.isArray(parsed.menu) ? parsed.menu : DEFAULT_KEYBINDS.menu,
           pause: Array.isArray(parsed.pause) ? parsed.pause : DEFAULT_KEYBINDS.pause,
           chat: Array.isArray(parsed.chat) ? parsed.chat : DEFAULT_KEYBINDS.chat
@@ -138,7 +176,8 @@ export class InputManager {
       this.keyBinds.curveLeft.includes(code) ||
       this.keyBinds.curveRight.includes(code) ||
       this.keyBinds.turbo.includes(code) ||
-      this.keyBinds.dash.includes(code)
+      this.keyBinds.dash.includes(code) ||
+      (this.keyBinds.focusBall?.includes(code) ?? false)
     );
   }
 
@@ -230,6 +269,60 @@ export class InputManager {
       }
     });
 
+    window.addEventListener('mousemove', (e) => {
+      this.mouseScreenX = e.clientX;
+      this.mouseScreenY = e.clientY;
+    });
+
+    window.addEventListener('mousedown', (e) => {
+      if (!this.isEnabled) return;
+      if (
+        e.target instanceof HTMLInputElement ||
+        e.target instanceof HTMLTextAreaElement ||
+        e.target instanceof HTMLButtonElement ||
+        (e.target instanceof HTMLElement && e.target.closest('button, input, textarea, select, [role="dialog"]'))
+      ) {
+        return;
+      }
+      const mCode = mouseButtonToCode(e.button);
+      if (!mCode) return;
+      if (this.isGameplayKey(mCode)) {
+        e.preventDefault();
+      }
+      if (this.isActionKey('dash', mCode)) {
+        this.dashTriggered = true;
+      }
+      if (!this.keyStates[mCode]) {
+        this.keyStates[mCode] = true;
+        this.updateMask();
+        if (this.isGameplayKey(mCode)) {
+          const immediateMask = this.dashTriggered ? (this.currentMask | INPUT_DASH) : this.currentMask;
+          this.onImmediateInput?.(immediateMask);
+        }
+        if (this.isActionKey('kick', mCode)) {
+          this.onKickImmediate?.();
+        }
+      }
+    });
+
+    window.addEventListener('mouseup', (e) => {
+      const mCode = mouseButtonToCode(e.button);
+      if (!mCode) return;
+      if (this.keyStates[mCode]) {
+        this.keyStates[mCode] = false;
+        this.updateMask();
+        if (this.isGameplayKey(mCode)) {
+          this.onImmediateInput?.(this.currentMask);
+        }
+      }
+    });
+
+    window.addEventListener('contextmenu', (e) => {
+      if (e.target instanceof HTMLCanvasElement) {
+        e.preventDefault();
+      }
+    });
+
     // Reset inputs if window loses focus
     window.addEventListener('blur', () => {
       this.resetMovement();
@@ -270,14 +363,20 @@ export class InputManager {
   private updateMask(): void {
     let mask = 0;
 
-    if (this.isAnyCodePressed(this.keyBinds.up)) mask |= INPUT_UP;
-    if (this.isAnyCodePressed(this.keyBinds.down)) mask |= INPUT_DOWN;
-    if (this.isAnyCodePressed(this.keyBinds.left)) mask |= INPUT_LEFT;
-    if (this.isAnyCodePressed(this.keyBinds.right)) mask |= INPUT_RIGHT;
+    if (this.movementMode === 'keyboard') {
+      if (this.isAnyCodePressed(this.keyBinds.up)) mask |= INPUT_UP;
+      if (this.isAnyCodePressed(this.keyBinds.down)) mask |= INPUT_DOWN;
+      if (this.isAnyCodePressed(this.keyBinds.left)) mask |= INPUT_LEFT;
+      if (this.isAnyCodePressed(this.keyBinds.right)) mask |= INPUT_RIGHT;
+    } else if (this.currentAimThrottle > 0) {
+      mask |= INPUT_MOUSE_AIM;
+    }
     if (this.isAnyCodePressed(this.keyBinds.kick)) mask |= INPUT_KICK;
     if (this.isAnyCodePressed(this.keyBinds.turbo)) mask |= INPUT_TURBO;
     if (this.isAnyCodePressed(this.keyBinds.curveLeft)) mask |= INPUT_MAGNUS_LEFT;
     if (this.isAnyCodePressed(this.keyBinds.curveRight)) mask |= INPUT_MAGNUS_RIGHT;
+
+    this.isFocusingBall = this.isAnyCodePressed(this.keyBinds.focusBall);
 
     if (mask !== this.currentMask) {
       this.currentMask = mask;
@@ -285,6 +384,33 @@ export class InputManager {
         this.onInputChanged(mask);
       }
     }
+  }
+
+  public sampleMouseAimPacket(
+    camera: { screenToWorld: (sx: number, sy: number, safeBottom?: number) => { x: number; y: number } },
+    playerX: number,
+    playerY: number,
+    canvasRect?: { left: number; top: number; width: number; height: number },
+    canvasBufferSize?: { width: number; height: number },
+    safeAreaBottom: number = 0
+  ): { active: boolean; aimAngle: number; aimThrottle: number } {
+    if (this.movementMode !== 'mouse') {
+      this.currentAimAngle = 0;
+      this.currentAimThrottle = 0;
+      return { active: false, aimAngle: 0, aimThrottle: 0 };
+    }
+    let sx = this.mouseScreenX;
+    let sy = this.mouseScreenY;
+    if (canvasRect && canvasRect.width > 0 && canvasRect.height > 0 && canvasBufferSize) {
+      sx = (sx - canvasRect.left) * (canvasBufferSize.width / canvasRect.width);
+      sy = (sy - canvasRect.top) * (canvasBufferSize.height / canvasRect.height);
+    }
+    const worldPt = camera.screenToWorld(sx, sy, safeAreaBottom);
+    const vec = computeMouseMovementVector(playerX, playerY, worldPt.x, worldPt.y);
+    this.currentAimAngle = vec.angle;
+    this.currentAimThrottle = vec.throttle;
+    this.updateMask();
+    return { active: vec.active, aimAngle: vec.angle, aimThrottle: vec.throttle };
   }
 
   public getMask(withDashTrigger: boolean = false): number {

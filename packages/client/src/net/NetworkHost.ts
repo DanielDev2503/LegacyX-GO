@@ -6,6 +6,8 @@ import { canChangeTeam } from './ClientPrediction';
 export interface PlayerInfo {
   id: number;
   peerId: string;
+  userId?: string | null;
+  isGuest?: boolean;
   nickname: string;
   name?: string;
   team: 'red' | 'blue' | 'spectator';
@@ -44,7 +46,13 @@ export class NetworkHost {
   private boundOnSignal!: (msg: any) => void;
   private boundOnPeerLeft!: (msg: any) => void;
 
-  public onPlayerInput?: (playerId: number, inputMask: number, tick: number) => void;
+  public onPlayerInput?: (
+    playerId: number,
+    inputMask: number,
+    tick: number,
+    aimAngle?: number,
+    aimThrottle?: number
+  ) => void;
   public onPlayerJoined?: (player: PlayerInfo) => void;
   public onPlayerLeft?: (playerId: number) => void;
   public onPlayersUpdated?: (players: PlayerInfo[]) => void;
@@ -214,7 +222,13 @@ export class NetworkHost {
         if (playerId !== undefined) {
           const decoded = BinaryProtocol.decodeInput(buffer);
           if (decoded) {
-            this.onPlayerInput?.(playerId, decoded.inputMask ?? 0, decoded.tick ?? decoded.sequence ?? 0);
+            this.onPlayerInput?.(
+              playerId,
+              decoded.inputMask ?? 0,
+              decoded.tick ?? decoded.sequence ?? 0,
+              decoded.aimAngle,
+              decoded.aimThrottle
+            );
           }
         }
       },
@@ -290,6 +304,12 @@ export class NetworkHost {
       if (nick) {
         player.nickname = nick;
         player.name = nick;
+      }
+      if (typeof msg.userId === 'string') {
+        player.userId = msg.userId;
+      }
+      if (typeof msg.isGuest === 'boolean') {
+        player.isGuest = msg.isGuest;
       }
       if (msg.number !== undefined) {
         player.number = Number(msg.number || player.number) % 100;
@@ -641,6 +661,13 @@ export class NetworkHost {
     this.broadcastReliable({
       type: 'MATCH_BANNER_EVENT',
       banner: banner ?? { kind: 'NONE' }
+    });
+  }
+
+  public broadcastScoreEvent(payload: Record<string, unknown>): void {
+    this.broadcastReliable({
+      type: 'SCORE_EVENT',
+      ...payload
     });
   }
 

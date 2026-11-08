@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { gameUI, type KeybindConfig } from '../state/gameUI.svelte';
+  import { gameUI, formatKeybindCode, type KeybindConfig } from '../state/gameUI.svelte.js';
+  import { mouseButtonToCode } from '../../controllers/InputManager.js';
 
   let {
     embedded = false
@@ -12,56 +13,86 @@
     { key: 'down', label: 'Mover Abajo' },
     { key: 'left', label: 'Mover Izquierda' },
     { key: 'right', label: 'Mover Derecha' },
-    { key: 'kick', label: 'Patear Balón (X)' },
+    { key: 'kick', label: 'Patear Balón (X / Click Izq)' },
     { key: 'turbo', label: 'Sprint Turbo (Shift)' },
-    { key: 'dash', label: 'Impulso Dash (Space)' },
+    { key: 'dash', label: 'Impulso Dash (Espacio / Click Der)' },
     { key: 'curveLeft', label: 'Curva Magnus Izq. (Z)' },
     { key: 'curveRight', label: 'Curva Magnus Der. (C)' },
+    { key: 'focusBall', label: 'Enfocar Balón (V / Tab)' },
     { key: 'pause', label: 'Pausar Partido (P)' },
-    { key: 'menu', label: 'Menú de Sala (Esc)' }
+    { key: 'menu', label: 'Menú de Sala (Esc)' },
+    { key: 'chat', label: 'Interactuar con Chat (Enter)' }
   ];
 
   let listeningKey = $state<keyof KeybindConfig | null>(null);
 
   function formatKeyCode(code: string | string[]): string {
     const raw = Array.isArray(code) ? (code[0] ?? '') : code;
-    return raw
-      .replace('Arrow', 'Flecha ')
-      .replace('Key', '')
-      .replace('ShiftLeft', 'Shift Izq')
-      .replace('ShiftRight', 'Shift Der')
-      .replace('Space', 'Espacio');
+    return formatKeybindCode(raw) || 'Sin asignar';
   }
 
   function handleWindowKeyDown(e: KeyboardEvent) {
     if (!listeningKey) return;
     e.preventDefault();
     e.stopPropagation();
+    if (e.key === 'Escape') {
+      listeningKey = null;
+      return;
+    }
     gameUI.setKeybind(listeningKey, e.code);
     listeningKey = null;
   }
+
+  function handleWindowMouseDown(e: MouseEvent) {
+    if (!listeningKey) return;
+    const code = mouseButtonToCode(e.button);
+    if (!code) return;
+    e.preventDefault();
+    e.stopPropagation();
+    gameUI.setKeybind(listeningKey, code);
+    listeningKey = null;
+  }
+
+  function handleWindowContextMenu(e: MouseEvent) {
+    if (listeningKey) {
+      e.preventDefault();
+    }
+  }
 </script>
 
-<svelte:window onkeydown={handleWindowKeyDown} />
+<svelte:window
+  onkeydown={handleWindowKeyDown}
+  onmousedown={handleWindowMouseDown}
+  oncontextmenu={handleWindowContextMenu}
+/>
 
 {#if embedded}
   <div class="keybind-panel">
+    {#if gameUI.lastKeybindSwapNotice}
+      <div class="swap-notice">{gameUI.lastKeybindSwapNotice}</div>
+    {/if}
     <div class="keybind-list">
       {#each ACTION_LABELS as item (item.key)}
         <div class="keybind-row">
           <span class="action-label">{item.label}</span>
           <button
+            type="button"
             class="bind-btn"
             class:listening={listeningKey === item.key}
-            onclick={() => (listeningKey = listeningKey === item.key ? null : item.key)}
+            onmousedown={(e) => {
+              if (listeningKey !== item.key) e.stopPropagation();
+            }}
+            onclick={() => {
+              if (listeningKey !== item.key) listeningKey = item.key;
+            }}
           >
-            {listeningKey === item.key ? 'Presiona tecla...' : formatKeyCode(gameUI.keybinds[item.key])}
+            {listeningKey === item.key ? 'Tecla o Click...' : formatKeyCode(gameUI.keybinds[item.key])}
           </button>
         </div>
       {/each}
     </div>
     <div class="keybind-footer">
-      <button class="reset-btn" onclick={() => gameUI.resetKeybinds()}>
+      <button type="button" class="reset-btn" onclick={() => gameUI.resetKeybinds()}>
         Restablecer Controles por Defecto
       </button>
     </div>
@@ -72,31 +103,46 @@
       <header class="modal-header">
         <div>
           <span class="kicker">CONTROLES PERSONALIZADOS</span>
-          <h2>Mapeo de Teclas</h2>
+          <h2>Mapeo de Teclas y Ratón</h2>
         </div>
-        <button class="close-btn" onclick={() => gameUI.closeModal()}>✕</button>
+        <button type="button" class="close-btn" onclick={() => gameUI.closeModal()} aria-label="Cerrar">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round">
+            <line x1="18" y1="6" x2="6" y2="18" />
+            <line x1="6" y1="6" x2="18" y2="18" />
+          </svg>
+        </button>
       </header>
+
+      {#if gameUI.lastKeybindSwapNotice}
+        <div class="swap-notice">{gameUI.lastKeybindSwapNotice}</div>
+      {/if}
 
       <div class="keybind-list">
         {#each ACTION_LABELS as item (item.key)}
           <div class="keybind-row">
             <span class="action-label">{item.label}</span>
             <button
+              type="button"
               class="bind-btn"
               class:listening={listeningKey === item.key}
-              onclick={() => (listeningKey = listeningKey === item.key ? null : item.key)}
+              onmousedown={(e) => {
+                if (listeningKey !== item.key) e.stopPropagation();
+              }}
+              onclick={() => {
+                if (listeningKey !== item.key) listeningKey = item.key;
+              }}
             >
-              {listeningKey === item.key ? 'Presiona tecla...' : formatKeyCode(gameUI.keybinds[item.key])}
+              {listeningKey === item.key ? 'Tecla o Click...' : formatKeyCode(gameUI.keybinds[item.key])}
             </button>
           </div>
         {/each}
       </div>
 
       <footer class="keybind-footer">
-        <button class="reset-btn" onclick={() => gameUI.resetKeybinds()}>
+        <button type="button" class="reset-btn" onclick={() => gameUI.resetKeybinds()}>
           Restablecer por Defecto
         </button>
-        <button class="done-btn" onclick={() => gameUI.closeModal()}>
+        <button type="button" class="done-btn" onclick={() => gameUI.closeModal()}>
           Guardar y Cerrar
         </button>
       </footer>
@@ -108,7 +154,7 @@
   .modal-backdrop {
     position: fixed;
     inset: 0;
-    background: rgba(5, 8, 14, 0.85);
+    background: rgba(5, 8, 14, 0.88);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -118,16 +164,16 @@
   }
 
   .keybind-modal-card {
-    width: min(520px, 95vw);
-    background: rgba(10, 16, 26, 0.95);
+    width: min(540px, 95vw);
+    background: #0a101a;
     border: 1px solid rgba(0, 229, 255, 0.6);
     border-radius: 0.5rem;
-    box-shadow: 0 0 24px rgba(0, 229, 255, 0.35), inset 0 0 12px rgba(0, 229, 255, 0.15);
+    box-shadow: 0 0 24px rgba(0, 229, 255, 0.25), inset 0 0 12px rgba(0, 229, 255, 0.1);
     padding: 1.4rem;
     color: #f0f8ff;
     display: flex;
     flex-direction: column;
-    gap: 1rem;
+    gap: 0.9rem;
     font-family: 'Chivo', system-ui, sans-serif;
   }
 
@@ -148,16 +194,28 @@
   h2 {
     font-family: 'Space Grotesk', system-ui, sans-serif;
     margin: 0.15rem 0 0;
-    font-size: 1.25rem;
+    font-size: 1.2rem;
   }
 
   .close-btn {
-    background: rgba(30, 41, 59, 0.85);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: #131c2e;
     color: #e2e8f0;
     border: 1px solid rgba(148, 163, 184, 0.25);
     border-radius: 8px;
-    padding: 0.4rem 0.75rem;
+    padding: 0.45rem;
     cursor: pointer;
+  }
+
+  .swap-notice {
+    font-size: 0.76rem;
+    color: #ffd700;
+    background: rgba(255, 215, 0, 0.08);
+    border: 1px solid rgba(255, 215, 0, 0.35);
+    border-radius: 6px;
+    padding: 0.45rem 0.7rem;
   }
 
   .keybind-panel {
@@ -170,7 +228,7 @@
     display: flex;
     flex-direction: column;
     gap: 0.45rem;
-    max-height: 320px;
+    max-height: 340px;
     overflow-y: auto;
   }
 
@@ -179,7 +237,7 @@
     justify-content: space-between;
     align-items: center;
     padding: 0.5rem 0.75rem;
-    background: rgba(15, 23, 42, 0.75);
+    background: #0f172a;
     border: 1px solid rgba(148, 163, 184, 0.14);
     border-radius: 8px;
   }
@@ -191,15 +249,15 @@
   }
 
   .bind-btn {
-    min-width: 135px;
+    min-width: 145px;
     padding: 0.38rem 0.75rem;
     border-radius: 6px;
-    background: #0f172a;
+    background: #080d17;
     border: 1px solid rgba(0, 229, 255, 0.35);
     color: #38bdf8;
     font-family: 'JetBrains Mono', monospace;
     font-variant-numeric: tabular-nums;
-    font-size: 0.8rem;
+    font-size: 0.78rem;
     font-weight: 700;
     cursor: pointer;
   }
@@ -220,7 +278,7 @@
   .reset-btn {
     padding: 0.55rem 0.95rem;
     border-radius: 8px;
-    background: rgba(30, 41, 59, 0.85);
+    background: #1e293b;
     border: 1px solid rgba(148, 163, 184, 0.25);
     color: #cbd5e1;
     font-size: 0.8rem;

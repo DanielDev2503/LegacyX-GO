@@ -162,7 +162,21 @@ export const STADIUM_PRESETS: Record<string, StadiumPreset> = {
   '4v4': STADIUM_BIG
 };
 
-export const StadiumRegistry: Record<string, StadiumPreset> = STADIUM_PRESETS;
+export type StadiumRegistryMap = Record<string, StadiumPreset> & {
+  getStadium: (id: StadiumId | string, customOptions?: Partial<StadiumOptions>) => Stadium;
+};
+
+export const StadiumRegistry: StadiumRegistryMap = Object.defineProperty(
+  STADIUM_PRESETS as StadiumRegistryMap,
+  'getStadium',
+  {
+    value: (id: StadiumId | string = defaultStadium, customOptions?: Partial<StadiumOptions>): Stadium =>
+      createStadium(id, customOptions),
+    enumerable: false,
+    configurable: true,
+    writable: false
+  }
+);
 
 export const DEFAULT_STADIUM_ID: StadiumId = 'mediano';
 

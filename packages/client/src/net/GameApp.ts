@@ -2,6 +2,7 @@ import { SignalingClient, sharedSignaling } from './SignalingClient.js';
 import { NetworkHost, type PlayerInfo } from './NetworkHost.js';
 import { NetworkClient } from './NetworkClient.js';
 import { gameUI, type RosterPlayer, type ChatEntry } from '../ui/state/gameUI.svelte.js';
+import { userProfile } from '../ui/state/userProfile.svelte.js';
 import { soundFX } from '../audio/SoundFX.js';
 import { triggerPitchEmote } from '../renderer/DiscRenderer.js';
 import type { PlayerInput } from '@legacyx/core';
@@ -16,6 +17,26 @@ export interface CreateRoomParams {
   scoreLimit?: number;
   teamsLocked?: boolean;
   allowCaptainKitSwitch?: boolean;
+  roomType?: 'casual' | 'ranked';
+}
+
+export function hasChatMentionForUser(
+  text: string,
+  localNickname: string,
+  sender?: string
+): boolean {
+  if (!text) return false;
+  if (sender && localNickname && sender.toLowerCase() === localNickname.toLowerCase()) {
+    return false;
+  }
+  const lower = text.toLowerCase();
+  if (/(^|\s)@all(\b|\s|[.,!?:;]|$)/i.test(lower)) {
+    return true;
+  }
+  const cleanLocal = (localNickname || '').trim().toLowerCase();
+  if (!cleanLocal) return false;
+  const escaped = cleanLocal.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`(^|\\s)@${escaped}(\\b|\\s|[.,!?:;]|$)`, 'i').test(lower);
 }
 
 export interface RoomConfigPatch {
@@ -75,6 +96,9 @@ export class GameApp {
   public currentRoomConfig: CreateRoomParams | null = null;
   /** Inputs de jugadores remotos recibidos por el Host (playerId → máscara). */
   public remoteInputs = new Map<number, PlayerInput>();
+  public activeMatchToken: string | null = null;
+  public lastJoinError: string | null = null;
+  public onScoreEventReceived: ((payload: Record<string, unknown>) => void) | null = null;
 
   constructor(signaling: SignalingClient = sharedSignaling) {
     this.signaling = signaling;
@@ -83,6 +107,17 @@ export class GameApp {
     gameUI.onRoomConfigChanged = (patch: RoomConfigPatch) => this.updateRoomConfig(patch);
     gameUI.onAdminAction = (action: string, payload?: any) => this.dispatchAdminAction(action, payload);
     gameUI.onProfileUpdated = () => this.syncPlayerProfile();
+
+    this.signaling.on('RANKED_MATCH_TOKEN', (msg: any) => {
+      if (typeof msg?.matchToken === 'string' && msg.matchToken) {
+        this.activeMatchToken = msg.matchToken;
+      }
+    });
+    this.signaling.on('RANKED_MATCH_RESULT', (msg: any) => {
+      if (msg?.ok) {
+        void userProfile.fetchLeaderboard(userProfile.leaderboardCategory);
+      }
+    });
 
     if (typeof window !== 'undefined') {
       window.addEventListener('beforeunload', () => {
@@ -151,7 +186,11 @@ export class GameApp {
       return; // Ocultar comando del feed de chat cuando los emotes en cancha están activados
     }
 
-    soundFX.playChatMessageSound();
+    if (hasChatMentionForUser(text, gameUI.nickname, sender)) {
+      soundFX.playChatMentionSound();
+    } else {
+      soundFX.playChatMessageSound();
+    }
     const msgId = id || `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
     gameUI.addChatMessage({
       id: msgId,
@@ -310,14 +349,23 @@ export class GameApp {
 
   public async createRoom(params: CreateRoomParams): Promise<boolean> {
     this.teardownNetworkSession();
+    this.lastJoinError = null;
+    gameUI.lobbyError = null;
     await this.signaling.ensureConnected();
 
     return new Promise<boolean>((resolve) => {
       const cleanName = params.name.trim() || `${gameUI.nickname || 'Player'}'s room`;
       const stadium = params.stadium || 'mediano';
-      const maxPlayers = params.maxPlayers ?? 12;
+      const maxPlayers = Math.max(2, Math.min(30, params.maxPlayers ?? 12));
       const isPublic = params.isPublic !== false;
       const password = params.password;
+      const roomType = params.roomType === 'ranked' ? 'ranked' : 'casual';
+      let tz = '';
+      try {
+        tz = Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+      } catch {
+        tz = '';
+      }
 
       let resolved = false;
       const timeout = setTimeout(() => {
@@ -341,13 +389,29 @@ export class GameApp {
         }
       };
 
+      const onError = (msg: any) => {
+        if (!resolved && msg?.code === 'RANKED_ROLE_REQUIRED') {
+          resolved = true;
+          clearTimeout(timeout);
+          cleanup();
+          const errMsg = String(msg.message || 'No tienes permisos para crear salas Clasificatorias.');
+          this.lastJoinError = errMsg;
+          gameUI.lobbyError = errMsg;
+          resolve(false);
+        }
+      };
+
       const cleanup = () => {
         this.signaling.off('room_created', onRoomCreated);
         this.signaling.off('ROOM_CREATED', onRoomCreated);
+        this.signaling.off('error', onError);
+        this.signaling.off('ERROR', onError);
       };
 
       this.signaling.on('room_created', onRoomCreated);
       this.signaling.on('ROOM_CREATED', onRoomCreated);
+      this.signaling.on('error', onError);
+      this.signaling.on('ERROR', onError);
 
       this.signaling.send({
         type: 'create_room',
@@ -357,6 +421,9 @@ export class GameApp {
         maxPlayers,
         isPublic,
         password,
+        roomType,
+        timeZone: tz,
+        accessToken: userProfile.jwt || undefined,
         config: {
           name: cleanName,
           stadiumId: stadium,
@@ -366,7 +433,9 @@ export class GameApp {
           password,
           timeLimit: params.timeLimit ?? 3,
           scoreLimit: params.scoreLimit ?? 3,
-          teamsLocked: params.teamsLocked ?? false
+          teamsLocked: params.teamsLocked ?? false,
+          roomType,
+          timeZone: tz
         }
       });
     });
@@ -382,6 +451,7 @@ export class GameApp {
   ): void {
     this.isHost = true;
     this.currentRoomId = roomId;
+    this.activeMatchToken = null;
     this.currentRoomConfig = params || { name, stadium, maxPlayers, isPublic };
     this.remoteInputs.clear();
 
@@ -395,6 +465,8 @@ export class GameApp {
     const profile = this.getLocalProfile();
     const host = new NetworkHost(this.signaling, profile.nickname, {
       peerId: this.signaling.peerId,
+      userId: userProfile.id,
+      isGuest: userProfile.isGuest,
       team: 'spectator',
       avatar: profile.avatar,
       avatarType: profile.avatarType,
@@ -415,6 +487,9 @@ export class GameApp {
     host.modifiers = { ...gameUI.modifiers } as any;
     this.networkHost = host;
 
+    const roomType = params?.roomType === 'ranked' ? 'ranked' : 'casual';
+    gameUI.isPracticeMode = false;
+    gameUI.roomType = roomType;
     gameUI.isHost = true;
     gameUI.isAdmin = true;
     gameUI.localPlayerId = 1;
@@ -437,6 +512,7 @@ export class GameApp {
       maxPlayers,
       playersCount: 1,
       ping: gameUI.realPing || 20,
+      roomType,
       isPrivate: !isPublic,
       password: params?.password,
       timeLimit: host.timeLimit,
@@ -457,8 +533,8 @@ export class GameApp {
       }
     };
 
-    host.onPlayerInput = (playerId, inputMask) => {
-      this.remoteInputs.set(playerId, { inputMask });
+    host.onPlayerInput = (playerId, inputMask, _tick, aimAngle, aimThrottle) => {
+      this.remoteInputs.set(playerId, { inputMask, aimAngle, aimThrottle });
     };
 
     host.onChatMessage = (sender, text, team, id) => this.pushChat(sender, text, team, false, id);
@@ -485,8 +561,85 @@ export class GameApp {
     };
   }
 
+  public startRankedMatchSession(): void {
+    this.activeMatchToken = null;
+    if (gameUI.isPracticeMode || gameUI.roomType !== 'ranked') return;
+    if (!this.isHost || !this.currentRoomId || !userProfile.jwt || !this.networkHost) return;
+
+    const participantUserIds = this.networkHost
+      .getPlayers()
+      .filter((p) => (p.team === 'red' || p.team === 'blue') && p.userId && !p.isGuest)
+      .map((p) => p.userId as string);
+
+    this.signaling.send({
+      type: 'RANKED_MATCH_START',
+      roomId: this.currentRoomId,
+      accessToken: userProfile.jwt,
+      participantUserIds
+    });
+  }
+
+  public reportRankedMatchIfEligible(summary: {
+    stadiumId: string;
+    durationSeconds: number;
+    redScore: number;
+    blueScore: number;
+    winner: 'red' | 'blue' | 'draw';
+    stats: Array<{
+      playerId: string | number;
+      team: string;
+      goals: number;
+      assists: number;
+      saves: number;
+    }>;
+    mvpPlayerId?: string | number | null;
+  }): void {
+    // En salas Casual o en Modo Entrenamiento JAMÁS se suman estadísticas globales ni ELO
+    if (gameUI.isPracticeMode || gameUI.roomType !== 'ranked') return;
+    if (!this.isHost || !this.currentRoomId || !this.activeMatchToken || !userProfile.jwt || !this.networkHost) {
+      return;
+    }
+
+    const hostPlayers = this.networkHost.getPlayers();
+    const participants = summary.stats
+      .map((s) => {
+        const pidNum = Number(s.playerId);
+        const pInfo = hostPlayers.find((p) => p.id === pidNum);
+        if (!pInfo || pInfo.isGuest || !pInfo.userId) return null;
+        if (s.team !== 'red' && s.team !== 'blue') return null;
+        return {
+          userId: pInfo.userId,
+          team: s.team as 'red' | 'blue',
+          goals: Number(s.goals || 0),
+          assists: Number(s.assists || 0),
+          saves: Number(s.saves || 0),
+          isMvp:
+            summary.mvpPlayerId !== undefined &&
+            summary.mvpPlayerId !== null &&
+            String(summary.mvpPlayerId) === String(s.playerId)
+        };
+      })
+      .filter(Boolean);
+
+    this.signaling.send({
+      type: 'RANKED_MATCH_REPORT',
+      roomId: this.currentRoomId,
+      matchToken: this.activeMatchToken,
+      accessToken: userProfile.jwt,
+      stadiumId: summary.stadiumId,
+      durationSeconds: Math.max(1, Math.round(summary.durationSeconds)),
+      redScore: summary.redScore,
+      blueScore: summary.blueScore,
+      winner: summary.winner,
+      participants
+    });
+    this.activeMatchToken = null;
+  }
+
   public async joinRoom(roomId: string, password?: string): Promise<boolean> {
     this.teardownNetworkSession();
+    this.lastJoinError = null;
+    gameUI.lobbyError = null;
     await this.signaling.ensureConnected();
 
     return new Promise<boolean>((resolve) => {
@@ -510,10 +663,27 @@ export class GameApp {
       };
 
       const onError = (msg: any) => {
-        if (!resolved && (msg.code === 'ROOM_NOT_FOUND' || msg.code === 'INVALID_PASSWORD' || msg.code === 'ROOM_FULL')) {
+        if (
+          !resolved &&
+          (msg.code === 'ROOM_NOT_FOUND' ||
+            msg.code === 'INVALID_PASSWORD' ||
+            msg.code === 'ROOM_FULL' ||
+            msg.code === 'RANKED_ACCOUNT_REQUIRED')
+        ) {
           resolved = true;
           clearTimeout(timeout);
           cleanup();
+          const fallbackMsg =
+            msg.code === 'RANKED_ACCOUNT_REQUIRED'
+              ? 'Esta sala es Clasificatoria. Debes iniciar sesión con una cuenta verificada para entrar.'
+              : msg.code === 'INVALID_PASSWORD'
+                ? 'Contraseña incorrecta.'
+                : msg.code === 'ROOM_FULL'
+                  ? 'La sala está llena (máximo 30 jugadores).'
+                  : 'No se pudo entrar a la sala.';
+          const errMsg = String(msg.message || fallbackMsg);
+          this.lastJoinError = errMsg;
+          gameUI.lobbyError = errMsg;
           resolve(false);
         }
       };
@@ -536,7 +706,9 @@ export class GameApp {
         type: 'join_room',
         roomId,
         password,
-        nickname: gameUI.nickname || 'Guest'
+        nickname: gameUI.nickname || 'Guest',
+        isGuest: userProfile.isGuest,
+        accessToken: userProfile.jwt || undefined
       });
     });
   }
@@ -544,6 +716,7 @@ export class GameApp {
   private setupGuestState(roomId: string, msg: any): void {
     this.isHost = false;
     this.currentRoomId = roomId;
+    this.activeMatchToken = null;
     this.remoteInputs.clear();
 
     this.networkHost?.destroy();
@@ -552,6 +725,8 @@ export class GameApp {
 
     const profile = this.getLocalProfile();
     const client = new NetworkClient(this.signaling, profile.nickname, 7, {
+      userId: userProfile.id,
+      isGuest: userProfile.isGuest,
       avatar: profile.avatar,
       avatarType: profile.avatarType,
       kit: profile.kit,
@@ -560,6 +735,8 @@ export class GameApp {
     });
     this.networkClient = client;
 
+    gameUI.isPracticeMode = false;
+    gameUI.roomType = msg.roomType === 'ranked' ? 'ranked' : 'casual';
     gameUI.isHost = false;
     gameUI.isAdmin = false;
     gameUI.matchId = roomId;
@@ -577,6 +754,7 @@ export class GameApp {
       maxPlayers: msg.maxPlayers || 12,
       playersCount: 2,
       ping: gameUI.realPing || 20,
+      roomType: gameUI.roomType,
       isPrivate: false
     };
     gameUI.selectStadium((msg.stadiumId || msg.stadium || 'mediano') as any);
@@ -628,6 +806,10 @@ export class GameApp {
 
     client.onMatchBanner = (banner) => {
       gameUI.applyMatchBanner(banner as any);
+    };
+
+    client.onScoreEvent = (payload) => {
+      this.onScoreEventReceived?.(payload);
     };
 
     client.onRoomClosed = () => this.handleRemoteRoomClosed();

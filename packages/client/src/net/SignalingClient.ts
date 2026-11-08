@@ -18,6 +18,8 @@ export interface RoomConfig {
   scoreLimit?: number;
   teamsLocked?: boolean;
   stadiumId?: string;
+  roomType?: 'casual' | 'ranked';
+  timeZone?: string;
 }
 
 export interface SignalingMessage {
@@ -195,6 +197,9 @@ export class SignalingClient {
               if (typeof msg.timestamp === 'number') {
                 this.pingMs = Math.max(1, Math.round(Date.now() - msg.timestamp));
                 this.emit('telemetry', { pingMs: this.pingMs, onlineCount: this.onlineCount });
+                if (this.isOpen()) {
+                  this.send({ type: 'REPORT_PING', pingMs: this.pingMs });
+                }
               }
               return;
             }
