@@ -170,36 +170,77 @@ export class AuthService {
   }
 
   private async maybeSendVerificationEmail(email: string, username: string, code: string): Promise<boolean> {
+    const brevoApiKey = (process.env.BREVO_API_KEY || '').trim();
     const resendKey = (process.env.RESEND_API_KEY || '').trim();
-    if (!resendKey) {
-      console.info(`[AuthService] Código de verificación para ${username} <${email}>: ${code} (expira en 15m)`);
-      return false;
+    const from = process.env.VERIFICATION_FROM_EMAIL || 'LegacyX-GO <noreply@legacyx-go.gg>';
+
+    const emailHtml = `<div style="font-family:sans-serif;background:#090d14;color:#e6edf3;padding:24px;border:1px solid #00e5ff;border-radius:8px;max-width:480px;margin:0 auto">
+      <h2 style="color:#00e5ff;margin:0 0 12px;letter-spacing:1px">LEGACYX-GO // VERIFICACIÓN</h2>
+      <p style="color:#cbd5e1;font-size:15px;line-height:1.5">Hola <strong>${username}</strong>, ingresa este código de 6 dígitos en la aplicación web para activar tu cuenta competitiva:</p>
+      <div style="font-size:36px;font-weight:700;letter-spacing:10px;color:#ffd700;margin:24px 0;background:#05070a;padding:16px;text-align:center;border-radius:6px;border:1px dashed #ffd700">${code}</div>
+      <p style="font-size:13px;color:#8b949e;margin:0">Válido durante 15 minutos. Si no solicitaste esta cuenta, puedes ignorar este mensaje.</p>
+    </div>`;
+
+    // 1. Envío directo mediante Brevo API (Recomendado)
+    if (brevoApiKey) {
+      try {
+        const senderMatch = from.match(/^(.*?)\s*<(.+)>$/);
+        const senderName = senderMatch ? senderMatch[1].trim() : 'LegacyX-GO';
+        const senderEmail = senderMatch ? senderMatch[2].trim() : from;
+
+        const res = await fetch('https://api.brevo.com/v3/smtp/email', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'api-key': brevoApiKey,
+            Accept: 'application/json'
+          },
+          body: JSON.stringify({
+            sender: { name: senderName, email: senderEmail },
+            to: [{ email, name: username }],
+            subject: `Tu código de verificación LegacyX-GO: ${code}`,
+            htmlContent: emailHtml
+          })
+        });
+        if (res.ok) {
+          console.info(`[AuthService] Código ${code} enviado con éxito vía Brevo a ${email}`);
+          return true;
+        } else {
+          const errText = await res.text();
+          console.warn(`[AuthService] Falló envío Brevo API (${res.status}): ${errText}`);
+        }
+      } catch (err) {
+        console.warn('[AuthService] Error de conexión con Brevo API:', err);
+      }
     }
-    try {
-      const from = process.env.VERIFICATION_FROM_EMAIL || 'LegacyX-GO <noreply@legacyx-go.gg>';
-      const res = await fetch('https://api.resend.com/emails', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${resendKey}`
-        },
-        body: JSON.stringify({
-          from,
-          to: [email],
-          subject: `Tu código de verificación LegacyX-GO: ${code}`,
-          html: `<div style="font-family:sans-serif;background:#090d14;color:#e6edf3;padding:24px;border:1px solid #00e5ff">
-            <h2 style="color:#00e5ff;margin:0 0 12px">LEGACYX-GO // VERIFICACIÓN DE CUENTA</h2>
-            <p>Hola <strong>${username}</strong>, ingresa este código de 6 dígitos para activar tu cuenta competitiva:</p>
-            <div style="font-size:32px;font-weight:700;letter-spacing:8px;color:#ffd700;margin:16px 0">${code}</div>
-            <p style="font-size:12px;color:#8b949e">Válido durante 15 minutos.</p>
-          </div>`
-        })
-      });
-      return res.ok;
-    } catch (err) {
-      console.warn('[AuthService] Fallo envío SMTP/Resend, usando código en entorno:', err);
-      return false;
+
+    // 2. Envío mediante Resend API
+    if (resendKey) {
+      try {
+        const res = await fetch('https://api.resend.com/emails', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${resendKey}`
+          },
+          body: JSON.stringify({
+            from,
+            to: [email],
+            subject: `Tu código de verificación LegacyX-GO: ${code}`,
+            html: emailHtml
+          })
+        });
+        if (res.ok) {
+          console.info(`[AuthService] Código ${code} enviado con éxito vía Resend a ${email}`);
+          return true;
+        }
+      } catch (err) {
+        console.warn('[AuthService] Fallo envío Resend:', err);
+      }
     }
+
+    console.info(`[AuthService] Código de verificación para ${username} <${email}>: ${code} (expira en 15m)`);
+    return false;
   }
 
   public async fetchFullProfile(userId: string, bearerToken?: string): Promise<UserProfileRecord | null> {
