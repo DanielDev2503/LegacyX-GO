@@ -478,9 +478,9 @@ class UserProfileStore {
 
       this.pendingVerificationEmail = cleanEmail;
       this.pendingPasswordCache = password;
-      this.devVerificationCodeHint = generatedCode;
+      this.devVerificationCodeHint = null;
       this.gatekeeperTab = 'verify';
-      this.authNotice = 'Cuenta creada. Ingresa el código de verificación de 6 dígitos.';
+      this.authNotice = 'Cuenta creada. Revisa tu correo e ingresa el código de verificación de 6 dígitos.';
       return { ok: true };
     } catch {
       this.authError = 'Error de conexión al registrar tu cuenta.';
@@ -526,7 +526,33 @@ class UserProfileStore {
         return { ok: true };
       }
 
-      // Fallback directo contra Supabase RPC verify_account_code + token login
+      // 1. Intentar validar vía Supabase Auth OTP nativo si el código corresponde al {{ .Token }} del correo GoTrue
+      let supSessionToken: string | null = null;
+      try {
+        const supVerifyRes = await fetch(`${this.supabaseUrl}/auth/v1/verify`, {
+          method: 'POST',
+          headers: this.supabaseHeaders(),
+          body: JSON.stringify({
+            type: 'signup',
+            email: cleanEmail,
+            token: cleanCode
+          })
+        });
+        if (supVerifyRes.ok) {
+          const supVerifyData = await supVerifyRes.json();
+          supSessionToken = supVerifyData?.access_token || null;
+          // Sincronizar en profiles para que verify_account_code complete el registro
+          await fetch(`${this.supabaseUrl}/rest/v1/rpc/refresh_verification_code`, {
+            method: 'POST',
+            headers: this.supabaseHeaders(),
+            body: JSON.stringify({ p_email: cleanEmail, p_new_code: cleanCode })
+          });
+        }
+      } catch (err) {
+        console.warn('[userProfile] Falló chequeo previo Supabase OTP:', err);
+      }
+
+      // 2. Fallback / validación contra Supabase RPC verify_account_code + token login
       const rpcRes = await fetch(`${this.supabaseUrl}/rest/v1/rpc/verify_account_code`, {
         method: 'POST',
         headers: this.supabaseHeaders(),
@@ -537,6 +563,10 @@ class UserProfileStore {
       if (!rpcRes.ok || !verifyRow?.success) {
         this.authError = verifyRow?.message || 'Código de verificación inválido o expirado.';
         return { ok: false, error: this.authError ?? undefined };
+      }
+
+      if (supSessionToken) {
+        this.jwt = supSessionToken;
       }
 
       if (pwd) {
@@ -564,6 +594,27 @@ class UserProfileStore {
 
     this.isLoading = true;
     try {
+      // 1. Notificar a Supabase Auth GoTrue para que despache el correo vía SMTP (Brevo)
+      let supResendOk = false;
+      try {
+        const supResendRes = await fetch(`${this.supabaseUrl}/auth/v1/resend`, {
+          method: 'POST',
+          headers: this.supabaseHeaders(),
+          body: JSON.stringify({
+            type: 'signup',
+            email: cleanEmail
+          })
+        });
+        if (supResendRes.ok) {
+          supResendOk = true;
+        } else if (supResendRes.status === 429) {
+          this.authError = 'Por seguridad, debes esperar 60 segundos antes de reenviar el código.';
+          return { ok: false, error: this.authError };
+        }
+      } catch (err) {
+        console.warn('[userProfile] Falló envío Supabase auth/v1/resend:', err);
+      }
+
       const apiRes = await this.tryServerApi('/api/auth/resend-code', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -574,8 +625,8 @@ class UserProfileStore {
           this.authError = apiRes.data?.error || 'No se pudo reenviar el código.';
           return { ok: false, error: this.authError ?? undefined };
         }
-        this.devVerificationCodeHint = apiRes.data?.devVerificationCode ?? this.devVerificationCodeHint;
-        this.authNotice = 'Se generó un nuevo código válido por 15 minutos.';
+        this.devVerificationCodeHint = apiRes.data?.devVerificationCode ?? null;
+        this.authNotice = 'Nuevo código enviado por correo. Revisa tu bandeja de entrada.';
         return { ok: true };
       }
 
@@ -585,12 +636,12 @@ class UserProfileStore {
         headers: this.supabaseHeaders(),
         body: JSON.stringify({ p_email: cleanEmail, p_new_code: newCode })
       });
-      if (!rpcRes.ok) {
+      if (!rpcRes.ok && !supResendOk) {
         this.authError = 'No se pudo regenerar el código.';
         return { ok: false, error: this.authError };
       }
-      this.devVerificationCodeHint = newCode;
-      this.authNotice = 'Nuevo código de 6 dígitos generado (válido por 15 min).';
+      this.devVerificationCodeHint = null;
+      this.authNotice = 'Nuevo código enviado por correo. Revisa tu bandeja de entrada.';
       return { ok: true };
     } catch {
       this.authError = 'Error de red al reenviar el código.';

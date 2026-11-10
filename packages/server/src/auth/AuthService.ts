@@ -389,6 +389,28 @@ export class AuthService {
     const cleanEmail = String(params.email ?? '').trim().toLowerCase();
     const cleanCode = String(params.code ?? '').trim();
 
+    // Intentar primero validación contra Supabase Auth OTP si el código proviene del correo GoTrue
+    try {
+      const supVerifyRes = await fetch(`${this.supabaseUrl}/auth/v1/verify`, {
+        method: 'POST',
+        headers: this.buildHeaders(),
+        body: JSON.stringify({
+          type: 'signup',
+          email: cleanEmail,
+          token: cleanCode
+        })
+      });
+      if (supVerifyRes.ok) {
+        // Sincronizar en profiles para que verify_account_code complete el registro
+        await this.callRpc('refresh_verification_code', {
+          p_email: cleanEmail,
+          p_new_code: cleanCode
+        });
+      }
+    } catch (err) {
+      console.warn('[AuthService] Falló verificación previa Supabase OTP:', err);
+    }
+
     const rpcResult = await this.callRpc<{
       success: boolean;
       user_id?: string;
@@ -432,6 +454,21 @@ export class AuthService {
     error?: string;
   }> {
     const cleanEmail = String(email ?? '').trim().toLowerCase();
+
+    // Notificar a Supabase Auth para que envíe el correo vía SMTP configurado (Brevo)
+    try {
+      await fetch(`${this.supabaseUrl}/auth/v1/resend`, {
+        method: 'POST',
+        headers: this.buildHeaders(),
+        body: JSON.stringify({
+          type: 'signup',
+          email: cleanEmail
+        })
+      });
+    } catch (err) {
+      console.warn('[AuthService] Supabase resend error:', err);
+    }
+
     const newCode = this.generateSixDigitCode();
     const rpcRes = await this.callRpc<{ success: boolean; error?: string }>(
       'refresh_verification_code',
