@@ -109,7 +109,7 @@ export function createHttpServer(distPath: string = clientDistPath): http.Server
           return sendJson(res, result.success ? 200 : 400, result);
         }
 
-        if (parsedUrl.pathname === '/api/auth/resend' && req.method === 'POST') {
+        if ((parsedUrl.pathname === '/api/auth/resend' || parsedUrl.pathname === '/api/auth/resend-code') && req.method === 'POST') {
           const body = await readJsonBody(req);
           const result = await authService.resendVerificationCode(body.email);
           return sendJson(res, result.success ? 200 : 400, result);
