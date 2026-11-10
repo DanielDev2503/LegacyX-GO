@@ -138,6 +138,77 @@ class UserProfileStore {
 
   constructor() {
     this.loadPersistedSession();
+    void this.handleOAuthRedirect();
+  }
+
+  public loginWithGoogle(): void {
+    if (typeof window === 'undefined') return;
+    const redirectUrl = window.location.origin;
+    window.location.href = `${this.supabaseUrl}/auth/v1/authorize?provider=google&redirect_to=${encodeURIComponent(redirectUrl)}`;
+  }
+
+  public async handleOAuthRedirect(): Promise<boolean> {
+    if (typeof window === 'undefined') return false;
+    const hash = window.location.hash;
+    if (!hash || !hash.includes('access_token=')) {
+      return false;
+    }
+
+    try {
+      this.isLoading = true;
+      const params = new URLSearchParams(hash.replace(/^#/, ''));
+      const accessToken = params.get('access_token');
+      const refreshToken = params.get('refresh_token');
+
+      if (!accessToken) return false;
+
+      window.history.replaceState(null, '', window.location.pathname + window.location.search);
+
+      const userRes = await fetch(`${this.supabaseUrl}/auth/v1/user`, {
+        headers: this.supabaseHeaders(accessToken)
+      });
+      if (!userRes.ok) return false;
+      const userData = await userRes.json();
+      const userId = userData?.id;
+      if (!userId) return false;
+
+      let profile: any = null;
+      for (let attempt = 0; attempt < 4; attempt++) {
+        const pRes = await fetch(
+          `${this.supabaseUrl}/rest/v1/profiles?id=eq.${encodeURIComponent(userId)}&select=*`,
+          { headers: this.supabaseHeaders(accessToken) }
+        );
+        if (pRes.ok) {
+          const rows = await pRes.json();
+          profile = Array.isArray(rows) ? rows[0] : null;
+          if (profile) break;
+        }
+        await new Promise((r) => setTimeout(r, 250));
+      }
+
+      if (!profile) return false;
+
+      const rankRes = await fetch(
+        `${this.supabaseUrl}/rest/v1/player_rankings?player_id=eq.${encodeURIComponent(userId)}&select=*`,
+        { headers: this.supabaseHeaders(accessToken) }
+      );
+      const ranks = rankRes.ok ? await rankRes.json() : [];
+      const ranking = Array.isArray(ranks) ? ranks[0] : {};
+
+      this.applyServerProfilePayload({
+        profile,
+        ranking,
+        session: { access_token: accessToken, refresh_token: refreshToken }
+      });
+      void this.fetchLeaderboard(this.leaderboardCategory);
+      gameUI.navigateTo('LOBBY');
+      return true;
+    } catch (err) {
+      console.warn('[userProfile] Error procesando retorno OAuth:', err);
+      return false;
+    } finally {
+      this.isLoading = false;
+    }
   }
 
   private supabaseHeaders(token?: string | null): Record<string, string> {
@@ -395,8 +466,13 @@ class UserProfileStore {
 
       const signupData = await signupRes.json();
       if (!signupRes.ok) {
-        this.authError =
-          signupData?.msg || signupData?.error_description || 'Error al registrar la cuenta.';
+        const rawErr = signupData?.msg || signupData?.error_description || signupData?.message || '';
+        if (rawErr.toLowerCase().includes('mail') || rawErr.toLowerCase().includes('smtp') || signupRes.status >= 500) {
+          this.authError =
+            'Error al enviar el correo (SMTP): Verifica en Supabase la clave SMTP de Brevo (o desactiva "Confirm email" en Authentication > Providers > Email para permitir registro directo).';
+        } else {
+          this.authError = rawErr || 'Error al registrar la cuenta.';
+        }
         return { ok: false, error: this.authError ?? undefined };
       }
 

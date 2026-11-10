@@ -294,9 +294,14 @@ export class AuthService {
 
     const signupBody = (await signupRes.json()) as any;
     if (!signupRes.ok) {
+      const rawErr = signupBody?.msg || signupBody?.error_description || signupBody?.message || '';
+      const isSmtpErr =
+        rawErr.toLowerCase().includes('mail') || rawErr.toLowerCase().includes('smtp') || signupRes.status >= 500;
       return {
         success: false,
-        error: signupBody?.msg || signupBody?.error_description || signupBody?.message || 'Error al registrar la cuenta.'
+        error: isSmtpErr
+          ? 'Error al enviar el correo (SMTP): Verifica en Supabase la clave SMTP de Brevo (o desactiva "Confirm email" en Authentication > Providers > Email para permitir registro directo).'
+          : rawErr || 'Error al registrar la cuenta.'
       };
     }
 
