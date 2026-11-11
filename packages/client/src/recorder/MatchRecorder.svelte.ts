@@ -47,6 +47,62 @@ export interface MatchRecorderMetadata {
   players: LxrPlayerMeta[];
 }
 
+export async function compressReplayGzip(replay: LxrReplayFile): Promise<Uint8Array> {
+  const jsonStr = JSON.stringify(replay);
+  const uncompressed = new TextEncoder().encode(jsonStr);
+  if (typeof CompressionStream !== 'undefined') {
+    const cs = new CompressionStream('gzip');
+    const writer = cs.writable.getWriter();
+    writer.write(uncompressed);
+    writer.close();
+    const reader = cs.readable.getReader();
+    const chunks: Uint8Array[] = [];
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      if (value) chunks.push(value);
+    }
+    const totalLength = chunks.reduce((acc, c) => acc + c.length, 0);
+    const result = new Uint8Array(totalLength);
+    let offset = 0;
+    for (const c of chunks) {
+      result.set(c, offset);
+      offset += c.length;
+    }
+    return result;
+  }
+  return uncompressed;
+}
+
+export async function decompressReplayGzip(data: ArrayBuffer | Uint8Array): Promise<LxrReplayFile> {
+  const uint8 = data instanceof Uint8Array ? data : new Uint8Array(data);
+  if (uint8.length >= 2 && uint8[0] === 0x1f && uint8[1] === 0x8b && typeof DecompressionStream !== 'undefined') {
+    const ds = new DecompressionStream('gzip');
+    const writer = ds.writable.getWriter();
+    await (writer as any).write(uint8);
+    await writer.close();
+    const reader = ds.readable.getReader();
+    const chunks: Uint8Array[] = [];
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      if (value) chunks.push(value);
+    }
+    const totalLength = chunks.reduce((acc, c) => acc + c.length, 0);
+    const result = new Uint8Array(totalLength);
+    let offset = 0;
+    for (const c of chunks) {
+      result.set(c, offset);
+      offset += c.length;
+    }
+    const str = new TextDecoder().decode(result);
+    return JSON.parse(str) as LxrReplayFile;
+  } else {
+    const str = new TextDecoder().decode(uint8);
+    return JSON.parse(str) as LxrReplayFile;
+  }
+}
+
 function selectSupportedVideoMime(): { mimeType: string; ext: 'webm' | 'mp4' } {
   if (typeof MediaRecorder === 'undefined' || typeof MediaRecorder.isTypeSupported !== 'function') {
     return { mimeType: '', ext: 'webm' };
@@ -398,6 +454,11 @@ class MatchRecorderStore {
     this.lastReplayData = valid;
     this.hasRecordedClip = true;
     return valid;
+  }
+
+  public loadReplayData(replay: LxrReplayFile): void {
+    this.lastReplayData = replay;
+    this.hasRecordedClip = true;
   }
 
   public async loadReplayFile(file: File): Promise<LxrReplayFile> {

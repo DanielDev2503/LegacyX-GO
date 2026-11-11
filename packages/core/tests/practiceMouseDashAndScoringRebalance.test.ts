@@ -259,20 +259,22 @@ describe('Gates 3, 4, 5 & BinaryProtocol 12-Byte Mouse Aim', () => {
       expect(engine.matchStats.get('r1')!.points).toBe(40);
     });
 
-    it('awards +10 pts for completed pass only when >= 90 px and enforces 3.0s (180 ticks) cooldown', () => {
+    it('awards +10 pts for completed pass only when >= 140 px and enforces 3.0s (180 ticks) cooldown', () => {
       const pRed1 = new Player({ id: 'r1', name: 'Passer', team: 'red', isHost: true });
       const pRed2 = new Player({ id: 'r2', name: 'Receiver', team: 'red' });
+      const pBlue = new Player({ id: 'b1', name: 'Defender', team: 'blue' });
       engine.addPlayer(pRed1);
       engine.addPlayer(pRed2);
+      engine.addPlayer(pBlue);
       engine.fsm.currentState = MatchPhase.PLAYING;
 
-      expect(MIN_PASS_DISTANCE_PX).toBe(90);
+      expect(MIN_PASS_DISTANCE_PX).toBe(140);
       expect(COMPLETED_PASS_COOLDOWN_TICKS).toBe(180);
 
       const d1 = engine.playerDiscs.get('r1')!;
       const d2 = engine.playerDiscs.get('r2')!;
 
-      // Short pass (50 px < 90 px) -> 0 pts
+      // Short pass (70 px < 140 px) -> 0 pts
       d1.pos.set(-100, -100);
       d2.pos.set(-30, -100);
       engine.ball.pos.set(-76, -100);
@@ -282,24 +284,32 @@ describe('Gates 3, 4, 5 & BinaryProtocol 12-Byte Mouse Aim', () => {
       expect(engine.matchStats.get('r1')?.passes ?? 0).toBe(0);
       expect(engine.matchStats.get('r1')?.points ?? 0).toBe(0);
 
-      // Valid pass (>= 90 px, aimed vertically away from goal posts) -> +10 pts
+      // Valid pass (>= 140 px, aimed vertically away from goal posts) -> +10 pts
       d1.pos.set(-150, -120);
-      d2.pos.set(-150, 20);
+      d1.vel.set(0, 0);
+      d2.pos.set(-150, 70);
+      d2.vel.set(0, 0);
       engine.ball.pos.set(-150, -96);
       engine.ball.vel.set(0, 0);
       engine.tick(new Map([['r1', INPUT_KICK]]));
-      for (let i = 0; i < 30; i++) engine.tick(new Map());
+      for (let i = 0; i < 40; i++) {
+        engine.tick(new Map());
+      }
 
       expect(engine.matchStats.get('r1')?.passes).toBe(1);
       expect(engine.matchStats.get('r1')?.points).toBe(10);
 
       // Immediate second pass within 180 ticks -> cooldown prevents extra +10 pts
       d1.pos.set(-150, -120);
-      d2.pos.set(-150, 20);
+      d1.vel.set(0, 0);
+      d2.pos.set(-150, 70);
+      d2.vel.set(0, 0);
       engine.ball.pos.set(-150, -96);
       engine.ball.vel.set(0, 0);
       engine.tick(new Map([['r1', INPUT_KICK]]));
-      for (let i = 0; i < 30; i++) engine.tick(new Map());
+      for (let i = 0; i < 40; i++) {
+        engine.tick(new Map());
+      }
 
       expect(engine.matchStats.get('r1')?.passes).toBe(1);
       expect(engine.matchStats.get('r1')?.points).toBe(10);

@@ -118,6 +118,11 @@ export class GameApp {
         void userProfile.fetchLeaderboard(userProfile.leaderboardCategory);
       }
     });
+    this.signaling.on('ROOM_PING_RESULT', (msg: any) => {
+      if (typeof msg?.roomId === 'string' && typeof msg?.ping === 'number') {
+        gameUI.updateRoomHoverPing(msg.roomId, msg.ping);
+      }
+    });
 
     if (typeof window !== 'undefined') {
       window.addEventListener('beforeunload', () => {
@@ -335,6 +340,10 @@ export class GameApp {
     if (!this.networkHost || this.networkHost.matchPhase === phase) return;
     this.networkHost.matchPhase = phase;
     this.networkHost.broadcastRoomStateSync();
+  }
+
+  public probeRoomPing(roomId: string): void {
+    this.signaling.probeRoomPing(roomId);
   }
 
   public setKitVariant(team: 'red' | 'blue', variant: 'home' | 'away'): void {
@@ -865,7 +874,7 @@ export class GameApp {
         peerId: 'local',
         nickname: profile.nickname,
         name: profile.nickname,
-        team: 'spectator',
+        team: 'red',
         number: 1,
         isAdmin: true,
         isHost: true,

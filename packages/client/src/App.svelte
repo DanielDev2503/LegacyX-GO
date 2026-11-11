@@ -17,7 +17,9 @@
     INPUT_FLAG_DASH,
     INPUT_FLAG_MAGNUS_LEFT,
     INPUT_FLAG_MAGNUS_RIGHT,
+    INPUT_FLAG_TYPING,
     INPUT_FLAG_MOUSE_AIM,
+    INPUT_FLAG_MOUSE_ACTIVE,
     lerp
   } from '@legacyx/core';
 
@@ -299,15 +301,17 @@
         engine.applyModifiers(gameUI.physicsModifiers);
         wireHostEngineEvents(engine);
       }
+      engine.isPracticeMode = true;
       engine.loadStadium('mediano');
       syncEngineMatchLimits(engine);
       rendererInstance?.setStadium(createStadium('mediano'));
       syncEnginePlayers();
+      engine.setPlayerTeam(1, 'red');
       engine.resetPositions();
       gameUI.applyMatchBanner({ kind: 'NONE' });
       gameUI.fsmPhase = 'STOPPED';
       gameUI.matchPhase = 0;
-      gameUI.enforceStopMenu();
+      gameUI.closeOverlay();
     };
 
     gameUI.onTeamChanged = (playerId: number, team: 'red' | 'blue' | 'spectator') => {
@@ -339,7 +343,16 @@
     };
 
     gameUI.onChatSent = (text: string) => {
-      if (gameUI.isHost) {
+      if (gameUI.isPracticeMode || (!gameApp.networkHost && !gameApp.networkClient)) {
+        const msgId = `local-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+        gameUI.addChatMessage({
+          id: msgId,
+          team: gameUI.myTeam === 'red' ? 'RED' : gameUI.myTeam === 'blue' ? 'BLUE' : 'SPEC',
+          sender: gameUI.nickname,
+          senderTeam: gameUI.myTeam,
+          text
+        });
+      } else if (gameUI.isHost) {
         gameApp.networkHost?.sendChat(gameUI.nickname, text, gameUI.myTeam);
       } else {
         gameApp.networkClient?.sendChat(text);
@@ -352,31 +365,47 @@
       }
     };
 
-    // Recepción de eventos de puntos flotantes para clientes No-Host (paridad 100% con Host)
+    function dispatchScoreEvent(ev: any): void {
+      if (!ev) return;
+      const pId = String(ev.playerId ?? '');
+      const player = gameUI.rosterPlayers.find((p) => String(p.id) === pId || p.peerId === pId);
+      const pName = player?.name || player?.nickname || (pId === '1' ? 'Host' : `Jugador ${pId}`);
+      const cat = String(ev.category || ev.eventType || '').toLowerCase();
+      let eventType = 'EVENTO';
+      if (cat.includes('power')) eventType = 'GOL POTENCIA';
+      else if (cat.includes('curve_goal')) eventType = 'GOL EFECTO';
+      else if (cat.includes('curve_assist')) eventType = 'ASISTENCIA EFECTO';
+      else if (cat.includes('assist')) eventType = 'ASISTENCIA';
+      else if (cat.includes('goal') && !cat.includes('own')) eventType = 'GOL';
+      else if (cat.includes('own')) eventType = 'AUTOGOL';
+      else if (cat.includes('save')) eventType = 'ATAJADA';
+      else if (cat.includes('shot')) eventType = 'TIRO';
+      else if (cat.includes('pass')) eventType = 'PASE';
+      else if (cat.includes('hattrick')) eventType = 'HATTRICK';
+
+      const pts = Number(ev.points ?? 0);
+      const pointsText = `${pts >= 0 ? '+' : ''}${pts} PTS`;
+      const team = player?.team === 'red' || player?.team === 'blue' ? player.team : 'neutral';
+
+      gameUI.pushScoreEvent({
+        playerName: pName,
+        eventType,
+        pointsText,
+        color: String(ev.color || (team === 'red' ? '#ff0055' : team === 'blue' ? '#00e5ff' : '#ffd700')),
+        team
+      });
+    }
+
+    // Recepción de eventos de puntos deslizantes para clientes No-Host (paridad 100% con Host)
     gameApp.onScoreEventReceived = (ev: Record<string, unknown>) => {
-      const cat = String(ev.category || '');
-      if (isFloatingScoreCategoryEnabled(gameUI.settings, cat)) {
-        rendererInstance?.addFloatingScore(
-          String(ev.text || ''),
-          Number(ev.x || 0),
-          Number(ev.y || 0),
-          String(ev.color || '#ffd700')
-        );
-      }
+      dispatchScoreEvent(ev);
     };
 
     // Conectar eventos del motor al sintetizador procedural Web Audio API, Screen Shake y Red P2P
     function wireHostEngineEvents(hostEngine: EngineInstance): void {
       hostEngine.on('score_event', (ev: any) => {
         if (!ev) return;
-        if (isFloatingScoreCategoryEnabled(gameUI.settings, String(ev.category || ''))) {
-          rendererInstance?.addFloatingScore(
-            String(ev.text || ''),
-            Number(ev.x || 0),
-            Number(ev.y || 0),
-            String(ev.color || '#ffd700')
-          );
-        }
+        dispatchScoreEvent(ev);
         gameApp.networkHost?.broadcastScoreEvent(ev);
       });
 
@@ -632,7 +661,7 @@
       if (!isInputActive || isTyping) {
         gameUI.isFocusingBall = false;
         renderer.focusBallOnly = false;
-        return { inputMask: 0 };
+        return { inputMask: isTyping ? INPUT_FLAG_TYPING : 0, aimAngle: null, aimThrottle: 0 };
       }
 
       const focusHeld = gameUI.keybinds.focusBall.some((k) => keyState.get(k));
@@ -662,7 +691,7 @@
           const mouseWorld = renderer.clientToWorld(mouseClientX, mouseClientY);
           const vec = computeMouseMovementVector(localPos.x, localPos.y, mouseWorld.x, mouseWorld.y);
           if (vec.active) {
-            mask |= INPUT_FLAG_MOUSE_AIM;
+            mask |= INPUT_FLAG_MOUSE_AIM | INPUT_FLAG_MOUSE_ACTIVE;
             return {
               inputMask: mask,
               aimAngle: vec.angle,
@@ -670,7 +699,7 @@
             };
           }
         }
-        return { inputMask: mask, aimAngle: 0, aimThrottle: 0 };
+        return { inputMask: mask, aimAngle: null, aimThrottle: 0 };
       }
 
       if (gameUI.keybinds.up.some((k) => keyState.get(k))) mask |= INPUT_FLAG_UP;
@@ -678,7 +707,7 @@
       if (gameUI.keybinds.left.some((k) => keyState.get(k))) mask |= INPUT_FLAG_LEFT;
       if (gameUI.keybinds.right.some((k) => keyState.get(k))) mask |= INPUT_FLAG_RIGHT;
 
-      return { inputMask: mask };
+      return { inputMask: mask, aimAngle: null, aimThrottle: 0 };
     }
 
     function dispatchImmediateGuestInput(): void {
@@ -846,8 +875,10 @@
       const phase = snap.phase ?? 0;
       if (phase === MatchPhase.STOP || phase === 0) {
         gameUI.matchTimeFormatted = '00:00';
+        gameUI.matchTimerSeconds = 0;
       } else {
         const totalSec = snap.matchTimer ?? 0;
+        gameUI.matchTimerSeconds = totalSec;
         const mins = Math.floor(totalSec / 60).toString().padStart(2, '0');
         const secs = (totalSec % 60).toString().padStart(2, '0');
         gameUI.matchTimeFormatted = `${mins}:${secs}`;
@@ -1151,9 +1182,11 @@
           const phase = currSnapshot.phase ?? (engine ? engine.fsm.state : 0);
           if (phase === MatchPhase.STOP || phase === 0) {
             gameUI.matchTimeFormatted = '00:00';
+            gameUI.matchTimerSeconds = 0;
             gameUI.handleMatchPhaseTransition(0);
           } else {
             const totalSec = currSnapshot.matchTimer ?? (engine ? Math.floor(engine.fsm.matchTicksElapsed / 60) : 0);
+            gameUI.matchTimerSeconds = totalSec;
             const mins = Math.floor(totalSec / 60).toString().padStart(2, '0');
             const secs = (totalSec % 60).toString().padStart(2, '0');
             gameUI.matchTimeFormatted = `${mins}:${secs}`;

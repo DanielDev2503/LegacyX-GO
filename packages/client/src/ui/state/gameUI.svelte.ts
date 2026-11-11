@@ -32,7 +32,17 @@ export type ModalType =
   | 'stats'
   | 'replayViewer';
 
-export type BallSkinType = 'classic' | 'retro' | 'neon';
+export type BallSkinType = 'classic' | 'retro' | 'neon' | 'cyber' | 'gold' | 'solid';
+
+export interface SlidingScoreEvent {
+  id: string;
+  playerName: string;
+  eventType: string;
+  pointsText: string;
+  color: string;
+  team?: 'red' | 'blue' | 'neutral';
+  timestamp: number;
+}
 export type StadiumPresetKey =
   | 'individual'
   | 'small'
@@ -135,6 +145,9 @@ export interface MatchBannerPayload {
   redScore?: number;
   blueScore?: number;
   durationMs?: number;
+  speedKmh?: number;
+  isPower?: boolean;
+  isCurve?: boolean;
 }
 
 export interface SettingsConfig {
@@ -492,6 +505,11 @@ export interface PlayerStatEntry {
   assists: number;
   passes: number;
   shots: number;
+  saves?: number;
+  powerGoals?: number;
+  curveGoals?: number;
+  curveAssists?: number;
+  hasHattrickBonus?: boolean;
   touches?: number;
   ownGoals?: number;
   isCaptain?: boolean;
@@ -774,6 +792,28 @@ class GameUIStore {
   public previousMatchPhase = $state<number>(0);
   public hasJoinedInitialSync = $state<boolean>(false);
   public isGoldenGoal = $state(false);
+  public currentSlidingEvent = $state<SlidingScoreEvent | null>(null);
+  public matchTimerSeconds = $state<number>(0);
+  private slidingEventTimeout: ReturnType<typeof setTimeout> | null = null;
+
+  public pushScoreEvent(event: Omit<SlidingScoreEvent, 'id' | 'timestamp'> & { id?: string; timestamp?: number }): void {
+    const fullEvent: SlidingScoreEvent = {
+      id: event.id || Math.random().toString(36).slice(2, 9),
+      playerName: event.playerName,
+      eventType: event.eventType,
+      pointsText: event.pointsText,
+      color: event.color || '#00e5ff',
+      team: event.team || 'neutral',
+      timestamp: event.timestamp || Date.now()
+    };
+    this.currentSlidingEvent = fullEvent;
+    if (this.slidingEventTimeout) clearTimeout(this.slidingEventTimeout);
+    this.slidingEventTimeout = setTimeout(() => {
+      if (this.currentSlidingEvent?.id === fullEvent.id) {
+        this.currentSlidingEvent = null;
+      }
+    }, 2400);
+  }
   public redPossession = $state(50);
   public bluePossession = $state(50);
   public pingMs = $state(0);
@@ -1048,6 +1088,13 @@ class GameUIStore {
       client.connect().catch(() => {
         // Fallback silently if offline
       });
+    }
+  }
+
+  public updateRoomHoverPing(roomId: string, ping: number): void {
+    const room = this.rooms.find((r) => r.id === roomId);
+    if (room) {
+      room.ping = ping;
     }
   }
 
@@ -2269,7 +2316,7 @@ class GameUIStore {
       peerId: 'local',
       nickname: profile.nickname,
       name: profile.nickname,
-      team: 'spectator',
+      team: 'red',
       number: 10,
       isAdmin: true,
       isHost: true,
@@ -2283,7 +2330,7 @@ class GameUIStore {
 
     this.rosterPlayers = [localPlayer];
     this.navigateTo('IN_GAME');
-    this.openOverlay('TEAM_MANAGEMENT');
+    this.closeOverlay();
     if (this.onStartPracticeMode) {
       this.onStartPracticeMode();
     }

@@ -240,7 +240,10 @@
           <div
             class="room-row"
             role="listitem"
-            onmouseenter={() => (hoveredRoomId = room.id)}
+            onmouseenter={() => {
+              hoveredRoomId = room.id;
+              gameApp.probeRoomPing(room.id);
+            }}
             onmouseleave={() => {
               if (hoveredRoomId === room.id) hoveredRoomId = null;
             }}
@@ -338,6 +341,16 @@
           onmouseenter={() => soundFX.playUIHover()}
           onclick={() => {
             soundFX.playUIClick();
+            if (!userProfile.isAuthenticated) {
+              gameUI.pushScoreEvent({
+                playerName: 'Debes iniciar sesión para ver repeticiones en la nube',
+                eventType: 'INICIA SESIÓN',
+                pointsText: '',
+                color: '#ff4757',
+                team: 'neutral'
+              });
+              return;
+            }
             gameUI.openModal('REPLAY_VIEWER');
           }}
         >
@@ -375,10 +388,15 @@
           <div class="player-details">
             <div class="nick-row">
               <span class="player-nick">{gameUI.nickname}</span>
-              {#if userProfile.isGuest}
-                <span class="role-chip guest">INVITADO</span>
-              {:else}
-                <span class="role-chip verified">{userProfile.role.toUpperCase()}</span>
+              {#if !userProfile.isGuest && userProfile.isAuthenticated}
+                <button
+                  type="button"
+                  class="btn-logout-compact"
+                  onclick={() => userProfile.logout()}
+                  title="Cerrar sesión"
+                >
+                  CERRAR SESIÓN
+                </button>
               {/if}
             </div>
             <span class="player-sub">
@@ -1116,22 +1134,23 @@
     text-overflow: ellipsis;
   }
 
-  .role-chip {
-    padding: 1px 5px;
-    border-radius: 3px;
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 9px;
+  .btn-logout-compact {
+    padding: 2px 7px;
+    font-size: 0.65rem;
     font-weight: 700;
+    font-family: 'Space Grotesk', sans-serif;
+    color: #ff4757;
+    background: rgba(255, 71, 87, 0.12);
+    border: 1px solid rgba(255, 71, 87, 0.35);
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all 0.15s ease;
   }
 
-  .role-chip.guest {
-    background: rgba(255, 215, 0, 0.15);
-    color: #ffd700;
-  }
-
-  .role-chip.verified {
-    background: rgba(0, 229, 255, 0.16);
-    color: #00e5ff;
+  .btn-logout-compact:hover {
+    background: rgba(255, 71, 87, 0.25);
+    border-color: #ff4757;
+    color: #ffffff;
   }
 
   .player-sub {

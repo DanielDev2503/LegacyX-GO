@@ -4,7 +4,7 @@ export interface BufferedClientInput {
   tick: number;
   mask: number;
   inputMask?: number;
-  aimAngle?: number;
+  aimAngle?: number | null;
   aimThrottle?: number;
   curve?: { x: number; y: number };
   isTurbo?: boolean;
@@ -32,7 +32,7 @@ export class ClientPredictionReconciler {
   public visualOffset: { x: number; y: number } = { x: 0, y: 0 };
   private readonly replayMap = new Map<
     number,
-    { inputMask: number; aimAngle?: number; aimThrottle?: number }
+    { inputMask: number; aimAngle?: number | null; aimThrottle?: number }
   >();
 
   public get pendingInputs(): BufferedClientInput[] {
@@ -48,11 +48,11 @@ export class ClientPredictionReconciler {
   }
 
   public recordInput(input: BufferedClientInput): void;
-  public recordInput(tick: number, mask: number, aimAngle?: number, aimThrottle?: number): void;
+  public recordInput(tick: number, mask: number, aimAngle?: number | null, aimThrottle?: number): void;
   public recordInput(
     inputOrTick: BufferedClientInput | number,
     maskArg?: number,
-    aimAngle?: number,
+    aimAngle?: number | null,
     aimThrottle?: number
   ): void {
     if (typeof inputOrTick === 'number') {
@@ -142,10 +142,12 @@ export class ClientPredictionReconciler {
     this.replayMap.clear();
     for (let i = 0; i < this.inputBuffer.length; i++) {
       const pending = this.inputBuffer[i]!;
+      const m = pending.inputMask ?? pending.mask ?? 0;
+      const isMouseActive = (m & INPUT_FLAG_MOUSE_AIM) !== 0 && pending.aimAngle !== null && pending.aimAngle !== undefined;
       this.replayMap.set(localDiscId, {
-        inputMask: pending.inputMask ?? pending.mask ?? 0,
-        aimAngle: pending.aimAngle,
-        aimThrottle: pending.aimThrottle
+        inputMask: m,
+        aimAngle: isMouseActive ? pending.aimAngle : null,
+        aimThrottle: isMouseActive ? (pending.aimThrottle ?? 0) : 0
       });
       engine.step(this.replayMap, true);
     }

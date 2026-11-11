@@ -320,7 +320,7 @@ export class NetworkClient {
   public sendInput(
     inputMask: number,
     tick: number,
-    aimAngle: number = 0,
+    aimAngle?: number | null,
     aimThrottle: number = 1
   ): void {
     if (!this.peer) return;
@@ -393,11 +393,22 @@ export class NetworkClient {
     return this.jitterBuffer.getInterpolatedState(performance.now());
   }
 
+  private lastTypingStateSent: boolean | null = null;
+
+  public sendTyping(isTyping: boolean): void {
+    if (this.lastTypingStateSent === isTyping) return;
+    this.lastTypingStateSent = isTyping;
+    this.peer?.sendReliable({
+      type: 'CHAT_TYPING',
+      isTyping
+    });
+  }
+
   public startPingProbe(): void {
     if (this.pingIntervalId !== null) return;
     this.pingIntervalId = setInterval(() => {
       if (this.peer) {
-        this.peer.sendReliable({
+        this.peer.sendUnreliableMessage({
           type: 'PING_PROBE',
           t: performance.now()
         });

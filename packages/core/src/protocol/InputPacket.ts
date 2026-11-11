@@ -5,8 +5,11 @@ import {
   INPUT_MAGNUS_LEFT,
   INPUT_MAGNUS_RIGHT,
   INPUT_TYPING,
-  INPUT_MOUSE_AIM
+  INPUT_MOUSE_AIM,
+  INPUT_MOUSE_ACTIVE
 } from '../game/Player';
+
+export const AIM_ANGLE_NULL_SENTINEL = 0xFF; // Sentinel para indicar aimAngle = null
 
 export interface InputData {
   sequence: number;
@@ -18,7 +21,7 @@ export interface InputData {
   isTurbo?: boolean | undefined;
   triggerDash?: boolean | undefined;
   isTyping?: boolean | undefined;
-  aimAngle?: number | undefined;    // Ángulo continuo en radianes [-PI, PI]
+  aimAngle?: number | null | undefined;    // Ángulo continuo en radianes [-PI, PI] o null si teclado/inactivo
   aimThrottle?: number | undefined; // Magnitud proporcional [0..1] (amortiguación fina cerca del cursor)
 }
 
@@ -27,15 +30,15 @@ export class InputPacket {
   public static readonly MOUSE_BYTE_LENGTH = 12;
 
   /**
-   * Encodes an input message into a clean 9-byte ArrayBuffer (or 12-byte when INPUT_MOUSE_AIM is active).
+   * Encodes an input message into a clean 9-byte ArrayBuffer (or 12-byte when INPUT_MOUSE_ACTIVE is active).
    * Byte 0: OP_INPUT (0x01)
    * Bytes 1-4: sequence (uint32)
    * Bytes 5-6: inputMask (uint16: bits 0-10 sin colisiones)
    *   Bit 0..9: teclas y acciones
-   *   Bit 10: INPUT_MOUSE_AIM (vector continuo 360°)
+   *   Bit 10: INPUT_MOUSE_AIM / INPUT_MOUSE_ACTIVE (vector continuo 360°)
    * Bytes 7-8: clientTimestamp (uint16)
    * Optional Bytes 9-10: quantized aimAngle int16 (rad * 10000)
-   * Optional Byte 11: quantized aimThrottle uint8 (0..255)
+   * Optional Byte 11: quantized aimThrottle uint8 (0..255, 0xFF = centinela null)
    */
   public static encode(data: InputData, buffer?: ArrayBuffer): ArrayBuffer {
     let mask = data.inputMask || 0;
@@ -46,10 +49,15 @@ export class InputPacket {
     if (data.isTyping) mask |= INPUT_TYPING;
 
     const hasMouseAim =
-      (mask & INPUT_MOUSE_AIM) !== 0 ||
-      (data.aimAngle !== undefined && (data.aimThrottle ?? 1) > 0);
+      Boolean((mask & (INPUT_MOUSE_AIM | INPUT_MOUSE_ACTIVE))) &&
+      data.aimAngle !== null &&
+      data.aimAngle !== undefined &&
+      (data.aimThrottle ?? 0) > 0;
+
     if (hasMouseAim) {
-      mask |= INPUT_MOUSE_AIM;
+      mask |= INPUT_MOUSE_ACTIVE;
+    } else {
+      mask &= ~(INPUT_MOUSE_ACTIVE | INPUT_MOUSE_AIM);
     }
 
     const neededBytes = hasMouseAim ? InputPacket.MOUSE_BYTE_LENGTH : InputPacket.BYTE_LENGTH;
@@ -66,7 +74,7 @@ export class InputPacket {
 
     if (hasMouseAim) {
       const qAngle = Math.max(-32767, Math.min(32767, Math.round((data.aimAngle ?? 0) * 10000)));
-      const qThrottle = Math.max(0, Math.min(255, Math.round((data.aimThrottle ?? 1) * 255)));
+      const qThrottle = Math.max(0, Math.min(254, Math.round((data.aimThrottle ?? 1) * 255)));
       view.setInt16(9, qAngle, false);
       view.setUint8(11, qThrottle);
     }
@@ -101,17 +109,24 @@ export class InputPacket {
     const magnusLeft = (inputMask & INPUT_MAGNUS_LEFT) !== 0;
     const magnusRight = (inputMask & INPUT_MAGNUS_RIGHT) !== 0;
     const isTyping = (inputMask & INPUT_TYPING) !== 0;
-    const hasMouseAim = (inputMask & INPUT_MOUSE_AIM) !== 0 && view.byteLength >= InputPacket.MOUSE_BYTE_LENGTH;
+    const hasMouseAim = (inputMask & (INPUT_MOUSE_AIM | INPUT_MOUSE_ACTIVE)) !== 0 && view.byteLength >= InputPacket.MOUSE_BYTE_LENGTH;
 
     const curveInput = magnusLeft ? 1 : (magnusRight ? 2 : 0);
     const curveX = magnusLeft ? -1 : (magnusRight ? 1 : 0);
     const curveY = 0;
 
-    let aimAngle: number | undefined;
-    let aimThrottle: number | undefined;
+    let aimAngle: number | null = null;
+    let aimThrottle: number | undefined = undefined;
     if (hasMouseAim) {
-      aimAngle = view.getInt16(9, false) / 10000;
-      aimThrottle = view.getUint8(11) / 255;
+      const qAngle = view.getInt16(9, false);
+      const qThrottle = view.getUint8(11);
+      if (qThrottle === AIM_ANGLE_NULL_SENTINEL || qAngle === 0x7fff || qThrottle === 0) {
+        aimAngle = null;
+        aimThrottle = 0;
+      } else {
+        aimAngle = qAngle / 10000;
+        aimThrottle = qThrottle / 255;
+      }
     }
 
     return {
@@ -124,7 +139,7 @@ export class InputPacket {
       isTurbo,
       triggerDash,
       isTyping,
-      aimAngle,
+      aimAngle: aimAngle ?? undefined,
       aimThrottle
     };
   }

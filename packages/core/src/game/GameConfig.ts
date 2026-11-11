@@ -14,8 +14,8 @@ export interface GameplayConfig {
   dashDistance: number;            // min: 3.75, max: 112.5, def: 37.5 (px, ~7 ticks continuos)
   dashCooldown: number;            // min: 0.0, max: 5.0, def: 1.0 (s)
   staminaRechargeRate: number;     // min: 5.0, max: 100.0, def: 25.0 (%/s)
-  staminaRegenMoving: boolean;     // default: true
-  staminaRegenMovingRate: number;  // min: 0, max: 200, def: 100 (% respecto a reposo)
+  staminaRegenMoving: boolean;     // default: false
+  staminaRegenMovingRate: number;  // min: 0, max: 200, def: 25 (% respecto a reposo)
   magnusCurveStrength: number;     // min: 0.0, max: 5.0, def: 1.05 (0.0x - 5.0x)
   ballMass: number;                // min: 0.1, max: 10.0, def: 0.67
   playerMass: number;              // min: 0.1, max: 10.0, def: 2.0
@@ -163,7 +163,7 @@ export const GAMEPLAY_CONFIG_LIMITS: Record<
     min: 0,
     max: 200,
     step: 5,
-    default: 100,
+    default: 25,
     label: 'Velocidad Recarga en Movimiento',
     unit: '%',
     description: 'Porcentaje de recarga al desplazarse sin usar Turbo (100% = igual que en reposo).'

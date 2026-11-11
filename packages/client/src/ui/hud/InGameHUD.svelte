@@ -1,5 +1,6 @@
 <script lang="ts">
   import { gameUI } from '../state/gameUI.svelte.js';
+  import { userProfile } from '../state/userProfile.svelte.js';
   import { soundFX } from '../../audio/SoundFX.js';
   import { matchRecorder } from '../../recorder/MatchRecorder.svelte.js';
   import {
@@ -8,6 +9,21 @@
     getMentionCandidates,
     segmentChatMentions
   } from '../utils/chatMentions.js';
+
+  let guestRecWarning = $state(false);
+
+  const remainingSeconds = $derived.by(() => {
+    if (gameUI.timeLimit <= 0) return 999;
+    return Math.max(0, gameUI.timeLimit * 60 - gameUI.matchTimerSeconds);
+  });
+
+  const isWarning30s = $derived(
+    gameUI.matchPhase === 1 &&
+    gameUI.timeLimit > 0 &&
+    !gameUI.isGoldenGoal &&
+    remainingSeconds <= 30 &&
+    remainingSeconds > 0
+  );
 
   let chatMessage = $state('');
   let chatCursor = $state(0);
@@ -316,6 +332,13 @@
 
   function toggleMatchRecording() {
     soundFX.playUIClick();
+    if (!matchRecorder.isRecording && (userProfile.isGuest || !userProfile.isAuthenticated)) {
+      guestRecWarning = true;
+      setTimeout(() => {
+        guestRecWarning = false;
+      }, 3500);
+      return;
+    }
     const canvas =
       typeof document !== 'undefined'
         ? (document.querySelector('.canvas-layer canvas') as HTMLCanvasElement | null)
@@ -380,7 +403,7 @@
     </div>
 
     <!-- B) Cartucho Central: Marcador y Reloj -->
-    <div class="top-card top-card-center">
+    <div class="top-card top-card-center" class:is-warning-30s={isWarning30s}>
       <div class="scoreboard-main-row">
         <!-- Tarjeta de Siglas RED -->
         <div
@@ -406,9 +429,6 @@
             <line x1="9" y1="2" x2="15" y2="2"></line>
           </svg>
           <span class="timer-clock" id="hud-timer">{gameUI.matchPhase === 0 ? '00:00' : gameUI.matchTimeFormatted}</span>
-          {#if gameUI.isGoldenGoal}
-            <span class="golden-goal-chip">GOL DE ORO</span>
-          {/if}
         </div>
 
         <span class="team-score-number" id="hud-score-blue">{gameUI.blueScore}</span>
@@ -427,7 +447,31 @@
           {blueActiveKit?.tag || 'BLUE'}
         </div>
       </div>
+
+      {#if gameUI.isGoldenGoal}
+        <div class="golden-goal-floating-badge" title="Gol de Oro activo: el próximo gol gana el encuentro">
+          <svg class="glowing-ball-svg" viewBox="0 0 24 24" fill="currentColor">
+            <circle cx="12" cy="12" r="9" fill="#ffd700"></circle>
+            <circle cx="12" cy="12" r="3.5" fill="#081221"></circle>
+          </svg>
+          <span>GOL DE ORO</span>
+        </div>
+      {/if}
     </div>
+
+    <!-- TARJETA DESLIZANTE DE EVENTOS BAJO EL MARCADOR -->
+    {#if gameUI.currentSlidingEvent}
+      <div class="hud-sliding-event-container" role="status" aria-live="polite">
+        <div
+          class="hud-sliding-event-card team-{gameUI.currentSlidingEvent.team}"
+          style="--event-color: {gameUI.currentSlidingEvent.color};"
+        >
+          <span class="event-badge">{gameUI.currentSlidingEvent.eventType}</span>
+          <span class="event-player">{gameUI.currentSlidingEvent.playerName}</span>
+          <span class="event-points">{gameUI.currentSlidingEvent.pointsText}</span>
+        </div>
+      </div>
+    {/if}
 
     <!-- C) Cartucho Derecho: Grabadora + 3 Botones de Acción Cyber-Pitch -->
     <div class="top-card top-card-right">
@@ -450,6 +494,12 @@
           <span class="rec-label">REC</span>
         {/if}
       </button>
+
+      {#if guestRecWarning}
+        <div class="rec-auth-warning-toast" role="alert">
+          <span>🔒 Inicia sesión con Google para grabar y guardar repeticiones en la nube.</span>
+        </div>
+      {/if}
 
       <!-- 1. Silenciar / Audio Toggle -->
       <button
@@ -618,13 +668,7 @@
         </div>
 
         <div class="vs-bolt-badge">
-          <svg class="vs-bolt-svg" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-            <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
-          </svg>
           <span class="vs-text">VS</span>
-          <svg class="vs-bolt-svg" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-            <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
-          </svg>
         </div>
 
         <div
@@ -686,6 +730,20 @@
             {activeBanner.isOwnGoal ? 'Autogol de:' : 'Gol de:'}
             <strong>{activeBanner.scorerName || goalTeamName}</strong>
           </span>
+          {#if activeBanner.speedKmh}
+            <span class="goal-speed-pill">
+              <svg class="credit-inline-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"></path>
+              </svg>
+              {activeBanner.speedKmh} km/h
+            </span>
+          {/if}
+          {#if activeBanner.isPower}
+            <span class="goal-bonus-pill power">POTENCIA +30</span>
+          {/if}
+          {#if activeBanner.isCurve}
+            <span class="goal-bonus-pill curve">EFECTO +30</span>
+          {/if}
           {#if activeBanner.assisterName && !activeBanner.isOwnGoal}
             <span class="goal-assist-pill">
               <svg class="credit-inline-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
@@ -983,6 +1041,173 @@
     border-top-left-radius: 0;
     border-top-right-radius: 0;
     box-shadow: 0 0 24px rgba(0, 229, 255, 0.18), 0 4px 20px rgba(0, 0, 0, 0.6);
+  }
+
+  .top-card-center.is-warning-30s {
+    border-color: #ef4444;
+    animation: warningPulse30s 1s ease-in-out infinite alternate;
+  }
+
+  @keyframes warningPulse30s {
+    0% {
+      box-shadow: 0 0 16px rgba(239, 68, 68, 0.4), 0 4px 20px rgba(0, 0, 0, 0.6);
+      background-color: rgba(30, 10, 15, 0.95);
+    }
+    100% {
+      box-shadow: 0 0 28px rgba(245, 158, 11, 0.8), 0 4px 25px rgba(239, 68, 68, 0.5);
+      background-color: rgba(45, 15, 20, 0.98);
+    }
+  }
+
+  .golden-goal-floating-badge {
+    position: absolute;
+    left: calc(100% + 10px);
+    top: 50%;
+    transform: translateY(-50%);
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.3rem 0.65rem;
+    background: #111827;
+    border: 1px solid #f59e0b;
+    border-radius: 4px;
+    box-shadow: 0 0 14px rgba(245, 158, 11, 0.45);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.72rem;
+    font-weight: 800;
+    color: #fbbf24;
+    letter-spacing: 0.05em;
+    white-space: nowrap;
+    animation: goldenGoalGlow 1.8s ease-in-out infinite alternate;
+  }
+
+  @keyframes goldenGoalGlow {
+    0% {
+      box-shadow: 0 0 10px rgba(245, 158, 11, 0.3);
+    }
+    100% {
+      box-shadow: 0 0 22px rgba(245, 158, 11, 0.75);
+    }
+  }
+
+  .glowing-ball-svg {
+    width: 14px;
+    height: 14px;
+    filter: drop-shadow(0 0 4px #ffd700);
+  }
+
+  /* HUD Sliding Event Card below scoreboard */
+  .hud-sliding-event-container {
+    position: fixed;
+    top: 52px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 39;
+    pointer-events: none;
+    animation: slideEventDown 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  }
+
+  .hud-sliding-event-card {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    padding: 0.35rem 0.85rem;
+    background: #090e17;
+    border: 1px solid var(--event-color, #00e5ff);
+    border-radius: 6px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.85), 0 0 16px var(--event-color, #00e5ff);
+    font-family: 'Space Grotesk', system-ui, sans-serif;
+  }
+
+  .hud-sliding-event-card .event-badge {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.72rem;
+    font-weight: 900;
+    color: var(--event-color, #00e5ff);
+    letter-spacing: 0.06em;
+  }
+
+  .hud-sliding-event-card .event-player {
+    font-size: 0.84rem;
+    font-weight: 700;
+    color: #ffffff;
+  }
+
+  .hud-sliding-event-card .event-points {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.8rem;
+    font-weight: 800;
+    color: #22c55e;
+  }
+
+  @keyframes slideEventDown {
+    0% {
+      opacity: 0;
+      transform: translate(-50%, -12px) scale(0.95);
+    }
+    100% {
+      opacity: 1;
+      transform: translate(-50%, 0) scale(1);
+    }
+  }
+
+  .rec-auth-warning-toast {
+    position: absolute;
+    top: calc(100% + 8px);
+    right: 0;
+    background: #181216;
+    border: 1px solid #ef4444;
+    color: #fca5a5;
+    padding: 0.45rem 0.8rem;
+    border-radius: 6px;
+    font-size: 0.78rem;
+    font-family: 'Space Grotesk', sans-serif;
+    white-space: nowrap;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.75);
+    z-index: 50;
+    animation: toastFadeIn 0.25s ease-out;
+  }
+
+  @keyframes toastFadeIn {
+    from { opacity: 0; transform: translateY(-4px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  .goal-speed-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    padding: 0.25rem 0.6rem;
+    background: rgba(14, 165, 233, 0.15);
+    border: 1px solid rgba(14, 165, 233, 0.45);
+    border-radius: 4px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.82rem;
+    font-weight: 700;
+    color: #38bdf8;
+  }
+
+  .goal-bonus-pill {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.25rem 0.55rem;
+    border-radius: 4px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.75rem;
+    font-weight: 800;
+    letter-spacing: 0.04em;
+  }
+
+  .goal-bonus-pill.power {
+    background: rgba(239, 68, 68, 0.2);
+    border: 1px solid #ef4444;
+    color: #fca5a5;
+  }
+
+  .goal-bonus-pill.curve {
+    background: rgba(168, 85, 247, 0.2);
+    border: 1px solid #a855f7;
+    color: #d8b4fe;
   }
 
   .scoreboard-main-row {

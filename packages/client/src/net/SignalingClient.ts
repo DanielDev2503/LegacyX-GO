@@ -153,6 +153,12 @@ export class SignalingClient {
     }
   }
 
+  public probeRoomPing(roomId: string): void {
+    if (this.isOpen()) {
+      this.send({ type: 'ROOM_PING_PROBE', roomId });
+    }
+  }
+
   private startPingLoop(): void {
     this.stopPingLoop();
     this.measurePing();

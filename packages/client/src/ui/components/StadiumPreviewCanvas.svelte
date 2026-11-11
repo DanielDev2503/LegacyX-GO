@@ -174,6 +174,38 @@
     <circle cx={-hw} cy={gh} r={pr * 1.15} fill="#ff4757" stroke="#ffffff" stroke-width="3" />
     <circle cx={hw} cy={-gh} r={pr * 1.15} fill="#00e5ff" stroke="#ffffff" stroke-width="3" />
     <circle cx={hw} cy={gh} r={pr * 1.15} fill="#00e5ff" stroke="#ffffff" stroke-width="3" />
+
+    <!-- 2 Jugadores a escala física real (Radio = 15 px) en posiciones iniciales de saque -->
+    <!-- Jugador Rojo (1) -->
+    <g class="preview-scale-player red-player">
+      <circle cx={-Math.round(hw * 0.45)} cy={0} r={15} fill="#ff0055" stroke="#ffffff" stroke-width="2.5" />
+      <text
+        x={-Math.round(hw * 0.45)}
+        y={4.5}
+        text-anchor="middle"
+        fill="#ffffff"
+        font-family="'Space Grotesk', sans-serif"
+        font-size="12"
+        font-weight="800"
+      >1</text>
+    </g>
+
+    <!-- Jugador Azul (2) -->
+    <g class="preview-scale-player blue-player">
+      <circle cx={Math.round(hw * 0.45)} cy={0} r={15} fill="#00e5ff" stroke="#ffffff" stroke-width="2.5" />
+      <text
+        x={Math.round(hw * 0.45)}
+        y={4.5}
+        text-anchor="middle"
+        fill="#081221"
+        font-family="'Space Grotesk', sans-serif"
+        font-size="12"
+        font-weight="800"
+      >2</text>
+    </g>
+
+    <!-- Balón central a escala física real (Radio = 5.8 px) -->
+    <circle cx={0} cy={0} r={5.8} fill="#ffffff" stroke="#0284c7" stroke-width="1.6" />
   </svg>
 
   {#if !compact}

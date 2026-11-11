@@ -13,6 +13,7 @@
     step: number;
     defaultVal: number;
     unit?: string;
+    parentToggle?: 'turboEnabled' | 'dashEnabled' | 'magnusEnabled' | 'staminaRegenMoving';
   }
 
   const PLAYER_CONTROLS: ControlDef[] = [
@@ -132,7 +133,8 @@
       min: 1.1,
       max: 4.0,
       step: 0.05,
-      defaultVal: 2.0
+      defaultVal: 2.0,
+      parentToggle: 'turboEnabled'
     },
     {
       key: 'dashDistance',
@@ -142,7 +144,8 @@
       max: 112.5,
       step: 0.25,
       defaultVal: 37.5,
-      unit: 'px'
+      unit: 'px',
+      parentToggle: 'dashEnabled'
     },
     {
       key: 'dashCooldown',
@@ -152,7 +155,8 @@
       max: 5.0,
       step: 0.25,
       defaultVal: 1.0,
-      unit: 's'
+      unit: 's',
+      parentToggle: 'dashEnabled'
     },
     {
       key: 'staminaRechargeRate',
@@ -172,7 +176,8 @@
       max: 200,
       step: 5,
       defaultVal: 100,
-      unit: '%'
+      unit: '%',
+      parentToggle: 'staminaRegenMoving'
     },
     {
       key: 'magnusCurveStrength',
@@ -181,7 +186,8 @@
       min: 0.0,
       max: 5.0,
       step: 0.05,
-      defaultVal: 1.05
+      defaultVal: 1.05,
+      parentToggle: 'magnusEnabled'
     },
     {
       key: 'dashesPerFullBar',
@@ -191,7 +197,8 @@
       max: 6,
       step: 1,
       defaultVal: 2,
-      unit: 'dashes'
+      unit: 'dashes',
+      parentToggle: 'dashEnabled'
     }
   ];
 
@@ -688,7 +695,8 @@
             <!-- Sliders de Mecánicas -->
             {#each MECHANICS_CONTROLS as ctrl (ctrl.key)}
               {@const currentVal = Number(gameUI.gameplayConfig[ctrl.key])}
-              <div class="control-item">
+              {@const isParentDisabled = ctrl.parentToggle ? !gameUI.gameplayConfig[ctrl.parentToggle] : false}
+              <div class="control-item" class:slider-disabled={isParentDisabled}>
                 <div class="control-header">
                   <div class="label-with-tooltip">
                     <span class="control-label">{ctrl.label}</span>
@@ -715,7 +723,7 @@
                       max={ctrl.max}
                       step={ctrl.step}
                       value={currentVal}
-                      disabled={!gameUI.isHost}
+                      disabled={!gameUI.isHost || isParentDisabled}
                       oninput={(e) => handleNumberInput(ctrl.key, e, ctrl.min, ctrl.max)}
                       onchange={(e) => handleNumberChange(ctrl.key, e, ctrl.min, ctrl.max)}
                     />
@@ -726,14 +734,14 @@
                       <button
                         type="button"
                         class="micro-step-btn"
-                        disabled={!gameUI.isHost || currentVal >= ctrl.max}
+                        disabled={!gameUI.isHost || isParentDisabled || currentVal >= ctrl.max}
                         onclick={() => stepValue(ctrl.key, ctrl.step, ctrl.min, ctrl.max, 1)}
                         aria-label="Incrementar {ctrl.label}"
                       >▲</button>
                       <button
                         type="button"
                         class="micro-step-btn"
-                        disabled={!gameUI.isHost || currentVal <= ctrl.min}
+                        disabled={!gameUI.isHost || isParentDisabled || currentVal <= ctrl.min}
                         onclick={() => stepValue(ctrl.key, ctrl.step, ctrl.min, ctrl.max, -1)}
                         aria-label="Decrementar {ctrl.label}"
                       >▼</button>
@@ -764,7 +772,7 @@
                     max={ctrl.max}
                     step={ctrl.step}
                     value={currentVal}
-                    disabled={!gameUI.isHost}
+                    disabled={!gameUI.isHost || isParentDisabled}
                     oninput={(e) => handleSlider(ctrl.key, e, ctrl.min, ctrl.max)}
                   />
                 </div>
@@ -1097,6 +1105,12 @@
   .control-item:focus-within {
     border-color: rgba(0, 229, 255, 0.25);
     background: rgba(18, 28, 48, 0.85);
+  }
+
+  .control-item.slider-disabled {
+    opacity: 0.38;
+    pointer-events: none;
+    filter: grayscale(0.85);
   }
 
   .control-header {

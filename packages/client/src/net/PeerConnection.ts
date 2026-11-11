@@ -586,15 +586,33 @@ export class PeerConnection {
     this.reliableOutbox.push(payload);
   }
 
+  public get unreliableBufferedAmount(): number {
+    const target = this.unreliableChannel || this.dataChannel;
+    return target?.bufferedAmount ?? 0;
+  }
+
   public sendUnreliable(buffer: ArrayBuffer): void {
     const target = this.unreliableChannel || this.dataChannel;
     if (target && target.readyState === 'open') {
       try {
-        if ((target.bufferedAmount ?? 0) <= 65536) {
+        if ((target.bufferedAmount ?? 0) <= 16384) {
           target.send(buffer);
         }
       } catch {
         // Ignore transient UDP-like drop
+      }
+    }
+  }
+
+  public sendUnreliableMessage(msg: unknown): void {
+    const target = this.unreliableChannel || this.dataChannel;
+    if (target && target.readyState === 'open') {
+      try {
+        if ((target.bufferedAmount ?? 0) <= 16384) {
+          target.send(typeof msg === 'string' ? msg : JSON.stringify(msg));
+        }
+      } catch {
+        // Ignore transient drop
       }
     }
   }

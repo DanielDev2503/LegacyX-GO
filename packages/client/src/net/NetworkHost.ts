@@ -8,6 +8,7 @@ export interface PlayerInfo {
   peerId: string;
   userId?: string | null;
   isGuest?: boolean;
+  elo?: number;
   nickname: string;
   name?: string;
   team: 'red' | 'blue' | 'spectator';
@@ -20,6 +21,7 @@ export interface PlayerInfo {
   kit?: any;
   localKit?: any;
   visitorKit?: any;
+  isTyping?: boolean;
 }
 
 export class NetworkHost {
@@ -50,7 +52,7 @@ export class NetworkHost {
     playerId: number,
     inputMask: number,
     tick: number,
-    aimAngle?: number,
+    aimAngle?: number | null,
     aimThrottle?: number
   ) => void;
   public onPlayerJoined?: (player: PlayerInfo) => void;
@@ -60,6 +62,7 @@ export class NetworkHost {
   public onPlayerEmote?: (playerId: number, emoji: string) => void;
   public onTeamChangeRequest?: (playerId: number, team: 'red' | 'blue' | 'spectator') => void;
   public onAdminMatchAction?: (action: string, payload?: Record<string, unknown>) => void;
+  public onPlayerTyping?: (playerId: number, isTyping: boolean) => void;
 
   public redKitVariant: 'home' | 'away' = 'home';
   public blueKitVariant: 'home' | 'away' = 'away';
@@ -74,6 +77,9 @@ export class NetworkHost {
     this.players.set(1, {
       id: 1,
       peerId: hostProfile?.peerId || signaling.peerId || 'host',
+      userId: hostProfile?.userId,
+      isGuest: hostProfile?.isGuest,
+      elo: hostProfile?.elo,
       nickname: hostNickname,
       name: hostNickname,
       team: hostProfile?.team ?? 'spectator',
@@ -104,6 +110,9 @@ export class NetworkHost {
     if (patch.kit !== undefined) host.kit = patch.kit;
     if (patch.localKit !== undefined) host.localKit = patch.localKit;
     if (patch.visitorKit !== undefined) host.visitorKit = patch.visitorKit;
+    if (patch.userId !== undefined) host.userId = patch.userId;
+    if (patch.isGuest !== undefined) host.isGuest = patch.isGuest;
+    if (patch.elo !== undefined) host.elo = patch.elo;
     this.onPlayersUpdated?.(this.getPlayers());
     this.broadcastRoomStateSync();
   }
@@ -191,7 +200,25 @@ export class NetworkHost {
     };
   }
 
-  public broadcastRoomStateSync(): void {
+  private roomStateSyncDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+
+  public broadcastRoomStateSync(immediate: boolean = false): void {
+    if (immediate) {
+      if (this.roomStateSyncDebounceTimer) {
+        clearTimeout(this.roomStateSyncDebounceTimer);
+        this.roomStateSyncDebounceTimer = null;
+      }
+      this.doBroadcastRoomStateSync();
+      return;
+    }
+    if (this.roomStateSyncDebounceTimer) return;
+    this.roomStateSyncDebounceTimer = setTimeout(() => {
+      this.roomStateSyncDebounceTimer = null;
+      this.doBroadcastRoomStateSync();
+    }, 40);
+  }
+
+  private doBroadcastRoomStateSync(): void {
     const playersList = this.getPlayers();
     for (const [peerId, peer] of this.peers.entries()) {
       const pid = this.peerToPlayerId.get(peerId);
@@ -337,10 +364,14 @@ export class NetworkHost {
       }
     } else if (msg.type === 'PING_PROBE') {
       const peer = this.peers.get(peerId);
-      peer?.sendReliable({
+      peer?.sendUnreliableMessage({
         type: 'PONG_PROBE',
         t: msg.t
       });
+    } else if (msg.type === 'CHAT_TYPING') {
+      const isTyping = Boolean(msg.isTyping);
+      player.isTyping = isTyping;
+      this.onPlayerTyping?.(player.id, isTyping);
     } else if (msg.type === 'KIT_VARIANT_CHANGE') {
       const redCapId = this.getRedCaptainId();
       const blueCapId = this.getBlueCaptainId();
@@ -592,6 +623,7 @@ export class NetworkHost {
 
   public broadcastSnapshot(buffer: ArrayBuffer): void {
     this.peers.forEach((peer) => {
+      if (peer.unreliableBufferedAmount > 16384) return;
       peer.sendUnreliable(buffer);
     });
   }

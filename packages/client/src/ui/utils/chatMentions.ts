@@ -46,9 +46,11 @@ export function findActiveMentionToken(text: string, cursorIndex: number): Menti
  */
 export function getMentionCandidates(
   query: string,
-  rosterPlayers: ReadonlyArray<{ name?: string; nickname?: string; team?: string }>
+  rosterPlayers: ReadonlyArray<{ name?: string; nickname?: string; team?: string }>,
+  excludeNickname?: string
 ): MentionCandidate[] {
   const normalized = query.trim().toLowerCase();
+  const normalizedExclude = (excludeNickname ?? '').trim().toLowerCase();
   const candidates: MentionCandidate[] = [];
 
   if (!normalized || 'all'.startsWith(normalized) || 'todos'.startsWith(normalized)) {
@@ -60,6 +62,9 @@ export function getMentionCandidates(
   }
 
   const seen = new Set<string>(['all']);
+  if (normalizedExclude) {
+    seen.add(normalizedExclude);
+  }
   for (const player of rosterPlayers) {
     const cleanName = (player.name ?? player.nickname ?? '').trim();
     if (!cleanName) continue;

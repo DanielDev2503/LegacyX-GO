@@ -112,6 +112,7 @@ export class GameRenderer {
     }
 
     this.camera = new Camera(0, 0);
+    this.camera.topHudHeightPx = 62;
     this.camera.setBounds(this.stadium.halfWidth, this.stadium.halfHeight);
 
     this.stadiumRenderer = new StadiumRenderer(this.stadium);
@@ -204,6 +205,21 @@ export class GameRenderer {
     this.handleResize();
   }
 
+  public setTeamKits(redKit?: any, blueKit?: any): void {
+    if (redKit) {
+      this.discRenderer.redKit = redKit;
+      if (redKit.primaryColor) {
+        this.stadiumRenderer.setTeamColors(redKit.primaryColor, this.stadiumRenderer.blueTeamColor);
+      }
+    }
+    if (blueKit) {
+      this.discRenderer.blueKit = blueKit;
+      if (blueKit.primaryColor) {
+        this.stadiumRenderer.setTeamColors(this.stadiumRenderer.redTeamColor, blueKit.primaryColor);
+      }
+    }
+  }
+
   public resize(width?: number, height?: number): void {
     if (width !== undefined && height !== undefined && width > 0 && height > 0) {
       this.canvas.width = width;
@@ -258,15 +274,7 @@ export class GameRenderer {
     const canvasX = (clientX - rect.left) * (canvasW / cssW);
     const canvasY = (clientY - rect.top) * (canvasH / cssH);
 
-    const usableHeight = Math.max(100, canvasH - this.safeAreaBottom);
-    const cx = canvasW / 2;
-    const cy = usableHeight / 2;
-    const renderScale = Math.max(0.1, this.camera.scale || this.scale || 1.0);
-
-    return {
-      x: (canvasX - cx - this.camera.shakeOffsetX) / renderScale + this.camera.x,
-      y: (canvasY - cy - this.camera.shakeOffsetY) / renderScale + this.camera.y
-    };
+    return this.camera.screenToWorld(canvasX, canvasY, this.safeAreaBottom);
   }
 
   public addFloatingScore(text: string, x: number, y: number, color?: string): void {

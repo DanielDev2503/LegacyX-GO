@@ -1,5 +1,20 @@
 import type { Stadium } from '@legacyx/core';
 
+function hexToRgba(hex: string, alpha: number): string {
+  if (!hex || typeof hex !== 'string') return `rgba(255, 255, 255, ${alpha})`;
+  let clean = hex.replace('#', '');
+  if (clean.length === 3) {
+    clean = clean.split('').map((c) => c + c).join('');
+  }
+  if (clean.length >= 6) {
+    const r = parseInt(clean.substring(0, 2), 16) || 0;
+    const g = parseInt(clean.substring(2, 4), 16) || 0;
+    const b = parseInt(clean.substring(4, 6), 16) || 0;
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+  }
+  return `rgba(255, 255, 255, ${alpha})`;
+}
+
 export class StadiumRenderer {
   private stadium: Stadium | null = null;
   public cacheCanvas: HTMLCanvasElement | OffscreenCanvas | null = null;
@@ -16,6 +31,24 @@ export class StadiumRenderer {
   private cachedHeight: number = 0;
   private cachedGoalSize: number = 0;
   public theme: 'dark' | 'light' = 'dark';
+  public redTeamColor: string = '#FF0055';
+  public blueTeamColor: string = '#00E5FF';
+
+  public setTeamColors(red: string, blue: string): void {
+    let changed = false;
+    if (red && red !== this.redTeamColor) {
+      this.redTeamColor = red;
+      changed = true;
+    }
+    if (blue && blue !== this.blueTeamColor) {
+      this.blueTeamColor = blue;
+      changed = true;
+    }
+    if (changed) {
+      this.invalidateCache();
+      this.rebuildCache();
+    }
+  }
 
   constructor(stadium?: Stadium) {
     if (stadium) {
@@ -105,11 +138,11 @@ export class StadiumRenderer {
     ctx.restore();
 
     // 3. Penalty Areas with Team Identity
-    // Left Penalty Area (Red #FF0055)
+    // Left Penalty Area (Red captain kit tint)
     ctx.save();
-    ctx.fillStyle = isDark ? 'rgba(255, 0, 85, 0.06)' : 'rgba(255, 0, 85, 0.03)';
+    ctx.fillStyle = hexToRgba(this.redTeamColor, isDark ? 0.06 : 0.03);
     ctx.fillRect(-hw, -penaltyAreaHeight / 2, penaltyAreaWidth, penaltyAreaHeight);
-    ctx.strokeStyle = 'rgba(255, 0, 85, 0.35)';
+    ctx.strokeStyle = hexToRgba(this.redTeamColor, 0.35);
     ctx.lineWidth = 1.5;
     ctx.beginPath();
     ctx.moveTo(-hw, -penaltyAreaHeight / 2);
@@ -119,11 +152,11 @@ export class StadiumRenderer {
     ctx.stroke();
     ctx.restore();
 
-    // Right Penalty Area (Blue #00E5FF)
+    // Right Penalty Area (Blue captain kit tint)
     ctx.save();
-    ctx.fillStyle = isDark ? 'rgba(0, 229, 255, 0.06)' : 'rgba(0, 229, 255, 0.03)';
+    ctx.fillStyle = hexToRgba(this.blueTeamColor, isDark ? 0.06 : 0.03);
     ctx.fillRect(hw - penaltyAreaWidth, -penaltyAreaHeight / 2, penaltyAreaWidth, penaltyAreaHeight);
-    ctx.strokeStyle = 'rgba(0, 229, 255, 0.35)';
+    ctx.strokeStyle = hexToRgba(this.blueTeamColor, 0.35);
     ctx.lineWidth = 1.5;
     ctx.beginPath();
     ctx.moveTo(hw, -penaltyAreaHeight / 2);
@@ -257,7 +290,9 @@ export class StadiumRenderer {
   private renderPost(ctx: CanvasRenderingContext2D, x: number, y: number, r: number): void {
     ctx.save();
     const isLeft = x < 0;
-    const haloColor = isLeft ? 'rgba(255, 0, 85, 0.4)' : 'rgba(0, 229, 255, 0.4)';
+    const haloColor = isLeft
+      ? hexToRgba(this.redTeamColor, 0.4)
+      : hexToRgba(this.blueTeamColor, 0.4);
 
     // Drop shadow
     ctx.fillStyle = 'rgba(15, 23, 42, 0.25)';

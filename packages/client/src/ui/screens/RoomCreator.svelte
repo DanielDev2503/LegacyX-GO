@@ -14,8 +14,8 @@
   let isPublic = $state(true);
   let teamsLocked = $state(true);
   let allowCaptainKitSwitch = $state(false);
-  let selectedTimeMinutes = $state(gameUI.timeLimitMinutes ?? 3);
-  let selectedGoalsLimit = $state(gameUI.scoreLimitGoals ?? 3);
+  let selectedTimeMinutes = $state(4);
+  let selectedGoalsLimit = $state(3);
   let selectedStadiumIndex = $state(0);
   let isCreating = $state(false);
   let createError = $state<string | null>(null);
@@ -169,9 +169,6 @@
         <div class="config-section">
           <div class="block-header">
             <span class="block-label">TIPO DE SALA</span>
-            {#if !userProfile.canCreateRanked}
-              <span class="role-lock-hint">Ranked: Representante / Superadmin</span>
-            {/if}
           </div>
           <div class="room-type-grid">
             <button
@@ -632,12 +629,6 @@
     font-size: 10.5px;
     font-weight: 700;
     color: #ffffff;
-  }
-
-  .role-lock-hint {
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 9.5px;
-    color: #ffd700;
   }
 
   .room-type-grid {

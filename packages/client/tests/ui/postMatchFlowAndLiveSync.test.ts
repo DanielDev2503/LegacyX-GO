@@ -45,8 +45,8 @@ describe('Post-Match Flow, Practice Mode, Live Kit/Stadium Sync, Auto Balance & 
     });
   });
 
-  describe('2. Practice / Solo Mode Player Registration & Spectator Initial Entry', () => {
-    it('registers local player into rosterPlayers and players with team spectator and ping 0', () => {
+  describe('2. Practice / Solo Mode Player Registration & Red Team Initial Entry', () => {
+    it('registers local player into rosterPlayers and players with team red and ping 0', () => {
       gameUI.nickname = 'SoloStriker';
       gameUI.enterPracticeMode();
 
@@ -58,7 +58,7 @@ describe('Post-Match Flow, Practice Mode, Live Kit/Stadium Sync, Auto Balance & 
 
       const localPlayer = gameUI.rosterPlayers[0];
       expect(localPlayer.id).toBe(1);
-      expect(localPlayer.team).toBe('spectator');
+      expect(localPlayer.team).toBe('red');
       expect(localPlayer.nickname).toBe('SoloStriker');
       expect(localPlayer.ping).toBe(0);
     });

@@ -9,6 +9,7 @@ export const INPUT_MAGNUS_LEFT = 1 << 7; // Bit 7: MagnusLeft (Z)
 export const INPUT_MAGNUS_RIGHT = 1 << 8;// Bit 8: MagnusRight (C)
 export const INPUT_TYPING = 1 << 9;      // Bit 9: Chat typing status
 export const INPUT_MOUSE_AIM = 1 << 10;  // Bit 10: Continuous 360° mouse pointer movement
+export const INPUT_MOUSE_ACTIVE = 1 << 10; // Explicit alias for active mouse movement
 
 // Parámetros Cinemáticos del Dash (Zero-GC)
 export function getDashStaminaCost(dashesPerFullBar: number = 4): number {
@@ -70,12 +71,21 @@ export class Player {
   public prevDashState: boolean = false;
 
   // Dirección continua 360° (Modo Ratón)
-  public aimAngle: number = 0;
+  public aimAngle: number | null = null;
   public aimThrottle: number = 0;
 
   // Cooldowns anti-farmeo de puntaje (ticks a 60 Hz)
   public lastShotAwardTick: number = -9999;
   public lastPassAwardTick: number = -9999;
+  public lastSaveAwardTick: number = -9999;
+
+  public resetInput(): void {
+    this.inputMask = 0;
+    this.aimAngle = null;
+    this.aimThrottle = 0;
+    this.triggerDash = false;
+    this.isTurbo = false;
+  }
 
   constructor(data: PlayerData) {
     this.id = data.id;

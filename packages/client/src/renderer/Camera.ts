@@ -35,6 +35,7 @@ export class Camera {
 
   public viewportWidth: number = 800;
   public viewportHeight: number = 600;
+  public topHudHeightPx: number = 0;
   public isFocusingBall: boolean = false;
 
   private bounds: CameraBounds = {
@@ -145,7 +146,7 @@ export class Camera {
       this.x = clamp(this.x, -boundX, boundX);
     }
 
-    const usableHeight = (vHeight - safeAreaBottom) / z;
+    const usableHeight = Math.max(100, vHeight - this.topHudHeightPx - safeAreaBottom) / z;
     const boundY = (hExt - usableHeight) / 2;
     if (boundY <= 0) {
       this.y = 0;
@@ -254,8 +255,9 @@ export class Camera {
 
   public applyTransform(ctx: CanvasRenderingContext2D, safeAreaBottom: number = 0): void {
     ctx.save();
-    const usableH = Math.max(100, this.viewportHeight - safeAreaBottom);
-    ctx.translate(this.viewportWidth / 2, usableH / 2);
+    const usableH = Math.max(100, this.viewportHeight - this.topHudHeightPx - safeAreaBottom);
+    const centerY = this.topHudHeightPx + usableH / 2;
+    ctx.translate(this.viewportWidth / 2, centerY);
     ctx.scale(this.scale * this.zoom, this.scale * this.zoom);
     ctx.translate(-this.x - this.shakeOffsetX, -this.y - this.shakeOffsetY);
   }
@@ -280,18 +282,20 @@ export class Camera {
   }
 
   public worldToScreen(worldX: number, worldY: number, safeAreaBottom: number = 0): { x: number; y: number } {
-    const usableH = safeAreaBottom > 0 ? Math.max(100, this.viewportHeight - safeAreaBottom) : this.viewportHeight;
+    const usableH = Math.max(100, this.viewportHeight - this.topHudHeightPx - safeAreaBottom);
+    const centerY = this.topHudHeightPx + usableH / 2;
     const s = Math.max(0.1, this.scale || this.zoom || 1.0);
     const sx = (worldX - this.x) * s + this.viewportWidth / 2 + this.shakeOffsetX;
-    const sy = (worldY - this.y) * s + usableH / 2 + this.shakeOffsetY;
+    const sy = (worldY - this.y) * s + centerY + this.shakeOffsetY;
     return { x: sx, y: sy };
   }
 
   public screenToWorld(screenX: number, screenY: number, safeAreaBottom: number = 0): { x: number; y: number } {
-    const usableH = safeAreaBottom > 0 ? Math.max(100, this.viewportHeight - safeAreaBottom) : this.viewportHeight;
+    const usableH = Math.max(100, this.viewportHeight - this.topHudHeightPx - safeAreaBottom);
+    const centerY = this.topHudHeightPx + usableH / 2;
     const s = Math.max(0.1, this.scale || this.zoom || 1.0);
     const wx = (screenX - this.viewportWidth / 2 - this.shakeOffsetX) / s + this.x;
-    const wy = (screenY - usableH / 2 - this.shakeOffsetY) / s + this.y;
+    const wy = (screenY - centerY - this.shakeOffsetY) / s + this.y;
     return { x: wx, y: wy };
   }
 }

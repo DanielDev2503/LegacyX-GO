@@ -393,11 +393,11 @@ export class InputManager {
     canvasRect?: { left: number; top: number; width: number; height: number },
     canvasBufferSize?: { width: number; height: number },
     safeAreaBottom: number = 0
-  ): { active: boolean; aimAngle: number; aimThrottle: number } {
+  ): { active: boolean; aimAngle: number | null; aimThrottle: number } {
     if (this.movementMode !== 'mouse') {
       this.currentAimAngle = 0;
       this.currentAimThrottle = 0;
-      return { active: false, aimAngle: 0, aimThrottle: 0 };
+      return { active: false, aimAngle: null, aimThrottle: 0 };
     }
     let sx = this.mouseScreenX;
     let sy = this.mouseScreenY;
@@ -410,7 +410,10 @@ export class InputManager {
     this.currentAimAngle = vec.angle;
     this.currentAimThrottle = vec.throttle;
     this.updateMask();
-    return { active: vec.active, aimAngle: vec.angle, aimThrottle: vec.throttle };
+    if (!vec.active) {
+      return { active: false, aimAngle: null, aimThrottle: 0 };
+    }
+    return { active: true, aimAngle: vec.angle, aimThrottle: vec.throttle };
   }
 
   public getMask(withDashTrigger: boolean = false): number {

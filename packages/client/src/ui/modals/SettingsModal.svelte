@@ -1,9 +1,11 @@
 <script lang="ts">
   import { gameUI, formatKeybindCode, type BallSkinType, type PatternType } from '../state/gameUI.svelte.js';
+  import { userProfile } from '../state/userProfile.svelte.js';
   import { mouseButtonToCode } from '../../controllers/InputManager.js';
   import { soundFX } from '../../audio/SoundFX.js';
   import { EMOJI_CATALOG } from '../utils/constants.js';
   import { tooltip } from '../actions/tooltip.js';
+  import { drawBallDesign, type BallSkin } from '../../renderer/ballDesigns.js';
 
   type SettingsTab = 'controls' | 'audio' | 'video' | 'kits' | 'avatar';
   let activeTab = $state<SettingsTab>(
@@ -104,6 +106,11 @@
   function setMovementMode(mode: 'keyboard' | 'mouse') {
     soundFX.playUIClick();
     gameUI.settings.movementMode = mode;
+    if (mode === 'mouse') {
+      gameUI.remapKey('kick', 'Mouse0');
+    } else {
+      gameUI.remapKey('kick', 'Space');
+    }
     gameUI.saveSettings();
   }
 
@@ -212,6 +219,55 @@
     soundFX.playUIClick();
     gameUI.settings.emoteTriggers = gameUI.settings.emoteTriggers.filter((_, i) => i !== index);
     gameUI.saveSettings();
+  }
+
+  function ballPreview(canvas: HTMLCanvasElement, opts: { skin: BallSkin; customColor?: string }) {
+    const render = () => {
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      drawBallDesign(ctx, {
+        x: canvas.width / 2,
+        y: canvas.height / 2,
+        radius: canvas.width * 0.38,
+        skin: opts.skin,
+        customColor: opts.customColor || gameUI.settings.ballCustomColor,
+        rotX: 0.35,
+        rotY: 0.25
+      });
+    };
+    render();
+    return {
+      update(nextOpts: { skin: BallSkin; customColor?: string }) {
+        opts = nextOpts;
+        render();
+      }
+    };
+  }
+
+  let newUsernameInput = $state(userProfile.username || gameUI.nickname || '');
+  let isSavingName = $state(false);
+  let nameChangeError = $state<string | null>(null);
+  let nameChangeSuccess = $state<string | null>(null);
+
+  async function handleNameChange() {
+    nameChangeError = null;
+    nameChangeSuccess = null;
+    const clean = newUsernameInput.trim();
+    if (!clean) return;
+    if (!confirm(`¿Estás seguro de que deseas fijar tu nombre oficial como "${clean}"? Esta acción no se puede deshacer.`)) {
+      return;
+    }
+    isSavingName = true;
+    try {
+      await userProfile.changeUsernameOnce(clean);
+      soundFX.playUIClick();
+      nameChangeSuccess = '¡Nombre de usuario actualizado con éxito!';
+    } catch (err: unknown) {
+      nameChangeError = err instanceof Error ? err.message : 'Error al cambiar nombre.';
+    } finally {
+      isSavingName = false;
+    }
   }
 </script>
 
@@ -1593,7 +1649,7 @@
 
                   {#if gameUI.settings.ballMode === 'texture'}
                     <div class="ball-cards-grid">
-                      <!-- Clásico -->
+                      <!-- 1. Clásico -->
                       <button
                         type="button"
                         class="ball-card"
@@ -1603,37 +1659,13 @@
                           gameUI.saveSettings();
                         }}
                       >
-                        <div class="ball-circle classic-ball">
-                          <svg viewBox="0 0 100 100" class="ball-svg">
-                            <polygon fill="#080e18" points="50,30 65,42 60,60 40,60 35,42" />
-                            <polygon fill="#f8fafc" points="50,5 30,12 22,25 35,42 50,30" />
-                            <polygon fill="#f8fafc" points="50,5 70,12 78,25 65,42 50,30" />
-                            <polygon fill="#080e18" points="40,60 60,60 70,80 50,95 30,80" />
-                          </svg>
+                        <div class="ball-circle">
+                          <canvas width="54" height="54" use:ballPreview={{ skin: 'classic' }}></canvas>
                         </div>
                         <strong class="ball-name">Clásico</strong>
                       </button>
 
-                      <!-- Neón -->
-                      <button
-                        type="button"
-                        class="ball-card"
-                        class:selected={gameUI.settings.ballSkin === 'neon'}
-                        onclick={() => {
-                          gameUI.settings.ballSkin = 'neon';
-                          gameUI.saveSettings();
-                        }}
-                      >
-                        <div class="ball-circle neon-ball">
-                          <svg viewBox="0 0 100 100" class="ball-svg">
-                            <circle cx="50" cy="50" r="44" fill="none" stroke="#ccff00" stroke-width="5" />
-                            <circle cx="50" cy="50" r="5" fill="#00e5ff" />
-                          </svg>
-                        </div>
-                        <strong class="ball-name">Neón</strong>
-                      </button>
-
-                      <!-- Retro -->
+                      <!-- 2. Retro -->
                       <button
                         type="button"
                         class="ball-card"
@@ -1643,33 +1675,74 @@
                           gameUI.saveSettings();
                         }}
                       >
-                        <div class="ball-circle retro-ball">
-                          <svg viewBox="0 0 100 100" class="ball-svg">
-                            <path d="M 50,0 Q 55,50 50,100" fill="none" stroke="#3a1c06" stroke-width="3" />
-                            <path d="M 25,0 Q 35,50 25,100" fill="none" stroke="#3a1c06" stroke-width="2.5" />
-                            <path d="M 75,0 Q 65,50 75,100" fill="none" stroke="#3a1c06" stroke-width="2.5" />
-                          </svg>
+                        <div class="ball-circle">
+                          <canvas width="54" height="54" use:ballPreview={{ skin: 'retro' }}></canvas>
                         </div>
                         <strong class="ball-name">Retro</strong>
                       </button>
 
-                      <!-- Fútbol Sala -->
+                      <!-- 3. Neón -->
                       <button
                         type="button"
                         class="ball-card"
-                        class:selected={gameUI.settings.ballSkin === 'futsal'}
+                        class:selected={gameUI.settings.ballSkin === 'neon'}
                         onclick={() => {
-                          gameUI.settings.ballSkin = 'futsal';
+                          gameUI.settings.ballSkin = 'neon';
                           gameUI.saveSettings();
                         }}
                       >
-                        <div class="ball-circle futsal-ball">
-                          <svg viewBox="0 0 100 100" class="ball-svg">
-                            <circle cx="50" cy="50" r="45" fill="none" stroke="#ff0055" stroke-width="4" stroke-dasharray="14 10" />
-                            <polygon fill="#ffcc00" points="50,25 58,42 75,42 62,54 66,72 50,60 34,72 38,54 25,42 42,42" />
-                          </svg>
+                        <div class="ball-circle">
+                          <canvas width="54" height="54" use:ballPreview={{ skin: 'neon' }}></canvas>
                         </div>
-                        <strong class="ball-name">Sala</strong>
+                        <strong class="ball-name">Neón</strong>
+                      </button>
+
+                      <!-- 4. Cyber -->
+                      <button
+                        type="button"
+                        class="ball-card"
+                        class:selected={gameUI.settings.ballSkin === 'cyber'}
+                        onclick={() => {
+                          gameUI.settings.ballSkin = 'cyber';
+                          gameUI.saveSettings();
+                        }}
+                      >
+                        <div class="ball-circle">
+                          <canvas width="54" height="54" use:ballPreview={{ skin: 'cyber' }}></canvas>
+                        </div>
+                        <strong class="ball-name">Cyber</strong>
+                      </button>
+
+                      <!-- 5. Oro -->
+                      <button
+                        type="button"
+                        class="ball-card"
+                        class:selected={gameUI.settings.ballSkin === 'gold'}
+                        onclick={() => {
+                          gameUI.settings.ballSkin = 'gold';
+                          gameUI.saveSettings();
+                        }}
+                      >
+                        <div class="ball-circle">
+                          <canvas width="54" height="54" use:ballPreview={{ skin: 'gold' }}></canvas>
+                        </div>
+                        <strong class="ball-name">Oro</strong>
+                      </button>
+
+                      <!-- 6. Sólido -->
+                      <button
+                        type="button"
+                        class="ball-card"
+                        class:selected={gameUI.settings.ballSkin === 'solid'}
+                        onclick={() => {
+                          gameUI.settings.ballSkin = 'solid';
+                          gameUI.saveSettings();
+                        }}
+                      >
+                        <div class="ball-circle">
+                          <canvas width="54" height="54" use:ballPreview={{ skin: 'solid', customColor: gameUI.settings.ballCustomColor }}></canvas>
+                        </div>
+                        <strong class="ball-name">Sólido</strong>
                       </button>
                     </div>
                   {:else}
@@ -2049,6 +2122,76 @@
                   </div>
                 {/if}
               </div>
+            </div>
+
+            <!-- Cambio único de nombre de usuario -->
+            <div class="username-change-card">
+              <div class="card-header-flex">
+                <div class="header-info-title">
+                  <h4 class="card-title">Cambio único de nombre de usuario</h4>
+                  <small class="bind-hint">Permite renombrar tu perfil de jugador una única vez.</small>
+                </div>
+                {#if userProfile.isAuthenticated}
+                  {#if userProfile.nameChanged}
+                    <span class="lock-status-badge locked">
+                      <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2">
+                        <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+                        <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+                      </svg>
+                      Cambio ya utilizado
+                    </span>
+                  {:else}
+                    <span class="lock-status-badge available">Disponible (1 uso)</span>
+                  {/if}
+                {:else}
+                  <span class="lock-status-badge guest">Solo cuentas registradas</span>
+                {/if}
+              </div>
+
+              {#if userProfile.isAuthenticated}
+                {#if userProfile.nameChanged}
+                  <div class="name-locked-notice">
+                    <p>Tu nombre oficial está fijado como <strong>{userProfile.username}</strong> y no admite modificaciones adicionales.</p>
+                  </div>
+                {:else}
+                  <div class="name-edit-form">
+                    <div class="name-input-group">
+                      <label for="new-username-input">Nuevo nombre (3 a 20 caracteres):</label>
+                      <div class="input-with-btn">
+                        <input
+                          id="new-username-input"
+                          type="text"
+                          class="initials-input-field name-field"
+                          maxlength="20"
+                          bind:value={newUsernameInput}
+                          placeholder="Tu nuevo apodo"
+                        />
+                        <button
+                          type="button"
+                          class="cyber-btn accent"
+                          disabled={isSavingName || !newUsernameInput.trim() || newUsernameInput.trim() === userProfile.username}
+                          onclick={handleNameChange}
+                        >
+                          {isSavingName ? 'GUARDANDO...' : 'CONFIRMAR CAMBIO'}
+                        </button>
+                      </div>
+                    </div>
+                    {#if nameChangeError}
+                      <p class="error-msg">{nameChangeError}</p>
+                    {/if}
+                    {#if nameChangeSuccess}
+                      <p class="success-msg">{nameChangeSuccess}</p>
+                    {/if}
+                    <p class="warning-alert-text">
+                      ⚠️ <strong>Atención:</strong> Esta acción es irreversible. Una vez modificado, tu nombre no podrá volver a cambiarse.
+                    </p>
+                  </div>
+                {/if}
+              {:else}
+                <div class="guest-name-info">
+                  <p>Estás jugando en modo invitado (<code>{gameUI.nickname}</code>). Inicia sesión con Google para desbloquear tu perfil oficial permanente.</p>
+                </div>
+              {/if}
             </div>
 
             <!-- Toggler de Emotes en Cancha con Tooltip Explicativo -->
@@ -3721,6 +3864,101 @@
     background: rgba(0, 229, 255, 0.2);
     border-color: #00e5ff;
     box-shadow: 0 0 10px rgba(0, 229, 255, 0.3);
+  }
+
+  /* Username Change Card */
+  .username-change-card {
+    background: #141b26;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 0.5rem;
+    padding: 1.15rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.85rem;
+  }
+
+  .lock-status-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.72rem;
+    font-weight: 700;
+    padding: 0.25rem 0.55rem;
+    border-radius: 4px;
+    letter-spacing: 0.02em;
+  }
+
+  .lock-status-badge.available {
+    background: rgba(34, 197, 94, 0.15);
+    border: 1px solid rgba(34, 197, 94, 0.4);
+    color: #4ade80;
+  }
+
+  .lock-status-badge.locked {
+    background: rgba(239, 68, 68, 0.15);
+    border: 1px solid rgba(239, 68, 68, 0.4);
+    color: #f87171;
+  }
+
+  .lock-status-badge.guest {
+    background: rgba(148, 163, 184, 0.15);
+    border: 1px solid rgba(148, 163, 184, 0.3);
+    color: #94a3b8;
+  }
+
+  .name-locked-notice p,
+  .guest-name-info p {
+    font-size: 0.88rem;
+    color: #94a3b8;
+    line-height: 1.45;
+  }
+
+  .name-edit-form {
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+  }
+
+  .name-input-group {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+  }
+
+  .name-input-group label {
+    font-size: 0.82rem;
+    color: #cbd5e1;
+    font-weight: 600;
+  }
+
+  .input-with-btn {
+    display: flex;
+    gap: 0.6rem;
+    align-items: center;
+  }
+
+  .name-field {
+    flex: 1;
+    max-width: 280px;
+  }
+
+  .warning-alert-text {
+    font-size: 0.78rem;
+    color: #f59e0b;
+    margin-top: 0.25rem;
+  }
+
+  .error-msg {
+    font-size: 0.8rem;
+    color: #ef4444;
+    font-weight: 600;
+  }
+
+  .success-msg {
+    font-size: 0.8rem;
+    color: #22c55e;
+    font-weight: 600;
   }
 
   /* Emotes Toggle Card */

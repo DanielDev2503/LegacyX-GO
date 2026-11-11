@@ -53,6 +53,10 @@ export interface PlayerMatchStats {
   assistsNormal?: number;
   assistsCurve?: number;
   hattrickBonus?: number;
+  ownGoals?: number;
+  powerGoals?: number;
+  curveGoals?: number;
+  curveAssists?: number;
 }
 
 export interface GoalInfo {
@@ -61,6 +65,9 @@ export interface GoalInfo {
   assisterId: string | null;
   assisterName: string | null;
   team: 'red' | 'blue';
+  speedKmh?: number;
+  isPower?: boolean;
+  isCurve?: boolean;
 }
 
 export interface KickoffState {

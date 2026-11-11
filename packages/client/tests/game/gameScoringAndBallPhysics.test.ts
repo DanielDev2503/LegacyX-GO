@@ -154,17 +154,19 @@ describe('Game Scoring Engine & Ball Kinematics (Phase 1)', () => {
       expect(stats.touches).toBe(2);
     });
 
-    it('awards +10 pts for completed pass between teammates separated by >= 90 px', () => {
+    it('awards +10 pts for completed pass between teammates separated by >= 140 px', () => {
       engine.ball.pos.set(-100, 0);
+      engine.ball.vel.set(200, 0);
       engine.registerBallTouch('r1');
       const r1Stats = engine.getOrCreatePlayerStats('r1');
       expect(r1Stats.points).toBe(0);
 
-      // Advance ticks and move ball >= 90 px to teammate
+      // Advance ticks and move ball >= 140 px to teammate
       for (let i = 0; i < 16; i++) engine.tick(new Map());
-      engine.ball.pos.set(20, 0);
+      engine.ball.pos.set(50, 0);
+      engine.ball.vel.set(200, 0);
 
-      // Teammate touches ball (distance = 120 px >= 90 px)
+      // Teammate touches ball (distance = 150 px >= 140 px)
       engine.registerBallTouch('r2');
       const r2Stats = engine.getOrCreatePlayerStats('r2');
       expect(r2Stats.points).toBe(0);
@@ -312,7 +314,7 @@ describe('Game Scoring Engine & Ball Kinematics (Phase 1)', () => {
       expect(r1Stats.assists).toBe(0);
     });
 
-    it('awards +120 pts for goal scored with active curve spin (total +140 with base shot of +20)', () => {
+    it('awards +130 pts for goal scored with active curve spin (total +150 with base shot of +20)', () => {
       let scoreEvents: Array<{ text: string; pts: number }> = [];
       engine.onScoreEvent = (_id, text, pts) => {
         scoreEvents.push({ text, pts });
@@ -332,9 +334,9 @@ describe('Game Scoring Engine & Ball Kinematics (Phase 1)', () => {
       engine.tick(new Map());
 
       expect(r1Stats.goals).toBe(1);
-      expect(r1Stats.points).toBe(r1PointsBefore + 120);
+      expect(r1Stats.points).toBe(r1PointsBefore + 130);
 
-      const goalEvent = scoreEvents.find(e => e.text.includes('+120'));
+      const goalEvent = scoreEvents.find(e => e.text.includes('+130'));
       expect(goalEvent).toBeDefined();
     });
 

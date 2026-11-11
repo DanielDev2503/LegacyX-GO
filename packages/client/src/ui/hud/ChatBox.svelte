@@ -27,7 +27,9 @@
   );
 
   let mentionCandidates = $derived(
-    activeMentionToken ? getMentionCandidates(activeMentionToken.query, gameUI.rosterPlayers) : []
+    activeMentionToken
+      ? getMentionCandidates(activeMentionToken.query, gameUI.rosterPlayers, gameUI.nickname)
+      : []
   );
 
   let isMentionMenuOpen = $derived(
@@ -186,7 +188,7 @@
 <aside
   id="chat-container"
   class="chat-dock"
-  style={`height: ${gameUI.chatHeight}px;`}
+  style={`height: ${gameUI.chatHeight}px; opacity: ${Math.max(0.1, (gameUI.settings.chatOpacity ?? 100) / 100)};`}
 >
   <div id="chat-messages" class="chat-history" bind:this={messagesRef}>
     {#each gameUI.chatMessages as msg (msg.id)}
@@ -285,12 +287,14 @@
     gap: 0.22rem;
     font-size: 0.78rem;
     padding-right: 0.25rem;
+    user-select: text;
   }
 
   .chat-line {
     color: #e2e8f0;
     line-height: 1.32;
     word-break: break-word;
+    user-select: text;
     animation: chatLineIn 180ms cubic-bezier(0.22, 1, 0.36, 1) both;
   }
 

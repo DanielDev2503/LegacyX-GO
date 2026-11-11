@@ -214,13 +214,23 @@ export function setupSignalingServer(wss: WebSocketServer) {
     }
   }
 
+  function getRealOnlineCount(): number {
+    let count = 0;
+    for (const client of wss.clients) {
+      if (client.readyState === WebSocket.OPEN) {
+        count++;
+      }
+    }
+    return count;
+  }
+
   function broadcastRoomList(): void {
     const activePeerIds = new Set(peerSockets.keys());
     const publicRooms = registry.getPublicRooms(activePeerIds);
     const payload = JSON.stringify({
       type: 'room_list',
       rooms: publicRooms,
-      onlineCount: wss.clients.size
+      onlineCount: getRealOnlineCount()
     });
 
     for (const client of wss.clients) {
@@ -369,7 +379,7 @@ export function setupSignalingServer(wss: WebSocketServer) {
       send(socket, {
         type: 'ice_config',
         iceServers,
-        onlineCount: wss.clients.size
+        onlineCount: getRealOnlineCount()
       });
       send(socket, {
         type: 'WELCOME',
@@ -388,7 +398,7 @@ export function setupSignalingServer(wss: WebSocketServer) {
     send(socket, {
       type: 'room_list',
       rooms: registry.getPublicRooms(new Set(peerSockets.keys())),
-      onlineCount: wss.clients.size
+      onlineCount: getRealOnlineCount()
     });
 
     ws.on('pong', () => {
@@ -442,7 +452,21 @@ export function setupSignalingServer(wss: WebSocketServer) {
               timestamp: msg.timestamp ?? msg.clientSentAt,
               clientSentAt: msg.clientSentAt ?? msg.timestamp,
               serverTime: Date.now(),
-              onlineCount: wss.clients.size
+              onlineCount: getRealOnlineCount()
+            });
+            break;
+          }
+
+          case 'ROOM_PING_PROBE': {
+            const roomId = String(msg.roomId || '');
+            const targetRoom = registry.getRoomById(roomId);
+            const hostPing = targetRoom?.hostPingMs ?? 20;
+            const clientPing = ws.rttMs ?? 20;
+            const estimatedPing = Math.max(8, Math.round((clientPing + hostPing) * 0.75));
+            send(ws, {
+              type: 'ROOM_PING_RESULT',
+              roomId,
+              ping: estimatedPing
             });
             break;
           }
@@ -552,7 +576,7 @@ export function setupSignalingServer(wss: WebSocketServer) {
           case 'JOIN_LOBBY': {
             const activePeerIds = new Set(peerSockets.keys());
             const publicRooms = registry.getPublicRooms(activePeerIds);
-            send(socket, { type: 'room_list', rooms: publicRooms, onlineCount: wss.clients.size });
+            send(socket, { type: 'room_list', rooms: publicRooms, onlineCount: getRealOnlineCount() });
             break;
           }
 

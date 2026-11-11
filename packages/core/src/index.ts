@@ -110,7 +110,8 @@ import {
   INPUT_FLAG_MAGNUS_LEFT,
   INPUT_FLAG_MAGNUS_RIGHT,
   INPUT_FLAG_TYPING,
-  INPUT_FLAG_MOUSE_AIM
+  INPUT_FLAG_MOUSE_AIM,
+  INPUT_FLAG_MOUSE_ACTIVE
 } from './protocol/BinaryProtocol';
 import { InputPacket, InputData } from './protocol/InputPacket';
 import { SnapshotPacket, ActiveRadiusConfig } from './protocol/SnapshotPacket';
@@ -601,7 +602,7 @@ export class EngineInstance {
           let iy = 0;
           let moveThrottle = 0;
 
-          if ((mask & INPUT_FLAG_MOUSE_AIM) !== 0 && input.aimAngle !== undefined && (input.aimThrottle ?? 0) > 0) {
+          if ((mask & INPUT_FLAG_MOUSE_AIM) !== 0 && typeof input.aimAngle === 'number' && (input.aimThrottle ?? 0) > 0) {
             moveThrottle = Math.max(0, Math.min(1, input.aimThrottle ?? 1));
             ix = Math.cos(input.aimAngle);
             iy = Math.sin(input.aimAngle);
@@ -1497,6 +1498,7 @@ export {
   INPUT_FLAG_MAGNUS_RIGHT,
   INPUT_FLAG_TYPING,
   INPUT_FLAG_MOUSE_AIM,
+  INPUT_FLAG_MOUSE_ACTIVE,
   DEFAULT_PHYSICS_MODIFIERS,
   DEFAULT_GAME_CONFIG,
   DEFAULT_GAMEPLAY_CONFIG,

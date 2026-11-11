@@ -5,9 +5,26 @@
  */
 
 import { gameUI } from './gameUI.svelte.js';
+import type { LxrReplayFile } from '../../recorder/MatchRecorder.svelte.js';
+import { compressReplayGzip, decompressReplayGzip } from '../../recorder/MatchRecorder.svelte.js';
 
 export type UserRole = 'superadmin' | 'representante' | 'jugador';
 export type LeaderboardCategory = 'elo' | 'goals' | 'assists' | 'saves';
+
+export interface UserReplayRow {
+  id: string;
+  user_id: string;
+  name: string;
+  storage_path: string;
+  stadium_id: string;
+  duration_seconds: number;
+  red_score: number;
+  blue_score: number;
+  red_acronym: string;
+  blue_acronym: string;
+  file_size_bytes: number;
+  created_at: string;
+}
 
 export interface PlayerRankingStats {
   matchesPlayed: number;
@@ -90,7 +107,10 @@ class UserProfileStore {
   public email = $state<string>('');
   public role = $state<UserRole>('jugador');
   public isVerified = $state<boolean>(false);
+  public nameChanged = $state<boolean>(false);
   public elo = $state<number>(1000);
+  public userReplays = $state<UserReplayRow[]>([]);
+  public isLoadingReplays = $state<boolean>(false);
   public stats = $state<PlayerRankingStats>({
     matchesPlayed: 0,
     wins: 0,
@@ -234,6 +254,7 @@ class UserProfileStore {
             email: this.email,
             role: this.role,
             isVerified: this.isVerified,
+            nameChanged: this.nameChanged,
             elo: this.elo,
             stats: this.stats
           })
@@ -267,6 +288,7 @@ class UserProfileStore {
         this.email = parsed.email ?? '';
         this.role = parsed.role ?? 'jugador';
         this.isVerified = Boolean(parsed.isVerified);
+        this.nameChanged = Boolean(parsed.nameChanged ?? false);
         this.elo = Number(parsed.elo ?? 1000);
         if (parsed.stats) {
           this.stats = { ...this.stats, ...parsed.stats };
@@ -331,6 +353,7 @@ class UserProfileStore {
     this.email = profile.email ?? this.email;
     this.role = (profile.role as UserRole) ?? 'jugador';
     this.isVerified = Boolean(profile.is_verified ?? profile.isVerified ?? true);
+    this.nameChanged = Boolean(profile.name_changed ?? false);
     this.elo = Number(ranking.elo ?? profile.elo ?? 1000);
     this.stats = {
       matchesPlayed: Number(ranking.matches_played ?? ranking.matchesPlayed ?? 0),
@@ -884,6 +907,198 @@ class UserProfileStore {
         assists: this.stats.assists,
         saves: this.stats.saves
       };
+    }
+  }
+
+  public async changeUsernameOnce(newName: string): Promise<boolean> {
+    const clean = newName.trim();
+    if (!this.isAuthenticated || !this.id || !this.jwt) {
+      throw new Error('Debes iniciar sesión para cambiar tu nombre de usuario.');
+    }
+    if (this.nameChanged) {
+      throw new Error('El nombre de usuario ya ha sido cambiado anteriormente y no puede modificarse más.');
+    }
+    if (clean.length < 3 || clean.length > 20) {
+      throw new Error('El nombre debe tener entre 3 y 20 caracteres.');
+    }
+    if (!/^[a-zA-Z0-9_\- ]+$/.test(clean)) {
+      throw new Error('El nombre solo puede contener letras, números, guiones y espacios.');
+    }
+
+    const res = await fetch(`${this.supabaseUrl}/rest/v1/profiles?id=eq.${encodeURIComponent(this.id)}`, {
+      method: 'PATCH',
+      headers: {
+        ...this.supabaseHeaders(this.jwt),
+        Prefer: 'return=representation'
+      },
+      body: JSON.stringify({
+        username: clean,
+        display_name: clean,
+        name_changed: true
+      })
+    });
+
+    if (!res.ok) {
+      const errBody = await res.json().catch(() => ({}));
+      throw new Error(errBody.message || 'Error al actualizar el nombre en el servidor.');
+    }
+
+    this.username = clean;
+    this.displayName = clean;
+    this.nameChanged = true;
+    this.persistSession();
+    gameUI.setPlayerNickname(clean);
+    return true;
+  }
+
+  public async fetchUserReplays(): Promise<UserReplayRow[]> {
+    if (!this.isAuthenticated || !this.id || !this.jwt) {
+      this.userReplays = [];
+      return [];
+    }
+    this.isLoadingReplays = true;
+    try {
+      const res = await fetch(
+        `${this.supabaseUrl}/rest/v1/user_replays?user_id=eq.${encodeURIComponent(this.id)}&order=created_at.desc`,
+        { headers: this.supabaseHeaders(this.jwt) }
+      );
+      if (res.ok) {
+        const rows: UserReplayRow[] = await res.json();
+        this.userReplays = Array.isArray(rows) ? rows : [];
+        return this.userReplays;
+      }
+      return [];
+    } catch (err) {
+      console.warn('[userProfile] Error cargando repeticiones:', err);
+      return [];
+    } finally {
+      this.isLoadingReplays = false;
+    }
+  }
+
+  public async uploadUserReplay(replayFile: LxrReplayFile, customName?: string): Promise<UserReplayRow> {
+    if (!this.isAuthenticated || !this.id || !this.jwt) {
+      throw new Error('Debes iniciar sesión con Google para guardar repeticiones en la nube.');
+    }
+
+    // 1. Obtener lista actual para certificar el límite de 10
+    const currentList = await this.fetchUserReplays();
+    if (currentList.length >= 10) {
+      // Auto-prune de la(s) más antigua(s) para dejar espacio
+      const toDelete = currentList.slice(9);
+      for (const old of toDelete) {
+        await this.deleteUserReplay(old.id, old.storage_path);
+      }
+    }
+
+    // 2. Comprimir con GZIP
+    const compressed = await compressReplayGzip(replayFile);
+    const replayId =
+      typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+        ? crypto.randomUUID()
+        : `rep_${Date.now()}`;
+    const storagePath = `${this.id}/${replayId}.lxr.gz`;
+
+    // 3. Subir archivo comprimido a Supabase Storage bucket 'replays'
+    const uploadRes = await fetch(`${this.supabaseUrl}/storage/v1/object/replays/${storagePath}`, {
+      method: 'POST',
+      headers: {
+        apikey: this.supabaseKey,
+        Authorization: `Bearer ${this.jwt}`,
+        'Content-Type': 'application/gzip',
+        'x-upsert': 'true'
+      },
+      body: compressed as unknown as BodyInit
+    });
+
+    if (!uploadRes.ok) {
+      const err = await uploadRes.json().catch(() => ({}));
+      throw new Error(err.message || 'Error al subir la repetición a Storage.');
+    }
+
+    // 4. Insertar fila en public.user_replays
+    const rowPayload = {
+      user_id: this.id,
+      name: customName || replayFile.roomName || 'Partida grabada',
+      storage_path: storagePath,
+      stadium_id: replayFile.stadiumId || 'mediano',
+      duration_seconds: Math.max(1, Math.round(replayFile.durationSeconds)),
+      red_score: replayFile.redScore ?? 0,
+      blue_score: replayFile.blueScore ?? 0,
+      red_acronym: (replayFile.redKit as any)?.tag || 'RED',
+      blue_acronym: (replayFile.blueKit as any)?.tag || 'BLUE',
+      file_size_bytes: compressed.byteLength
+    };
+
+    const dbRes = await fetch(`${this.supabaseUrl}/rest/v1/user_replays`, {
+      method: 'POST',
+      headers: {
+        ...this.supabaseHeaders(this.jwt),
+        Prefer: 'return=representation'
+      },
+      body: JSON.stringify(rowPayload)
+    });
+
+    if (!dbRes.ok) {
+      const err = await dbRes.json().catch(() => ({}));
+      throw new Error(err.message || 'Error al registrar la repetición en la base de datos.');
+    }
+
+    const insertedRows: UserReplayRow[] = await dbRes.json();
+    const inserted = insertedRows[0]!;
+    await this.fetchUserReplays();
+    return inserted;
+  }
+
+  public async downloadUserReplay(storagePath: string): Promise<LxrReplayFile> {
+    if (!this.jwt) throw new Error('Usuario no autenticado.');
+    const res = await fetch(`${this.supabaseUrl}/storage/v1/object/replays/${storagePath}`, {
+      headers: {
+        apikey: this.supabaseKey,
+        Authorization: `Bearer ${this.jwt}`
+      }
+    });
+    if (!res.ok) {
+      throw new Error('No se pudo descargar la repetición del servidor.');
+    }
+    const buf = await res.arrayBuffer();
+    return decompressReplayGzip(buf);
+  }
+
+  public async deleteUserReplay(id: string, storagePath: string): Promise<void> {
+    if (!this.jwt) return;
+    try {
+      await fetch(`${this.supabaseUrl}/storage/v1/object/replays/${storagePath}`, {
+        method: 'DELETE',
+        headers: {
+          apikey: this.supabaseKey,
+          Authorization: `Bearer ${this.jwt}`
+        }
+      });
+      await fetch(`${this.supabaseUrl}/rest/v1/user_replays?id=eq.${encodeURIComponent(id)}`, {
+        method: 'DELETE',
+        headers: this.supabaseHeaders(this.jwt)
+      });
+    } finally {
+      this.userReplays = this.userReplays.filter((r) => r.id !== id);
+    }
+  }
+
+  public async renameUserReplay(id: string, newName: string): Promise<void> {
+    if (!this.jwt) return;
+    const clean = newName.trim();
+    if (!clean) return;
+    const res = await fetch(`${this.supabaseUrl}/rest/v1/user_replays?id=eq.${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      headers: {
+        ...this.supabaseHeaders(this.jwt),
+        Prefer: 'return=representation'
+      },
+      body: JSON.stringify({ name: clean })
+    });
+    if (res.ok) {
+      const item = this.userReplays.find((r) => r.id === id);
+      if (item) item.name = clean;
     }
   }
 }

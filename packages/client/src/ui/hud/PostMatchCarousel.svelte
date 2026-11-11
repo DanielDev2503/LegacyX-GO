@@ -3,7 +3,7 @@
   import { soundFX } from '../../audio/SoundFX.js';
 
   let currentSlide = $state<0 | 1>(0);
-  let expandedPlayerId = $state<string | null>(null);
+  let expandedPlayers = $state<Set<string>>(new Set());
 
   let redPlayers = $derived(gameUI.players.filter((p) => p.team === 'red'));
   let specPlayers = $derived(gameUI.players.filter((p) => p.team === 'spectator'));
@@ -51,7 +51,28 @@
 
   function toggleAccordion(id: string) {
     soundFX.playUIClick();
-    expandedPlayerId = expandedPlayerId === id ? null : id;
+    const next = new Set(expandedPlayers);
+    if (next.has(id)) {
+      next.delete(id);
+    } else {
+      next.add(id);
+    }
+    expandedPlayers = next;
+  }
+
+  function toggleAllTeam(team: 'red' | 'blue') {
+    soundFX.playUIClick();
+    const list = team === 'red' ? gameUI.redTeamStats : gameUI.blueTeamStats;
+    const allOpen = list.length > 0 && list.every((p) => expandedPlayers.has(p.nickname));
+    const next = new Set(expandedPlayers);
+    for (const p of list) {
+      if (allOpen) {
+        next.delete(p.nickname);
+      } else {
+        next.add(p.nickname);
+      }
+    }
+    expandedPlayers = next;
   }
 
   function goToSlide(slide: 0 | 1) {
@@ -217,17 +238,25 @@
                   style="color: {redKitTertiary}; text-shadow: {redHasOutline ? '-1px -1px 0 #000000, 1px -1px 0 #000000, -1px 1px 0 #000000, 1px 1px 0 #000000' : 'none'};"
                 >{redTeamName}</span>
                 <div class="col-headers-right" style="color: {redKitTertiary};">
-                  <span class="col-pts">Pts</span>
-                  <span class="col-stat">G</span>
-                  <span class="col-stat">A</span>
-                  <span class="col-stat">P</span>
-                  <span class="col-stat">S</span>
-                  <span class="col-arrow"></span>
+                  <span class="col-pts">PTS</span>
+                  <span class="col-stat" title="Goles">G</span>
+                  <span class="col-stat" title="Asistencias">A</span>
+                  <span class="col-stat" title="Atajadas">S</span>
+                  <span class="col-stat" title="Pases">P</span>
+                  <span class="col-stat" title="Tiros">T</span>
+                  <button
+                    type="button"
+                    class="btn-toggle-all"
+                    title="Alternar todos los desgloses"
+                    onclick={(e) => { e.stopPropagation(); toggleAllTeam('red'); }}
+                  >
+                    {gameUI.redTeamStats.length > 0 && gameUI.redTeamStats.every((p) => expandedPlayers.has(p.nickname)) ? '▲' : '▼'}
+                  </button>
                 </div>
               </div>
               <div class="table-scroll-body custom-scrollbar">
                 {#each gameUI.redTeamStats as player}
-                  {@const isExpanded = expandedPlayerId === player.nickname}
+                  {@const isExpanded = expandedPlayers.has(player.nickname)}
                   <div class="player-stat-row" class:row-expanded={isExpanded}>
                     <!-- svelte-ignore a11y_click_events_have_key_events -->
                     <!-- svelte-ignore a11y_interactive_supports_focus -->
@@ -246,6 +275,7 @@
                       <span class="col-pts red-txt">{player.points}</span>
                       <span class="col-stat">{player.goals}</span>
                       <span class="col-stat">{player.assists}</span>
+                      <span class="col-stat">{player.saves || 0}</span>
                       <span class="col-stat">{player.passes}</span>
                       <span class="col-stat">{player.shots}</span>
                       <span class="col-arrow chevron-icon">{isExpanded ? '▲' : '▼'}</span>
@@ -256,25 +286,55 @@
                       <div class="accordion-drawer">
                         <div class="drawer-grid">
                           <div class="drawer-chip">
-                            <span class="chip-label">Toques</span>
-                            <span class="chip-val text-muted">0</span>
+                            <span class="chip-label">Gol (+100)</span>
+                            <span class="chip-val text-green">+{player.goals * 100}</span>
+                          </div>
+                          {#if player.powerGoals}
+                            <div class="drawer-chip">
+                              <span class="chip-label">Gol Pot. (+30)</span>
+                              <span class="chip-val text-cyan">+{player.powerGoals * 30}</span>
+                            </div>
+                          {/if}
+                          {#if player.curveGoals}
+                            <div class="drawer-chip">
+                              <span class="chip-label">Gol Ef. (+30)</span>
+                              <span class="chip-val text-purple">+{player.curveGoals * 30}</span>
+                            </div>
+                          {/if}
+                          <div class="drawer-chip">
+                            <span class="chip-label">Asistencia (+50)</span>
+                            <span class="chip-val text-cyan">+{player.assists * 50}</span>
+                          </div>
+                          {#if player.curveAssists}
+                            <div class="drawer-chip">
+                              <span class="chip-label">Asist. Ef. (+20)</span>
+                              <span class="chip-val text-purple">+{player.curveAssists * 20}</span>
+                            </div>
+                          {/if}
+                          <div class="drawer-chip">
+                            <span class="chip-label">Atajada (+100)</span>
+                            <span class="chip-val text-gold">+{(player.saves || 0) * 100}</span>
                           </div>
                           <div class="drawer-chip">
-                            <span class="chip-label">Pases</span>
-                            <span class="chip-val text-cyan">+{player.passes * 10}</span>
-                          </div>
-                          <div class="drawer-chip">
-                            <span class="chip-label">Tiros</span>
+                            <span class="chip-label">Tiro (+20)</span>
                             <span class="chip-val text-cyan">+{player.shots * 20}</span>
                           </div>
                           <div class="drawer-chip">
-                            <span class="chip-label">Goles</span>
-                            <span class="chip-val text-green">+{player.goals * 100}</span>
+                            <span class="chip-label">Pase (+10)</span>
+                            <span class="chip-val text-cyan">+{player.passes * 10}</span>
                           </div>
-                          <div class="drawer-chip">
-                            <span class="chip-label">Autogol</span>
-                            <span class="chip-val text-error">-{player.ownGoals ? player.ownGoals * 50 : 0}</span>
-                          </div>
+                          {#if player.hasHattrickBonus}
+                            <div class="drawer-chip">
+                              <span class="chip-label">Hattrick (+100)</span>
+                              <span class="chip-val text-gold">+100</span>
+                            </div>
+                          {/if}
+                          {#if player.ownGoals}
+                            <div class="drawer-chip">
+                              <span class="chip-label">Autogol (-50)</span>
+                              <span class="chip-val text-error">-{player.ownGoals * 50}</span>
+                            </div>
+                          {/if}
                         </div>
                       </div>
                     {/if}
@@ -297,17 +357,25 @@
                   style="color: {blueKitTertiary}; text-shadow: {blueHasOutline ? '-1px -1px 0 #000000, 1px -1px 0 #000000, -1px 1px 0 #000000, 1px 1px 0 #000000' : 'none'};"
                 >{blueTeamName}</span>
                 <div class="col-headers-right" style="color: {blueKitTertiary};">
-                  <span class="col-pts">Pts</span>
-                  <span class="col-stat">G</span>
-                  <span class="col-stat">A</span>
-                  <span class="col-stat">P</span>
-                  <span class="col-stat">S</span>
-                  <span class="col-arrow"></span>
+                  <span class="col-pts">PTS</span>
+                  <span class="col-stat" title="Goles">G</span>
+                  <span class="col-stat" title="Asistencias">A</span>
+                  <span class="col-stat" title="Atajadas">S</span>
+                  <span class="col-stat" title="Pases">P</span>
+                  <span class="col-stat" title="Tiros">T</span>
+                  <button
+                    type="button"
+                    class="btn-toggle-all"
+                    title="Alternar todos los desgloses"
+                    onclick={(e) => { e.stopPropagation(); toggleAllTeam('blue'); }}
+                  >
+                    {gameUI.blueTeamStats.length > 0 && gameUI.blueTeamStats.every((p) => expandedPlayers.has(p.nickname)) ? '▲' : '▼'}
+                  </button>
                 </div>
               </div>
               <div class="table-scroll-body custom-scrollbar">
                 {#each gameUI.blueTeamStats as player}
-                  {@const isExpanded = expandedPlayerId === player.nickname}
+                  {@const isExpanded = expandedPlayers.has(player.nickname)}
                   <div
                     class="player-stat-row"
                     class:is-mvp={player.isMvp}
@@ -339,6 +407,7 @@
                       </span>
                       <span class="col-stat" class:gold-stat={player.isMvp}>{player.goals}</span>
                       <span class="col-stat">{player.assists}</span>
+                      <span class="col-stat">{player.saves || 0}</span>
                       <span class="col-stat">{player.passes}</span>
                       <span class="col-stat">{player.shots}</span>
                       <span class="col-arrow chevron-icon">{isExpanded ? '▲' : '▼'}</span>
@@ -349,25 +418,55 @@
                       <div class="accordion-drawer">
                         <div class="drawer-grid">
                           <div class="drawer-chip">
-                            <span class="chip-label">Toques</span>
-                            <span class="chip-val text-muted">0</span>
+                            <span class="chip-label">Gol (+100)</span>
+                            <span class="chip-val text-gold">+{player.goals * 100}</span>
+                          </div>
+                          {#if player.powerGoals}
+                            <div class="drawer-chip">
+                              <span class="chip-label">Gol Pot. (+30)</span>
+                              <span class="chip-val text-cyan">+{player.powerGoals * 30}</span>
+                            </div>
+                          {/if}
+                          {#if player.curveGoals}
+                            <div class="drawer-chip">
+                              <span class="chip-label">Gol Ef. (+30)</span>
+                              <span class="chip-val text-purple">+{player.curveGoals * 30}</span>
+                            </div>
+                          {/if}
+                          <div class="drawer-chip">
+                            <span class="chip-label">Asistencia (+50)</span>
+                            <span class="chip-val text-cyan">+{player.assists * 50}</span>
+                          </div>
+                          {#if player.curveAssists}
+                            <div class="drawer-chip">
+                              <span class="chip-label">Asist. Ef. (+20)</span>
+                              <span class="chip-val text-purple">+{player.curveAssists * 20}</span>
+                            </div>
+                          {/if}
+                          <div class="drawer-chip">
+                            <span class="chip-label">Atajada (+100)</span>
+                            <span class="chip-val text-gold">+{(player.saves || 0) * 100}</span>
                           </div>
                           <div class="drawer-chip">
-                            <span class="chip-label">Pases</span>
-                            <span class="chip-val text-cyan">+{player.passes * 10}</span>
-                          </div>
-                          <div class="drawer-chip">
-                            <span class="chip-label">Tiros</span>
+                            <span class="chip-label">Tiro (+20)</span>
                             <span class="chip-val text-cyan">+{player.shots * 20}</span>
                           </div>
                           <div class="drawer-chip">
-                            <span class="chip-label">Goles</span>
-                            <span class="chip-val text-gold">+{player.goals * 100}</span>
+                            <span class="chip-label">Pase (+10)</span>
+                            <span class="chip-val text-cyan">+{player.passes * 10}</span>
                           </div>
-                          <div class="drawer-chip">
-                            <span class="chip-label">Autogol</span>
-                            <span class="chip-val text-muted">0</span>
-                          </div>
+                          {#if player.hasHattrickBonus}
+                            <div class="drawer-chip">
+                              <span class="chip-label">Hattrick (+100)</span>
+                              <span class="chip-val text-gold">+100</span>
+                            </div>
+                          {/if}
+                          {#if player.ownGoals}
+                            <div class="drawer-chip">
+                              <span class="chip-label">Autogol (-50)</span>
+                              <span class="chip-val text-error">-{player.ownGoals * 50}</span>
+                            </div>
+                          {/if}
                         </div>
                       </div>
                     {/if}
@@ -1032,8 +1131,27 @@
 
   .col-player { flex: 1; text-align: left; }
   .col-pts { width: 44px; text-align: right; }
-  .col-stat { width: 30px; text-align: center; }
+  .col-stat { width: 26px; text-align: center; }
   .col-arrow { width: 22px; text-align: center; }
+
+  .btn-toggle-all {
+    background: transparent;
+    border: none;
+    color: inherit;
+    cursor: pointer;
+    font-size: 0.65rem;
+    padding: 0;
+    width: 22px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0.85;
+    transition: opacity 0.15s ease, transform 0.15s ease;
+  }
+  .btn-toggle-all:hover {
+    opacity: 1;
+    transform: scale(1.15);
+  }
 
   .table-scroll-body {
     flex: 1;
@@ -1116,7 +1234,7 @@
 
   .drawer-grid {
     display: grid;
-    grid-template-columns: repeat(5, 1fr);
+    grid-template-columns: repeat(auto-fit, minmax(80px, 1fr));
     gap: 0.35rem;
     text-align: center;
   }
@@ -1145,8 +1263,8 @@
   .text-cyan { color: #00e5ff; }
   .text-green { color: #2ecc71; }
   .text-gold { color: #ffe16d; }
+  .text-purple { color: #d070ff; }
   .text-error { color: #ff4757; }
-  .text-muted { color: #849396; }
 
   /* CABECERA DE SALA (SLIDE 1) */
   .lobby-header-row {

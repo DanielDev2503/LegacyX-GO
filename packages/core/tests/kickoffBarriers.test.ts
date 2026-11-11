@@ -16,11 +16,11 @@ describe('Regulatory Kickoff Barriers & Contact Deactivation', () => {
     engine.addPlayer(pBlue);
   });
 
-  it('activates neutral kickoff on match start with halfway line barrier at X = 0', () => {
+  it('activates red kickoff on match start with halfway line barrier at X = 0', () => {
     engine.startMatch();
     expect(engine.kickoffState.active).toBe(true);
-    expect(engine.kickoffState.mode).toBe('NEUTRAL');
-    expect(engine.kickoffState.possessingTeam).toBeNull();
+    expect(engine.kickoffState.mode).toBe('TEAM_KICKOFF');
+    expect(engine.kickoffState.possessingTeam).toBe('red');
 
     // Fast-forward countdown into PLAYING
     for (let i = 0; i < 180; i++) {
@@ -32,8 +32,8 @@ describe('Regulatory Kickoff Barriers & Contact Deactivation', () => {
     const redDisc = engine.playerDiscs.get(pRed.id)!;
     const blueDisc = engine.playerDiscs.get(pBlue.id)!;
 
-    // Position Red close to X = 0 (away from ball at y=60) and attempt to cross into Blue territory (X > 0)
-    redDisc.pos.set(-10, 60);
+    // Position Red close to X = 0 (outside central circle at y=100) and attempt to cross into Blue territory (X > 0)
+    redDisc.pos.set(-10, 100);
     redDisc.vel.set(100, 0);
 
     const inputs = new Map<string, number>();
@@ -44,8 +44,8 @@ describe('Regulatory Kickoff Barriers & Contact Deactivation', () => {
     expect(redDisc.pos.x).toBeLessThanOrEqual(-15);
     expect(redDisc.vel.x).toBeLessThanOrEqual(0);
 
-    // Position Blue close to X = 0 (away from ball at y=60) and attempt to cross into Red territory (X < 0)
-    blueDisc.pos.set(10, 60);
+    // Position Blue close to X = 0 (outside central circle at y=100) and attempt to cross into Red territory (X < 0)
+    blueDisc.pos.set(10, 100);
     blueDisc.vel.set(-100, 0);
     inputs.clear();
     inputs.set(pBlue.id, INPUT_LEFT);
@@ -424,8 +424,8 @@ describe('Regulatory Kickoff Barriers & Contact Deactivation', () => {
     engine.startMatch();
     const snap = engine.getSnapshot();
     expect(snap.kickoffActive).toBe(true);
-    expect(snap.kickoffMode).toBe('NEUTRAL');
-    expect(snap.possessingTeam).toBeNull();
+    expect(snap.kickoffMode).toBe('TEAM_KICKOFF');
+    expect(snap.possessingTeam).toBe('red');
   });
 });
 
