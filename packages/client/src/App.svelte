@@ -35,6 +35,7 @@
   import { ClientPredictionReconciler } from './net/ClientPrediction.js';
   import { computeMouseMovementVector, mouseButtonToCode } from './controllers/InputManager.js';
   import { matchRecorder } from './recorder/MatchRecorder.svelte.js';
+  import { userProfile } from './ui/state/userProfile.svelte.js';
 
   import Gatekeeper from './ui/screens/Gatekeeper.svelte';
   import Lobby from './ui/screens/Lobby.svelte';
@@ -68,6 +69,16 @@
     targetEngine.setTimeLimit(Math.max(0, Number(gameUI.timeLimitMinutes ?? 0)) * 60);
     targetEngine.setScoreLimit(Math.max(0, Number(gameUI.scoreLimitGoals ?? 0)));
   }
+
+  $effect(() => {
+    // Sincronizar retorno OAuth y entrada automática al Lobby si ya hay sesión autenticada activa
+    if (typeof window !== 'undefined' && window.location.hash?.includes('access_token=')) {
+      void userProfile.handleOAuthRedirect();
+    } else if (userProfile.isAuthenticated && !userProfile.isGuest && gameUI.currentScreen === 'GATEKEEPER') {
+      gameUI.setPlayerNickname(userProfile.username);
+      gameUI.navigateTo('LOBBY');
+    }
+  });
 
   $effect(() => {
     if (gameUI.currentScreen !== 'IN_GAME' || !canvasRef) return;
