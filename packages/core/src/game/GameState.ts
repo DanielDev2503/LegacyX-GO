@@ -20,6 +20,9 @@ export interface DiscSnapshot {
   curveFactor?: number | undefined;
   spin?: number | undefined;
   isPowerShot?: boolean | undefined;
+  lastAckedInputSeq?: number | undefined;
+  dashTimer?: number | undefined;
+  dashCooldown?: number | undefined;
 }
 
 export interface TouchHistoryEntry {

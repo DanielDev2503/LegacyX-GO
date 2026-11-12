@@ -29,6 +29,13 @@ import {
   KickoffPhysicsContext,
   StadiumBoundariesConfig
 } from './physics/ContinuousCollision';
+import {
+  stepPlayerKinematics,
+  type KinematicsConfig,
+  type PlayerKinematicsInput,
+  type PlayerKinematicsState,
+  type StepKinematicsOptions
+} from './physics/PlayerKinematics';
 import { PhysicsTicker } from './physics/PhysicsTicker';
 import { GoalNet, GoalNetOptions, NetBall } from './physics/GoalNet';
 import { Stadium, StadiumOptions, GoalDefinition, StadiumBallPhysics, StadiumPlayerPhysics } from './stadiums/Stadium';
@@ -190,6 +197,7 @@ interface EngineDashState {
   lastShotTick: number;
   lastPassTick: number;
   lastTouchTick: number;
+  lastProcessedInputSeq: number;
 }
 
 export class EngineInstance {
@@ -379,7 +387,8 @@ export class EngineInstance {
         prevDashDown: false,
         lastShotTick: -9999,
         lastPassTick: -9999,
-        lastTouchTick: -9999
+        lastTouchTick: -9999,
+        lastProcessedInputSeq: 0
       };
       this.playerRuntime.set(id, rt);
     }
@@ -590,122 +599,61 @@ export class EngineInstance {
 
       for (const [id, player] of this.players.entries()) {
         const rt = this.getRuntime(id);
-        if (rt.cooldownTimer > 0) {
-          rt.cooldownTimer = Math.max(0, rt.cooldownTimer - CORE_DT);
-        }
-
         const input = inputs.get(id);
 
         if (input) {
-          const mask = input.inputMask ?? 0;
-          let ix = 0;
-          let iy = 0;
-          let moveThrottle = 0;
-
-          if ((mask & INPUT_FLAG_MOUSE_AIM) !== 0 && typeof input.aimAngle === 'number' && (input.aimThrottle ?? 0) > 0) {
-            moveThrottle = Math.max(0, Math.min(1, input.aimThrottle ?? 1));
-            ix = Math.cos(input.aimAngle);
-            iy = Math.sin(input.aimAngle);
-          } else {
-            let rx = input.dirX ?? 0;
-            let ry = input.dirY ?? 0;
-            if (rx === 0 && ry === 0 && mask) {
-              if (mask & INPUT_FLAG_LEFT) rx -= 1;
-              if (mask & INPUT_FLAG_RIGHT) rx += 1;
-              if (mask & INPUT_FLAG_UP) ry -= 1;
-              if (mask & INPUT_FLAG_DOWN) ry += 1;
-            }
-            const rLen = Math.hypot(rx, ry);
-            if (rLen > 0.001) {
-              ix = rx / rLen;
-              iy = ry / rLen;
-              moveThrottle = Math.min(1.0, rLen);
-            }
+          const seq = (input as any).sequence ?? (input as any).seq ?? (input as any).tick;
+          if (typeof seq === 'number') {
+            rt.lastProcessedInputSeq = seq >>> 0;
           }
+        }
 
-          const hasMoveInput = moveThrottle > 0.01;
-          const isKickRequested = Boolean(input.kick || (mask & INPUT_FLAG_KICK));
-          player.kicking = isKickRequested;
-          player.isTyping = Boolean(mask & INPUT_FLAG_TYPING);
+        const mask = input ? (input.inputMask ?? 0) : 0;
+        player.isTyping = Boolean(mask & INPUT_FLAG_TYPING);
 
-          const pAccelCfg = (this.modifiers as any).playerAcceleration ?? 0.14;
-          const pKickAccelCfg = (this.modifiers as any).kickingAcceleration ?? pAccelCfg * (0.108 / 0.14);
-          const accelBase = (pAccelCfg / 0.11) * 7.5;
-          const kickAccelRatio = pAccelCfg > 0 ? pKickAccelCfg / pAccelCfg : (0.108 / 0.14);
-          const canTurbo = (this.modifiers as any).turboEnabled !== false;
-          const isTurboRequested = canTurbo && Boolean(mask & INPUT_FLAG_TURBO);
-          const turboMultiplier = (this.modifiers as any).boostMultiplier ?? (this.modifiers as any).turboMultiplier ?? 2.0;
+        const pState: PlayerKinematicsState = {
+          pos: player.pos,
+          vel: player.vel,
+          radius: player.radius,
+          stamina: player.stamina,
+          isDashing: player.isDashing,
+          dashTicksRemaining: rt.ticksRemaining,
+          dashCooldownTimer: rt.cooldownTimer,
+          dashDirX: rt.dirX,
+          dashDirY: rt.dirY,
+          isTurbo: player.isTurbo,
+          kicking: player.kicking,
+          prevDashState: rt.prevDashDown,
+          team: this.playerTeams.get(id) ?? 'spec'
+        };
 
-          const canDash = (this.modifiers as any).dashEnabled !== false;
-          const isDashDown = Boolean(input.dash || (mask & INPUT_FLAG_DASH));
-          const wantsDash = canDash && isDashDown && !rt.prevDashDown;
-          rt.prevDashDown = isDashDown;
+        stepPlayerKinematics(
+          pState,
+          {
+            inputMask: mask,
+            aimAngle: input ? input.aimAngle : null,
+            aimThrottle: input ? input.aimThrottle : 0
+          },
+          this.stadium,
+          null,
+          this.modifiers as any,
+          CORE_DT,
+          { skipSubsteps: true }
+        );
 
-          const dashesPerFullBar = (this.modifiers as any).dashesPerFullBar ?? 4;
-          const dashCost = 100 / Math.max(1, Math.min(6, dashesPerFullBar));
-          const curSpeedBefore = player.vel.len();
+        player.stamina = pState.stamina;
+        player.isDashing = pState.isDashing;
+        player.isTurbo = pState.isTurbo;
+        player.kicking = pState.kicking ?? false;
+        rt.ticksRemaining = pState.dashTicksRemaining;
+        rt.cooldownTimer = pState.dashCooldownTimer;
+        rt.dirX = pState.dashDirX;
+        rt.dirY = pState.dashDirY;
+        rt.prevDashDown = pState.prevDashState ?? false;
 
-          if (wantsDash && rt.ticksRemaining <= 0 && rt.cooldownTimer <= 1e-6 && player.stamina >= dashCost) {
-            player.stamina = Math.max(0, player.stamina - dashCost);
-            rt.ticksRemaining = DASH_TICKS;
-            rt.cooldownTimer = dashCooldownCfg;
-            const team = this.playerTeams.get(id);
-            if (curSpeedBefore > 0.05) {
-              rt.dirX = player.vel.x / curSpeedBefore;
-              rt.dirY = player.vel.y / curSpeedBefore;
-            } else if (hasMoveInput) {
-              rt.dirX = ix;
-              rt.dirY = iy;
-            } else {
-              rt.dirX = team === 'blue' ? -1 : 1;
-              rt.dirY = 0;
-            }
-          }
+        const isKickRequested = player.kicking;
 
-          const wasDashing = rt.ticksRemaining > 0;
-          if (rt.ticksRemaining > 0) {
-            rt.ticksRemaining--;
-            player.isDashing = true;
-            player.isTurbo = false;
-            const dashDist = (this.modifiers as any).dashDistance ?? 37.5;
-            const dashSpeed = (dashDist / DASH_TICKS) * 60;
-            player.vel.x = rt.dirX * dashSpeed;
-            player.vel.y = rt.dirY * dashSpeed;
-          } else {
-            player.isDashing = false;
-            let accel = (isKickRequested ? accelBase * kickAccelRatio : accelBase) * (hasMoveInput ? moveThrottle : 1.0);
-            const pMaxSpeedCfg = (this.modifiers as any).playerMaxSpeed ?? ((this.modifiers as any).playerSpeed ? (this.modifiers as any).playerSpeed * 2.8 : 3.5);
-            const maxSpeedBase = (pMaxSpeedCfg / 2.8) * 168.0 * (hasMoveInput ? moveThrottle : 1.0);
-
-            if (isTurboRequested && hasMoveInput && player.stamina > 0) {
-              accel *= Math.max(2.4, turboMultiplier * 1.4);
-              player.stamina = Math.max(0, player.stamina - 40 * CORE_DT);
-              player.isTurbo = player.stamina > 0;
-            } else {
-              player.isTurbo = false;
-            }
-
-            if (hasMoveInput) {
-              player.vel.x += ix * accel;
-              player.vel.y += iy * accel;
-              const currentMaxSpeed = player.isTurbo ? maxSpeedBase * turboMultiplier : maxSpeedBase;
-              const curSpeed = player.vel.len();
-              if (curSpeed > currentMaxSpeed) {
-                player.vel.x = (player.vel.x / curSpeed) * currentMaxSpeed;
-                player.vel.y = (player.vel.y / curSpeed) * currentMaxSpeed;
-              }
-            }
-          }
-
-          if (!wasDashing && !player.isTurbo && player.stamina < 100) {
-            if (!hasMoveInput) {
-              player.stamina = Math.min(100, player.stamina + rechargePerTick);
-            } else if (regenMovingEnabled && regenMovingFactor > 0) {
-              player.stamina = Math.min(100, player.stamina + rechargePerTick * regenMovingFactor);
-            }
-          }
-
-          if (isKickRequested && this.world.isWithinKickDistance(player, this.ball)) {
+        if (isKickRequested && this.world.isWithinKickDistance(player, this.ball)) {
             const dx = this.ball.pos.x - player.pos.x;
             const dy = this.ball.pos.y - player.pos.y;
             const dist = Math.hypot(dx, dy) || 1;
@@ -759,24 +707,6 @@ export class EngineInstance {
               this.fsm.startPlaying();
             }
           }
-        } else {
-          if (rt.ticksRemaining > 0) {
-            rt.ticksRemaining--;
-            player.isDashing = true;
-            const dashDist = (this.modifiers as any).dashDistance ?? 37.5;
-            const dashSpeed = (dashDist / DASH_TICKS) * 60;
-            player.vel.x = rt.dirX * dashSpeed;
-            player.vel.y = rt.dirY * dashSpeed;
-          } else {
-            player.isDashing = false;
-          }
-          rt.prevDashDown = false;
-          player.isTurbo = false;
-          player.kicking = false;
-          if (!player.isDashing && player.stamina < 100) {
-            player.stamina = Math.min(100, player.stamina + rechargePerTick);
-          }
-        }
 
         if (this.fsm.state === MatchPhase.KICKOFF) {
           const ballVelSq = this.ball.vel.x * this.ball.vel.x + this.ball.vel.y * this.ball.vel.y;
@@ -1339,6 +1269,7 @@ export class EngineInstance {
 
     for (const [id, p] of this.players.entries()) {
       const team = this.playerTeams.get(id);
+      const rt = this.playerRuntime.get(id);
       let flags = 0;
       if (p.kicking) flags |= 1 << 0;
       if (p.isDashing) flags |= 1 << 1;
@@ -1353,7 +1284,10 @@ export class EngineInstance {
         vx: p.vel.x,
         vy: p.vel.y,
         flags,
-        stamina: p.stamina
+        stamina: p.stamina,
+        dashTimer: rt ? rt.ticksRemaining : (p.isDashing ? 1 : 0),
+        dashCooldown: rt ? rt.cooldownTimer : 0,
+        lastAckedInputSeq: rt ? rt.lastProcessedInputSeq : 0
       });
     }
 
@@ -1504,7 +1438,8 @@ export {
   DEFAULT_GAMEPLAY_CONFIG,
   GAMEPLAY_CONFIG_LIMITS,
   sanitizeGameplayConfig,
-  defaultStadium
+  defaultStadium,
+  stepPlayerKinematics
 };
 
 export type {
@@ -1542,5 +1477,9 @@ export type {
   PhysicsModifiers,
   GameConfig,
   GameplayConfig,
-  ConfigLimits
+  ConfigLimits,
+  KinematicsConfig,
+  PlayerKinematicsInput,
+  PlayerKinematicsState,
+  StepKinematicsOptions
 };

@@ -62,6 +62,9 @@ export interface CompactDiscState {
   flags: number;
   spin?: number;
   stamina?: number;
+  lastAckedInputSeq?: number;
+  dashTimer?: number;
+  dashCooldown?: number;
 }
 
 export interface GameStateSnapshot {
@@ -99,7 +102,7 @@ export class BinaryProtocol {
   public static readonly INPUT_SIZE = 9;
   public static readonly MOUSE_INPUT_SIZE = 12;
   public static readonly SNAPSHOT_HEADER_SIZE = 12;
-  public static readonly DISC_RECORD_SIZE = 18;
+  public static readonly DISC_RECORD_SIZE = 32;
 
   public static peekPacketType(buffer: ArrayBuffer | DataView): number {
     const view = buffer instanceof DataView ? buffer : new DataView(buffer);
@@ -139,7 +142,7 @@ export class BinaryProtocol {
     const view = new DataView(buf);
 
     view.setUint8(0, OP_INPUT);
-    view.setUint32(1, input.sequence ?? input.tick ?? 0, false);
+    view.setUint32(1, input.sequence ?? input.tick ?? (input as any).seq ?? 0, true);
     view.setUint16(5, mask, false);
     view.setUint16(7, (input.clientTimestamp ?? 0) & 0xffff, false);
 
@@ -159,7 +162,7 @@ export class BinaryProtocol {
       return null;
     }
 
-    const sequence = view.getUint32(1, false);
+    const sequence = view.getUint32(1, true);
     const inputMask = view.getUint16(5, false);
     const clientTimestamp = view.getUint16(7, false);
 
@@ -234,22 +237,18 @@ export class BinaryProtocol {
     let offset = this.SNAPSHOT_HEADER_SIZE;
     for (let i = 0; i < discCount; i++) {
       const d = snapshot.discs[i];
-      view.setUint16(offset, d.id, false);
+      view.setUint16(offset, d.id, true);
       view.setUint8(offset + 2, d.team & 0xff);
       view.setUint8(offset + 3, d.flags & 0xff);
-      view.setFloat32(offset + 4, d.x, false);
-      view.setFloat32(offset + 8, d.y, false);
-
-      const qvx = Math.max(-32768, Math.min(32767, Math.round(d.vx * 20)));
-      const qvy = Math.max(-32768, Math.min(32767, Math.round(d.vy * 20)));
-      view.setInt16(offset + 12, qvx, false);
-      view.setInt16(offset + 14, qvy, false);
-
-      const stamina = Math.max(0, Math.min(100, Math.round(d.stamina ?? 100)));
-      view.setUint8(offset + 16, stamina);
-
-      const spin = Math.max(-128, Math.min(127, Math.round((d.spin ?? 0) * 50)));
-      view.setInt8(offset + 17, spin);
+      view.setFloat32(offset + 4, d.x, true);
+      view.setFloat32(offset + 8, d.y, true);
+      view.setFloat32(offset + 12, d.vx, true);
+      view.setFloat32(offset + 16, d.vy, true);
+      view.setFloat32(offset + 20, d.stamina ?? 100, true);
+      view.setUint32(offset + 24, d.lastAckedInputSeq ?? 0, true);
+      view.setUint8(offset + 28, Math.max(0, Math.min(255, Math.round(d.dashTimer ?? 0))));
+      view.setInt8(offset + 29, Math.max(-128, Math.min(127, Math.round((d.spin ?? 0) * 50))));
+      view.setUint16(offset + 30, Math.max(0, Math.min(65535, Math.round((d.dashCooldown ?? 0) * 1000))), true);
 
       offset += this.DISC_RECORD_SIZE;
     }
@@ -272,36 +271,80 @@ export class BinaryProtocol {
     const discCount = view.getUint8(11);
 
     const discs: CompactDiscState[] = [];
+    const discStride = discCount > 0 ? Math.floor((view.byteLength - this.SNAPSHOT_HEADER_SIZE) / discCount) : this.DISC_RECORD_SIZE;
     let offset = this.SNAPSHOT_HEADER_SIZE;
 
     for (let i = 0; i < discCount; i++) {
-      if (offset + this.DISC_RECORD_SIZE > view.byteLength) {
-        if (offset + 16 <= view.byteLength) {
-          const id = view.getUint16(offset, false);
-          const team = view.getUint8(offset + 2);
-          const flags = view.getUint8(offset + 3);
-          const x = view.getFloat32(offset + 4, false);
-          const y = view.getFloat32(offset + 8, false);
-          const vx = view.getInt16(offset + 12, false) / 20;
-          const vy = view.getInt16(offset + 14, false) / 20;
-          discs.push({ id, team, flags, x, y, vx, vy, stamina: 100, spin: 0 });
-          offset += 16;
-          continue;
-        }
+      if (discStride >= 32 && offset + 32 <= view.byteLength) {
+        const id = view.getUint16(offset, true);
+        const team = view.getUint8(offset + 2);
+        const flags = view.getUint8(offset + 3);
+        const x = view.getFloat32(offset + 4, true);
+        const y = view.getFloat32(offset + 8, true);
+        const vx = view.getFloat32(offset + 12, true);
+        const vy = view.getFloat32(offset + 16, true);
+        const stamina = view.getFloat32(offset + 20, true);
+        const lastAckedInputSeq = view.getUint32(offset + 24, true);
+        const dashTimer = view.getUint8(offset + 28);
+        const spin = view.getInt8(offset + 29) / 50;
+        const dashCooldown = view.getUint16(offset + 30, true) / 1000;
+
+        discs.push({
+          id,
+          team,
+          flags,
+          x,
+          y,
+          vx,
+          vy,
+          stamina,
+          spin,
+          lastAckedInputSeq,
+          dashTimer,
+          dashCooldown
+        });
+        offset += discStride;
+      } else if (offset + 18 <= view.byteLength) {
+        // Fallback for legacy 18-byte record (Int16 for vx, vy / 20)
+        const id = view.getUint16(offset, false);
+        const team = view.getUint8(offset + 2);
+        const flags = view.getUint8(offset + 3);
+        const x = view.getFloat32(offset + 4, false);
+        const y = view.getFloat32(offset + 8, false);
+        const vx = view.getInt16(offset + 12, false) / 20;
+        const vy = view.getInt16(offset + 14, false) / 20;
+        const stamina = view.getUint8(offset + 16);
+        const spin = view.getInt8(offset + 17) / 50;
+
+        discs.push({
+          id,
+          team,
+          flags,
+          x,
+          y,
+          vx,
+          vy,
+          stamina,
+          spin,
+          lastAckedInputSeq: 0,
+          dashTimer: 0,
+          dashCooldown: 0
+        });
+        offset += discStride > 0 ? discStride : 18;
+      } else if (offset + 16 <= view.byteLength) {
+        // Fallback for legacy 16-byte record
+        const id = view.getUint16(offset, false);
+        const team = view.getUint8(offset + 2);
+        const flags = view.getUint8(offset + 3);
+        const x = view.getFloat32(offset + 4, false);
+        const y = view.getFloat32(offset + 8, false);
+        const vx = view.getInt16(offset + 12, false) / 20;
+        const vy = view.getInt16(offset + 14, false) / 20;
+        discs.push({ id, team, flags, x, y, vx, vy, stamina: 100, spin: 0, lastAckedInputSeq: 0, dashTimer: 0, dashCooldown: 0 });
+        offset += discStride > 0 ? discStride : 16;
+      } else {
         break;
       }
-      const id = view.getUint16(offset, false);
-      const team = view.getUint8(offset + 2);
-      const flags = view.getUint8(offset + 3);
-      const x = view.getFloat32(offset + 4, false);
-      const y = view.getFloat32(offset + 8, false);
-      const vx = view.getInt16(offset + 12, false) / 20;
-      const vy = view.getInt16(offset + 14, false) / 20;
-      const stamina = view.getUint8(offset + 16);
-      const spin = view.getInt8(offset + 17) / 50;
-
-      discs.push({ id, team, flags, x, y, vx, vy, stamina, spin });
-      offset += this.DISC_RECORD_SIZE;
     }
 
     return {

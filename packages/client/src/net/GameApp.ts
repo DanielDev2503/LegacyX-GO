@@ -542,8 +542,8 @@ export class GameApp {
       }
     };
 
-    host.onPlayerInput = (playerId, inputMask, _tick, aimAngle, aimThrottle) => {
-      this.remoteInputs.set(playerId, { inputMask, aimAngle, aimThrottle });
+    host.onPlayerInput = (playerId, inputMask, tick, aimAngle, aimThrottle) => {
+      this.remoteInputs.set(playerId, { inputMask, aimAngle, aimThrottle, tick, sequence: tick, seq: tick } as any);
     };
 
     host.onChatMessage = (sender, text, team, id) => this.pushChat(sender, text, team, false, id);

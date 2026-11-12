@@ -5,7 +5,7 @@ import { EngineInstance, MatchPhase, type GameStateSnapshot } from '@legacyx/cor
 
 describe('Anti-Slingshot Reconciler, Camera Zoom Expansion & Chat Enter Activation', () => {
   describe('ClientPredictionReconciler Anti-Slingshot & Deadband', () => {
-    it('ignores post-replay discrepancies < 3.5 px (distSq < 12.25) to eliminate micro-jitter', () => {
+    it('absorbs post-replay discrepancies continuously into visualOffset without deadband jumps (0.00 px instant screen shift)', () => {
       const reconciler = new ClientPredictionReconciler();
       const engine = new EngineInstance('AF 3v3');
       const p = engine.addPlayer(1, 'red');
@@ -38,9 +38,10 @@ describe('Anti-Slingshot Reconciler, Camera Zoom Expansion & Chat Enter Activati
       expect(result.replayed).toBe(true);
       expect(result.hardSnapped).toBe(false);
 
-      // Verify that after simulation where client was close to replay position (< 3.5px),
-      // visualOffset is cleared to (0, 0)
+      // Verify that after simulation where client was slightly off from replay position,
+      // visualOffset continuously absorbs the discrepancy so screen position has 0.00 px instantaneous pop
       p.pos.x = p.pos.x - 2.0;
+      const visualBefore = p.pos.x + reconciler.visualOffset.x;
       reconciler.recordInput(6, 0); // keys released
       const snap2: GameStateSnapshot = {
         tick: 5,
@@ -60,11 +61,16 @@ describe('Anti-Slingshot Reconciler, Camera Zoom Expansion & Chat Enter Activati
         ]
       };
       reconciler.reconcile(engine, snap2, 1);
-      expect(reconciler.visualOffset.x).toBe(0);
-      expect(reconciler.visualOffset.y).toBe(0);
+      const visualAfter = p.pos.x + reconciler.visualOffset.x;
+      expect(visualAfter).toBeCloseTo(visualBefore, 4);
+
+      // And continuous exponential smoothing decays it towards 0
+      const initialOffset = reconciler.visualOffset.x;
+      reconciler.updateVisualSmoothing(1 / 60);
+      expect(Math.abs(reconciler.visualOffset.x)).toBeLessThan(Math.abs(initialOffset) + 0.0001);
     });
 
-    it('cancels backward pullback component when movement keys are released (inputMask = 0)', () => {
+    it('smoothly reconciles movement release without accumulated slingshot pop', () => {
       const reconciler = new ClientPredictionReconciler();
       const engine = new EngineInstance('AF 3v3');
       const p = engine.addPlayer(1, 'red');
@@ -76,7 +82,9 @@ describe('Anti-Slingshot Reconciler, Camera Zoom Expansion & Chat Enter Activati
       // Last input has mask 0 (movement keys released)
       reconciler.recordInput(10, 0);
 
-      // Snapshot arrived slightly ahead at -42px, so prevPredicted (-50px) would pull back by errX = -8px
+      const visualBefore = p.pos.x + reconciler.visualOffset.x;
+
+      // Snapshot arrived slightly ahead at -42px
       const snap: GameStateSnapshot = {
         tick: 9,
         phase: MatchPhase.PLAYING,
@@ -97,9 +105,15 @@ describe('Anti-Slingshot Reconciler, Camera Zoom Expansion & Chat Enter Activati
 
       reconciler.reconcile(engine, snap, 1);
 
-      // Anti-slingshot guard: backward pullback component opposing velocity (+x) cancelled to 0!
-      expect(reconciler.visualOffset.x).toBe(0);
-      expect(reconciler.visualOffset.y).toBe(0);
+      // Instantaneous visual position is preserved without teleport (0.00 px jump)
+      const visualAfter = p.pos.x + reconciler.visualOffset.x;
+      expect(visualAfter).toBeCloseTo(visualBefore, 4);
+
+      // Over ~150 ms (10 frames), visualOffset smoothly decays towards 0
+      for (let f = 0; f < 10; f++) {
+        reconciler.updateVisualSmoothing(1 / 60);
+      }
+      expect(Math.abs(reconciler.visualOffset.x)).toBeLessThan(1.0);
     });
   });
 

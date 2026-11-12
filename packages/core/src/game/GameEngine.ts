@@ -25,6 +25,7 @@ import { SOUND_KICK, SOUND_POST_HIT, SOUND_GOAL, PlayerInput } from '../protocol
 import { ScoreEventCategory } from '../protocol/ControlMessages';
 import { GameplayConfig, sanitizeGameplayConfig, defaultStadium } from './GameConfig';
 import { Vec2 } from '../math/Vec2';
+import { stepPlayerKinematics, type PlayerKinematicsState } from '../physics/PlayerKinematics';
 
 export const SHOT_ON_GOAL_COOLDOWN_TICKS = 240; // 4.0 segundos a 60 Hz
 export const COMPLETED_PASS_COOLDOWN_TICKS = 180; // 3.0 segundos a 60 Hz
@@ -836,23 +837,12 @@ export class GameEngine {
     }
 
     const dt = 1 / 60;
-    const accel = (this.gameplayConfig.playerAcceleration / 0.11) * 7.5;
-    const kickAccelRatio =
-      this.gameplayConfig.playerAcceleration > 0
-        ? (this.gameplayConfig.kickingAcceleration ?? this.gameplayConfig.playerAcceleration * (0.108 / 0.14)) /
-          this.gameplayConfig.playerAcceleration
-        : (0.108 / 0.14);
     const kickStrength = (this.gameplayConfig.kickStrength / 4.545) * 320.0;
     const kickMargin = this.gameplayConfig.kickMargin ?? 4.0;
-    const dashCooldownCfg = this.gameplayConfig.dashCooldown ?? 1.0;
 
     for (const [playerId, player] of this.players.entries()) {
       const disc = this.playerDiscs.get(playerId);
       if (!disc) continue;
-
-      if (player.dashCooldownTimer > 0) {
-        player.dashCooldownTimer = Math.max(0, player.dashCooldownTimer - dt);
-      }
 
       const rawInput = inputs.get(playerId);
       let mask = player.inputMask;
@@ -862,154 +852,63 @@ export class GameEngine {
         mask = rawInput.inputMask ?? 0;
         if (rawInput.aimAngle !== undefined) player.aimAngle = rawInput.aimAngle;
         if (rawInput.aimThrottle !== undefined) player.aimThrottle = rawInput.aimThrottle;
+        const seq = (rawInput as any).sequence ?? (rawInput as any).seq ?? (rawInput as any).tick;
+        if (typeof seq === 'number') {
+          player.lastProcessedInputSeq = seq >>> 0;
+        }
       }
 
       player.inputMask = mask;
       player.isTyping = Boolean(mask & INPUT_TYPING);
       disc.isTyping = player.isTyping;
 
-      let uMoveX = 0;
-      let uMoveY = 0;
-      let moveThrottle = 0;
-      const isMouseActive =
-        ((mask & INPUT_MOUSE_ACTIVE) !== 0 || (mask & INPUT_MOUSE_AIM) !== 0) &&
-        player.aimAngle !== null &&
-        player.aimAngle !== undefined &&
-        player.aimThrottle > 0;
+      const pState: PlayerKinematicsState = {
+        pos: disc.pos,
+        vel: disc.vel,
+        radius: disc.radius,
+        stamina: player.stamina,
+        isDashing: player.isDashing,
+        dashTicksRemaining: player.dashTicksRemaining,
+        dashCooldownTimer: player.dashCooldownTimer,
+        dashDirX: player.dashDirX,
+        dashDirY: player.dashDirY,
+        isTurbo: player.isTurbo,
+        kicking: disc.kicking,
+        prevDashState: player.prevDashState,
+        triggerDash: player.triggerDash,
+        team: player.team
+      };
 
-      if (isMouseActive && player.aimAngle !== null) {
-        moveThrottle = Math.max(0, Math.min(1, player.aimThrottle));
-        uMoveX = Math.cos(player.aimAngle);
-        uMoveY = Math.sin(player.aimAngle);
-      } else {
-        let dirX = 0;
-        let dirY = 0;
-        if (mask & INPUT_UP) dirY -= 1;
-        if (mask & INPUT_DOWN) dirY += 1;
-        if (mask & INPUT_LEFT) dirX -= 1;
-        if (mask & INPUT_RIGHT) dirX += 1;
+      stepPlayerKinematics(
+        pState,
+        {
+          inputMask: mask,
+          aimAngle: player.aimAngle,
+          aimThrottle: player.aimThrottle
+        },
+        this.stadium,
+        this.physicsWorld.kickoffContext,
+        this.gameplayConfig,
+        dt,
+        { skipSubsteps: true }
+      );
 
-        if (dirX !== 0 || dirY !== 0) {
-          const len = Math.hypot(dirX, dirY);
-          uMoveX = dirX / len;
-          uMoveY = dirY / len;
-          moveThrottle = 1.0;
-        } else {
-          uMoveX = 0;
-          uMoveY = 0;
-          moveThrottle = 0;
-        }
-      }
-
-      const hasMoveInput = moveThrottle > 0;
-      const vSpeed = Math.hypot(disc.vel.x, disc.vel.y);
-
-      const isDashKeyDown = (mask & INPUT_DASH) !== 0;
-      const wantsDash = player.triggerDash || (isDashKeyDown && !player.prevDashState);
-      const dashCost = 100 / (this.gameplayConfig.dashesPerFullBar || 4);
-      const canDash = this.gameplayConfig.dashEnabled !== false;
-
-      if (
-        canDash &&
-        wantsDash &&
-        !player.prevDashState &&
-        player.stamina >= dashCost &&
-        !player.isDashing &&
-        player.dashCooldownTimer <= 1e-6
-      ) {
-        player.stamina = Math.max(0, player.stamina - dashCost);
-        player.isDashing = true;
-        player.dashTicksRemaining = DASH_TICKS;
-        player.dashCooldownTimer = dashCooldownCfg;
-
-        if (vSpeed > 0.05) {
-          player.dashDirX = disc.vel.x / vSpeed;
-          player.dashDirY = disc.vel.y / vSpeed;
-        } else if (hasMoveInput) {
-          player.dashDirX = uMoveX;
-          player.dashDirY = uMoveY;
-        } else {
-          player.dashDirX = player.team === 'red' ? 1 : -1;
-          player.dashDirY = 0;
-        }
-      }
-      player.prevDashState = isDashKeyDown;
+      player.stamina = pState.stamina;
+      player.isDashing = pState.isDashing;
+      player.dashTicksRemaining = pState.dashTicksRemaining;
+      player.dashCooldownTimer = pState.dashCooldownTimer;
+      player.dashDirX = pState.dashDirX;
+      player.dashDirY = pState.dashDirY;
+      player.isTurbo = pState.isTurbo;
+      player.prevDashState = pState.prevDashState ?? false;
       player.triggerDash = false;
-
-      const isKicking = (mask & INPUT_KICK) !== 0;
-      disc.kicking = isKicking;
-      const effectiveAccel = (isKicking ? accel * kickAccelRatio : accel) * (hasMoveInput ? moveThrottle : 1.0);
-
-      const wasDashing = player.isDashing;
-      if (player.isDashing) {
-        player.dashTicksRemaining--;
-        const dashSpeed = (this.gameplayConfig.dashDistance / DASH_TICKS) * 60;
-        disc.vel.x = player.dashDirX * dashSpeed;
-        disc.vel.y = player.dashDirY * dashSpeed;
-
-        if (player.dashTicksRemaining <= 0) {
-          player.isDashing = false;
-        }
-      } else {
-        const baseMaxSpeed = (this.gameplayConfig.playerMaxSpeed / 2.8) * 168.0 * (hasMoveInput ? moveThrottle : 1.0);
-        const kSpeedTurbo = this.gameplayConfig.boostMultiplier ?? 2.0;
-        const turboMaxSpeed = baseMaxSpeed * kSpeedTurbo;
-        const kAccelTurbo = Math.max(2.8, kSpeedTurbo * 1.5);
-        const turboAccel = effectiveAccel * kAccelTurbo;
-
-        const canTurbo = this.gameplayConfig.turboEnabled !== false;
-        const wantsTurbo = canTurbo && (((mask & INPUT_TURBO) !== 0) || player.isTurbo);
-        if (wantsTurbo && hasMoveInput && player.stamina > 0) {
-          player.isTurbo = true;
-          player.stamina = Math.max(0, player.stamina - 40 * dt);
-          if (player.stamina <= 0) {
-            player.isTurbo = false;
-          }
-
-          disc.vel.x += uMoveX * turboAccel;
-          disc.vel.y += uMoveY * turboAccel;
-
-          const curSpeed = Math.hypot(disc.vel.x, disc.vel.y);
-          if (curSpeed > turboMaxSpeed) {
-            disc.vel.x = (disc.vel.x / curSpeed) * turboMaxSpeed;
-            disc.vel.y = (disc.vel.y / curSpeed) * turboMaxSpeed;
-          }
-        } else {
-          player.isTurbo = false;
-          if (hasMoveInput) {
-            const curSpeed = Math.hypot(disc.vel.x, disc.vel.y);
-            if (curSpeed < baseMaxSpeed) {
-              disc.vel.x += uMoveX * effectiveAccel;
-              disc.vel.y += uMoveY * effectiveAccel;
-              const postSpeed = Math.hypot(disc.vel.x, disc.vel.y);
-              if (postSpeed > baseMaxSpeed) {
-                disc.vel.x = (disc.vel.x / postSpeed) * baseMaxSpeed;
-                disc.vel.y = (disc.vel.y / postSpeed) * baseMaxSpeed;
-              }
-            }
-          }
-        }
-      }
-
-      // Recarga de estamina en reposo y opcionalmente en movimiento (sin usar Turbo ni Dash)
-      if (!player.isDashing && !wasDashing && !player.isTurbo && player.stamina < 100) {
-        if (!hasMoveInput) {
-          player.stamina = Math.min(100, player.stamina + this.gameplayConfig.staminaRechargeRate * dt);
-        } else if (this.gameplayConfig.staminaRegenMoving !== false) {
-          const movingFactor = (this.gameplayConfig.staminaRegenMovingRate ?? 100) / 100;
-          if (movingFactor > 0) {
-            player.stamina = Math.min(
-              100,
-              player.stamina + this.gameplayConfig.staminaRechargeRate * movingFactor * dt
-            );
-          }
-        }
-      }
 
       disc.stamina = player.stamina;
       disc.isDashing = player.isDashing;
       disc.isTurbo = player.isTurbo;
+      disc.kicking = pState.kicking ?? false;
 
+      const isKicking = disc.kicking;
       if (isKicking) {
         const diffX = this.ball.pos.x - disc.pos.x;
         const diffY = this.ball.pos.y - disc.pos.y;
@@ -1485,10 +1384,13 @@ export class GameEngine {
           radius: disc.radius,
           kicking: disc.kicking,
           avatar: player.avatar,
-          stamina: Math.round(player.stamina),
+          stamina: player.stamina,
           isDashing: player.isDashing,
           isTurbo: player.isTurbo,
-          isTyping: disc.isTyping
+          isTyping: disc.isTyping,
+          lastAckedInputSeq: player.lastProcessedInputSeq >>> 0,
+          dashTimer: player.dashTicksRemaining,
+          dashCooldown: player.dashCooldownTimer
         });
       }
     }

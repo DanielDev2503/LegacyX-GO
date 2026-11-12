@@ -68,7 +68,7 @@ export class InputPacket {
     const view = new DataView(buf);
 
     view.setUint8(0, OP_INPUT);
-    view.setUint32(1, data.sequence, false);
+    view.setUint32(1, data.sequence, true);
     view.setUint16(5, mask, false);
     view.setUint16(7, data.clientTimestamp & 0xffff, false);
 
@@ -91,7 +91,7 @@ export class InputPacket {
     if (view.byteLength < 8) return null;
     if (view.getUint8(0) !== OP_INPUT) return null;
 
-    const sequence = view.getUint32(1, false);
+    const sequence = view.byteLength === 8 ? view.getUint32(1, false) : view.getUint32(1, true);
 
     let inputMask = 0;
     let clientTimestamp = 0;

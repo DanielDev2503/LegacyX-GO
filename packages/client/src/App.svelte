@@ -870,18 +870,24 @@
     }
 
     function syncHudTelemetryFromSnapshot(snap: GameStateSnapshot): void {
-      gameUI.redScore = snap.redScore ?? gameUI.redScore;
-      gameUI.blueScore = snap.blueScore ?? gameUI.blueScore;
+      const rScore = snap.redScore ?? 0;
+      if (gameUI.redScore !== rScore) gameUI.redScore = rScore;
+      const bScore = snap.blueScore ?? 0;
+      if (gameUI.blueScore !== bScore) gameUI.blueScore = bScore;
+
       const phase = snap.phase ?? 0;
       if (phase === MatchPhase.STOP || phase === 0) {
-        gameUI.matchTimeFormatted = '00:00';
-        gameUI.matchTimerSeconds = 0;
+        if (gameUI.matchTimerSeconds !== 0) gameUI.matchTimerSeconds = 0;
+        if (gameUI.matchTimeFormatted !== '00:00') gameUI.matchTimeFormatted = '00:00';
       } else {
         const totalSec = snap.matchTimer ?? 0;
-        gameUI.matchTimerSeconds = totalSec;
-        const mins = Math.floor(totalSec / 60).toString().padStart(2, '0');
-        const secs = (totalSec % 60).toString().padStart(2, '0');
-        gameUI.matchTimeFormatted = `${mins}:${secs}`;
+        if (gameUI.matchTimerSeconds !== totalSec) {
+          gameUI.matchTimerSeconds = totalSec;
+          const mins = Math.floor(totalSec / 60).toString().padStart(2, '0');
+          const secs = (totalSec % 60).toString().padStart(2, '0');
+          const fmt = `${mins}:${secs}`;
+          if (gameUI.matchTimeFormatted !== fmt) gameUI.matchTimeFormatted = fmt;
+        }
       }
       gameUI.handleMatchPhaseTransition(phase);
     }
@@ -933,6 +939,9 @@
       gameApp.networkClient.onSnapshotDecoded = handleAuthoritativeSnapshot;
     }
 
+    const guestLocalInputMap = new Map<number, PlayerInput>();
+    const hostSimulationInputs = new Map<number, PlayerInput>();
+
     const simTicker = new SimulationTicker((now) => {
       lastSimTimestamp = now;
       const localPkt = computeLocalPlayerInput(true);
@@ -954,7 +963,7 @@
             prevPredLocalPos.x = localDiscBefore.pos.x;
             prevPredLocalPos.y = localDiscBefore.pos.y;
 
-            const nextTick = predEngine.currentTick + 1;
+            const nextTick = (predEngine.currentTick + 1) >>> 0;
             const localMask = localPkt.inputMask ?? 0;
             reconciler.recordInput(nextTick, localMask, localPkt.aimAngle, localPkt.aimThrottle);
             gameApp.networkClient.sendInput(
@@ -964,9 +973,10 @@
               localPkt.aimThrottle
             );
 
-            const localInputMap = new Map<number, PlayerInput>();
-            localInputMap.set(gameUI.localPlayerId, localPkt);
-            predEngine.step(localInputMap);
+            (localPkt as any).sequence = nextTick;
+            guestLocalInputMap.clear();
+            guestLocalInputMap.set(gameUI.localPlayerId, localPkt);
+            predEngine.step(guestLocalInputMap);
 
             const localDiscAfter = predEngine.players.get(gameUI.localPlayerId);
             if (localDiscAfter) {
@@ -976,9 +986,10 @@
             }
             clientTick = predEngine.currentTick;
           } else {
+            const nextTick = (++clientTick) >>> 0;
             gameApp.networkClient.sendInput(
               localPkt.inputMask ?? 0,
-              ++clientTick,
+              nextTick,
               localPkt.aimAngle,
               localPkt.aimThrottle
             );
@@ -998,14 +1009,14 @@
         // Host: Sincronizar jugadores, límites y procesar física autoritativa
         syncEnginePlayers();
         syncEngineMatchLimits(engine);
-        const inputs = new Map<number, PlayerInput>();
-        inputs.set(gameUI.localPlayerId, localPkt);
+        hostSimulationInputs.clear();
+        hostSimulationInputs.set(gameUI.localPlayerId, localPkt);
         for (const [rId, rInput] of gameApp.remoteInputs.entries()) {
-          inputs.set(rId, rInput);
+          hostSimulationInputs.set(rId, rInput);
         }
 
         prevSnapshot = currSnapshot;
-        engine.step(inputs);
+        engine.step(hostSimulationInputs);
         currSnapshot = engine.getState();
 
         // Broadcast snapshot autoritativo a todos los peers conectados
@@ -1018,8 +1029,23 @@
 
     let frameCount = 0;
     let lastFpsCalculation = performance.now();
+    let lastRenderFrameTime = performance.now();
+    const scratchRenderSnapshot: GameStateSnapshot = {
+      tick: 0,
+      phase: 0,
+      matchTimer: 0,
+      redScore: 0,
+      blueScore: 0,
+      soundMask: 0,
+      discs: []
+    };
+    const scratchDiscs: CompactDiscState[] = [];
 
     function renderLoop(currentTime: number): void {
+      const now = currentTime || performance.now();
+      const frameDt = Math.max(0.001, Math.min(0.1, (now - lastRenderFrameTime) / 1000));
+      lastRenderFrameTime = now;
+
       // Interpolación lineal libre en Canvas 2D
       const alpha = Math.max(0, Math.min(1.0, (currentTime - lastSimTimestamp) / FIXED_DT_MS));
 
@@ -1095,7 +1121,7 @@
       }
 
       if (!gameUI.isHost && gameApp.networkClient) {
-        reconciler.decayVisualOffset();
+        reconciler.updateVisualSmoothing(frameDt);
         const interpSnap =
           gameApp.networkClient.jitterBuffer.getInterpolatedSnapshot(currentTime) ??
           gameApp.networkClient.latestSnapshot;
@@ -1112,22 +1138,38 @@
             if (predDisc.isTurbo) predFlags |= 1 << 4;
             if (predDisc.isTyping) predFlags |= 1 << 5;
 
-            renderSnap = {
-              ...interpSnap,
-              discs: interpSnap.discs.map((d: CompactDiscState) =>
-                d.id === localId
-                  ? {
-                      ...d,
-                      x: predX,
-                      y: predY,
-                      vx: predDisc.vel.x,
-                      vy: predDisc.vel.y,
-                      stamina: predDisc.stamina,
-                      flags: predFlags || d.flags
-                    }
-                  : d
-              )
-            };
+            scratchDiscs.length = 0;
+            const inDiscs = interpSnap.discs;
+            for (let i = 0; i < inDiscs.length; i++) {
+              const d = inDiscs[i]!;
+              if (d.id === localId) {
+                const predRt = (predEngine as any).getRuntime?.(localId);
+                scratchDiscs.push({
+                  id: d.id,
+                  team: d.team,
+                  x: predX,
+                  y: predY,
+                  vx: predDisc.vel.x,
+                  vy: predDisc.vel.y,
+                  flags: predFlags || d.flags,
+                  stamina: predDisc.stamina,
+                  spin: d.spin,
+                  dashTimer: predRt?.ticksRemaining ?? 0,
+                  dashCooldown: predRt?.cooldownTimer ?? 0,
+                  lastAckedInputSeq: d.lastAckedInputSeq
+                });
+              } else {
+                scratchDiscs.push(d);
+              }
+            }
+
+            scratchRenderSnapshot.tick = interpSnap.tick;
+            scratchRenderSnapshot.phase = interpSnap.phase;
+            scratchRenderSnapshot.matchTimer = interpSnap.matchTimer;
+            scratchRenderSnapshot.redScore = interpSnap.redScore;
+            scratchRenderSnapshot.blueScore = interpSnap.blueScore;
+            scratchRenderSnapshot.discs = scratchDiscs;
+            renderSnap = scratchRenderSnapshot;
           }
           currSnapshot = renderSnap;
           prevSnapshot = renderSnap;

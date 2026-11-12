@@ -176,9 +176,18 @@ export class SnapshotPacket {
 
       let stamina = 100;
       let curveFactor = 0;
+      let lastAckedInputSeq: number | undefined = undefined;
+      let dashTimer: number | undefined = undefined;
+      let dashCooldown: number | undefined = undefined;
+
       if (discStride >= 20) {
         stamina = view.getUint8(offset + 18);
         curveFactor = view.getInt8(offset + 19);
+      }
+      if (discStride >= 26) {
+        lastAckedInputSeq = view.getUint32(offset + 20, true);
+        dashTimer = view.getUint8(offset + 24);
+        dashCooldown = view.getUint8(offset + 25) / 100;
       }
 
       const dynamicRadius = team === 0 ? (activeCfg?.ballRadius ?? 5.8) : (activeCfg?.playerRadius ?? 15.0);
@@ -202,7 +211,10 @@ export class SnapshotPacket {
         isPowerShot: team === 0 ? isPowerShot : undefined,
         lastKickerId: team === 0 ? lastKickerId : undefined,
         curveFactor: team === 0 ? curveFactor : undefined,
-        spin: team === 0 ? (curveFactor / 10) : undefined
+        spin: team === 0 ? (curveFactor / 10) : undefined,
+        lastAckedInputSeq: team !== 0 ? lastAckedInputSeq : undefined,
+        dashTimer: team !== 0 ? dashTimer : undefined,
+        dashCooldown: team !== 0 ? dashCooldown : undefined
       });
 
       offset += discStride;

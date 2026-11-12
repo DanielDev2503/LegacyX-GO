@@ -69,6 +69,7 @@ export class Player {
   public curveInput: number = 0;
   public triggerDash: boolean = false;
   public prevDashState: boolean = false;
+  public lastProcessedInputSeq: number = 0;
 
   // Dirección continua 360° (Modo Ratón)
   public aimAngle: number | null = null;
