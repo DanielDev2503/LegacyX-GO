@@ -30,6 +30,8 @@ export class StadiumRenderer {
   private cachedWidth: number = 0;
   private cachedHeight: number = 0;
   private cachedGoalSize: number = 0;
+  private cachedRedColor: string | null = null;
+  private cachedBlueColor: string | null = null;
   public theme: 'dark' | 'light' = 'dark';
   public redTeamColor: string = '#FF0055';
   public blueTeamColor: string = '#00E5FF';
@@ -65,6 +67,8 @@ export class StadiumRenderer {
   public invalidateCache(): void {
     this.cacheCanvas = null;
     this.cachedStadium = null;
+    this.cachedRedColor = null;
+    this.cachedBlueColor = null;
   }
 
   public resize(): void {
@@ -170,7 +174,7 @@ export class StadiumRenderer {
     ctx.save();
     const lineColor = isDark ? 'rgba(0, 229, 255, 0.45)' : '#0EA5E9';
     const dotColor = isDark ? '#00E5FF' : '#0EA5E9';
-    const dashLineColor = isDark ? 'rgba(0, 229, 255, 0.45)' : 'rgba(14, 165, 233, 0.5)';
+    const goalLineAlpha = isDark ? 0.45 : 0.5;
 
     ctx.strokeStyle = lineColor;
     ctx.lineWidth = 3.0;
@@ -215,15 +219,19 @@ export class StadiumRenderer {
     ctx.arc(0, 0, 4.5, 0, Math.PI * 2);
     ctx.fill();
 
-    // Dashed goal lines
-    ctx.strokeStyle = dashLineColor;
+    // Dashed goal lines (adopt captain primary kit colors)
     ctx.lineWidth = 2;
     if (typeof ctx.setLineDash === 'function') {
       ctx.setLineDash([4, 4]);
     }
+    ctx.strokeStyle = hexToRgba(this.redTeamColor, goalLineAlpha);
     ctx.beginPath();
     ctx.moveTo(-hw, -gh);
     ctx.lineTo(-hw, gh);
+    ctx.stroke();
+
+    ctx.strokeStyle = hexToRgba(this.blueTeamColor, goalLineAlpha);
+    ctx.beginPath();
     ctx.moveTo(hw, -gh);
     ctx.lineTo(hw, gh);
     ctx.stroke();
@@ -236,6 +244,8 @@ export class StadiumRenderer {
     this.cachedHeight = height;
     this.cachedGoalSize = goalSize;
     this.cachedTheme = isDark ? 'dark' : 'light';
+    this.cachedRedColor = this.redTeamColor;
+    this.cachedBlueColor = this.blueTeamColor;
   }
 
   public renderPitch(ctx: CanvasRenderingContext2D, stadium?: Stadium): void {
@@ -255,7 +265,9 @@ export class StadiumRenderer {
       this.cachedWidth !== width ||
       this.cachedHeight !== height ||
       this.cachedGoalSize !== goalSize ||
-      this.cachedTheme !== this.theme
+      this.cachedTheme !== this.theme ||
+      this.cachedRedColor !== this.redTeamColor ||
+      this.cachedBlueColor !== this.blueTeamColor
     ) {
       this.buildCachedCanvas(activeStadium, width, height, isDark);
     }
@@ -322,7 +334,7 @@ export class StadiumRenderer {
     ctx.arc(x, y, r, 0, Math.PI * 2);
     ctx.fill();
 
-    ctx.strokeStyle = isLeft ? '#FF0055' : '#0EA5E9';
+    ctx.strokeStyle = isLeft ? this.redTeamColor : this.blueTeamColor;
     ctx.lineWidth = 1.5;
     ctx.stroke();
     ctx.restore();

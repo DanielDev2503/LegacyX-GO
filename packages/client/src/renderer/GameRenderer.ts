@@ -21,7 +21,7 @@ import { NetRenderer } from './NetRenderer';
 import { DiscRenderer, type PlayerVisualInfo } from './DiscRenderer';
 import { VFXManager } from './VFXManager';
 import { MinimapRenderer, type MinimapSettings } from './MinimapRenderer';
-import { OffscreenIndicatorRenderer } from './OffscreenIndicatorRenderer';
+import { OffscreenIndicatorRenderer, type OffscreenDrawOptions } from './OffscreenIndicatorRenderer';
 
 export interface FloatingScoreText {
   text: string;
@@ -63,6 +63,7 @@ export class GameRenderer {
   public offsetY: number = 0;
   public safeAreaBottom: number = 160;
   public chatHeight: number = 130;
+  public chatWidth: number = 340;
   public theme: 'dark' | 'light' = 'dark';
   public focusBallOnly: boolean = false;
 
@@ -185,6 +186,21 @@ export class GameRenderer {
     return this.chatHeight;
   }
 
+  public setChatWidth(width: number): void {
+    if (width >= 0) {
+      this.chatWidth = width;
+    }
+  }
+
+  public getChatWidth(): number {
+    return this.chatWidth;
+  }
+
+  public setChatBounds(width: number, height: number): void {
+    this.setChatWidth(width);
+    this.setChatHeight(height);
+  }
+
   public setChatSafeArea(bottom: number): void {
     if (bottom >= 0) {
       this.safeAreaBottom = bottom;
@@ -208,16 +224,28 @@ export class GameRenderer {
   public setTeamKits(redKit?: any, blueKit?: any): void {
     if (redKit) {
       this.discRenderer.redKit = redKit;
-      if (redKit.primaryColor) {
-        this.stadiumRenderer.setTeamColors(redKit.primaryColor, this.stadiumRenderer.blueTeamColor);
-      }
     }
     if (blueKit) {
       this.discRenderer.blueKit = blueKit;
-      if (blueKit.primaryColor) {
-        this.stadiumRenderer.setTeamColors(this.stadiumRenderer.redTeamColor, blueKit.primaryColor);
-      }
     }
+    const redColor = redKit?.primaryColor || this.stadiumRenderer.redTeamColor;
+    const blueColor = blueKit?.primaryColor || this.stadiumRenderer.blueTeamColor;
+    this.stadiumRenderer.setTeamColors(redColor, blueColor);
+  }
+
+  private getEffectiveZoom(): number {
+    if (this.camera.scale !== 1.0) return this.camera.scale;
+    if (this.camera.zoom !== 1.0) return this.camera.zoom;
+    return this.scale || 1.0;
+  }
+
+  private getOffscreenOptions(zoom: number): OffscreenDrawOptions {
+    return {
+      zoom,
+      chatWidth: this.chatWidth,
+      redColor: this.stadiumRenderer.redTeamColor,
+      blueColor: this.stadiumRenderer.blueTeamColor
+    };
   }
 
   public resize(width?: number, height?: number): void {
@@ -462,9 +490,13 @@ export class GameRenderer {
       this.camera.follow(ballX, ballY);
     }
 
+    const dpr = typeof window !== 'undefined' && window.devicePixelRatio ? window.devicePixelRatio : 1;
+    const vWidth = (this.canvas.width || 800) / dpr;
+    const vHeight = (this.canvas.height || 600) / dpr;
+
     const wExt = this.stadium.width + (this.stadium.goalDepth + this.stadium.runOff) * 2;
     const hExt = this.stadium.height + this.stadium.runOff * 2;
-    this.camera.clamp(wExt, hExt, this.canvas.width, this.canvas.height, this.safeAreaBottom);
+    this.camera.clamp(wExt, hExt, vWidth, vHeight, this.safeAreaBottom);
 
     const isFrozenPhase =
       s1.phase === MatchPhase.PAUSE ||
@@ -505,17 +537,24 @@ export class GameRenderer {
     this.vfx.update(dt);
 
     const ctx = this.ctx;
-    ctx.fillStyle = this.theme === 'dark' ? '#050811' : '#E0F2FE';
-    ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+    ctx.save();
+    if (typeof ctx.setTransform === 'function') {
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    } else if (dpr !== 1 && typeof ctx.scale === 'function') {
+      ctx.scale(dpr, dpr);
+    }
 
-    const usableHeight = Math.max(100, this.canvas.height - this.safeAreaBottom);
-    const cx = this.canvas.width / 2;
+    ctx.fillStyle = this.theme === 'dark' ? '#050811' : '#E0F2FE';
+    ctx.fillRect(0, 0, vWidth, vHeight);
+
+    const usableHeight = Math.max(100, vHeight - this.safeAreaBottom);
+    const cx = vWidth / 2;
     const cy = usableHeight / 2;
+    const effectiveZoom = this.getEffectiveZoom();
 
     ctx.save();
     ctx.translate(cx + this.camera.shakeOffsetX, cy + this.camera.shakeOffsetY);
-    const renderScale = this.camera.scale || this.scale || 1.0;
-    ctx.scale(renderScale, renderScale);
+    ctx.scale(effectiveZoom, effectiveZoom);
     ctx.translate(-this.camera.x, -this.camera.y);
 
     // 1. Pitch
@@ -550,9 +589,10 @@ export class GameRenderer {
         this.camera.y,
         cx,
         cy,
-        this.canvas.width,
-        this.canvas.height,
-        this.chatHeight
+        vWidth,
+        vHeight,
+        this.chatHeight,
+        this.getOffscreenOptions(effectiveZoom)
       );
     }
 
@@ -569,10 +609,12 @@ export class GameRenderer {
           minimapSize: this.minimapSize,
           minimapCameraFrustum: this.minimapCameraFrustum
         },
-        this.canvas.width,
-        this.canvas.height
+        vWidth,
+        vHeight
       );
     }
+
+    ctx.restore();
   }
 
   private renderSingleSnapshot(
@@ -630,8 +672,8 @@ export class GameRenderer {
       this.offsetX + this.cameraOffset.x + this.camera.shakeOffsetX,
       this.offsetY + this.cameraOffset.y + this.camera.shakeOffsetY
     );
-    const zoom = this.camera?.zoom || 1.0;
-    ctx.scale(this.scale * zoom, this.scale * zoom);
+    const effectiveZoom = this.getEffectiveZoom();
+    ctx.scale(effectiveZoom, effectiveZoom);
 
     ctx.save();
     ctx.translate(-this.camera.x, -this.camera.y);
@@ -676,7 +718,8 @@ export class GameRenderer {
         this.offsetY + this.cameraOffset.y,
         vWidth,
         vHeight,
-        this.chatHeight
+        this.chatHeight,
+        this.getOffscreenOptions(effectiveZoom)
       );
       ctx.restore();
     }
