@@ -438,6 +438,82 @@ export function isFloatingScoreCategoryEnabled(
   }
 }
 
+export function normalizeBallSettings<
+  T extends Partial<Pick<SettingsConfig, 'ballMode' | 'ballSkin' | 'ballCustomColor'>>
+>(raw: T): T & Pick<SettingsConfig, 'ballMode' | 'ballSkin' | 'ballCustomColor'> {
+  const ballCustomColor =
+    typeof raw.ballCustomColor === 'string' && raw.ballCustomColor.trim().length > 0
+      ? raw.ballCustomColor
+      : DEFAULT_SETTINGS.ballCustomColor;
+  if (String(raw.ballSkin || '') === 'solid') {
+    return {
+      ...raw,
+      ballMode: 'color',
+      ballSkin: 'classic',
+      ballCustomColor
+    };
+  }
+  return {
+    ...raw,
+    ballMode: raw.ballMode === 'color' ? 'color' : DEFAULT_SETTINGS.ballMode,
+    ballSkin: raw.ballSkin || DEFAULT_SETTINGS.ballSkin,
+    ballCustomColor
+  };
+}
+
+export type ScoreFilterCategory = 'goal' | 'assist' | 'save' | 'shot' | 'pass' | 'hattrick' | 'ownGoal';
+
+export function classifyScoreEvent(ev: Record<string, unknown>): {
+  filterCat?: ScoreFilterCategory;
+  eventType: string;
+  pointsText: string;
+} {
+  const cat = String(ev.category ?? ev.eventType ?? '').toLowerCase();
+  const rawText = String(ev.text ?? '').toLowerCase();
+
+  const isOwn = cat.includes('own') || rawText.includes('autogol');
+  const isHattrick = cat.includes('hattrick') || rawText.includes('hattrick');
+  const isAssist = cat.includes('assist') || rawText.includes('asistencia');
+  const isSave = cat.includes('save') || rawText.includes('atajada');
+  const isShot = cat.includes('shot') || rawText.includes('tiro');
+  const isPass = cat.includes('pass') || rawText.includes('pase');
+  const isPower = !isOwn && (cat.includes('power') || Boolean(ev.isPower) || rawText.includes('potencia'));
+  const isCurve = cat.includes('curve') || Boolean(ev.isCurve) || rawText.includes('efecto');
+  const isGoal = !isOwn && (cat.includes('goal') || isPower || rawText.includes('gol'));
+
+  const filterCat: ScoreFilterCategory | undefined = isOwn
+    ? 'ownGoal'
+    : isHattrick
+      ? 'hattrick'
+      : isAssist
+        ? 'assist'
+        : isSave
+          ? 'save'
+          : isShot
+            ? 'shot'
+            : isPass
+              ? 'pass'
+              : isGoal
+                ? 'goal'
+                : undefined;
+
+  let eventType = 'EVENTO';
+  if (isOwn) eventType = 'AUTOGOL';
+  else if (isHattrick) eventType = 'HATTRICK';
+  else if (isAssist && isCurve) eventType = 'ASISTENCIA EFECTO';
+  else if (isAssist) eventType = 'ASISTENCIA';
+  else if (isPower) eventType = 'GOL POTENCIA';
+  else if (isGoal && isCurve) eventType = 'GOL EFECTO';
+  else if (isGoal) eventType = 'GOL';
+  else if (isSave) eventType = 'ATAJADA';
+  else if (isShot) eventType = 'TIRO';
+  else if (isPass) eventType = 'PASE';
+
+  const pts = Number(ev.points ?? 0);
+  const pointsText = `${pts >= 0 ? '+' : ''}${pts} PTS`;
+  return { ...(filterCat ? { filterCat } : {}), eventType, pointsText };
+}
+
 export interface RoomInfo {
   id: string;
   name: string;
@@ -1193,10 +1269,17 @@ class GameUIStore {
           rawChatOpacity > 0 && rawChatOpacity <= 1
             ? Math.round(rawChatOpacity * 100)
             : Math.max(10, Math.min(100, Math.round(rawChatOpacity)));
+        const normalizedBall = normalizeBallSettings(parsed);
+        const legacySolidSkin =
+          String(parsed.ballSkin || '') === 'solid' ||
+          localStorage.getItem('haxball_ball_skin') === 'solid';
 
         this.settings = {
           ...DEFAULT_SETTINGS,
           ...parsed,
+          ballMode: normalizedBall.ballMode,
+          ballSkin: normalizedBall.ballSkin,
+          ballCustomColor: normalizedBall.ballCustomColor,
           cameraZoom: clampedZoom,
           chatOpacity: normalizedChatOpacityPct,
           localKit,
@@ -1205,6 +1288,10 @@ class GameUIStore {
             ? parsed.emoteTriggers
             : [...DEFAULT_SETTINGS.emoteTriggers]
         };
+        if (legacySolidSkin) {
+          localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(this.settings));
+          localStorage.setItem('haxball_ball_skin', this.settings.ballSkin);
+        }
         this.isAudioMuted = this.settings.isMuted;
         this.masterVolume = this.settings.masterVolume;
 
@@ -1213,6 +1300,10 @@ class GameUIStore {
         soundFX.setChatVolume(this.settings.chatVolume);
         soundFX.setSfxVolume(this.settings.sfxVolume);
         soundFX.setEnvVolume(this.settings.envVolume);
+      } else if (localStorage.getItem('haxball_ball_skin') === 'solid') {
+        this.settings.ballMode = 'color';
+        this.settings.ballSkin = 'classic';
+        localStorage.setItem('haxball_ball_skin', 'classic');
       }
       const savedExtrap =
         localStorage.getItem(LEGACYX_EXTRAPOLATION_KEY) ??
@@ -1331,6 +1422,10 @@ class GameUIStore {
     if (patch) {
       this.settings = { ...this.settings, ...patch };
     }
+    const normalizedBall = normalizeBallSettings(this.settings);
+    this.settings.ballMode = normalizedBall.ballMode;
+    this.settings.ballSkin = normalizedBall.ballSkin;
+    this.settings.ballCustomColor = normalizedBall.ballCustomColor;
     this.extrapolationMs = Math.max(0, Math.min(250, Math.round(Number(this.settings.extrapolationMs) || 0)));
     this.settings.extrapolationMs = this.extrapolationMs;
     this.isAudioMuted = this.settings.isMuted;
@@ -1780,6 +1875,14 @@ class GameUIStore {
       sum += this.pingSamples[i]!;
     }
     this.avgPingMs = this.pingSampleCount > 0 ? Math.round(sum / this.pingSampleCount) : this.pingMs;
+  }
+
+  public resetTelemetry(): void {
+    this.pingMs = 0;
+    this.avgPingMs = 0;
+    this.pingSampleHead = 0;
+    this.pingSampleCount = 0;
+    this.pingSamples.fill(0);
   }
 
   public get isMatchActive(): boolean {
@@ -2268,6 +2371,7 @@ class GameUIStore {
 
   public resetRoomSession(): void {
     this.clearAllSlidingEventTimers();
+    this.resetTelemetry();
     this.isPracticeMode = false;
     this.chatMessages = [];
     this.players = [];
@@ -2347,8 +2451,11 @@ class GameUIStore {
     };
     this.activeStadiumName = 'Mediano';
     this.selectedStadiumId = 'mediano';
-    this.fsmPhase = 'STOPPED';
-    this.matchPhase = 0;
+    this.resetTelemetry();
+    this.fsmPhase = 'PLAYING';
+    this.matchPhase = 2;
+    this.previousMatchPhase = 2;
+    this.hasJoinedInitialSync = true;
     this.isHost = true;
     this.isAdmin = true;
     this.localPlayerId = 1;
@@ -2380,6 +2487,7 @@ class GameUIStore {
     };
 
     this.rosterPlayers = [localPlayer];
+    this.clearModalStack();
     this.navigateTo('IN_GAME');
     this.closeOverlay();
     if (this.onStartPracticeMode) {

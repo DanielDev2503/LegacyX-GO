@@ -28,6 +28,7 @@
   import {
     gameUI,
     isFloatingScoreCategoryEnabled,
+    classifyScoreEvent,
     type PhysicsModifiers,
     type MatchBannerPayload
   } from './ui/state/gameUI.svelte.js';
@@ -136,16 +137,30 @@
       syncEngineMatchLimits(predEngine);
     }
 
-    // Inicializar siempre en 0: STOP con el menú de sala abierto
-    gameUI.fsmPhase = 'STOPPED';
-    gameUI.matchPhase = 0;
-    gameUI.previousMatchPhase = 0;
-    gameUI.applyMatchBanner({ kind: 'NONE' });
-    if (isHostInitial) {
+    let prevSnapshot: GameStateSnapshot = engine ? engine.getState() : ({} as any);
+    let currSnapshot: GameStateSnapshot = engine ? engine.getState() : ({} as any);
+
+    if (isHostInitial && gameUI.isPracticeMode) {
+      gameUI.fsmPhase = 'PLAYING';
+      gameUI.matchPhase = MatchPhase.PLAYING;
+      gameUI.previousMatchPhase = MatchPhase.PLAYING;
       gameUI.hasJoinedInitialSync = true;
+      gameUI.applyMatchBanner({ kind: 'NONE' });
+      gameUI.clearModalStack();
+      gameUI.recordTelemetrySample(0, gameUI.fps);
+    } else {
+      // Inicializar siempre en 0: STOP con el menú de sala abierto
+      gameUI.fsmPhase = 'STOPPED';
+      gameUI.matchPhase = 0;
+      gameUI.previousMatchPhase = 0;
+      gameUI.applyMatchBanner({ kind: 'NONE' });
+      if (isHostInitial) {
+        gameUI.hasJoinedInitialSync = true;
+        gameUI.recordTelemetrySample(0, gameUI.fps);
+      }
+      gameUI.clearModalStack();
+      gameUI.openOverlay('TEAM_MANAGEMENT');
     }
-    gameUI.clearModalStack();
-    gameUI.openOverlay('TEAM_MANAGEMENT');
 
     // Sincronizar jugadores del engine con el roster reactivo
     function syncEnginePlayers() {
@@ -307,27 +322,67 @@
     };
 
     gameUI.onStopMatch = () => {
-      frozenMatchSnapshot = null;
+      let capturedStatsSnapshot: ReturnType<typeof buildMatchStatsSnapshot> | null = null;
       if (matchRecorder.isRecording) {
         matchRecorder.stop();
       }
       if (gameUI.isHost && engine) {
+        const liveStats = engine.getMatchStats();
+        const liveState = engine.getState();
+        const hasMatchActivity =
+          (liveState.redScore ?? 0) > 0 ||
+          (liveState.blueScore ?? 0) > 0 ||
+          (liveState.matchTimer ?? 0) > 0 ||
+          liveStats.some(
+            (s: any) =>
+              (s.goals || 0) > 0 ||
+              (s.assists || 0) > 0 ||
+              (s.saves || 0) > 0 ||
+              (s.shots || 0) > 0 ||
+              (s.passes || 0) > 0 ||
+              (s.ownGoals || 0) > 0 ||
+              (s.points || 0) !== 0
+          );
+        if (hasMatchActivity) {
+          capturedStatsSnapshot = frozenMatchSnapshot ?? buildMatchStatsSnapshot(undefined, liveStats);
+        }
+        frozenMatchSnapshot = null;
         engine.stopMatch();
+        currSnapshot = engine.getState();
+        prevSnapshot = currSnapshot;
         soundFX.playWhistle();
         gameApp.networkHost?.broadcastGameFx('whistle');
         setAndBroadcastBanner({ kind: 'NONE' });
         gameApp.syncMatchPhase(0);
         gameApp.networkHost?.broadcastRoomStateSync();
       } else if (!gameUI.isHost && gameApp.networkClient) {
+        frozenMatchSnapshot = null;
         gameApp.networkClient.sendAdminAction('STOP_MATCH');
         return;
       }
-      gameUI.hasCompletedMatch = false;
-      gameUI.lastMatchStats = null;
-      gameUI.activeSlide = 'MENU';
-      gameUI.redTeamStats = [];
-      gameUI.blueTeamStats = [];
-      gameUI.mvp = null;
+      frozenMatchSnapshot = null;
+      if (capturedStatsSnapshot) {
+        gameUI.hasCompletedMatch = true;
+        gameUI.activeSlide = 'STATS';
+        gameUI.lastMatchStats = capturedStatsSnapshot.snapshot;
+        gameUI.mvp = capturedStatsSnapshot.theMVP;
+        gameUI.redTeamStats = capturedStatsSnapshot.redStats;
+        gameUI.blueTeamStats = capturedStatsSnapshot.blueStats;
+        gameApp.networkHost?.broadcastMatchStats(
+          capturedStatsSnapshot.snapshot,
+          capturedStatsSnapshot.allStats,
+          capturedStatsSnapshot.theMVP,
+          capturedStatsSnapshot.redStats,
+          capturedStatsSnapshot.blueStats
+        );
+      } else {
+        gameUI.hasCompletedMatch = false;
+        gameUI.lastMatchStats = null;
+        gameUI.activeSlide = 'MENU';
+        gameUI.redTeamStats = [];
+        gameUI.blueTeamStats = [];
+        gameUI.mvp = null;
+      }
       gameUI.clearModalStack();
       gameUI.activeModal = 'TEAM_SELECT';
     };
@@ -343,6 +398,27 @@
       }
     };
 
+    function activatePracticeEngine(targetEngine: EngineInstance): void {
+      targetEngine.isPracticeMode = true;
+      syncEngineMatchLimits(targetEngine);
+      syncEnginePlayers();
+      const p1Team = targetEngine.playerTeams.get(1);
+      if (p1Team !== 'red' && p1Team !== 'blue') {
+        targetEngine.setPlayerTeam(1, 'red');
+      }
+      targetEngine.startMatch(false);
+      targetEngine.fsm.startPlaying();
+      currSnapshot = targetEngine.getState();
+      prevSnapshot = currSnapshot;
+      gameUI.applyMatchBanner({ kind: 'NONE' });
+      gameUI.hasJoinedInitialSync = true;
+      gameUI.fsmPhase = 'PLAYING';
+      gameUI.matchPhase = MatchPhase.PLAYING;
+      gameUI.previousMatchPhase = MatchPhase.PLAYING;
+      gameUI.clearModalStack();
+      gameUI.recordTelemetrySample(0, gameUI.fps);
+    }
+
     gameUI.onStartPracticeMode = () => {
       gameApp.setupPracticeMode();
       predEngine = null;
@@ -353,17 +429,11 @@
         engine.applyModifiers(gameUI.physicsModifiers);
         wireHostEngineEvents(engine);
       }
+      const stadiumId = gameUI.selectedStadiumId || 'mediano';
       engine.isPracticeMode = true;
-      engine.loadStadium('mediano');
-      syncEngineMatchLimits(engine);
-      rendererInstance?.setStadium(createStadium('mediano'));
-      syncEnginePlayers();
-      engine.setPlayerTeam(1, 'red');
-      engine.resetPositions();
-      gameUI.applyMatchBanner({ kind: 'NONE' });
-      gameUI.fsmPhase = 'STOPPED';
-      gameUI.matchPhase = 0;
-      gameUI.closeOverlay();
+      engine.loadStadium(stadiumId);
+      rendererInstance?.setStadium(createStadium(stadiumId));
+      activatePracticeEngine(engine);
     };
 
     gameUI.onTeamChanged = (playerId: number, team: 'red' | 'blue' | 'spectator') => {
@@ -419,44 +489,20 @@
 
     function dispatchScoreEvent(ev: any): void {
       if (!ev) return;
-      const localId = gameUI.localPlayerId;
+      const localId = gameUI.localPlayerId || gameApp.networkClient?.localPlayerId || 0;
       const pId = String(ev.playerId ?? '');
       if (!localId || !pId || pId !== String(localId)) return;
 
-      const cat = String(ev.category || ev.eventType || '').toLowerCase();
-      const filterCat = cat.includes('own')
-        ? 'ownGoal'
-        : cat.includes('hattrick')
-          ? 'hattrick'
-          : cat.includes('assist')
-            ? 'assist'
-            : cat.includes('save')
-              ? 'save'
-              : cat.includes('shot')
-                ? 'shot'
-                : cat.includes('pass')
-                  ? 'pass'
-                  : cat.includes('goal') || cat.includes('power')
-                    ? 'goal'
-                    : undefined;
+      const { filterCat, eventType, pointsText } = classifyScoreEvent(ev);
       if (!isFloatingScoreCategoryEnabled(gameUI.settings, filterCat)) return;
 
       const player = gameUI.rosterPlayers.find((p) => String(p.id) === pId || p.peerId === pId);
-      let eventType = 'EVENTO';
-      if (cat.includes('power')) eventType = 'GOL POTENCIA';
-      else if (cat.includes('curve_goal')) eventType = 'GOL EFECTO';
-      else if (cat.includes('curve_assist')) eventType = 'ASISTENCIA EFECTO';
-      else if (cat.includes('assist')) eventType = 'ASISTENCIA';
-      else if (cat.includes('goal') && !cat.includes('own')) eventType = 'GOL';
-      else if (cat.includes('own')) eventType = 'AUTOGOL';
-      else if (cat.includes('save')) eventType = 'ATAJADA';
-      else if (cat.includes('shot')) eventType = 'TIRO';
-      else if (cat.includes('pass')) eventType = 'PASE';
-      else if (cat.includes('hattrick')) eventType = 'HATTRICK';
-
-      const pts = Number(ev.points ?? 0);
-      const pointsText = `${pts >= 0 ? '+' : ''}${pts} PTS`;
-      const team = player?.team === 'red' || player?.team === 'blue' ? player.team : 'neutral';
+      const team =
+        player?.team === 'red' || player?.team === 'blue'
+          ? player.team
+          : ev.team === 'red' || ev.team === 'blue'
+            ? ev.team
+            : 'neutral';
 
       gameUI.pushScoreEvent({
         playerName: '',
@@ -635,6 +681,8 @@
         gameUI.matchPhase = 0;
         gameUI.previousMatchPhase = 0;
         hostEngine.stopMatch();
+        currSnapshot = hostEngine.getState();
+        prevSnapshot = currSnapshot;
 
         gameUI.lastMatchStats = frozen.snapshot;
         gameUI.mvp = frozen.theMVP;
@@ -659,6 +707,9 @@
 
     if (engine) {
       wireHostEngineEvents(engine);
+      if (gameUI.isPracticeMode) {
+        activatePracticeEngine(engine);
+      }
     }
 
     // 2. Inicializar GameRenderer desacoplado
@@ -1004,8 +1055,6 @@
     let animFrameId: number;
 
     let clientTick = 0;
-    let prevSnapshot: GameStateSnapshot = engine ? engine.getState() : ({} as any);
-    let currSnapshot: GameStateSnapshot = engine ? engine.getState() : ({} as any);
 
     function isMovablePhase(phase: number): boolean {
       return (
@@ -1399,7 +1448,8 @@
       // Actualizar telemetría reactiva en UI
       frameCount++;
       if (currentTime - lastFpsCalculation >= 500) {
-        gameUI.fps = Math.round((frameCount * 1000) / (currentTime - lastFpsCalculation));
+        const currentFps = Math.round((frameCount * 1000) / (currentTime - lastFpsCalculation));
+        gameUI.recordTelemetrySample(gameUI.isHost ? 0 : gameUI.pingMs, currentFps);
         frameCount = 0;
         lastFpsCalculation = currentTime;
         syncChatBounds();

@@ -13,7 +13,14 @@ import { NetworkClient } from '../../src/net/NetworkClient.js';
 import { NetworkHost } from '../../src/net/NetworkHost.js';
 import { GameApp } from '../../src/net/GameApp.js';
 import { ClientPredictionReconciler } from '../../src/net/ClientPrediction.js';
-import { gameUI, DEFAULT_PHYSICS_MODIFIERS } from '../../src/ui/state/gameUI.svelte.js';
+import {
+  gameUI,
+  DEFAULT_PHYSICS_MODIFIERS,
+  DEFAULT_SETTINGS,
+  SETTINGS_STORAGE_KEY,
+  isFloatingScoreCategoryEnabled,
+  classifyScoreEvent
+} from '../../src/ui/state/gameUI.svelte.js';
 import { userProfile } from '../../src/ui/state/userProfile.svelte.js';
 
 const CLIENT_SRC_DIR = resolve(process.cwd(), 'src');
@@ -435,6 +442,365 @@ describe('Task 6: Strict Host & Non-Host Parity Integration', () => {
       // Item 27: guard Lobby/GATEKEEPER route transition so logout never bounces back to LOBBY
       expect(appSrc).toContain('didAutoRouteAuthenticatedBoot');
       expect(appSrc).toMatch(/REPLAY_VIEWER.*userProfile\.isAuthenticated\s*&&\s*!userProfile\.isGuest/);
+    });
+  });
+
+  describe('Items 1, 3 & 7: Score event parity, Practice/Stop stats, Host 0ms telemetry & Solid ball migration', () => {
+    it('Item 7: migrates legacy saved ballMode=texture + ballSkin=solid to ballMode=color & ballSkin=classic while preserving custom color', () => {
+      expect(DEFAULT_SETTINGS.ballSkin).not.toBe('solid');
+
+      const originalStorage = (globalThis as any).localStorage;
+      const store = new Map<string, string>();
+      const memoryStorage = {
+        getItem: (k: string) => store.get(k) ?? null,
+        setItem: (k: string, v: string) => {
+          store.set(k, String(v));
+        },
+        removeItem: (k: string) => {
+          store.delete(k);
+        },
+        clear: () => {
+          store.clear();
+        },
+        key: (i: number) => Array.from(store.keys())[i] ?? null,
+        get length() {
+          return store.size;
+        }
+      };
+      (globalThis as any).localStorage = memoryStorage;
+
+      try {
+        memoryStorage.setItem(
+          SETTINGS_STORAGE_KEY,
+          JSON.stringify({
+            ...DEFAULT_SETTINGS,
+            ballMode: 'texture',
+            ballSkin: 'solid',
+            ballCustomColor: '#ff00aa'
+          })
+        );
+        memoryStorage.setItem('haxball_ball_skin', 'solid');
+
+        gameUI.loadPersistedState();
+        expect(gameUI.settings.ballMode).toBe('color');
+        expect(gameUI.settings.ballSkin).toBe('classic');
+        expect(gameUI.settings.ballCustomColor).toBe('#ff00aa');
+        expect(memoryStorage.getItem('haxball_ball_skin')).toBe('classic');
+        expect(JSON.parse(memoryStorage.getItem(SETTINGS_STORAGE_KEY)!).ballSkin).toBe('classic');
+        expect(JSON.parse(memoryStorage.getItem(SETTINGS_STORAGE_KEY)!).ballMode).toBe('color');
+
+        // Empty custom color falls back cleanly to #ffffff on migration
+        memoryStorage.setItem(
+          SETTINGS_STORAGE_KEY,
+          JSON.stringify({
+            ...DEFAULT_SETTINGS,
+            ballMode: 'texture',
+            ballSkin: 'solid',
+            ballCustomColor: ''
+          })
+        );
+        gameUI.loadPersistedState();
+        expect(gameUI.settings.ballMode).toBe('color');
+        expect(gameUI.settings.ballSkin).toBe('classic');
+        expect(gameUI.settings.ballCustomColor).toBe('#ffffff');
+
+        // saveSettings also normalizes legacy 'solid' if ever passed programmatically
+        gameUI.saveSettings({
+          ballMode: 'texture',
+          ballSkin: 'solid' as any,
+          ballCustomColor: '#00ff88'
+        });
+        expect(gameUI.settings.ballMode).toBe('color');
+        expect(gameUI.settings.ballSkin).toBe('classic');
+        expect(gameUI.settings.ballCustomColor).toBe('#00ff88');
+      } finally {
+        (globalThis as any).localStorage = originalStorage;
+      }
+    });
+
+    it('Item 3: resets stale telemetry samples on resetRoomSession/enterPracticeMode and wires Host=0ms vs Guest=pingMs in App.svelte renderLoop', () => {
+      gameUI.recordTelemetrySample(48, 60);
+      gameUI.recordTelemetrySample(62, 60);
+      gameUI.realPing = 55;
+      expect(gameUI.pingMs).toBe(62);
+      expect(gameUI.avgPingMs).toBe(55);
+
+      gameUI.resetRoomSession();
+      expect(gameUI.pingMs).toBe(0);
+      expect(gameUI.avgPingMs).toBe(0);
+      expect(gameUI.pingSampleCount).toBe(0);
+      expect(gameUI.pingSamples[0]).toBe(0);
+
+      // Guest PONG_PROBE updates WebRTC RTT; entering practice/reset returns telemetry to 0 ms
+      const signaling = new SignalingClient('ws://localhost:8080', false);
+      const netClient = new NetworkClient(signaling, 'GuestPing', 2);
+      gameUI.isHost = false;
+      (netClient as any).handleReliableMessage({
+        type: 'PONG_PROBE',
+        t: performance.now() - 42
+      });
+      expect(gameUI.pingMs).toBeGreaterThan(0);
+
+      gameUI.enterPracticeMode();
+      expect(gameUI.pingMs).toBe(0);
+      expect(gameUI.avgPingMs).toBe(0);
+
+      const appSrc = readClientFile('App.svelte');
+      expect(appSrc).toContain('gameUI.recordTelemetrySample(gameUI.isHost ? 0 : gameUI.pingMs');
+      netClient.disconnect();
+    });
+
+    it('Item 1: classifies all EngineInstance score_event categories & labels, enforces playable Practice startup, and wires Host/Guest score & stop-match stats parity', () => {
+      expect(
+        classifyScoreEvent({
+          category: 'goal',
+          text: '¡Gol de Potencia! +150',
+          points: 150
+        })
+      ).toEqual({
+        filterCat: 'goal',
+        eventType: 'GOL POTENCIA',
+        pointsText: '+150 PTS'
+      });
+
+      expect(
+        classifyScoreEvent({
+          category: 'goal',
+          text: '¡Gol de Efecto! +150',
+          points: 150
+        })
+      ).toEqual({
+        filterCat: 'goal',
+        eventType: 'GOL EFECTO',
+        pointsText: '+150 PTS'
+      });
+
+      expect(
+        classifyScoreEvent({
+          category: 'assist',
+          text: 'Asistencia con Efecto +70',
+          points: 70
+        })
+      ).toEqual({
+        filterCat: 'assist',
+        eventType: 'ASISTENCIA EFECTO',
+        pointsText: '+70 PTS'
+      });
+
+      expect(
+        classifyScoreEvent({
+          category: 'ownGoal',
+          text: 'Autogol -50',
+          points: -50
+        })
+      ).toEqual({
+        filterCat: 'ownGoal',
+        eventType: 'AUTOGOL',
+        pointsText: '-50 PTS'
+      });
+
+      expect(
+        classifyScoreEvent({
+          category: 'shot',
+          text: 'Tiro al arco +20',
+          points: 20
+        })
+      ).toEqual({
+        filterCat: 'shot',
+        eventType: 'TIRO',
+        pointsText: '+20 PTS'
+      });
+
+      expect(
+        classifyScoreEvent({
+          category: 'pass',
+          text: 'Pase completado +10',
+          points: 10
+        })
+      ).toEqual({
+        filterCat: 'pass',
+        eventType: 'PASE',
+        pointsText: '+10 PTS'
+      });
+
+      expect(
+        classifyScoreEvent({
+          category: 'save',
+          text: 'Atajada +100',
+          points: 100
+        })
+      ).toEqual({
+        filterCat: 'save',
+        eventType: 'ATAJADA',
+        pointsText: '+100 PTS'
+      });
+
+      expect(
+        classifyScoreEvent({
+          category: 'hattrick',
+          text: '¡Hattrick Bonus +100!',
+          points: 100
+        })
+      ).toEqual({
+        filterCat: 'hattrick',
+        eventType: 'HATTRICK',
+        pointsText: '+100 PTS'
+      });
+
+      // Enter Practice Mode directly into active playable state (no blocking TEAM_MANAGEMENT modal)
+      gameUI.enterPracticeMode();
+      expect(gameUI.isPracticeMode).toBe(true);
+      expect(gameUI.fsmPhase).toBe('PLAYING');
+      expect(gameUI.matchPhase).toBe(2);
+      expect(gameUI.activeModal).toBe('NONE');
+      expect(gameUI.pingMs).toBe(0);
+
+      // App.svelte activates practice EngineInstance, maps Guest localPlayerId fallback, preserves stats on stopMatch when actions occurred
+      const appSrc = readClientFile('App.svelte');
+      expect(appSrc).toContain('classifyScoreEvent(ev)');
+      expect(appSrc).toContain('gameApp.networkClient?.localPlayerId');
+      expect(appSrc).toContain('activatePracticeEngine');
+      expect(appSrc).toContain('startMatch(false)');
+      expect(appSrc).toContain('fsm.startPlaying()');
+      expect(appSrc).toContain('hasMatchActivity');
+      expect(appSrc).toContain('gameApp.networkHost?.broadcastMatchStats(');
+    });
+
+    it('Item 1: strictly keeps Ranked DB submission gated on roomType=ranked && !isPracticeMode', () => {
+      const client = new SignalingClient('ws://localhost:8080', false);
+      const app = new GameApp(client);
+      const sendSpy = vi.spyOn(client, 'send').mockImplementation(() => {});
+
+      (app as any).isHost = true;
+      (app as any).currentRoomId = 'R-RANK';
+      (app as any).activeMatchToken = 'tok-123';
+      (app as any).networkHost = new NetworkHost(client, 'HostUser');
+      userProfile.jwt = 'jwt-test-token';
+
+      gameUI.isPracticeMode = true;
+      gameUI.roomType = 'ranked';
+      app.reportRankedMatchIfEligible({
+        stadiumId: 'mediano',
+        durationSeconds: 60,
+        redScore: 2,
+        blueScore: 0,
+        winner: 'red',
+        stats: [],
+        mvpPlayerId: '1'
+      });
+      expect(sendSpy).not.toHaveBeenCalled();
+
+      gameUI.isPracticeMode = false;
+      gameUI.roomType = 'casual';
+      app.reportRankedMatchIfEligible({
+        stadiumId: 'mediano',
+        durationSeconds: 60,
+        redScore: 2,
+        blueScore: 0,
+        winner: 'red',
+        stats: [],
+        mvpPlayerId: '1'
+      });
+      expect(sendSpy).not.toHaveBeenCalled();
+
+      // Ranked real match reports cleanly
+      gameUI.isPracticeMode = false;
+      gameUI.roomType = 'ranked';
+      app.reportRankedMatchIfEligible({
+        stadiumId: 'mediano',
+        durationSeconds: 60,
+        redScore: 2,
+        blueScore: 0,
+        winner: 'red',
+        stats: [],
+        mvpPlayerId: '1'
+      });
+      expect(sendSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'RANKED_MATCH_REPORT',
+          roomId: 'R-RANK'
+        })
+      );
+
+      // Casual + Practice categories stay enabled via floating settings regardless of mode
+      expect(isFloatingScoreCategoryEnabled(gameUI.settings, 'goal')).toBe(true);
+      expect(isFloatingScoreCategoryEnabled(gameUI.settings, 'shot')).toBe(true);
+      expect(isFloatingScoreCategoryEnabled(gameUI.settings, 'pass')).toBe(true);
+      expect(isFloatingScoreCategoryEnabled(gameUI.settings, 'save')).toBe(true);
+    });
+
+    it('Item 1: delivers Host->Guest SCORE_EVENT & MATCH_STATS_SUMMARY to Non-Host HUD sliding queue & post-match STATS slide', () => {
+      const signaling = new SignalingClient('ws://localhost:8080', false);
+      const host = new NetworkHost(signaling, 'HostPro');
+      const netClient = new NetworkClient(signaling, 'GuestTwo', 2);
+      const sentPayloads: any[] = [];
+      (host as any).peers.set('guest-2', {
+        sendReliable: (m: any) => sentPayloads.push(m),
+        close: () => {}
+      });
+
+      gameUI.isHost = false;
+      gameUI.localPlayerId = 2;
+      gameUI.rosterPlayers = [
+        { id: 1, peerId: 'host', nickname: 'HostPro', name: 'HostPro', team: 'red', number: 1, isAdmin: true, isHost: true, avatar: 'H', ping: 0 },
+        { id: 2, peerId: 'guest-2', nickname: 'GuestTwo', name: 'GuestTwo', team: 'blue', number: 2, isAdmin: false, isHost: false, avatar: 'G', ping: 30 }
+      ];
+
+      netClient.onScoreEvent = (ev) => {
+        const localId = gameUI.localPlayerId || netClient.localPlayerId || 0;
+        const pId = String(ev.playerId ?? '');
+        if (!localId || !pId || pId !== String(localId)) return;
+        const { filterCat, eventType, pointsText } = classifyScoreEvent(ev);
+        if (!isFloatingScoreCategoryEnabled(gameUI.settings, filterCat)) return;
+        gameUI.pushScoreEvent({
+          playerName: '',
+          eventType,
+          pointsText,
+          color: String(ev.color || '#00e5ff'),
+          team: 'blue'
+        });
+      };
+
+      // Host broadcasts score event for Host (ignored on Guest) and for Guest (shown on Guest)
+      host.broadcastScoreEvent({
+        playerId: '1',
+        team: 'red',
+        category: 'shot',
+        text: 'Tiro al arco +20',
+        points: 20,
+        color: '#ffbe0b'
+      });
+      host.broadcastScoreEvent({
+        playerId: '2',
+        team: 'blue',
+        category: 'goal',
+        text: '¡Gol de Potencia! +150',
+        points: 150,
+        color: '#ffd700'
+      });
+      host.broadcastMatchStats(
+        { redScore: 0, blueScore: 1, matchDuration: 35, winner: 'blue', winnerTeamName: 'BLUE' },
+        [{ playerId: '2', nickname: 'GuestTwo', team: 'blue', goals: 1, assists: 0, saves: 0, shots: 1, passes: 0, touches: 1, points: 150 }],
+        { playerId: '2', nickname: 'GuestTwo', team: 'blue', points: 150 },
+        [],
+        [{ playerId: '2', nickname: 'GuestTwo', team: 'blue', goals: 1, points: 150 }]
+      );
+
+      for (const msg of sentPayloads) {
+        (netClient as any).handleReliableMessage(msg);
+      }
+
+      expect(gameUI.slidingEventQueue.length).toBe(1);
+      expect(gameUI.slidingEventQueue[0]!.eventType).toBe('GOL POTENCIA');
+      expect(gameUI.slidingEventQueue[0]!.pointsText).toBe('+150 PTS');
+      expect(gameUI.hasCompletedMatch).toBe(true);
+      expect(gameUI.activeSlide).toBe('STATS');
+      expect(gameUI.activeModal).toBe('TEAM_SELECT');
+      expect((gameUI.lastMatchStats as any)?.blueScore).toBe(1);
+      expect(gameUI.blueTeamStats.length).toBe(1);
+
+      host.destroy();
+      netClient.disconnect();
     });
   });
 });
