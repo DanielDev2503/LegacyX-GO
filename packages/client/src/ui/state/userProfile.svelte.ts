@@ -180,6 +180,8 @@ class UserProfileStore {
     DEFAULT_SUPABASE_PUBLISHABLE_KEY
   );
   private refreshInFlight: Promise<string | null> | null = null;
+  private personalRankInFlight: Promise<PersonalRankSummary | null> | null = null;
+  public onUsernameChanged: ((newUsername: string) => void) | null = null;
 
   constructor() {
     this.loadPersistedSession();
@@ -294,11 +296,11 @@ class UserProfileStore {
     }
   }
 
-  public async ensureValidAccessToken(): Promise<string | null> {
+  public async ensureValidAccessToken(forceRefresh: boolean = false): Promise<string | null> {
     if (!this.jwt && !this.refreshToken) return null;
 
     const expMs = decodeJwtExpirationMs(this.jwt);
-    if (this.jwt && expMs !== null && expMs - Date.now() > 60_000) {
+    if (!forceRefresh && this.jwt && expMs !== null && expMs - Date.now() > 60_000) {
       return this.jwt;
     }
 
@@ -398,13 +400,72 @@ class UserProfileStore {
         this.isAuthenticated = true;
         this.isGuest = false;
         gameUI.setPlayerNickname(this.username);
-        if ((expMs === null || expMs - Date.now() <= 60_000) && this.refreshToken && typeof window !== 'undefined') {
-          void this.ensureValidAccessToken();
+        if (typeof window !== 'undefined' && typeof fetch === 'function') {
+          void this.refreshSessionProfile();
         }
       }
     } catch {
       this.isGuest = true;
       this.isAuthenticated = false;
+    }
+  }
+
+  public async refreshSessionProfile(): Promise<boolean> {
+    if (!this.isAuthenticated || !this.id || typeof fetch !== 'function') {
+      return false;
+    }
+
+    try {
+      let token = await this.ensureValidAccessToken();
+      if (!token || !this.id) return false;
+
+      const apiRes = await this.tryServerApi('/api/auth/session', {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (apiRes.handled && apiRes.ok && apiRes.data?.profile) {
+        this.applyServerProfilePayload({ profile: apiRes.data.profile });
+        return true;
+      }
+
+      const fetchProfileRow = async (bearerToken: string) =>
+        fetch(
+          `${this.supabaseUrl}/rest/v1/profiles?id=eq.${encodeURIComponent(this.id!)}&select=id,username,display_name,email,role,is_verified,name_changed`,
+          { headers: this.supabaseHeaders(bearerToken) }
+        );
+
+      let pRes = await fetchProfileRow(token);
+      if (pRes.status === 401) {
+        const refreshed = await this.ensureValidAccessToken(true);
+        if (!refreshed) return false;
+        token = refreshed;
+        pRes = await fetchProfileRow(token);
+      }
+      if (!pRes.ok) return false;
+
+      const rows = await pRes.json().catch(() => null);
+      const profile = Array.isArray(rows) ? rows[0] : null;
+      if (!profile || !profile.id) return false;
+
+      let ranking: any = undefined;
+      try {
+        const rankRes = await fetch(
+          `${this.supabaseUrl}/rest/v1/player_rankings?player_id=eq.${encodeURIComponent(this.id!)}&select=*`,
+          { headers: this.supabaseHeaders(token) }
+        );
+        if (rankRes.ok) {
+          const rankRows = await rankRes.json().catch(() => []);
+          if (Array.isArray(rankRows) && rankRows[0]) {
+            ranking = rankRows[0];
+          }
+        }
+      } catch {
+        // Mantener ranking actual si falla consulta auxiliar
+      }
+
+      this.applyServerProfilePayload({ profile, ranking });
+      return true;
+    } catch {
+      return false;
     }
   }
 
@@ -476,27 +537,40 @@ class UserProfileStore {
 
   private applyServerProfilePayload(payload: any): void {
     const profile = payload.profile ?? payload;
-    const ranking = payload.ranking ?? {};
+    const hasRanking = Boolean(payload.ranking && typeof payload.ranking === 'object');
+    const ranking = hasRanking ? payload.ranking : {};
     const session = payload.session ?? {};
+    const statSource = hasRanking
+      ? ranking
+      : profile.matchesPlayed !== undefined || profile.matches_played !== undefined
+        ? profile
+        : null;
 
     this.id = profile.id;
     this.username = profile.username;
-    this.displayName = profile.display_name ?? profile.displayName ?? profile.username;
+    const nameChanged = Boolean(profile.nameChanged ?? profile.name_changed ?? false);
+    this.nameChanged = nameChanged;
+    this.displayName = nameChanged
+      ? profile.username
+      : (profile.display_name ?? profile.displayName ?? profile.username);
     this.email = profile.email ?? this.email;
     this.role = (profile.role as UserRole) ?? 'jugador';
     this.isVerified = Boolean(profile.is_verified ?? profile.isVerified ?? true);
-    this.nameChanged = Boolean(profile.nameChanged ?? profile.name_changed ?? false);
-    this.elo = Number(ranking.elo ?? profile.elo ?? 1000);
-    this.stats = {
-      matchesPlayed: Number(ranking.matches_played ?? ranking.matchesPlayed ?? 0),
-      wins: Number(ranking.wins ?? 0),
-      losses: Number(ranking.losses ?? 0),
-      draws: Number(ranking.draws ?? 0),
-      goals: Number(ranking.goals ?? 0),
-      assists: Number(ranking.assists ?? 0),
-      saves: Number(ranking.saves ?? 0),
-      mvpCount: Number(ranking.mvp_count ?? ranking.mvpCount ?? 0)
-    };
+    if (hasRanking || profile.elo !== undefined) {
+      this.elo = Number(ranking.elo ?? profile.elo ?? this.elo ?? 1000);
+    }
+    if (statSource) {
+      this.stats = {
+        matchesPlayed: Number(statSource.matches_played ?? statSource.matchesPlayed ?? 0),
+        wins: Number(statSource.wins ?? 0),
+        losses: Number(statSource.losses ?? 0),
+        draws: Number(statSource.draws ?? 0),
+        goals: Number(statSource.goals ?? 0),
+        assists: Number(statSource.assists ?? 0),
+        saves: Number(statSource.saves ?? 0),
+        mvpCount: Number(statSource.mvp_count ?? statSource.mvpCount ?? 0)
+      };
+    }
     if (session.access_token || payload.accessToken || payload.jwt) {
       this.jwt = session.access_token ?? payload.accessToken ?? payload.jwt;
     }
@@ -955,8 +1029,16 @@ class UserProfileStore {
             metricValue: Number(r.metric_value ?? r.metricValue ?? 0),
             elo: Number(r.elo ?? 1000)
           }));
-        if (apiRes.data?.personalRank) {
-          this.personalRank = apiRes.data.personalRank;
+        const pr = apiRes.data?.personalRank;
+        if (pr) {
+          this.personalRank = {
+            position: Number(pr.position ?? pr.rank_position ?? 0),
+            elo: Number(pr.elo ?? this.elo),
+            goals: Number(pr.goals ?? this.stats.goals),
+            assists: Number(pr.assists ?? this.stats.assists),
+            saves: Number(pr.saves ?? this.stats.saves)
+          };
+          this.elo = this.personalRank.elo;
         } else {
           this.syncPersonalRankFromList();
         }
@@ -985,27 +1067,7 @@ class UserProfileStore {
       }
 
       if (this.isAuthenticated && this.id) {
-        const pRes = await fetch(`${this.supabaseUrl}/rest/v1/rpc/get_player_rank_summary`, {
-          method: 'POST',
-          headers: this.supabaseHeaders(this.jwt),
-          body: JSON.stringify({ p_player_id: this.id, p_category: category })
-        });
-        if (pRes.ok) {
-          const pRows = await pRes.json();
-          const pRow = Array.isArray(pRows) ? pRows[0] : pRows;
-          if (pRow && pRow.rank_position) {
-            this.personalRank = {
-              position: Number(pRow.rank_position),
-              elo: Number(pRow.elo ?? this.elo),
-              goals: Number(pRow.goals ?? this.stats.goals),
-              assists: Number(pRow.assists ?? this.stats.assists),
-              saves: Number(pRow.saves ?? this.stats.saves)
-            };
-            this.elo = this.personalRank.elo;
-            return;
-          }
-        }
-        this.syncPersonalRankFromList();
+        await this.fetchPersonalRank(category);
       } else {
         this.personalRank = null;
       }
@@ -1013,6 +1075,57 @@ class UserProfileStore {
       // Mantener último estado en caso offline
     } finally {
       this.isLeaderboardLoading = false;
+    }
+  }
+
+  public async fetchPersonalRank(
+    category: LeaderboardCategory = this.leaderboardCategory
+  ): Promise<PersonalRankSummary | null> {
+    if (!this.isAuthenticated || !this.id) {
+      this.personalRank = null;
+      return null;
+    }
+
+    if (this.personalRankInFlight) {
+      return this.personalRankInFlight;
+    }
+
+    const playerId = this.id;
+    this.personalRankInFlight = (async () => {
+      try {
+        const pRes = await fetch(`${this.supabaseUrl}/rest/v1/rpc/get_player_rank_summary`, {
+          method: 'POST',
+          headers: this.supabaseHeaders(this.jwt),
+          body: JSON.stringify({ p_player_id: playerId, p_category: category })
+        });
+        if (pRes.ok) {
+          const pRows = await pRes.json();
+          const pRow = Array.isArray(pRows) ? pRows[0] : pRows;
+          const pos = Number(pRow?.rank_position ?? pRow?.position ?? 0);
+          if (pRow && pos > 0) {
+            this.personalRank = {
+              position: pos,
+              elo: Number(pRow.elo ?? this.elo),
+              goals: Number(pRow.goals ?? this.stats.goals),
+              assists: Number(pRow.assists ?? this.stats.assists),
+              saves: Number(pRow.saves ?? this.stats.saves)
+            };
+            this.elo = this.personalRank.elo;
+            return this.personalRank;
+          }
+        }
+      } catch {
+        // Usar lista en caché si falla red
+      }
+
+      this.syncPersonalRankFromList();
+      return this.personalRank;
+    })();
+
+    try {
+      return await this.personalRankInFlight;
+    } finally {
+      this.personalRankInFlight = null;
     }
   }
 
@@ -1045,43 +1158,81 @@ class UserProfileStore {
   public async changeUsernameOnce(newName: string): Promise<boolean> {
     const clean = newName.trim();
     if (!this.isAuthenticated || !this.id) {
-      throw new Error('Debes iniciar sesión para cambiar tu nombre de usuario.');
+      const msg = 'Debes iniciar sesión para cambiar tu nombre de usuario.';
+      this.authError = msg;
+      throw new Error(msg);
     }
     if (this.nameChanged) {
-      throw new Error('El nombre de usuario ya ha sido cambiado anteriormente y no puede modificarse más.');
+      const msg = 'El nombre de usuario ya ha sido cambiado anteriormente y no puede modificarse más.';
+      this.authError = msg;
+      throw new Error(msg);
     }
     const validation = validateAccountUsername(clean);
     if (!validation.valid) {
-      throw new Error(validation.error || 'Nombre de usuario inválido.');
+      const msg = validation.error || 'Nombre de usuario inválido.';
+      this.authError = msg;
+      throw new Error(msg);
     }
-    const token = await this.ensureValidAccessToken();
+    let token = await this.ensureValidAccessToken();
     if (!token) {
-      throw new Error(this.authError || 'Tu sesión expiró. Vuelve a iniciar sesión.');
+      const msg = this.authError || 'Tu sesión expiró. Vuelve a iniciar sesión.';
+      this.authError = msg;
+      throw new Error(msg);
     }
 
-    const res = await fetch(`${this.supabaseUrl}/rest/v1/profiles?id=eq.${encodeURIComponent(this.id)}`, {
-      method: 'PATCH',
-      headers: {
-        ...this.supabaseHeaders(token),
-        Prefer: 'return=representation'
-      },
-      body: JSON.stringify({
-        username: clean,
-        display_name: clean,
-        name_changed: true
-      })
-    });
+    this.authError = null;
+
+    const invokeRpc = async (bearerToken: string) =>
+      fetch(`${this.supabaseUrl}/rest/v1/rpc/change_username_once`, {
+        method: 'POST',
+        headers: this.supabaseHeaders(bearerToken),
+        body: JSON.stringify({ p_new_username: clean })
+      });
+
+    let res = await invokeRpc(token);
+    if (res.status === 401) {
+      const refreshedToken = await this.ensureValidAccessToken(true);
+      if (!refreshedToken) {
+        const msg = this.authError || 'Tu sesión expiró. Vuelve a iniciar sesión.';
+        this.authError = msg;
+        throw new Error(msg);
+      }
+      token = refreshedToken;
+      res = await invokeRpc(token);
+    }
+
+    const raw = await res.json().catch(() => null);
+    const result = Array.isArray(raw) ? raw[0] : raw;
 
     if (!res.ok) {
-      const errBody = await res.json().catch(() => ({}));
-      throw new Error(errBody.message || 'Error al actualizar el nombre en el servidor.');
+      const msg = String(
+        result?.error || result?.message || 'Error al actualizar el nombre en el servidor.'
+      );
+      this.authError = msg;
+      throw new Error(msg);
     }
 
-    this.username = clean;
-    this.displayName = clean;
-    this.nameChanged = true;
+    if (!result || result.success !== true) {
+      const msg = String(
+        result?.error || result?.message || 'No se pudo actualizar el nombre de usuario.'
+      );
+      this.authError = msg;
+      throw new Error(msg);
+    }
+
+    const nextUsername = String(result.username ?? clean).trim() || clean;
+    const nextDisplayName = String(result.display_name ?? nextUsername).trim() || nextUsername;
+    this.username = nextUsername;
+    this.displayName = nextDisplayName;
+    this.nameChanged = Boolean(result.name_changed ?? true);
     this.persistSession();
-    gameUI.setPlayerNickname(clean);
+    gameUI.setPlayerNickname(nextUsername);
+    this.onUsernameChanged?.(nextUsername);
+
+    await Promise.all([
+      this.fetchPersonalRank(this.leaderboardCategory),
+      this.fetchLeaderboard(this.leaderboardCategory)
+    ]);
     return true;
   }
 

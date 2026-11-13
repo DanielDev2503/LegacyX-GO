@@ -425,14 +425,16 @@ export class AuthService {
     const ranks = rankRes.ok ? ((await rankRes.json()) as any[]) : [];
     const r = ranks[0] || {};
 
+    const nameChanged = Boolean(p.name_changed);
+
     return {
       id: p.id,
       username: p.username,
-      displayName: p.display_name || p.username,
+      displayName: nameChanged ? p.username : (p.display_name || p.username),
       email: p.email,
       role: (p.role as UserRole) || 'jugador',
       isVerified: Boolean(p.is_verified),
-      nameChanged: Boolean(p.name_changed),
+      nameChanged,
       elo: Number(r.elo ?? 1000),
       matchesPlayed: Number(r.matches_played ?? 0),
       wins: Number(r.wins ?? 0),
