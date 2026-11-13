@@ -1,20 +1,54 @@
 <script lang="ts">
-  import { gameUI, formatKeybindCode, type BallSkinType, type PatternType } from '../state/gameUI.svelte.js';
+  import {
+    gameUI,
+    formatKeybindCode,
+    type BallSkinType,
+    type PatternType,
+    type ScoreboardDesignType
+  } from '../state/gameUI.svelte.js';
   import { userProfile, validateAccountUsername } from '../state/userProfile.svelte.js';
   import { mouseButtonToCode } from '../../controllers/InputManager.js';
   import { soundFX } from '../../audio/SoundFX.js';
   import { EMOJI_CATALOG } from '../utils/constants.js';
   import { tooltip } from '../actions/tooltip.js';
   import { drawBallDesign, type BallSkin } from '../../renderer/ballDesigns.js';
+  import MatchScoreboard from '../components/MatchScoreboard.svelte';
+  import KitPatternBadge from '../components/KitPatternBadge.svelte';
 
-  type SettingsTab = 'controls' | 'audio' | 'video' | 'kits' | 'avatar' | 'account';
+  type SettingsTab = 'controls' | 'audio' | 'video' | 'visual' | 'kits' | 'avatar' | 'account';
   let activeTab = $state<SettingsTab>(
     (gameUI.activeSettingsTab as string) === 'club'
       ? 'avatar'
-      : (gameUI.activeSettingsTab as string) === 'account'
-        ? 'account'
-        : ((gameUI.activeSettingsTab as SettingsTab) || 'controls')
+      : ((['controls', 'audio', 'video', 'visual', 'kits', 'avatar', 'account'] as const).includes(
+            gameUI.activeSettingsTab as SettingsTab
+          )
+          ? (gameUI.activeSettingsTab as SettingsTab)
+          : 'controls')
   );
+
+  const BALL_TEXTURE_OPTIONS: readonly { id: Exclude<BallSkinType, 'solid'>; label: string; era?: string }[] = [
+    { id: 'classic', label: 'Clásico' },
+    { id: 'retro', label: 'Retro' },
+    { id: 'neon', label: 'Neón' },
+    { id: 'cyber', label: 'Cyber' },
+    { id: 'gold', label: 'Oro' },
+    { id: 'wc2006', label: 'Teamgeist', era: '2006' },
+    { id: 'wc2010', label: 'Jabulani', era: '2010' },
+    { id: 'wc2014', label: 'Brazuca', era: '2014' },
+    { id: 'wc2018', label: 'Telstar 18', era: '2018' },
+    { id: 'wc2022', label: 'Al Rihla', era: '2022' },
+    { id: 'wc2026', label: 'Trionda', era: '2026' }
+  ];
+
+  const SCOREBOARD_DESIGN_OPTIONS: readonly { id: ScoreboardDesignType; label: string; era: string }[] = [
+    { id: 'original', label: 'Original LegacyX', era: 'Clásico' },
+    { id: 'wc2006', label: 'Alemania 2006', era: 'WC 2006' },
+    { id: 'wc2010', label: 'Sudáfrica 2010', era: 'WC 2010' },
+    { id: 'wc2014', label: 'Brasil 2014', era: 'WC 2014' },
+    { id: 'wc2018', label: 'Rusia 2018', era: 'WC 2018' },
+    { id: 'wc2022', label: 'Catar 2022', era: 'WC 2022' },
+    { id: 'wc2026', label: 'Norteamérica 2026', era: 'WC 2026' }
+  ];
 
   // Keybinding remapping state
   let rebindingAction = $state<string | null>(null);
@@ -307,13 +341,45 @@
   <span>Volver</span>
 </button>
 
+{#snippet lockBadge()}
+  <span class="tab-lock-icon" aria-label="Solo cuentas registradas" title="Exclusivo para cuentas registradas">
+    <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+      <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+    </svg>
+  </span>
+{/snippet}
+
+{#snippet guestLockCard(sectionLabel: string, description: string)}
+  <div class="account-guest-card guest-lock-card" data-guest-locked-section={sectionLabel}>
+    <div class="guest-lock-header">
+      <span class="guest-lock-badge">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+          <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+        </svg>
+        Exclusivo para cuentas registradas
+      </span>
+    </div>
+    <div class="account-guest-copy">
+      <h4 class="card-title">{sectionLabel} bloqueado en Modo Invitado</h4>
+      <p>
+        Actualmente juegas como <code>{gameUI.nickname || 'inv_'}</code>. {description}
+      </p>
+    </div>
+    <button type="button" class="cyber-btn accent" onclick={goToAuthFromSettings}>
+      Iniciar sesión / Crear cuenta
+    </button>
+  </div>
+{/snippet}
+
 <div
   class="modal-backdrop"
   role="presentation"
   onclick={handleBackdropClick}
 >
   <div class="settings-modal-card" role="dialog" aria-modal="true" aria-labelledby="settings-dialog-title">
-    <!-- Panel Izquierdo: Encabezado y Lista vertical continua de 5 Pestañas -->
+    <!-- Panel Izquierdo: Encabezado y Lista vertical continua de Pestañas -->
     <aside class="tabs-sidebar">
       <div class="sidebar-header">
         <span class="settings-icon-box" aria-hidden="true">
@@ -382,7 +448,28 @@
         <button
           type="button"
           class="tab-btn"
+          class:active={activeTab === 'visual'}
+          class:locked={!userProfile.isAuthenticated}
+          onclick={() => switchTab('visual')}
+        >
+          <span class="tab-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="9" />
+              <path d="M12 3v18" />
+              <path d="M3 12h18" />
+            </svg>
+          </span>
+          <span class="tab-label">Personalización visual</span>
+          {#if !userProfile.isAuthenticated}
+            {@render lockBadge()}
+          {/if}
+        </button>
+
+        <button
+          type="button"
+          class="tab-btn"
           class:active={activeTab === 'kits'}
+          class:locked={!userProfile.isAuthenticated}
           onclick={() => switchTab('kits')}
         >
           <span class="tab-icon" aria-hidden="true">
@@ -391,12 +478,16 @@
             </svg>
           </span>
           <span class="tab-label">Equipaciones</span>
+          {#if !userProfile.isAuthenticated}
+            {@render lockBadge()}
+          {/if}
         </button>
 
         <button
           type="button"
           class="tab-btn"
           class:active={activeTab === 'avatar'}
+          class:locked={!userProfile.isAuthenticated}
           onclick={() => switchTab('avatar')}
         >
           <span class="tab-icon" aria-hidden="true">
@@ -408,12 +499,16 @@
             </svg>
           </span>
           <span class="tab-label">Avatar y emotes</span>
+          {#if !userProfile.isAuthenticated}
+            {@render lockBadge()}
+          {/if}
         </button>
 
         <button
           type="button"
           class="tab-btn"
           class:active={activeTab === 'account'}
+          class:locked={!userProfile.isAuthenticated}
           onclick={() => switchTab('account')}
         >
           <span class="tab-icon" aria-hidden="true">
@@ -423,6 +518,9 @@
             </svg>
           </span>
           <span class="tab-label">Cuenta</span>
+          {#if !userProfile.isAuthenticated}
+            {@render lockBadge()}
+          {/if}
         </button>
       </nav>
     </aside>
@@ -1122,11 +1220,47 @@
                   </div>
                 </div>
 
-                <!-- Extrapolación (0 - 250 ms) -->
+                <!-- Extrapolación automática + manual (0 - 250 ms) -->
                 <div class="slider-row pt-2">
+                  <div class="toggle-row auto-extrap-row">
+                    <span class="param-name label-with-tooltip">
+                      Extrapolación automática (según ping)
+                      <span
+                        class="info-tooltip-wrapper"
+                        tabindex="0"
+                        role="button"
+                        aria-label="Info extrapolación automática"
+                        use:tooltip={"Ajusta automáticamente la extrapolación visual entre 0 ms (ping <= 20 ms) y 85 ms según tu latencia actual."}
+                      >
+                        <svg class="info-help-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                          <circle cx="12" cy="12" r="10"></circle>
+                          <line x1="12" y1="16" x2="12" y2="12"></line>
+                          <line x1="12" y1="8" x2="12.01" y2="8"></line>
+                        </svg>
+                      </span>
+                    </span>
+                    <div class="auto-extrap-controls">
+                      {#if gameUI.settings.autoExtrapolation !== false}
+                        <span class="val-badge auto-extrap-badge">Auto: {gameUI.effectiveExtrapolationMs} ms</span>
+                      {/if}
+                      <label class="switch-toggle" aria-label="Extrapolación automática (según ping)">
+                        <input
+                          id="toggle-auto-extrapolation"
+                          type="checkbox"
+                          checked={gameUI.settings.autoExtrapolation !== false}
+                          onchange={(e) => {
+                            soundFX.playUIClick();
+                            gameUI.saveSettings({ autoExtrapolation: (e.currentTarget as HTMLInputElement).checked });
+                          }}
+                        />
+                        <span class="toggle-slider"></span>
+                      </label>
+                    </div>
+                  </div>
+
                   <div class="slider-meta">
                     <span class="param-name label-with-tooltip">
-                      Extrapolación (0 - 250 ms)
+                      Extrapolación manual (0 - 250 ms)
                       <span
                         class="info-tooltip-wrapper"
                         tabindex="0"
@@ -1146,7 +1280,7 @@
                         type="button"
                         class="extrap-step-btn"
                         aria-label="Reducir extrapolación 5 ms"
-                        disabled={gameUI.extrapolationMs <= 0}
+                        disabled={gameUI.settings.autoExtrapolation !== false || gameUI.extrapolationMs <= 0}
                         onclick={() => {
                           soundFX.playUIClick();
                           gameUI.setExtrapolationMs(gameUI.extrapolationMs - 5);
@@ -1162,6 +1296,7 @@
                         max="250"
                         step="5"
                         aria-label="Extrapolación en milisegundos"
+                        disabled={gameUI.settings.autoExtrapolation !== false}
                         value={gameUI.extrapolationMs}
                         oninput={(e) => {
                           const raw = Number((e.currentTarget as HTMLInputElement).value);
@@ -1175,7 +1310,7 @@
                         type="button"
                         class="extrap-step-btn"
                         aria-label="Aumentar extrapolación 5 ms"
-                        disabled={gameUI.extrapolationMs >= 250}
+                        disabled={gameUI.settings.autoExtrapolation !== false || gameUI.extrapolationMs >= 250}
                         onclick={() => {
                           soundFX.playUIClick();
                           gameUI.setExtrapolationMs(gameUI.extrapolationMs + 5);
@@ -1192,6 +1327,7 @@
                     min="0"
                     max="250"
                     step="5"
+                    disabled={gameUI.settings.autoExtrapolation !== false}
                     style="--val-percent: {(gameUI.extrapolationMs / 250) * 100}%;"
                     value={gameUI.extrapolationMs}
                     oninput={(e) => {
@@ -1377,7 +1513,7 @@
                 </div>
               </div>
 
-              <!-- COLUMNA 2: Efectos de Cancha y Personalización del Balón -->
+              <!-- COLUMNA 2: Efectos Visuales de Cancha -->
               <div class="col-visuals-ball">
                 <!-- Efectos Visuales de Cancha -->
                 <div class="graphics-card">
@@ -1647,7 +1783,39 @@
                     </div>
                   </div>
                 </div>
+              </div>
+            </div>
+          </div>
 
+          <!-- Footer con botón de reset siempre visible -->
+          <div class="pane-footer">
+            <button
+              type="button"
+              class="btn-reset"
+              onclick={handleResetGraphics}
+            >
+              ↺ Restablecer valores gráficos por defecto
+            </button>
+          </div>
+        </div>
+
+      <!-- ======================================================== -->
+      <!-- SECCIÓN 3B: PERSONALIZACIÓN VISUAL (SOLO CUENTAS)        -->
+      <!-- ======================================================== -->
+      {:else if activeTab === 'visual'}
+        <div class="tab-pane">
+          <div class="section-header-row">
+            <h3 class="section-heading">Personalización visual</h3>
+          </div>
+
+          <div class="settings-scroll-area">
+            {#if !userProfile.isAuthenticated}
+              {@render guestLockCard(
+                'Personalización visual',
+                'Inicia sesión o crea una cuenta para desbloquear balones Mundialistas (2006–2026), colores sólidos y estilos de marcador oficiales.'
+              )}
+            {:else}
+              <div class="visual-customization-stack">
                 <!-- Personalización del Balón -->
                 <div class="graphics-card">
                   <div class="card-header-flex">
@@ -1658,6 +1826,7 @@
                         class="mode-choice-btn"
                         class:active={gameUI.settings.ballMode === 'texture'}
                         onclick={() => {
+                          soundFX.playUIClick();
                           gameUI.settings.ballMode = 'texture';
                           gameUI.saveSettings();
                         }}
@@ -1669,6 +1838,7 @@
                         class="mode-choice-btn"
                         class:active={gameUI.settings.ballMode === 'color'}
                         onclick={() => {
+                          soundFX.playUIClick();
                           gameUI.settings.ballMode = 'color';
                           gameUI.saveSettings();
                         }}
@@ -1680,85 +1850,26 @@
 
                   {#if gameUI.settings.ballMode === 'texture'}
                     <div class="ball-cards-grid">
-                      <!-- 1. Clásico -->
-                      <button
-                        type="button"
-                        class="ball-card"
-                        class:selected={gameUI.settings.ballSkin === 'classic'}
-                        onclick={() => {
-                          gameUI.settings.ballSkin = 'classic';
-                          gameUI.saveSettings();
-                        }}
-                      >
-                        <div class="ball-circle">
-                          <canvas width="54" height="54" use:ballPreview={{ skin: 'classic' }}></canvas>
-                        </div>
-                        <strong class="ball-name">Clásico</strong>
-                      </button>
-
-                      <!-- 2. Retro -->
-                      <button
-                        type="button"
-                        class="ball-card"
-                        class:selected={gameUI.settings.ballSkin === 'retro'}
-                        onclick={() => {
-                          gameUI.settings.ballSkin = 'retro';
-                          gameUI.saveSettings();
-                        }}
-                      >
-                        <div class="ball-circle">
-                          <canvas width="54" height="54" use:ballPreview={{ skin: 'retro' }}></canvas>
-                        </div>
-                        <strong class="ball-name">Retro</strong>
-                      </button>
-
-                      <!-- 3. Neón -->
-                      <button
-                        type="button"
-                        class="ball-card"
-                        class:selected={gameUI.settings.ballSkin === 'neon'}
-                        onclick={() => {
-                          gameUI.settings.ballSkin = 'neon';
-                          gameUI.saveSettings();
-                        }}
-                      >
-                        <div class="ball-circle">
-                          <canvas width="54" height="54" use:ballPreview={{ skin: 'neon' }}></canvas>
-                        </div>
-                        <strong class="ball-name">Neón</strong>
-                      </button>
-
-                      <!-- 4. Cyber -->
-                      <button
-                        type="button"
-                        class="ball-card"
-                        class:selected={gameUI.settings.ballSkin === 'cyber'}
-                        onclick={() => {
-                          gameUI.settings.ballSkin = 'cyber';
-                          gameUI.saveSettings();
-                        }}
-                      >
-                        <div class="ball-circle">
-                          <canvas width="54" height="54" use:ballPreview={{ skin: 'cyber' }}></canvas>
-                        </div>
-                        <strong class="ball-name">Cyber</strong>
-                      </button>
-
-                      <!-- 5. Oro -->
-                      <button
-                        type="button"
-                        class="ball-card"
-                        class:selected={gameUI.settings.ballSkin === 'gold'}
-                        onclick={() => {
-                          gameUI.settings.ballSkin = 'gold';
-                          gameUI.saveSettings();
-                        }}
-                      >
-                        <div class="ball-circle">
-                          <canvas width="54" height="54" use:ballPreview={{ skin: 'gold' }}></canvas>
-                        </div>
-                        <strong class="ball-name">Oro</strong>
-                      </button>
+                      {#each BALL_TEXTURE_OPTIONS as ball (ball.id)}
+                        <button
+                          type="button"
+                          class="ball-card"
+                          class:selected={gameUI.settings.ballSkin === ball.id}
+                          onclick={() => {
+                            soundFX.playUIClick();
+                            gameUI.settings.ballSkin = ball.id;
+                            gameUI.saveSettings();
+                          }}
+                        >
+                          <div class="ball-circle">
+                            <canvas width="54" height="54" use:ballPreview={{ skin: ball.id as BallSkin }}></canvas>
+                          </div>
+                          <strong class="ball-name">{ball.label}</strong>
+                          {#if ball.era}
+                            <span class="ball-era-badge">{ball.era}</span>
+                          {/if}
+                        </button>
+                      {/each}
                     </div>
                   {:else}
                     <div class="solid-color-picker-box">
@@ -1795,19 +1906,45 @@
                     </div>
                   {/if}
                 </div>
-              </div>
-            </div>
-          </div>
 
-          <!-- Footer con botón de reset siempre visible -->
-          <div class="pane-footer">
-            <button
-              type="button"
-              class="btn-reset"
-              onclick={handleResetGraphics}
-            >
-              ↺ Restablecer valores gráficos por defecto
-            </button>
+                <!-- Personalización del Marcador -->
+                <div class="graphics-card">
+                  <div class="card-header-flex">
+                    <h4 class="card-title">Personalización del Marcador</h4>
+                    <span class="val-badge">{SCOREBOARD_DESIGN_OPTIONS.find((s) => s.id === gameUI.settings.scoreboardDesign)?.label || 'Original LegacyX'}</span>
+                  </div>
+                  <div class="scoreboard-cards-grid">
+                    {#each SCOREBOARD_DESIGN_OPTIONS as sb (sb.id)}
+                      <button
+                        type="button"
+                        class="scoreboard-design-card"
+                        class:selected={gameUI.settings.scoreboardDesign === sb.id}
+                        onclick={() => {
+                          soundFX.playUIClick();
+                          gameUI.saveSettings({ scoreboardDesign: sb.id });
+                        }}
+                      >
+                        <div class="scoreboard-live-preview">
+                          <MatchScoreboard
+                            design={sb.id}
+                            redScore={2}
+                            blueScore={1}
+                            clockText="02:30"
+                            redKit={gameUI.settings.localKit}
+                            blueKit={gameUI.settings.visitorKit}
+                            compact={true}
+                          />
+                        </div>
+                        <div class="scoreboard-card-meta">
+                          <strong class="ball-name">{sb.label}</strong>
+                          <span class="ball-era-badge">{sb.era}</span>
+                        </div>
+                      </button>
+                    {/each}
+                  </div>
+                </div>
+              </div>
+            {/if}
           </div>
         </div>
 
@@ -1835,6 +1972,14 @@
             </h3>
           </div>
 
+          {#if !userProfile.isAuthenticated}
+            <div class="settings-scroll-area">
+              {@render guestLockCard(
+                'Equipaciones de Equipo',
+                'Inicia sesión o crea una cuenta para personalizar el nombre, siglas, colores y patrón de tus equipaciones Local y Visitante.'
+              )}
+            </div>
+          {:else}
           <!-- Bloque Superior de Identidad (Unificado) -->
           <div class="team-identity-block">
             <div class="input-group team-name-group">
@@ -2047,21 +2192,15 @@
                 <!-- Miniatura de Marcador -->
                 <div class="pitch-preview-cell">
                   <span class="pitch-preview-label">Marcador</span>
-                  <div
-                    class="scoreboard-preview-badge"
-                    style="
-                      background: linear-gradient(90deg, {currentKit.primaryColor} 50%, {currentKit.secondaryColor} 50%);
-                      border: 1.5px solid {currentKit.tertiaryColor || '#ffffff'};
-                      color: {currentKit.tertiaryColor || '#ffffff'};
-                      text-shadow: {hasOutline ? '-1px -1px 0 #000000, 1px -1px 0 #000000, -1px 1px 0 #000000, 1px 1px 0 #000000' : 'none'};
-                    "
-                  >
-                    {currentKit.tag || unifiedTeamTag || 'RED'}
-                  </div>
+                  <KitPatternBadge
+                    kit={currentKit}
+                    label={currentKit.tag || unifiedTeamTag || (activeKitTab === 'local' ? 'RED' : 'BLU')}
+                  />
                 </div>
               </div>
             </div>
           </div>
+          {/if}
         </div>
 
       <!-- ======================================================== -->
@@ -2074,6 +2213,12 @@
           </div>
 
           <div class="settings-scroll-area">
+            {#if !userProfile.isAuthenticated}
+              {@render guestLockCard(
+                'Avatar y emotes',
+                'Inicia sesión o crea una cuenta para configurar tu avatar en cancha y tus disparadores de emotes rápidos.'
+              )}
+            {:else}
             <!-- Editor compacto estilo Gatekeeper (disco izquierda, selector derecha) -->
             <div class="compact-avatar-editor">
               <div class="avatar-disc-side">
@@ -2282,6 +2427,7 @@
                 </button>
               </div>
             </div>
+            {/if}
           </div>
         </div>
       {:else if activeTab === 'account'}
@@ -2410,17 +2556,10 @@
                 {/if}
               </div>
             {:else}
-              <div class="account-guest-card">
-                <div class="account-guest-copy">
-                  <h4 class="card-title">Modo Invitado activo</h4>
-                  <p>
-                    Actualmente juegas como <code>{gameUI.nickname}</code>. Inicia sesión o crea una cuenta para guardar tu ELO, estadísticas competitivas, repeticiones en la nube y nombre oficial único.
-                  </p>
-                </div>
-                <button type="button" class="cyber-btn accent" onclick={goToAuthFromSettings}>
-                  Iniciar sesión / Crear cuenta
-                </button>
-              </div>
+              {@render guestLockCard(
+                'Cuenta y Perfil Oficial',
+                'Inicia sesión o crea una cuenta para guardar tu ELO, estadísticas competitivas, repeticiones en la nube y nombre oficial único.'
+              )}
             {/if}
           </div>
         </div>
@@ -3203,8 +3342,8 @@
 
   .ball-cards-grid {
     display: grid;
-    grid-template-columns: repeat(5, minmax(0, 1fr));
-    gap: 0.5rem;
+    grid-template-columns: repeat(auto-fill, minmax(104px, 1fr));
+    gap: 0.55rem;
   }
 
   .ball-card {
@@ -3696,21 +3835,6 @@
     color: rgba(255, 255, 255, 0.7);
     letter-spacing: 0.08em;
     text-transform: uppercase;
-  }
-
-  .scoreboard-preview-badge {
-    min-width: 48px;
-    height: 28px;
-    padding: 0 0.65rem;
-    border-radius: 4px;
-    font-family: 'Space Grotesk', system-ui, sans-serif;
-    font-weight: 700;
-    font-size: 0.85rem;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    letter-spacing: 0.05em;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.6);
   }
 
   .tactical-pitch-lines {
@@ -4562,6 +4686,134 @@
     font-size: 0.84rem;
     line-height: 1.45;
     color: #cbd5e1;
+  }
+
+  .tab-lock-icon {
+    margin-left: auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: #94a3b8;
+    opacity: 0.85;
+  }
+
+  .tab-btn.locked:hover .tab-lock-icon {
+    color: #fbbf24;
+  }
+
+  .guest-lock-card {
+    display: flex;
+    flex-direction: column;
+    gap: 0.85rem;
+    padding: 1.25rem;
+    background: rgba(15, 23, 42, 0.92);
+    border: 1px solid rgba(251, 191, 36, 0.35);
+    border-radius: 0.75rem;
+  }
+
+  .guest-lock-header {
+    display: flex;
+    align-items: center;
+  }
+
+  .guest-lock-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.3rem 0.65rem;
+    border-radius: 999px;
+    background: rgba(251, 191, 36, 0.14);
+    border: 1px solid rgba(251, 191, 36, 0.4);
+    color: #fbbf24;
+    font-size: 0.74rem;
+    font-weight: 800;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+
+  .auto-extrap-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    margin-bottom: 0.45rem;
+  }
+
+  .auto-extrap-controls {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+  }
+
+  .auto-extrap-badge {
+    background: rgba(0, 229, 255, 0.14);
+    border: 1px solid rgba(0, 229, 255, 0.35);
+    color: #00e5ff;
+  }
+
+  .visual-customization-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+  }
+
+  .ball-era-badge {
+    margin-top: 0.2rem;
+    padding: 0.1rem 0.42rem;
+    border-radius: 999px;
+    background: rgba(0, 229, 255, 0.12);
+    border: 1px solid rgba(0, 229, 255, 0.28);
+    color: #7dd3fc;
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+  }
+
+  .scoreboard-cards-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+    gap: 0.75rem;
+  }
+
+  .scoreboard-design-card {
+    display: flex;
+    flex-direction: column;
+    gap: 0.55rem;
+    padding: 0.7rem;
+    background: rgba(11, 17, 30, 0.78);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 0.6rem;
+    cursor: pointer;
+    text-align: left;
+    transition: border-color 0.15s ease, background 0.15s ease;
+  }
+
+  .scoreboard-design-card:hover {
+    border-color: rgba(0, 229, 255, 0.45);
+    background: rgba(0, 229, 255, 0.05);
+  }
+
+  .scoreboard-design-card.selected {
+    border-color: #00e5ff;
+    background: rgba(0, 229, 255, 0.12);
+    box-shadow: 0 0 12px rgba(0, 229, 255, 0.18);
+  }
+
+  .scoreboard-live-preview {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0.35rem;
+    background: rgba(6, 10, 20, 0.85);
+    border-radius: 0.45rem;
+    overflow: hidden;
+  }
+
+  .scoreboard-card-meta {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
   }
 
   /* Responsive Adjustments */

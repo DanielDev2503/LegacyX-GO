@@ -32,7 +32,54 @@ export type ModalType =
   | 'stats'
   | 'replayViewer';
 
-export type BallSkinType = 'classic' | 'retro' | 'neon' | 'cyber' | 'gold' | 'solid';
+export type BallSkinType =
+  | 'classic'
+  | 'retro'
+  | 'neon'
+  | 'cyber'
+  | 'gold'
+  | 'solid'
+  | 'wc2006'
+  | 'wc2010'
+  | 'wc2014'
+  | 'wc2018'
+  | 'wc2022'
+  | 'wc2026';
+
+export type ScoreboardDesignType =
+  | 'original'
+  | 'wc2006'
+  | 'wc2010'
+  | 'wc2014'
+  | 'wc2018'
+  | 'wc2022'
+  | 'wc2026';
+
+export const VALID_BALL_TEXTURE_SKINS: readonly Exclude<BallSkinType, 'solid'>[] = [
+  'classic',
+  'retro',
+  'neon',
+  'cyber',
+  'gold',
+  'wc2006',
+  'wc2010',
+  'wc2014',
+  'wc2018',
+  'wc2022',
+  'wc2026'
+];
+
+export const VALID_SCOREBOARD_DESIGNS: readonly ScoreboardDesignType[] = [
+  'original',
+  'wc2006',
+  'wc2010',
+  'wc2014',
+  'wc2018',
+  'wc2022',
+  'wc2026'
+];
+
+export type SettingsTabType = 'controls' | 'audio' | 'video' | 'visual' | 'kits' | 'avatar' | 'club' | 'account';
 
 export interface SlidingScoreEvent {
   id: string;
@@ -211,14 +258,16 @@ export interface SettingsConfig {
   minimapMode: 'radar' | 'overlay' | 'hidden' | 'always' | 'auto' | 'off';
   minimapPosition: 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right';
 
-  // Personalización del Balón (Diseño vs Color)
+  // Personalización visual (Balón y Marcador)
   ballMode: 'texture' | 'color';
   ballSkin: BallSkinType | 'futsal';
   ballCustomColor: string;
+  scoreboardDesign: ScoreboardDesignType;
 
   // Compatibility fields
   fpsCap: number;
   extrapolationMs: number;
+  autoExtrapolation: boolean;
   netDeformationEnabled: boolean;
   showStatsMonitor: boolean;
 
@@ -286,9 +335,11 @@ export const DEFAULT_SETTINGS: SettingsConfig = {
   ballMode: 'texture',
   ballSkin: 'classic',
   ballCustomColor: '#ffffff',
+  scoreboardDesign: 'original',
 
   fpsCap: 60,
   extrapolationMs: 0,
+  autoExtrapolation: true,
   netDeformationEnabled: true,
   showStatsMonitor: true,
 
@@ -453,10 +504,14 @@ export function normalizeBallSettings<
       ballCustomColor
     };
   }
+  const candidateSkin = String(raw.ballSkin || '');
+  const isValidTexture =
+    candidateSkin === 'futsal' ||
+    (VALID_BALL_TEXTURE_SKINS as readonly string[]).includes(candidateSkin);
   return {
     ...raw,
     ballMode: raw.ballMode === 'color' ? 'color' : DEFAULT_SETTINGS.ballMode,
-    ballSkin: raw.ballSkin || DEFAULT_SETTINGS.ballSkin,
+    ballSkin: (isValidTexture ? raw.ballSkin : DEFAULT_SETTINGS.ballSkin) as BallSkinType | 'futsal',
     ballCustomColor
   };
 }
@@ -795,7 +850,68 @@ class GameUIStore {
   public settings = $state<SettingsConfig>({ ...DEFAULT_SETTINGS });
   public extrapolationMs = $state<number>(0);
   public activeBanner = $state<MatchBannerPayload>({ kind: 'NONE' });
-  public activeSettingsTab = $state<'controls' | 'audio' | 'video' | 'kits' | 'avatar' | 'club' | 'account'>('controls');
+  public activeSettingsTab = $state<SettingsTabType>('controls');
+  private _authReader = $state<(() => boolean) | null>(null);
+
+  public setAuthStatusReader(reader: () => boolean): void {
+    this._authReader = reader;
+  }
+
+  public get isAuthenticatedUser(): boolean {
+    if (this._authReader) {
+      return this._authReader();
+    }
+    if (typeof localStorage !== 'undefined') {
+      try {
+        const raw = localStorage.getItem('legacyx_auth_session_v1');
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          return Boolean(parsed?.isAuthenticated && !parsed?.isGuest);
+        }
+      } catch {
+        // Ignore malformed storage session
+      }
+    }
+    return false;
+  }
+
+  private _effectiveExtrapolationMs = $derived.by(() => {
+    if (this.settings.autoExtrapolation === false) {
+      return Math.max(0, Math.min(250, Math.round(Number(this.settings.extrapolationMs) || 0)));
+    }
+    const p = Math.max(0, Number(this.pingMs) || 0);
+    if (p <= 20) return 0;
+    if (p >= 200) return 85;
+    return Math.round(((p - 20) / 180) * 85);
+  });
+
+  public get effectiveExtrapolationMs(): number {
+    return this._effectiveExtrapolationMs;
+  }
+
+  public get effectiveBallMode(): 'texture' | 'color' {
+    return this.isAuthenticatedUser ? this.settings.ballMode : DEFAULT_SETTINGS.ballMode;
+  }
+
+  public get effectiveBallSkin(): BallSkinType | 'futsal' {
+    return this.isAuthenticatedUser ? this.settings.ballSkin : DEFAULT_SETTINGS.ballSkin;
+  }
+
+  public get effectiveBallCustomColor(): string {
+    return this.isAuthenticatedUser ? this.settings.ballCustomColor : DEFAULT_SETTINGS.ballCustomColor;
+  }
+
+  public get effectiveScoreboardDesign(): ScoreboardDesignType {
+    return this.isAuthenticatedUser ? this.settings.scoreboardDesign : DEFAULT_SETTINGS.scoreboardDesign;
+  }
+
+  public get effectiveLocalKit(): TeamKitConfig {
+    return this.isAuthenticatedUser ? this.settings.localKit : GameUIStore.DEFAULT_RED_KIT;
+  }
+
+  public get effectiveVisitorKit(): TeamKitConfig {
+    return this.isAuthenticatedUser ? this.settings.visitorKit : GameUIStore.DEFAULT_BLUE_KIT;
+  }
   public keybinds = $state<KeybindConfig>({
     up: [...DEFAULT_KEYBINDS.up],
     down: [...DEFAULT_KEYBINDS.down],
@@ -851,10 +967,16 @@ class GameUIStore {
     | 'PAUSED'
     | 'RESUME_COUNTDOWN'
     | 'GOAL'
+    | 'GOAL_REPLAY'
     | 'OVERTIME'
     | 'CELEBRATION'
     | 'STATS'
   >('STOPPED');
+  public activeGoalScorerId = $state<number | null>(null);
+  private _isGoalReplay = $derived(this.fsmPhase === 'GOAL_REPLAY');
+  public get isGoalReplay(): boolean {
+    return this._isGoalReplay;
+  }
   public previousMatchPhase = $state<number>(0);
   public hasJoinedInitialSync = $state<boolean>(false);
   public isGoldenGoal = $state(false);
@@ -863,6 +985,11 @@ class GameUIStore {
   public matchTimerSeconds = $state<number>(0);
   public onChatAdded?: (entry: ChatEntry) => void;
   public onBannerApplied?: (banner: MatchBannerPayload) => void;
+  public onHudStateChange?: (kind: string, detail?: any) => void;
+
+  private emitHudStateChange(kind: string, detail?: any): void {
+    this.onHudStateChange?.(kind, detail);
+  }
   private slidingEventTimeout: ReturnType<typeof setTimeout> | null = null;
   private slidingEventTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
@@ -907,6 +1034,7 @@ class GameUIStore {
     }
     this.slidingEventQueue = nextQueue;
     this.currentSlidingEvent = fullEvent;
+    this.emitHudStateChange('score_event', fullEvent);
 
     const timer = setTimeout(() => {
       this.slidingEventTimers.delete(fullEvent.id);
@@ -963,7 +1091,16 @@ class GameUIStore {
   public masterVolume = $state(0.5);
 
   // Diapositiva activa del carrusel ('MENU' | 'STATS')
-  public activeSlide = $state<'MENU' | 'STATS'>('MENU');
+  private _activeSlide = $state<'MENU' | 'STATS'>('MENU');
+  public get activeSlide(): 'MENU' | 'STATS' {
+    return this._activeSlide;
+  }
+  public set activeSlide(value: 'MENU' | 'STATS') {
+    if (this._activeSlide !== value) {
+      this._activeSlide = value;
+      this.emitHudStateChange('ui_overlay', { activeModal: this.activeModal, activeSlide: value });
+    }
+  }
 
   // Ajuste de sala: permitir a capitanes conmutar su kit
   public allowCaptainKitSwitch = $state(false);
@@ -1017,6 +1154,7 @@ class GameUIStore {
     const normalized: MatchBannerPayload = !banner || !banner.kind ? { kind: 'NONE' } : { ...banner };
     this.activeBanner = normalized;
     this.onBannerApplied?.(normalized);
+    this.emitHudStateChange('banner', normalized);
   }
 
   public pushLocalSystemNotice(text: string): void {
@@ -1143,6 +1281,13 @@ class GameUIStore {
 
   constructor() {
     this.loadPersistedState();
+    void import('./userProfile.svelte.js')
+      .then((mod) => {
+        if (mod?.userProfile && !this._authReader) {
+          this._authReader = () => Boolean(mod.userProfile.isAuthenticated);
+        }
+      })
+      .catch(() => {});
     if (typeof window !== 'undefined') {
       this.initSignaling();
     }
@@ -1274,12 +1419,23 @@ class GameUIStore {
           String(parsed.ballSkin || '') === 'solid' ||
           localStorage.getItem('haxball_ball_skin') === 'solid';
 
+        const scoreboardDesign: ScoreboardDesignType = (
+          VALID_SCOREBOARD_DESIGNS as readonly string[]
+        ).includes(String(parsed.scoreboardDesign || ''))
+          ? (parsed.scoreboardDesign as ScoreboardDesignType)
+          : DEFAULT_SETTINGS.scoreboardDesign;
+
         this.settings = {
           ...DEFAULT_SETTINGS,
           ...parsed,
           ballMode: normalizedBall.ballMode,
           ballSkin: normalizedBall.ballSkin,
           ballCustomColor: normalizedBall.ballCustomColor,
+          scoreboardDesign,
+          autoExtrapolation:
+            typeof parsed.autoExtrapolation === 'boolean'
+              ? parsed.autoExtrapolation
+              : DEFAULT_SETTINGS.autoExtrapolation,
           cameraZoom: clampedZoom,
           chatOpacity: normalizedChatOpacityPct,
           localKit,
@@ -1323,9 +1479,9 @@ class GameUIStore {
       const hostEntry = this.rosterPlayers.find((p) => p.id === this.localPlayerId);
       if (hostEntry) {
         hostEntry.avatarType = this.avatarMode;
-        hostEntry.kit = { ...this.settings.localKit };
-        hostEntry.localKit = { ...this.settings.localKit };
-        hostEntry.visitorKit = { ...this.settings.visitorKit };
+        hostEntry.kit = { ...this.effectiveLocalKit };
+        hostEntry.localKit = { ...this.effectiveLocalKit };
+        hostEntry.visitorKit = { ...this.effectiveVisitorKit };
       }
       const rawKeybinds = localStorage.getItem(KEYBINDS_STORAGE_KEY);
       if (currentVersion < SETTINGS_VERSION || !rawKeybinds) {
@@ -1451,27 +1607,29 @@ class GameUIStore {
     soundFX.crowdSoundEnabled = this.settings.crowdSoundEnabled;
     soundFX.ambientSoundEnabled = this.settings.ambientSoundEnabled;
 
-    // Sincronizar kits con redKit y blueKit para compatibilidad
-    if (this.settings.localKit) {
-      this.redKit.primaryColor = this.settings.localKit.primaryColor;
-      this.redKit.secondaryColor = this.settings.localKit.secondaryColor;
-      this.redKit.tertiaryColor = this.settings.localKit.tertiaryColor || '#ffffff';
-      this.redKit.outlineColor = this.settings.localKit.outlineColor || '#000000';
-      this.redKit.pattern = this.settings.localKit.pattern;
+    // Sincronizar kits efectivos con redKit y blueKit para compatibilidad
+    const activeLocalKit = this.effectiveLocalKit;
+    const activeVisitorKit = this.effectiveVisitorKit;
+    if (activeLocalKit) {
+      this.redKit.primaryColor = activeLocalKit.primaryColor;
+      this.redKit.secondaryColor = activeLocalKit.secondaryColor;
+      this.redKit.tertiaryColor = activeLocalKit.tertiaryColor || '#ffffff';
+      this.redKit.outlineColor = activeLocalKit.outlineColor || '#000000';
+      this.redKit.pattern = activeLocalKit.pattern;
     }
-    if (this.settings.visitorKit) {
-      this.blueKit.primaryColor = this.settings.visitorKit.primaryColor;
-      this.blueKit.secondaryColor = this.settings.visitorKit.secondaryColor;
-      this.blueKit.tertiaryColor = this.settings.visitorKit.tertiaryColor || '#ffffff';
-      this.blueKit.outlineColor = this.settings.visitorKit.outlineColor || '#000000';
-      this.blueKit.pattern = this.settings.visitorKit.pattern;
+    if (activeVisitorKit) {
+      this.blueKit.primaryColor = activeVisitorKit.primaryColor;
+      this.blueKit.secondaryColor = activeVisitorKit.secondaryColor;
+      this.blueKit.tertiaryColor = activeVisitorKit.tertiaryColor || '#ffffff';
+      this.blueKit.outlineColor = activeVisitorKit.outlineColor || '#000000';
+      this.blueKit.pattern = activeVisitorKit.pattern;
     }
 
     const localEntry = this.rosterPlayers.find((p) => p.id === this.localPlayerId);
     if (localEntry) {
-      localEntry.kit = { ...this.settings.localKit };
-      localEntry.localKit = { ...this.settings.localKit };
-      localEntry.visitorKit = { ...this.settings.visitorKit };
+      localEntry.kit = { ...activeLocalKit };
+      localEntry.localKit = { ...activeLocalKit };
+      localEntry.visitorKit = { ...activeVisitorKit };
     }
 
     if (typeof localStorage !== 'undefined') {
@@ -1486,6 +1644,12 @@ class GameUIStore {
     }
     this.onSettingsChanged?.(this.settings);
     this.onProfileUpdated?.();
+    this.emitHudStateChange('kits_updated', {
+      redKitVariant: this.redKitVariant,
+      blueKitVariant: this.blueKitVariant,
+      localKit: activeLocalKit,
+      visitorKit: activeVisitorKit
+    });
   }
 
   public resetGraphicsSettings(): void {
@@ -1515,7 +1679,9 @@ class GameUIStore {
     this.settings.ballMode = DEFAULT_SETTINGS.ballMode;
     this.settings.ballSkin = DEFAULT_SETTINGS.ballSkin;
     this.settings.ballCustomColor = DEFAULT_SETTINGS.ballCustomColor;
+    this.settings.scoreboardDesign = DEFAULT_SETTINGS.scoreboardDesign;
     this.settings.extrapolationMs = DEFAULT_SETTINGS.extrapolationMs;
+    this.settings.autoExtrapolation = DEFAULT_SETTINGS.autoExtrapolation;
     this.extrapolationMs = DEFAULT_SETTINGS.extrapolationMs;
     this.saveSettings();
   }
@@ -1676,11 +1842,20 @@ class GameUIStore {
   }
 
   public get redTeamKit(): TeamKitConfig {
-    return this.settings.localKit;
+    return this.effectiveLocalKit;
   }
 
   public get blueTeamKit(): TeamKitConfig {
-    return this.settings.visitorKit;
+    return this.effectiveVisitorKit;
+  }
+
+  private isGuestPlayer(player: RosterPlayer): boolean {
+    const nick = (player.nickname || player.name || '').trim();
+    if (/^inv_/i.test(nick)) return true;
+    if (player.id === this.localPlayerId && !this.isAuthenticatedUser) {
+      return !nick || /^inv_/i.test(nick) || nick === 'Jugador';
+    }
+    return false;
   }
 
   public static readonly DEFAULT_RED_KIT: TeamKitConfig = {
@@ -1718,11 +1893,13 @@ class GameUIStore {
   public setRedKitVariant(variant: 'home' | 'away'): void {
     this.redKitVariant = variant;
     this.onRoomConfigChanged?.({ redKitVariant: variant });
+    this.emitHudStateChange('kits_updated', { redKitVariant: variant, blueKitVariant: this.blueKitVariant });
   }
 
   public setBlueKitVariant(variant: 'home' | 'away'): void {
     this.blueKitVariant = variant;
     this.onRoomConfigChanged?.({ blueKitVariant: variant });
+    this.emitHudStateChange('kits_updated', { redKitVariant: this.redKitVariant, blueKitVariant: variant });
   }
 
   /** Equipación activa del capitán RED (índice 0): su kit Local por defecto, o Visitante si se conmuta. */
@@ -1732,9 +1909,12 @@ class GameUIStore {
       return GameUIStore.DEFAULT_RED_KIT;
     }
     const cap = redPlayers[0];
+    if (this.isGuestPlayer(cap)) {
+      return GameUIStore.DEFAULT_RED_KIT;
+    }
     const kit = this.redKitVariant === 'home'
-      ? (cap.localKit || cap.kit || this.settings.localKit || GameUIStore.DEFAULT_RED_KIT)
-      : (cap.visitorKit || cap.kit || this.settings.visitorKit || GameUIStore.DEFAULT_RED_KIT);
+      ? (cap.localKit || cap.kit || this.effectiveLocalKit || GameUIStore.DEFAULT_RED_KIT)
+      : (cap.visitorKit || cap.kit || this.effectiveVisitorKit || GameUIStore.DEFAULT_RED_KIT);
     return kit;
   }
 
@@ -1745,9 +1925,12 @@ class GameUIStore {
       return GameUIStore.DEFAULT_BLUE_KIT;
     }
     const cap = bluePlayers[0];
+    if (this.isGuestPlayer(cap)) {
+      return GameUIStore.DEFAULT_BLUE_KIT;
+    }
     const kit = this.blueKitVariant === 'away'
-      ? (cap.visitorKit || cap.kit || this.settings.visitorKit || GameUIStore.DEFAULT_BLUE_KIT)
-      : (cap.localKit || cap.kit || this.settings.localKit || GameUIStore.DEFAULT_BLUE_KIT);
+      ? (cap.visitorKit || cap.kit || this.effectiveVisitorKit || GameUIStore.DEFAULT_BLUE_KIT)
+      : (cap.localKit || cap.kit || this.effectiveLocalKit || GameUIStore.DEFAULT_BLUE_KIT);
     return kit;
   }
 
@@ -1818,6 +2001,7 @@ class GameUIStore {
       return;
     }
     this.activeBanner = { kind: 'NONE' };
+    this.activeGoalScorerId = null;
     this.fsmPhase = 'STOPPED';
     this.previousMatchPhase = 0;
     this.onStopMatch?.();
@@ -1875,6 +2059,11 @@ class GameUIStore {
       sum += this.pingSamples[i]!;
     }
     this.avgPingMs = this.pingSampleCount > 0 ? Math.round(sum / this.pingSampleCount) : this.pingMs;
+    this.emitHudStateChange('telemetry', {
+      pingMs: this.pingMs,
+      avgPingMs: this.avgPingMs,
+      fps: this.fps
+    });
   }
 
   public resetTelemetry(): void {
@@ -1894,6 +2083,7 @@ class GameUIStore {
       this.fsmPhase === 'PAUSED' ||
       this.fsmPhase === 'RESUME_COUNTDOWN' ||
       this.fsmPhase === 'GOAL' ||
+      this.fsmPhase === 'GOAL_REPLAY' ||
       this.fsmPhase === 'OVERTIME' ||
       this.fsmPhase === 'CELEBRATION'
     );
@@ -1909,6 +2099,7 @@ class GameUIStore {
       case 'PAUSED': return 2.1;
       case 'RESUME_COUNTDOWN': return 2.2;
       case 'GOAL': return 3;
+      case 'GOAL_REPLAY': return 3.5;
       case 'CELEBRATION': return 4;
       case 'OVERTIME': return 2;
       case 'WARMUP': return 1;
@@ -1925,24 +2116,30 @@ class GameUIStore {
     }
     if (phase === 0) {
       this.fsmPhase = 'STOPPED';
+      this.activeGoalScorerId = null;
     } else if (phase === 0.5) {
       this.fsmPhase = 'PRE_MATCH_VS';
     } else if (phase === 0.6) {
       this.fsmPhase = 'START_COUNTDOWN';
     } else if (phase === 1) {
       this.fsmPhase = 'KICKOFF';
+      this.activeGoalScorerId = null;
     } else if (phase === 2) {
       this.fsmPhase = 'PLAYING';
+      this.activeGoalScorerId = null;
     } else if (phase === 2.1) {
       this.fsmPhase = 'PAUSED';
     } else if (phase === 2.2) {
       this.fsmPhase = 'RESUME_COUNTDOWN';
     } else if (phase === 3) {
       this.fsmPhase = 'GOAL';
+    } else if (phase === 3.5) {
+      this.fsmPhase = 'GOAL_REPLAY';
     } else if (phase === 4) {
       this.fsmPhase = 'CELEBRATION';
     } else if (phase === 5) {
       this.fsmPhase = 'STATS';
+      this.activeGoalScorerId = null;
     }
   }
 
@@ -1983,6 +2180,7 @@ class GameUIStore {
       this.modalStack.push(this.activeModal);
     }
     this.activeModal = resolved;
+    this.emitHudStateChange('ui_overlay', { activeModal: this.activeModal, activeSlide: this._activeSlide });
   }
 
   public openOverlay(modal: ModalType): void {
@@ -2129,6 +2327,7 @@ class GameUIStore {
     }
     this.pendingPasswordRoom = null;
     this.pendingPasswordInput = '';
+    this.emitHudStateChange('ui_overlay', { activeModal: this.activeModal, activeSlide: this._activeSlide });
   }
 
   public closeModal(): void {
@@ -2140,6 +2339,7 @@ class GameUIStore {
     this.activeModal = 'NONE';
     this.pendingPasswordRoom = null;
     this.pendingPasswordInput = '';
+    this.emitHudStateChange('ui_overlay', { activeModal: this.activeModal, activeSlide: this._activeSlide });
   }
 
   public toggleMute(): void {
@@ -2367,6 +2567,7 @@ class GameUIStore {
       this.chatMessages.shift();
     }
     this.onChatAdded?.(entry);
+    this.emitHudStateChange('chat', entry);
   }
 
   public resetRoomSession(): void {
@@ -2386,6 +2587,7 @@ class GameUIStore {
     this.matchTimeFormatted = '00:00';
     this.matchTimerSeconds = 0;
     this.activeBanner = { kind: 'NONE' };
+    this.activeGoalScorerId = null;
     this.matchPhase = 0;
     this.previousMatchPhase = 0;
     this.hasJoinedInitialSync = false;
@@ -2460,13 +2662,14 @@ class GameUIStore {
     this.isAdmin = true;
     this.localPlayerId = 1;
 
+    this.activeGoalScorerId = null;
     const profile = {
       nickname: this.nickname || 'Jugador',
       avatar: this.avatarValue || '1',
       avatarType: this.avatarMode || 'letters',
-      kit: { ...this.settings.localKit },
-      localKit: { ...this.settings.localKit },
-      visitorKit: { ...this.settings.visitorKit }
+      kit: { ...this.effectiveLocalKit },
+      localKit: { ...this.effectiveLocalKit },
+      visitorKit: { ...this.effectiveVisitorKit }
     };
 
     const localPlayer: RosterPlayer = {
