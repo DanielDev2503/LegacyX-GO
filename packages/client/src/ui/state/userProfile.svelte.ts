@@ -90,10 +90,34 @@ export function validateAccountUsername(raw: string): { valid: boolean; error?: 
   if (/^inv_/i.test(trimmed)) {
     return { valid: false, error: 'El prefijo inv_ está reservado exclusivamente para invitados.' };
   }
-  if (!/^[a-zA-Z0-9_]{3,15}$/.test(trimmed)) {
-    return { valid: false, error: 'Solo se permiten letras, números y guiones bajos.' };
+  if (!/^[a-zA-Z0-9_.-]{3,15}$/.test(trimmed)) {
+    return {
+      valid: false,
+      error: 'Solo se permiten letras, números, puntos, guiones y guiones bajos.'
+    };
   }
   return { valid: true };
+}
+
+function decodeJwtExpirationMs(token: string | null): number | null {
+  if (!token || typeof token !== 'string') return null;
+  const parts = token.split('.');
+  if (parts.length !== 3 || !parts[1]) return null;
+  try {
+    const normalized = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+    const padLength = (4 - (normalized.length % 4)) % 4;
+    const padded = normalized + '='.repeat(padLength);
+    const decoded =
+      typeof atob === 'function'
+        ? atob(padded)
+        : Buffer.from(padded, 'base64').toString('utf8');
+    const payload = JSON.parse(decoded) as { exp?: unknown };
+    return typeof payload.exp === 'number' && Number.isFinite(payload.exp)
+      ? payload.exp * 1000
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 class UserProfileStore {
@@ -155,6 +179,7 @@ class UserProfileStore {
     'VITE_SUPABASE_PUBLISHABLE_KEY',
     DEFAULT_SUPABASE_PUBLISHABLE_KEY
   );
+  private refreshInFlight: Promise<string | null> | null = null;
 
   constructor() {
     this.loadPersistedSession();
@@ -269,6 +294,74 @@ class UserProfileStore {
     }
   }
 
+  public async ensureValidAccessToken(): Promise<string | null> {
+    if (!this.jwt && !this.refreshToken) return null;
+
+    const expMs = decodeJwtExpirationMs(this.jwt);
+    if (this.jwt && expMs !== null && expMs - Date.now() > 60_000) {
+      return this.jwt;
+    }
+
+    if (!this.refreshToken) {
+      this.clearExpiredSession();
+      return null;
+    }
+
+    if (this.refreshInFlight) {
+      return this.refreshInFlight;
+    }
+
+    const currentRefreshToken = this.refreshToken;
+    this.refreshInFlight = (async () => {
+      try {
+        const res = await fetch(`${this.supabaseUrl}/auth/v1/token?grant_type=refresh_token`, {
+          method: 'POST',
+          headers: {
+            apikey: this.supabaseKey,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ refresh_token: currentRefreshToken })
+        });
+
+        if (!res.ok) {
+          if (res.status === 400 || res.status === 401 || res.status === 403) {
+            this.clearExpiredSession();
+            return null;
+          }
+          if (expMs !== null && expMs > Date.now() && this.jwt) {
+            return this.jwt;
+          }
+          this.clearExpiredSession();
+          return null;
+        }
+
+        const data = await res.json().catch(() => ({}));
+        const nextAccess = typeof data?.access_token === 'string' ? data.access_token : null;
+        if (!nextAccess) {
+          this.clearExpiredSession();
+          return null;
+        }
+
+        this.jwt = nextAccess;
+        if (typeof data.refresh_token === 'string' && data.refresh_token.trim()) {
+          this.refreshToken = data.refresh_token;
+        }
+        this.persistSession();
+        return this.jwt;
+      } catch {
+        if (expMs !== null && expMs > Date.now() && this.jwt) {
+          return this.jwt;
+        }
+        this.clearExpiredSession();
+        return null;
+      } finally {
+        this.refreshInFlight = null;
+      }
+    })();
+
+    return this.refreshInFlight;
+  }
+
   public loadPersistedSession(): void {
     if (typeof localStorage === 'undefined') return;
     try {
@@ -280,6 +373,15 @@ class UserProfileStore {
       }
       const parsed = JSON.parse(raw);
       if (parsed && parsed.jwt && parsed.id && parsed.username && parsed.isVerified) {
+        const expMs = decodeJwtExpirationMs(parsed.jwt);
+        const isExpiredOrMalformed = expMs === null || expMs <= Date.now();
+        if (isExpiredOrMalformed && !parsed.refreshToken) {
+          localStorage.removeItem(AUTH_SESSION_STORAGE_KEY);
+          this.isGuest = true;
+          this.isAuthenticated = false;
+          return;
+        }
+
         this.jwt = parsed.jwt;
         this.refreshToken = parsed.refreshToken ?? null;
         this.id = parsed.id;
@@ -296,6 +398,9 @@ class UserProfileStore {
         this.isAuthenticated = true;
         this.isGuest = false;
         gameUI.setPlayerNickname(this.username);
+        if ((expMs === null || expMs - Date.now() <= 60_000) && this.refreshToken && typeof window !== 'undefined') {
+          void this.ensureValidAccessToken();
+        }
       }
     } catch {
       this.isGuest = true;
@@ -328,18 +433,45 @@ class UserProfileStore {
     return guestNick;
   }
 
-  public logout(): void {
+  private resetSessionFields(): void {
     this.isAuthenticated = false;
     this.isGuest = true;
     this.jwt = null;
     this.refreshToken = null;
     this.id = null;
+    this.username = '';
+    this.displayName = '';
+    this.email = '';
     this.role = 'jugador';
     this.isVerified = false;
+    this.nameChanged = false;
+    this.elo = 1000;
+    this.stats = {
+      matchesPlayed: 0,
+      wins: 0,
+      losses: 0,
+      draws: 0,
+      goals: 0,
+      assists: 0,
+      saves: 0,
+      mvpCount: 0
+    };
     this.personalRank = null;
-    this.authError = null;
+    this.userReplays = [];
     this.authNotice = null;
     this.persistSession();
+  }
+
+  private clearExpiredSession(): void {
+    this.resetSessionFields();
+    this.authError = 'Tu sesión expiró. Vuelve a iniciar sesión.';
+  }
+
+  public logout(): void {
+    this.resetSessionFields();
+    this.authError = null;
+    gameUI.setPlayerNickname('');
+    gameUI.navigateTo('GATEKEEPER');
   }
 
   private applyServerProfilePayload(payload: any): void {
@@ -353,7 +485,7 @@ class UserProfileStore {
     this.email = profile.email ?? this.email;
     this.role = (profile.role as UserRole) ?? 'jugador';
     this.isVerified = Boolean(profile.is_verified ?? profile.isVerified ?? true);
-    this.nameChanged = Boolean(profile.name_changed ?? false);
+    this.nameChanged = Boolean(profile.nameChanged ?? profile.name_changed ?? false);
     this.elo = Number(ranking.elo ?? profile.elo ?? 1000);
     this.stats = {
       matchesPlayed: Number(ranking.matches_played ?? ranking.matchesPlayed ?? 0),
@@ -912,23 +1044,25 @@ class UserProfileStore {
 
   public async changeUsernameOnce(newName: string): Promise<boolean> {
     const clean = newName.trim();
-    if (!this.isAuthenticated || !this.id || !this.jwt) {
+    if (!this.isAuthenticated || !this.id) {
       throw new Error('Debes iniciar sesión para cambiar tu nombre de usuario.');
     }
     if (this.nameChanged) {
       throw new Error('El nombre de usuario ya ha sido cambiado anteriormente y no puede modificarse más.');
     }
-    if (clean.length < 3 || clean.length > 20) {
-      throw new Error('El nombre debe tener entre 3 y 20 caracteres.');
+    const validation = validateAccountUsername(clean);
+    if (!validation.valid) {
+      throw new Error(validation.error || 'Nombre de usuario inválido.');
     }
-    if (!/^[a-zA-Z0-9_\- ]+$/.test(clean)) {
-      throw new Error('El nombre solo puede contener letras, números, guiones y espacios.');
+    const token = await this.ensureValidAccessToken();
+    if (!token) {
+      throw new Error(this.authError || 'Tu sesión expiró. Vuelve a iniciar sesión.');
     }
 
     const res = await fetch(`${this.supabaseUrl}/rest/v1/profiles?id=eq.${encodeURIComponent(this.id)}`, {
       method: 'PATCH',
       headers: {
-        ...this.supabaseHeaders(this.jwt),
+        ...this.supabaseHeaders(token),
         Prefer: 'return=representation'
       },
       body: JSON.stringify({
@@ -952,7 +1086,12 @@ class UserProfileStore {
   }
 
   public async fetchUserReplays(): Promise<UserReplayRow[]> {
-    if (!this.isAuthenticated || !this.id || !this.jwt) {
+    if (!this.isAuthenticated || !this.id) {
+      this.userReplays = [];
+      return [];
+    }
+    const token = await this.ensureValidAccessToken();
+    if (!token) {
       this.userReplays = [];
       return [];
     }
@@ -960,7 +1099,7 @@ class UserProfileStore {
     try {
       const res = await fetch(
         `${this.supabaseUrl}/rest/v1/user_replays?user_id=eq.${encodeURIComponent(this.id)}&order=created_at.desc`,
-        { headers: this.supabaseHeaders(this.jwt) }
+        { headers: this.supabaseHeaders(token) }
       );
       if (res.ok) {
         const rows: UserReplayRow[] = await res.json();
@@ -977,8 +1116,12 @@ class UserProfileStore {
   }
 
   public async uploadUserReplay(replayFile: LxrReplayFile, customName?: string): Promise<UserReplayRow> {
-    if (!this.isAuthenticated || !this.id || !this.jwt) {
+    if (!this.isAuthenticated || !this.id) {
       throw new Error('Debes iniciar sesión con Google para guardar repeticiones en la nube.');
+    }
+    const token = await this.ensureValidAccessToken();
+    if (!token) {
+      throw new Error(this.authError || 'Tu sesión expiró. Vuelve a iniciar sesión.');
     }
 
     // 1. Obtener lista actual para certificar el límite de 10
@@ -989,6 +1132,11 @@ class UserProfileStore {
       for (const old of toDelete) {
         await this.deleteUserReplay(old.id, old.storage_path);
       }
+    }
+
+    const activeToken = (await this.ensureValidAccessToken()) ?? token;
+    if (!activeToken) {
+      throw new Error(this.authError || 'Tu sesión expiró. Vuelve a iniciar sesión.');
     }
 
     // 2. Comprimir con GZIP
@@ -1004,7 +1152,7 @@ class UserProfileStore {
       method: 'POST',
       headers: {
         apikey: this.supabaseKey,
-        Authorization: `Bearer ${this.jwt}`,
+        Authorization: `Bearer ${activeToken}`,
         'Content-Type': 'application/gzip',
         'x-upsert': 'true'
       },
@@ -1017,29 +1165,39 @@ class UserProfileStore {
     }
 
     // 4. Insertar fila en public.user_replays
+    const safeName =
+      (customName || replayFile.roomName || 'Partida grabada').trim().slice(0, 60) || 'Partida grabada';
     const rowPayload = {
       user_id: this.id,
-      name: customName || replayFile.roomName || 'Partida grabada',
+      name: safeName,
       storage_path: storagePath,
       stadium_id: replayFile.stadiumId || 'mediano',
       duration_seconds: Math.max(1, Math.round(replayFile.durationSeconds)),
       red_score: replayFile.redScore ?? 0,
       blue_score: replayFile.blueScore ?? 0,
-      red_acronym: (replayFile.redKit as any)?.tag || 'RED',
-      blue_acronym: (replayFile.blueKit as any)?.tag || 'BLUE',
+      red_acronym: String((replayFile.redKit as any)?.tag || 'RED').slice(0, 6),
+      blue_acronym: String((replayFile.blueKit as any)?.tag || 'BLUE').slice(0, 6),
       file_size_bytes: compressed.byteLength
     };
 
     const dbRes = await fetch(`${this.supabaseUrl}/rest/v1/user_replays`, {
       method: 'POST',
       headers: {
-        ...this.supabaseHeaders(this.jwt),
+        ...this.supabaseHeaders(activeToken),
         Prefer: 'return=representation'
       },
       body: JSON.stringify(rowPayload)
     });
 
     if (!dbRes.ok) {
+      // Limpiar objeto huérfano en Storage si falló el registro en DB
+      await fetch(`${this.supabaseUrl}/storage/v1/object/replays/${storagePath}`, {
+        method: 'DELETE',
+        headers: {
+          apikey: this.supabaseKey,
+          Authorization: `Bearer ${activeToken}`
+        }
+      }).catch(() => {});
       const err = await dbRes.json().catch(() => ({}));
       throw new Error(err.message || 'Error al registrar la repetición en la base de datos.');
     }
@@ -1051,11 +1209,14 @@ class UserProfileStore {
   }
 
   public async downloadUserReplay(storagePath: string): Promise<LxrReplayFile> {
-    if (!this.jwt) throw new Error('Usuario no autenticado.');
+    const token = await this.ensureValidAccessToken();
+    if (!token) {
+      throw new Error(this.authError || 'Usuario no autenticado.');
+    }
     const res = await fetch(`${this.supabaseUrl}/storage/v1/object/replays/${storagePath}`, {
       headers: {
         apikey: this.supabaseKey,
-        Authorization: `Bearer ${this.jwt}`
+        Authorization: `Bearer ${token}`
       }
     });
     if (!res.ok) {
@@ -1066,18 +1227,19 @@ class UserProfileStore {
   }
 
   public async deleteUserReplay(id: string, storagePath: string): Promise<void> {
-    if (!this.jwt) return;
+    const token = await this.ensureValidAccessToken();
+    if (!token) return;
     try {
       await fetch(`${this.supabaseUrl}/storage/v1/object/replays/${storagePath}`, {
         method: 'DELETE',
         headers: {
           apikey: this.supabaseKey,
-          Authorization: `Bearer ${this.jwt}`
+          Authorization: `Bearer ${token}`
         }
       });
       await fetch(`${this.supabaseUrl}/rest/v1/user_replays?id=eq.${encodeURIComponent(id)}`, {
         method: 'DELETE',
-        headers: this.supabaseHeaders(this.jwt)
+        headers: this.supabaseHeaders(token)
       });
     } finally {
       this.userReplays = this.userReplays.filter((r) => r.id !== id);
@@ -1085,13 +1247,14 @@ class UserProfileStore {
   }
 
   public async renameUserReplay(id: string, newName: string): Promise<void> {
-    if (!this.jwt) return;
-    const clean = newName.trim();
+    const token = await this.ensureValidAccessToken();
+    if (!token) return;
+    const clean = newName.trim().slice(0, 60);
     if (!clean) return;
     const res = await fetch(`${this.supabaseUrl}/rest/v1/user_replays?id=eq.${encodeURIComponent(id)}`, {
       method: 'PATCH',
       headers: {
-        ...this.supabaseHeaders(this.jwt),
+        ...this.supabaseHeaders(token),
         Prefer: 'return=representation'
       },
       body: JSON.stringify({ name: clean })

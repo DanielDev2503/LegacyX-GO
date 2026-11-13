@@ -1,5 +1,6 @@
 import type { CompactDiscState, GameStateSnapshot } from '@legacyx/core';
-import { soundFX } from '../audio/SoundFX.js';
+import type { MatchBannerPayload } from '../ui/state/gameUI.svelte.js';
+import { userProfile } from '../ui/state/userProfile.svelte.js';
 
 export interface LxrPlayerMeta {
   id: number;
@@ -18,12 +19,25 @@ export interface LxrGoalMarker {
   blueScore: number;
 }
 
+export interface LxrChatEntry {
+  t: number;
+  kind: 'chat' | 'system' | 'goal' | 'whisper' | 'team';
+  sender: string;
+  senderTeam?: 'RED' | 'BLUE' | 'SPECTATOR';
+  text: string;
+}
+
+export interface LxrBannerEvent {
+  t: number;
+  payload: MatchBannerPayload;
+}
+
 export interface LxrFrame {
   t: number;
   snapshot: GameStateSnapshot;
 }
 
-export interface LxrReplayFile {
+export interface LxrReplayV1 {
   magic: 'LXR1';
   version: 1;
   createdAt: string;
@@ -39,12 +53,55 @@ export interface LxrReplayFile {
   goals: LxrGoalMarker[];
 }
 
+export interface LxrReplayV2 {
+  magic: 'LXR2';
+  version: 2;
+  createdAt: string;
+  roomName: string;
+  stadiumId: string;
+  durationSeconds: number;
+  redScore: number;
+  blueScore: number;
+  recordingPlayerId: number | null;
+  recordingPlayerName: string;
+  cameraZoom: number;
+  viewportWidth: number;
+  viewportHeight: number;
+  timeLimitSeconds: number;
+  redKit?: Record<string, unknown>;
+  blueKit?: Record<string, unknown>;
+  players: LxrPlayerMeta[];
+  chatMessages: LxrChatEntry[];
+  banners: LxrBannerEvent[];
+  frames: LxrFrame[];
+  goals: LxrGoalMarker[];
+}
+
+export type LxrReplayFile = LxrReplayV1 | LxrReplayV2;
+
 export interface MatchRecorderMetadata {
   roomName: string;
   stadiumId: string;
   redKit?: Record<string, unknown>;
   blueKit?: Record<string, unknown>;
   players: LxrPlayerMeta[];
+  recordingPlayerId?: number | null;
+  recordingPlayerName?: string;
+  cameraZoom?: number;
+  viewportWidth?: number;
+  viewportHeight?: number;
+  timeLimitSeconds?: number;
+}
+
+function concatChunks(chunks: Uint8Array[]): Uint8Array {
+  const totalLength = chunks.reduce((acc, c) => acc + c.length, 0);
+  const result = new Uint8Array(totalLength);
+  let offset = 0;
+  for (const c of chunks) {
+    result.set(c, offset);
+    offset += c.length;
+  }
+  return result;
 }
 
 export async function compressReplayGzip(replay: LxrReplayFile): Promise<Uint8Array> {
@@ -53,8 +110,11 @@ export async function compressReplayGzip(replay: LxrReplayFile): Promise<Uint8Ar
   if (typeof CompressionStream !== 'undefined') {
     const cs = new CompressionStream('gzip');
     const writer = cs.writable.getWriter();
-    writer.write(uncompressed);
-    writer.close();
+    const writePromise = (async () => {
+      await writer.write(uncompressed);
+      await writer.close();
+    })();
+
     const reader = cs.readable.getReader();
     const chunks: Uint8Array[] = [];
     while (true) {
@@ -62,16 +122,79 @@ export async function compressReplayGzip(replay: LxrReplayFile): Promise<Uint8Ar
       if (done) break;
       if (value) chunks.push(value);
     }
-    const totalLength = chunks.reduce((acc, c) => acc + c.length, 0);
-    const result = new Uint8Array(totalLength);
-    let offset = 0;
-    for (const c of chunks) {
-      result.set(c, offset);
-      offset += c.length;
-    }
-    return result;
+    await writePromise;
+    return concatChunks(chunks);
   }
   return uncompressed;
+}
+
+export function normalizeParsedReplay(parsed: Partial<LxrReplayFile>): LxrReplayFile {
+  if (
+    !parsed ||
+    (parsed.magic !== 'LXR1' && parsed.magic !== 'LXR2') ||
+    !Array.isArray(parsed.frames)
+  ) {
+    throw new Error('Archivo .lxr inválido o corrupto.');
+  }
+
+  const durationFallback =
+    parsed.frames.length > 0 ? parsed.frames[parsed.frames.length - 1]!.t : 1;
+  const durationSeconds = Math.max(0.5, Number(parsed.durationSeconds ?? durationFallback));
+
+  if (parsed.magic === 'LXR2' || parsed.version === 2) {
+    const v2 = parsed as Partial<LxrReplayV2>;
+    return {
+      magic: 'LXR2',
+      version: 2,
+      createdAt: v2.createdAt || new Date().toISOString(),
+      roomName: v2.roomName || 'Repetición LegacyX-GO',
+      stadiumId: v2.stadiumId || 'mediano',
+      durationSeconds,
+      redScore: Number(v2.redScore ?? 0),
+      blueScore: Number(v2.blueScore ?? 0),
+      recordingPlayerId: v2.recordingPlayerId ?? null,
+      recordingPlayerName: String(v2.recordingPlayerName ?? ''),
+      cameraZoom:
+        typeof v2.cameraZoom === 'number' && Number.isFinite(v2.cameraZoom) && v2.cameraZoom > 0
+          ? v2.cameraZoom
+          : 1,
+      viewportWidth:
+        typeof v2.viewportWidth === 'number' && Number.isFinite(v2.viewportWidth) && v2.viewportWidth > 0
+          ? v2.viewportWidth
+          : 1280,
+      viewportHeight:
+        typeof v2.viewportHeight === 'number' && Number.isFinite(v2.viewportHeight) && v2.viewportHeight > 0
+          ? v2.viewportHeight
+          : 720,
+      timeLimitSeconds:
+        typeof v2.timeLimitSeconds === 'number' && Number.isFinite(v2.timeLimitSeconds)
+          ? v2.timeLimitSeconds
+          : 180,
+      redKit: v2.redKit,
+      blueKit: v2.blueKit,
+      players: Array.isArray(v2.players) ? v2.players : [],
+      chatMessages: Array.isArray(v2.chatMessages) ? v2.chatMessages : [],
+      banners: Array.isArray(v2.banners) ? v2.banners : [],
+      frames: v2.frames ?? [],
+      goals: Array.isArray(v2.goals) ? v2.goals : []
+    };
+  }
+
+  return {
+    magic: 'LXR1',
+    version: 1,
+    createdAt: parsed.createdAt || new Date().toISOString(),
+    roomName: parsed.roomName || 'Repetición LegacyX-GO',
+    stadiumId: parsed.stadiumId || 'mediano',
+    durationSeconds,
+    redScore: Number(parsed.redScore ?? 0),
+    blueScore: Number(parsed.blueScore ?? 0),
+    redKit: parsed.redKit,
+    blueKit: parsed.blueKit,
+    players: Array.isArray(parsed.players) ? parsed.players : [],
+    frames: parsed.frames,
+    goals: Array.isArray(parsed.goals) ? parsed.goals : []
+  };
 }
 
 export async function decompressReplayGzip(data: ArrayBuffer | Uint8Array): Promise<LxrReplayFile> {
@@ -79,8 +202,11 @@ export async function decompressReplayGzip(data: ArrayBuffer | Uint8Array): Prom
   if (uint8.length >= 2 && uint8[0] === 0x1f && uint8[1] === 0x8b && typeof DecompressionStream !== 'undefined') {
     const ds = new DecompressionStream('gzip');
     const writer = ds.writable.getWriter();
-    await (writer as any).write(uint8);
-    await writer.close();
+    const payloadBytes = new Uint8Array(uint8);
+    const writePromise = (async () => {
+      await writer.write(payloadBytes);
+      await writer.close();
+    })();
     const reader = ds.readable.getReader();
     const chunks: Uint8Array[] = [];
     while (true) {
@@ -88,38 +214,12 @@ export async function decompressReplayGzip(data: ArrayBuffer | Uint8Array): Prom
       if (done) break;
       if (value) chunks.push(value);
     }
-    const totalLength = chunks.reduce((acc, c) => acc + c.length, 0);
-    const result = new Uint8Array(totalLength);
-    let offset = 0;
-    for (const c of chunks) {
-      result.set(c, offset);
-      offset += c.length;
-    }
-    const str = new TextDecoder().decode(result);
-    return JSON.parse(str) as LxrReplayFile;
-  } else {
-    const str = new TextDecoder().decode(uint8);
-    return JSON.parse(str) as LxrReplayFile;
+    await writePromise;
+    const str = new TextDecoder().decode(concatChunks(chunks));
+    return normalizeParsedReplay(JSON.parse(str) as Partial<LxrReplayFile>);
   }
-}
-
-function selectSupportedVideoMime(): { mimeType: string; ext: 'webm' | 'mp4' } {
-  if (typeof MediaRecorder === 'undefined' || typeof MediaRecorder.isTypeSupported !== 'function') {
-    return { mimeType: '', ext: 'webm' };
-  }
-  const candidates: Array<{ mimeType: string; ext: 'webm' | 'mp4' }> = [
-    { mimeType: 'video/webm;codecs=vp9,opus', ext: 'webm' },
-    { mimeType: 'video/webm;codecs=vp9', ext: 'webm' },
-    { mimeType: 'video/webm;codecs=vp8,opus', ext: 'webm' },
-    { mimeType: 'video/webm', ext: 'webm' },
-    { mimeType: 'video/mp4', ext: 'mp4' }
-  ];
-  for (const c of candidates) {
-    if (MediaRecorder.isTypeSupported(c.mimeType)) {
-      return c;
-    }
-  }
-  return { mimeType: '', ext: 'webm' };
+  const str = new TextDecoder().decode(uint8);
+  return normalizeParsedReplay(JSON.parse(str) as Partial<LxrReplayFile>);
 }
 
 function cloneSnapshotForReplay(snap: GameStateSnapshot): GameStateSnapshot {
@@ -141,17 +241,27 @@ function cloneSnapshotForReplay(snap: GameStateSnapshot): GameStateSnapshot {
     blueScore: snap.blueScore,
     matchTimer: snap.matchTimer,
     soundMask: snap.soundMask,
+    ...(snap.isGoldenGoal !== undefined ? { isGoldenGoal: snap.isGoldenGoal } : {}),
+    ...(snap.kickoffActive !== undefined ? { kickoffActive: snap.kickoffActive } : {}),
+    ...(snap.isNeutralKickoff !== undefined ? { isNeutralKickoff: snap.isNeutralKickoff } : {}),
+    ...(snap.kickoffPossessingTeam !== undefined
+      ? { kickoffPossessingTeam: snap.kickoffPossessingTeam }
+      : {}),
     discs
   };
 }
+
+const SAVED_CLOUD_NOTICE_TEXT =
+  'Grabación guardada en tu cuenta. Ve al Visor de Repeticiones para verla o descargar el video.';
 
 class MatchRecorderStore {
   isRecording = $state(false);
   elapsedSeconds = $state(0);
   hasRecordedClip = $state(false);
   showPostRecordPrompt = $state(false);
-  lastVideoUrl = $state<string | null>(null);
-  lastVideoExt = $state<'webm' | 'mp4'>('webm');
+  isUploadingToCloud = $state(false);
+  cloudSaveError = $state<string | null>(null);
+  savedCloudNotice = $state<string | null>(null);
   lastReplayData = $state<LxrReplayFile | null>(null);
   lastFileBaseName = $state<string>('legacyx-partido');
 
@@ -167,15 +277,22 @@ class MatchRecorderStore {
   private startedAtMs = 0;
   private lastRecordedFrameMs = -999;
   private timerHandle: ReturnType<typeof setInterval> | null = null;
-  private mediaRecorder: MediaRecorder | null = null;
-  private videoTracksToCleanup: MediaStreamTrack[] = [];
-  private recordedChunks: Blob[] = [];
+  private noticeTimeoutHandle: ReturnType<typeof setTimeout> | null = null;
+  private activeUploadPromise: Promise<void> | null = null;
   private framesBuffer: LxrFrame[] = [];
   private goalsBuffer: LxrGoalMarker[] = [];
+  private chatBuffer: LxrChatEntry[] = [];
+  private bannersBuffer: LxrBannerEvent[] = [];
   private currentMeta: MatchRecorderMetadata = {
     roomName: 'Sala LegacyX-GO',
     stadiumId: 'mediano',
-    players: []
+    players: [],
+    recordingPlayerId: null,
+    recordingPlayerName: '',
+    cameraZoom: 1,
+    viewportWidth: 1280,
+    viewportHeight: 720,
+    timeLimitSeconds: 180
   };
   private latestRedScore = 0;
   private latestBlueScore = 0;
@@ -184,27 +301,33 @@ class MatchRecorderStore {
     return typeof performance !== 'undefined' ? performance.now() : Date.now();
   }
 
+  private elapsedSec(): number {
+    return Math.round(Math.max(0, (this.nowMs() - this.startedAtMs) / 1000) * 1000) / 1000;
+  }
+
+  private clearNoticeTimer(): void {
+    if (this.noticeTimeoutHandle !== null) {
+      clearTimeout(this.noticeTimeoutHandle);
+      this.noticeTimeoutHandle = null;
+    }
+  }
+
   public start(canvas: HTMLCanvasElement | null, meta?: Partial<MatchRecorderMetadata>): boolean {
     if (this.isRecording) return true;
 
-    if (this.lastVideoUrl && typeof URL !== 'undefined' && typeof URL.revokeObjectURL === 'function') {
-      try {
-        URL.revokeObjectURL(this.lastVideoUrl);
-      } catch {
-        // Ignored in test environments
-      }
-    }
-
-    this.lastVideoUrl = null;
-    this.recordedChunks = [];
+    this.clearNoticeTimer();
     this.framesBuffer = [];
     this.goalsBuffer = [];
+    this.chatBuffer = [];
+    this.bannersBuffer = [];
     this.latestRedScore = 0;
     this.latestBlueScore = 0;
     this.lastRecordedFrameMs = -999;
     this.startedAtMs = this.nowMs();
     this.elapsedSeconds = 0;
     this.showPostRecordPrompt = false;
+    this.cloudSaveError = null;
+    this.savedCloudNotice = null;
 
     const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
     const cleanRoom = (meta?.roomName || 'legacyx-partido')
@@ -214,67 +337,32 @@ class MatchRecorderStore {
       .slice(0, 24);
     this.lastFileBaseName = `${cleanRoom || 'legacyx'}-${stamp}`;
 
+    const winW = typeof window !== 'undefined' && window.innerWidth > 0 ? window.innerWidth : 1280;
+    const winH = typeof window !== 'undefined' && window.innerHeight > 0 ? window.innerHeight : 720;
+    const canvasW = canvas?.clientWidth || canvas?.width || winW;
+    const canvasH = canvas?.clientHeight || canvas?.height || winH;
+
     this.currentMeta = {
       roomName: meta?.roomName || 'Sala LegacyX-GO',
       stadiumId: meta?.stadiumId || 'mediano',
       redKit: meta?.redKit ? { ...meta.redKit } : undefined,
       blueKit: meta?.blueKit ? { ...meta.blueKit } : undefined,
-      players: meta?.players ? meta.players.map((p) => ({ ...p })) : []
+      players: meta?.players ? meta.players.map((p) => ({ ...p })) : [],
+      recordingPlayerId: meta?.recordingPlayerId ?? null,
+      recordingPlayerName: meta?.recordingPlayerName ?? '',
+      cameraZoom:
+        typeof meta?.cameraZoom === 'number' && Number.isFinite(meta.cameraZoom) && meta.cameraZoom > 0
+          ? meta.cameraZoom
+          : 1,
+      viewportWidth:
+        typeof meta?.viewportWidth === 'number' && meta.viewportWidth > 0 ? meta.viewportWidth : canvasW,
+      viewportHeight:
+        typeof meta?.viewportHeight === 'number' && meta.viewportHeight > 0 ? meta.viewportHeight : canvasH,
+      timeLimitSeconds:
+        typeof meta?.timeLimitSeconds === 'number' && meta.timeLimitSeconds >= 0
+          ? meta.timeLimitSeconds
+          : 180
     };
-
-    // Inicializar captura de video + audio en tiempo real (60 FPS) si el entorno soporta MediaRecorder
-    this.videoTracksToCleanup = [];
-    if (
-      canvas &&
-      typeof (canvas as HTMLCanvasElement & { captureStream?: (fps?: number) => MediaStream }).captureStream ===
-        'function' &&
-      typeof MediaRecorder !== 'undefined'
-    ) {
-      try {
-        const videoStream = canvas.captureStream(60);
-        const videoTracks = videoStream.getVideoTracks();
-        this.videoTracksToCleanup = videoTracks;
-
-        const audioStream = soundFX.getAudioStream();
-        const audioTracks = audioStream ? audioStream.getAudioTracks() : [];
-        const combinedTracks = [...videoTracks, ...audioTracks];
-        const combinedStream =
-          typeof MediaStream !== 'undefined' ? new MediaStream(combinedTracks) : videoStream;
-
-        const { mimeType, ext } = selectSupportedVideoMime();
-        this.lastVideoExt = ext;
-        const recorder = mimeType
-          ? new MediaRecorder(combinedStream, { mimeType, videoBitsPerSecond: 4_500_000 })
-          : new MediaRecorder(combinedStream);
-
-        recorder.ondataavailable = (ev: BlobEvent) => {
-          if (ev.data && ev.data.size > 0) {
-            this.recordedChunks.push(ev.data);
-          }
-        };
-
-        recorder.onstop = () => {
-          if (this.recordedChunks.length > 0 && typeof Blob !== 'undefined' && typeof URL !== 'undefined') {
-            const outMime = mimeType || (this.lastVideoExt === 'mp4' ? 'video/mp4' : 'video/webm');
-            const blob = new Blob(this.recordedChunks, { type: outMime });
-            this.lastVideoUrl = URL.createObjectURL(blob);
-          }
-          for (const vt of this.videoTracksToCleanup) {
-            try {
-              vt.stop();
-            } catch {
-              // Ignored
-            }
-          }
-          this.videoTracksToCleanup = [];
-        };
-
-        recorder.start(250);
-        this.mediaRecorder = recorder;
-      } catch {
-        this.mediaRecorder = null;
-      }
-    }
 
     this.isRecording = true;
     if (this.timerHandle !== null) clearInterval(this.timerHandle);
@@ -294,6 +382,24 @@ class MatchRecorderStore {
     if (meta.blueKit) this.currentMeta.blueKit = { ...meta.blueKit };
     if (meta.players && meta.players.length > 0) {
       this.currentMeta.players = meta.players.map((p) => ({ ...p }));
+    }
+    if (meta.recordingPlayerId !== undefined) {
+      this.currentMeta.recordingPlayerId = meta.recordingPlayerId;
+    }
+    if (meta.recordingPlayerName !== undefined) {
+      this.currentMeta.recordingPlayerName = meta.recordingPlayerName;
+    }
+    if (typeof meta.cameraZoom === 'number' && Number.isFinite(meta.cameraZoom) && meta.cameraZoom > 0) {
+      this.currentMeta.cameraZoom = meta.cameraZoom;
+    }
+    if (typeof meta.viewportWidth === 'number' && meta.viewportWidth > 0) {
+      this.currentMeta.viewportWidth = meta.viewportWidth;
+    }
+    if (typeof meta.viewportHeight === 'number' && meta.viewportHeight > 0) {
+      this.currentMeta.viewportHeight = meta.viewportHeight;
+    }
+    if (typeof meta.timeLimitSeconds === 'number' && meta.timeLimitSeconds >= 0) {
+      this.currentMeta.timeLimitSeconds = meta.timeLimitSeconds;
     }
   }
 
@@ -320,16 +426,62 @@ class MatchRecorderStore {
     blueScore: number;
   }): void {
     if (!this.isRecording) return;
-    const elapsedSec = Math.max(0, (this.nowMs() - this.startedAtMs) / 1000);
     this.latestRedScore = goal.redScore;
     this.latestBlueScore = goal.blueScore;
     this.goalsBuffer.push({
-      t: Math.round(elapsedSec * 1000) / 1000,
+      t: this.elapsedSec(),
       scoringTeam: goal.scoringTeam,
       scorerName: goal.scorerName || 'Gol',
       redScore: goal.redScore,
       blueScore: goal.blueScore
     });
+  }
+
+  public recordChat(entry: Omit<LxrChatEntry, 't'> & { t?: number }): void {
+    if (!this.isRecording) return;
+    this.chatBuffer.push({
+      t: typeof entry.t === 'number' && Number.isFinite(entry.t) ? entry.t : this.elapsedSec(),
+      kind: entry.kind,
+      sender: entry.sender,
+      ...(entry.senderTeam ? { senderTeam: entry.senderTeam } : {}),
+      text: entry.text
+    });
+  }
+
+  public recordBanner(payload: MatchBannerPayload, t?: number): void {
+    if (!this.isRecording) return;
+    this.bannersBuffer.push({
+      t: typeof t === 'number' && Number.isFinite(t) ? t : this.elapsedSec(),
+      payload: { ...payload }
+    });
+  }
+
+  private async uploadReplayToCloud(replayFile: LxrReplayV2): Promise<void> {
+    this.isUploadingToCloud = true;
+    this.cloudSaveError = null;
+    this.savedCloudNotice = null;
+    this.clearNoticeTimer();
+
+    try {
+      await userProfile.uploadUserReplay(replayFile, replayFile.roomName);
+      this.savedCloudNotice = SAVED_CLOUD_NOTICE_TEXT;
+      this.noticeTimeoutHandle = setTimeout(() => {
+        this.savedCloudNotice = null;
+        this.noticeTimeoutHandle = null;
+      }, 5500);
+    } catch (err) {
+      this.savedCloudNotice = null;
+      this.cloudSaveError =
+        err instanceof Error ? err.message : 'No se pudo guardar la grabación en tu cuenta.';
+    } finally {
+      this.isUploadingToCloud = false;
+    }
+  }
+
+  public async waitForCloudUpload(): Promise<void> {
+    if (this.activeUploadPromise) {
+      await this.activeUploadPromise;
+    }
   }
 
   public stop(): LxrReplayFile | null {
@@ -347,18 +499,26 @@ class MatchRecorderStore {
     );
     this.elapsedSeconds = Math.round(totalSec);
 
-    const replayFile: LxrReplayFile = {
-      magic: 'LXR1',
-      version: 1,
+    const replayFile: LxrReplayV2 = {
+      magic: 'LXR2',
+      version: 2,
       createdAt: new Date().toISOString(),
       roomName: this.currentMeta.roomName,
       stadiumId: this.currentMeta.stadiumId,
       durationSeconds: Math.max(0.5, Math.round(totalSec * 100) / 100),
       redScore: this.latestRedScore,
       blueScore: this.latestBlueScore,
+      recordingPlayerId: this.currentMeta.recordingPlayerId ?? null,
+      recordingPlayerName: this.currentMeta.recordingPlayerName ?? '',
+      cameraZoom: this.currentMeta.cameraZoom ?? 1,
+      viewportWidth: this.currentMeta.viewportWidth ?? 1280,
+      viewportHeight: this.currentMeta.viewportHeight ?? 720,
+      timeLimitSeconds: this.currentMeta.timeLimitSeconds ?? 180,
       redKit: this.currentMeta.redKit,
       blueKit: this.currentMeta.blueKit,
       players: this.currentMeta.players,
+      chatMessages: this.chatBuffer.slice(),
+      banners: this.bannersBuffer.slice(),
       frames: this.framesBuffer.slice(),
       goals: this.goalsBuffer.slice()
     };
@@ -367,14 +527,9 @@ class MatchRecorderStore {
     this.hasRecordedClip = true;
     this.showPostRecordPrompt = true;
 
-    if (this.mediaRecorder && this.mediaRecorder.state !== 'inactive') {
-      try {
-        this.mediaRecorder.stop();
-      } catch {
-        // Ignored
-      }
+    if (userProfile.isAuthenticated) {
+      this.activeUploadPromise = this.uploadReplayToCloud(replayFile);
     }
-    this.mediaRecorder = null;
 
     return replayFile;
   }
@@ -387,70 +542,20 @@ class MatchRecorderStore {
     }
   }
 
+  public dismissSavedCloudNotice(): void {
+    this.clearNoticeTimer();
+    this.savedCloudNotice = null;
+  }
+
   public dismissPrompt(): void {
+    this.dismissSavedCloudNotice();
     this.showPostRecordPrompt = false;
-  }
-
-  public downloadVideo(): boolean {
-    if (!this.lastVideoUrl || typeof document === 'undefined') return false;
-    const a = document.createElement('a');
-    a.href = this.lastVideoUrl;
-    a.download = `${this.lastFileBaseName}.${this.lastVideoExt}`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    return true;
-  }
-
-  public downloadReplay(replay: LxrReplayFile | null = this.lastReplayData): boolean {
-    if (!replay || typeof document === 'undefined' || typeof Blob === 'undefined' || typeof URL === 'undefined') {
-      return false;
-    }
-    const serialized = JSON.stringify(replay);
-    const blob = new Blob([serialized], { type: 'application/x-legacyx-replay+json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${this.lastFileBaseName}.lxr`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    setTimeout(() => {
-      try {
-        URL.revokeObjectURL(url);
-      } catch {
-        // Ignored
-      }
-    }, 1500);
-    return true;
+    this.cloudSaveError = null;
   }
 
   public parseReplayText(raw: string): LxrReplayFile {
     const parsed = JSON.parse(raw) as Partial<LxrReplayFile>;
-    if (!parsed || parsed.magic !== 'LXR1' || !Array.isArray(parsed.frames)) {
-      throw new Error('Archivo .lxr inválido o corrupto.');
-    }
-    const valid: LxrReplayFile = {
-      magic: 'LXR1',
-      version: 1,
-      createdAt: parsed.createdAt || new Date().toISOString(),
-      roomName: parsed.roomName || 'Repetición LegacyX-GO',
-      stadiumId: parsed.stadiumId || 'mediano',
-      durationSeconds: Math.max(
-        0.5,
-        Number(
-          parsed.durationSeconds ??
-            (parsed.frames.length > 0 ? parsed.frames[parsed.frames.length - 1]!.t : 1)
-        )
-      ),
-      redScore: Number(parsed.redScore ?? 0),
-      blueScore: Number(parsed.blueScore ?? 0),
-      redKit: parsed.redKit,
-      blueKit: parsed.blueKit,
-      players: Array.isArray(parsed.players) ? parsed.players : [],
-      frames: parsed.frames,
-      goals: Array.isArray(parsed.goals) ? parsed.goals : []
-    };
+    const valid = normalizeParsedReplay(parsed);
     this.lastReplayData = valid;
     this.hasRecordedClip = true;
     return valid;
