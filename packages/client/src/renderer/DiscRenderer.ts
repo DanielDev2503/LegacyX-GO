@@ -1,7 +1,13 @@
 import type { DiscSnapshot, CompactDiscState } from '@legacyx/core';
-import { drawBallDesign, type BallSkin } from './ballDesigns.js';
+import {
+  drawBallDesign,
+  isBallSkin,
+  WORLD_CUP_BALL_SKINS,
+  type BallSkin,
+  type WorldCupBallSkin
+} from './ballDesigns.js';
 
-export type { BallSkin };
+export { WORLD_CUP_BALL_SKINS, type BallSkin, type WorldCupBallSkin };
 
 export interface ActivePitchEmote {
   emoji: string;
@@ -150,14 +156,7 @@ export class DiscRenderer {
   constructor() {
     if (typeof localStorage !== 'undefined') {
       const savedSkin = localStorage.getItem('haxball_ball_skin');
-      if (
-        savedSkin === 'classic' ||
-        savedSkin === 'retro' ||
-        savedSkin === 'neon' ||
-        savedSkin === 'cyber' ||
-        savedSkin === 'gold' ||
-        savedSkin === 'solid'
-      ) {
+      if (savedSkin && isBallSkin(savedSkin)) {
         this.ballSkin = savedSkin;
       }
     }

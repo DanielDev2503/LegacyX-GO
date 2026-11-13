@@ -37,6 +37,8 @@ export interface FloatingScoreText {
 export interface GameRendererOptions {
   stadium?: Stadium;
   playerInfos?: Map<number, PlayerVisualInfo>;
+  overrideDpr?: number;
+  theme?: 'dark' | 'light';
 }
 
 export class GameRenderer {
@@ -65,6 +67,7 @@ export class GameRenderer {
   public chatHeight: number = 130;
   public chatWidth: number = 340;
   public theme: 'dark' | 'light' = 'dark';
+  public overrideDpr?: number;
   public focusBallOnly: boolean = false;
 
   // Visual toggles
@@ -110,6 +113,12 @@ export class GameRenderer {
       if (opts?.playerInfos) {
         this.playerInfos = opts.playerInfos;
       }
+      if (typeof opts?.overrideDpr === 'number' && Number.isFinite(opts.overrideDpr) && opts.overrideDpr > 0) {
+        this.overrideDpr = opts.overrideDpr;
+      }
+      if (opts?.theme === 'dark' || opts?.theme === 'light') {
+        this.theme = opts.theme;
+      }
     }
 
     this.camera = new Camera(0, 0);
@@ -117,9 +126,11 @@ export class GameRenderer {
     this.camera.setBounds(this.stadium.halfWidth, this.stadium.halfHeight);
 
     this.stadiumRenderer = new StadiumRenderer(this.stadium);
+    this.stadiumRenderer.theme = this.theme;
     this.pitchRenderer = this.stadiumRenderer;
     this.netRenderer = new NetRenderer();
     this.discRenderer = new DiscRenderer();
+    this.discRenderer.theme = this.theme;
     this.discRenderer.setStadiumBounds(this.stadium.bounds);
     this.vfx = new VFXManager();
     this.minimapRenderer = new MinimapRenderer(this.stadium);
@@ -221,6 +232,21 @@ export class GameRenderer {
     this.handleResize();
   }
 
+  private getEffectiveDpr(): number {
+    if (typeof this.overrideDpr === 'number' && Number.isFinite(this.overrideDpr) && this.overrideDpr > 0) {
+      return this.overrideDpr;
+    }
+    return typeof window !== 'undefined' && window.devicePixelRatio ? window.devicePixelRatio : 1;
+  }
+
+  public setTheme(theme: 'dark' | 'light'): void {
+    const nextTheme: 'dark' | 'light' = theme === 'light' ? 'light' : 'dark';
+    this.theme = nextTheme;
+    this.stadiumRenderer.theme = nextTheme;
+    this.discRenderer.theme = nextTheme;
+    this.stadiumRenderer.invalidateCache();
+  }
+
   public setTeamKits(redKit?: any, blueKit?: any): void {
     if (redKit) {
       this.discRenderer.redKit = redKit;
@@ -257,7 +283,7 @@ export class GameRenderer {
   }
 
   public handleResize(): void {
-    const dpr = typeof window !== 'undefined' && window.devicePixelRatio ? window.devicePixelRatio : 1;
+    const dpr = this.getEffectiveDpr();
     const displayWidth =
       this.canvas.clientWidth || this.canvas.width || (typeof window !== 'undefined' ? window.innerWidth : 800);
     const displayHeight =
@@ -396,6 +422,43 @@ export class GameRenderer {
     const dt = this.lastRenderTimestamp > 0 ? Math.min(0.1, (now - this.lastRenderTimestamp) / 1000) : 1 / 60;
     this.lastRenderTimestamp = now;
 
+    this.renderInterpolatedSnapshots(prevSnapshot, currSnapshot, alpha, localPlayerId, dt);
+  }
+
+  /**
+   * Deterministic fixed-timestep render for offscreen replay & WebM export.
+   * Steps camera/shake/VFX/nets strictly by `dtSec` without reading wall-clock time.
+   */
+  public renderAtFixedStep(
+    s0: GameStateSnapshot | null,
+    s1: GameStateSnapshot | null,
+    alpha: number = 1.0,
+    focusId?: number | null,
+    dtSec: number = 1 / 60
+  ): void {
+    if (this.isDestroyed || (!s0 && !s1)) return;
+    const prevSnapshot = (s0 ?? s1)!;
+    const currSnapshot = (s1 ?? s0)!;
+    const fixedDt = typeof dtSec === 'number' && Number.isFinite(dtSec) && dtSec > 0 ? dtSec : 1 / 60;
+    this.renderInterpolatedSnapshots(
+      prevSnapshot,
+      currSnapshot,
+      alpha,
+      focusId ?? undefined,
+      fixedDt
+    );
+  }
+
+  private renderInterpolatedSnapshots(
+    prevSnapshot: GameStateSnapshot,
+    currSnapshot: GameStateSnapshot,
+    alpha: number,
+    localPlayerId: number | undefined,
+    dt: number
+  ): void {
+    this.stadiumRenderer.theme = this.theme;
+    this.discRenderer.theme = this.theme;
+
     const s0 = prevSnapshot ?? currSnapshot;
     const s1 = currSnapshot ?? prevSnapshot;
     const clampedAlpha = Math.max(0, Math.min(1.0, alpha));
@@ -490,7 +553,7 @@ export class GameRenderer {
       this.camera.follow(ballX, ballY);
     }
 
-    const dpr = typeof window !== 'undefined' && window.devicePixelRatio ? window.devicePixelRatio : 1;
+    const dpr = this.getEffectiveDpr();
     const vWidth = (this.canvas.width || 800) / dpr;
     const vHeight = (this.canvas.height || 600) / dpr;
 
@@ -529,7 +592,7 @@ export class GameRenderer {
       this.scratchBall.vel.y = ballVy;
       this.scratchBall.radius = this.discRenderer.ballRadius;
       for (let i = 0; i < this.localGoalNets.length; i++) {
-        this.localGoalNets[i]!.step(1 / 60);
+        this.localGoalNets[i]!.step(dt);
         this.localGoalNets[i]!.checkBallCollision(this.scratchBall);
       }
     }
@@ -622,7 +685,9 @@ export class GameRenderer {
     localDiscId?: number | null,
     settings?: Partial<MinimapSettings>
   ): void {
-    const dpr = typeof window !== 'undefined' && window.devicePixelRatio ? window.devicePixelRatio : 1;
+    this.stadiumRenderer.theme = this.theme;
+    this.discRenderer.theme = this.theme;
+    const dpr = this.getEffectiveDpr();
     const ctx = this.ctx;
 
     const ball = snapshot.discs?.find((d) => d.team === 0);
