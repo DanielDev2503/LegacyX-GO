@@ -102,6 +102,7 @@ export class GameApp {
 
   constructor(signaling: SignalingClient = sharedSignaling) {
     this.signaling = signaling;
+    this.signaling.setUserId(userProfile.id ?? null);
 
     gameUI.onLeaveRoom = () => this.leaveCurrentRoom();
     gameUI.onRoomConfigChanged = (patch: RoomConfigPatch) => this.updateRoomConfig(patch);
@@ -119,8 +120,14 @@ export class GameApp {
       }
     });
     this.signaling.on('ROOM_PING_RESULT', (msg: any) => {
-      if (typeof msg?.roomId === 'string' && typeof msg?.ping === 'number') {
-        gameUI.updateRoomHoverPing(msg.roomId, msg.ping);
+      const pingVal =
+        typeof msg?.pingMs === 'number' && Number.isFinite(msg.pingMs)
+          ? msg.pingMs
+          : typeof msg?.ping === 'number' && Number.isFinite(msg.ping)
+            ? msg.ping
+            : -1;
+      if (typeof msg?.roomId === 'string' && pingVal > 0) {
+        gameUI.updateRoomHoverPing(msg.roomId, pingVal);
       }
     });
 
@@ -342,8 +349,8 @@ export class GameApp {
     this.networkHost.broadcastRoomStateSync();
   }
 
-  public probeRoomPing(roomId: string): void {
-    this.signaling.probeRoomPing(roomId);
+  public probeRoomPing(roomId: string): Promise<number> {
+    return this.signaling.probeRoomPing(roomId);
   }
 
   public setKitVariant(team: 'red' | 'blue', variant: 'home' | 'away'): void {
@@ -358,8 +365,10 @@ export class GameApp {
 
   public async createRoom(params: CreateRoomParams): Promise<boolean> {
     this.teardownNetworkSession();
+    gameUI.isPracticeMode = false;
     this.lastJoinError = null;
     gameUI.lobbyError = null;
+    this.signaling.setUserId(userProfile.id ?? null);
     await this.signaling.ensureConnected();
 
     return new Promise<boolean>((resolve) => {
@@ -432,6 +441,8 @@ export class GameApp {
         password,
         roomType,
         timeZone: tz,
+        userId: userProfile.id ?? undefined,
+        clientSessionId: this.signaling.clientSessionId,
         accessToken: userProfile.jwt || undefined,
         config: {
           name: cleanName,
@@ -647,8 +658,10 @@ export class GameApp {
 
   public async joinRoom(roomId: string, password?: string): Promise<boolean> {
     this.teardownNetworkSession();
+    gameUI.isPracticeMode = false;
     this.lastJoinError = null;
     gameUI.lobbyError = null;
+    this.signaling.setUserId(userProfile.id ?? null);
     await this.signaling.ensureConnected();
 
     return new Promise<boolean>((resolve) => {
@@ -717,6 +730,8 @@ export class GameApp {
         password,
         nickname: gameUI.nickname || 'Guest',
         isGuest: userProfile.isGuest,
+        userId: userProfile.id ?? undefined,
+        clientSessionId: this.signaling.clientSessionId,
         accessToken: userProfile.jwt || undefined
       });
     });
@@ -783,7 +798,10 @@ export class GameApp {
         gameUI.selectStadium(state.stadiumId as any);
       }
       if (typeof state.teamsLocked === 'boolean') gameUI.teamsLocked = state.teamsLocked;
-      if (typeof state.timeLimit === 'number') gameUI.modifiers.matchTimeMinutes = state.timeLimit;
+      if (typeof state.timeLimit === 'number') {
+        gameUI.modifiers.matchTimeMinutes = state.timeLimit;
+        gameUI.modifiers.timeLimit = state.timeLimit;
+      }
       if (typeof state.scoreLimit === 'number') gameUI.modifiers.goalLimit = state.scoreLimit;
       if (state.gameplayConfig || state.modifiers) {
         gameUI.applyRemoteGameplayConfig(state.gameplayConfig, state.modifiers);
@@ -836,9 +854,12 @@ export class GameApp {
     this.currentRoomId = null;
     this.networkClient = null; // NetworkClient ya se auto-desconecta tras ROOM_CLOSED
     this.signaling.send({ type: 'leave_room', roomId });
-    this.resetToLobbyState();
+    const stayOnGatekeeper = gameUI.currentScreen === 'GATEKEEPER';
+    this.resetToLobbyState(!stayOnGatekeeper);
     gameUI.clearModalStack();
-    gameUI.navigateTo('LOBBY');
+    if (!stayOnGatekeeper) {
+      gameUI.navigateTo('LOBBY');
+    }
   }
 
   public teardownNetworkSession(): void {
@@ -855,8 +876,10 @@ export class GameApp {
       this.signaling.send({ type: 'leave_room', roomId: this.currentRoomId });
       this.currentRoomId = null;
     }
+    this.activeMatchToken = null;
     this.remoteInputs.clear();
     this.currentRoomConfig = null;
+    gameUI.isPracticeMode = false;
     gameUI.resetRoomSession();
   }
 
@@ -864,6 +887,7 @@ export class GameApp {
     this.teardownNetworkSession();
     this.isHost = true;
     gameUI.resetRoomSession();
+    gameUI.isPracticeMode = true;
     const profile = this.getLocalProfile();
     gameUI.localPlayerId = 1;
     gameUI.isHost = true;
@@ -889,22 +913,32 @@ export class GameApp {
     gameUI.players = gameUI.rosterPlayers;
   }
 
-  private resetToLobbyState(): void {
+  private resetToLobbyState(shouldRefreshRooms: boolean = true): void {
     this.isHost = false;
     this.currentRoomConfig = null;
+    this.activeMatchToken = null;
     this.remoteInputs.clear();
+    gameUI.isPracticeMode = false;
     gameUI.activeRoom = null;
     gameUI.isHost = true;
     gameUI.isAdmin = true;
     gameUI.localPlayerId = 1;
     gameUI.fsmPhase = 'STOPPED';
     gameUI.matchTimeFormatted = '00:00';
-    gameUI.refreshRooms();
+    if (shouldRefreshRooms) {
+      gameUI.refreshRooms();
+    }
   }
 
   public leaveCurrentRoom(): void {
     this.teardownNetworkSession();
-    this.resetToLobbyState();
+    this.resetToLobbyState(true);
+  }
+
+  public handleLogout(): void {
+    this.signaling.setUserId(null);
+    this.teardownNetworkSession();
+    this.resetToLobbyState(false);
   }
 }
 

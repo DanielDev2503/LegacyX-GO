@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { gameUI, type MatchStatsSnapshot } from '../../src/ui/state/gameUI.svelte.js';
-import { BinaryProtocol, type GameStateSnapshot, EngineInstance, createStadium } from '@legacyx/core';
+import { BinaryProtocol, INPUT_FLAG_RIGHT, type GameStateSnapshot, EngineInstance, createStadium } from '@legacyx/core';
 import { activePitchEmotes, triggerPitchEmote, clearPitchEmotes } from '../../src/renderer/DiscRenderer.js';
 
 describe('Post-Match Flow, Practice Mode, Live Kit/Stadium Sync, Auto Balance & Emote Optimization', () => {
@@ -64,9 +64,9 @@ describe('Post-Match Flow, Practice Mode, Live Kit/Stadium Sync, Auto Balance & 
     });
   });
 
-  describe('3. BinaryProtocol 18-byte Disc Serialization for Stamina & Spin', () => {
+  describe('3. BinaryProtocol 32-byte Disc Serialization for Stamina & Spin', () => {
     it('encodes and decodes stamina and spin preserving precision for non-host players', () => {
-      expect(BinaryProtocol.DISC_RECORD_SIZE).toBe(18);
+      expect(BinaryProtocol.DISC_RECORD_SIZE).toBe(32);
 
       const snapshot: GameStateSnapshot = {
         tick: 120,
@@ -325,7 +325,7 @@ describe('Post-Match Flow, Practice Mode, Live Kit/Stadium Sync, Auto Balance & 
 
       // Apply right movement input towards center/ball during KICKOFF
       const inputs = new Map();
-      inputs.set(1, { dirX: 1, dirY: 0 });
+      inputs.set(1, { inputMask: INPUT_FLAG_RIGHT, dirX: 1, dirY: 0 });
       engine.step(inputs);
 
       // Player must accelerate and move forward (|v| > 0)

@@ -26,6 +26,12 @@ export interface SignalingMessage {
   type:
     | 'ice_config'
     | 'WELCOME'
+    | 'IDENTIFY'
+    | 'JOIN_LOBBY'
+    | 'AUTH'
+    | 'CREATE_ROOM'
+    | 'JOIN_ROOM'
+    | 'GET_ROOMS'
     | 'ROOM_LIST'
     | 'ROOM_CREATED'
     | 'JOIN_SUCCESS'
@@ -33,6 +39,10 @@ export interface SignalingMessage {
     | 'PEER_LEFT'
     | 'SIGNAL'
     | 'ERROR'
+    | 'PING_PROBE'
+    | 'PONG_PROBE'
+    | 'ROOM_PING_PROBE'
+    | 'ROOM_PING_RESULT'
     | 'register_host'
     | 'join_room'
     | 'offer'
@@ -44,18 +54,30 @@ export interface SignalingMessage {
     | 'room_list'
     | 'create_room'
     | 'list_rooms'
+    | 'leave_room'
     | 'error'
     | 'host_disconnected'
     | 'update_room_count'
     | 'close_room'
     | 'ping'
-    | 'pong';
+    | 'pong'
+    | (string & {});
   roomId?: string;
   peerId?: string;
+  userId?: string;
+  clientSessionId?: string;
   targetPeerId?: string;
   senderPeerId?: string;
   fromPeerId?: string;
   hostPeerId?: string;
+  requesterId?: string;
+  probeId?: string;
+  clientSentAt?: number;
+  t0?: number;
+  pingMs?: number | null;
+  ping?: number | null;
+  unreachable?: boolean;
+  timedOut?: boolean;
   sdp?: RTCSessionDescriptionInit;
   candidate?: RTCIceCandidateInit;
   data?: unknown;
@@ -68,6 +90,52 @@ export interface SignalingMessage {
   iceServers?: RTCIceServer[];
   timestamp?: number;
   onlineCount?: number;
+}
+
+const CLIENT_SESSION_STORAGE_KEY = 'legacyx_client_session_id';
+const AUTH_SESSION_STORAGE_KEY = 'legacyx_auth_session';
+let fallbackTabSessionId: string | null = null;
+
+function generateUuid(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  return `sess_${Math.random().toString(36).slice(2, 10)}_${Date.now().toString(36)}`;
+}
+
+function getOrCreateClientSessionId(): string {
+  if (typeof sessionStorage !== 'undefined') {
+    try {
+      const existing = sessionStorage.getItem(CLIENT_SESSION_STORAGE_KEY);
+      if (existing && existing.trim()) {
+        fallbackTabSessionId = existing;
+        return existing;
+      }
+      const created = generateUuid();
+      sessionStorage.setItem(CLIENT_SESSION_STORAGE_KEY, created);
+      fallbackTabSessionId = created;
+      return created;
+    } catch {
+      // Fallback to in-memory UUID when sessionStorage is restricted
+    }
+  }
+  if (!fallbackTabSessionId) {
+    fallbackTabSessionId = generateUuid();
+  }
+  return fallbackTabSessionId;
+}
+
+function readStoredUserId(): string | null {
+  if (typeof localStorage === 'undefined') return null;
+  try {
+    const raw = localStorage.getItem(AUTH_SESSION_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Record<string, any>;
+    const candidate = parsed?.profile?.id ?? parsed?.user?.id ?? parsed?.id;
+    return typeof candidate === 'string' && candidate.trim() ? candidate.trim() : null;
+  } catch {
+    return null;
+  }
 }
 
 type EventCallback = (payload: any) => void;
@@ -88,16 +156,25 @@ export function getDefaultSignalingUrl(): string {
 export class SignalingClient {
   public ws: WebSocket | null = null;
   public peerId: string = 'peer_' + Math.random().toString(36).substring(2, 9);
+  public readonly clientSessionId: string;
+  public userId: string | null = null;
   private url: string;
   public isConnected: boolean = false;
   public pingMs: number | null = null;
   public onlineCount: number = 1;
   private pingInterval: ReturnType<typeof setInterval> | null = null;
   private listeners = new Map<string, Set<EventCallback>>();
+  private connectPromise: Promise<void> | null = null;
+  private probeCounter = 0;
+  private pendingRoomProbes = new Map<
+    string,
+    { roomId: string; sentAt: number; timer: ReturnType<typeof setTimeout>; resolve: (ms: number) => void }
+  >();
 
   public onMessage: ((msg: SignalingMessage) => void) | null = null;
   public onConnected: (() => void) | null = null;
   public onDisconnected: (() => void) | null = null;
+  public onRoomPingResult: ((roomId: string, pingMs: number) => void) | null = null;
 
   public iceConfigReady!: Promise<RTCIceServer[]>;
   private resolveIceConfig!: (servers: RTCIceServer[]) => void;
@@ -105,19 +182,70 @@ export class SignalingClient {
 
   constructor(url?: string, autoConnect: boolean = true) {
     this.url = url || getDefaultSignalingUrl();
+    this.clientSessionId = getOrCreateClientSessionId();
+    this.userId = readStoredUserId();
     this.resetIcePromise();
     if (autoConnect && typeof window !== 'undefined') {
       Promise.resolve().then(() => {
-        if (!this.isConnected && !this.ws) {
-          this.connect();
-        }
+        void this.ensureConnected();
+      });
+    }
+  }
+
+  private static getWsReadyStateConstants(): { connecting: number; open: number } {
+    const connecting =
+      typeof WebSocket !== 'undefined' && typeof WebSocket.CONNECTING === 'number' ? WebSocket.CONNECTING : 0;
+    const open = typeof WebSocket !== 'undefined' && typeof WebSocket.OPEN === 'number' ? WebSocket.OPEN : 1;
+    return { connecting, open };
+  }
+
+  public setUserId(userId: string | null): void {
+    const normalized = typeof userId === 'string' && userId.trim().length > 0 ? userId.trim() : null;
+    this.userId = normalized;
+    if (this.isOpen()) {
+      this.identify(normalized);
+    }
+  }
+
+  public identify(userId: string | null = this.userId): void {
+    if (userId !== undefined) {
+      this.userId = typeof userId === 'string' && userId.trim().length > 0 ? userId.trim() : null;
+    }
+    if (this.isOpen()) {
+      this.send({
+        type: 'IDENTIFY',
+        userId: this.userId ?? undefined,
+        clientSessionId: this.clientSessionId
+      });
+    }
+  }
+
+  public joinLobby(): void {
+    if (this.isOpen()) {
+      this.send({
+        type: 'JOIN_LOBBY',
+        userId: this.userId ?? undefined,
+        clientSessionId: this.clientSessionId
       });
     }
   }
 
   public async ensureConnected(): Promise<void> {
     if (this.isOpen()) return;
+    if (this.connectPromise) return this.connectPromise;
+    const { connecting, open } = SignalingClient.getWsReadyStateConstants();
+    if (this.ws && (this.ws.readyState === connecting || this.ws.readyState === open)) {
+      return;
+    }
     return this.connect();
+  }
+
+  private clearPendingRoomProbes(): void {
+    for (const pending of this.pendingRoomProbes.values()) {
+      clearTimeout(pending.timer);
+      pending.resolve(-1);
+    }
+    this.pendingRoomProbes.clear();
   }
 
   private resetIcePromise(): void {
@@ -153,10 +281,34 @@ export class SignalingClient {
     }
   }
 
-  public probeRoomPing(roomId: string): void {
-    if (this.isOpen()) {
-      this.send({ type: 'ROOM_PING_PROBE', roomId });
+  public probeRoomPing(roomId: string): Promise<number> {
+    if (!roomId || !this.isOpen()) {
+      return Promise.resolve(-1);
     }
+    const probeId = `probe_${++this.probeCounter}_${Date.now().toString(36)}`;
+    const sentAt = Date.now();
+
+    return new Promise<number>((resolve) => {
+      const timer = setTimeout(() => {
+        this.pendingRoomProbes.delete(probeId);
+        resolve(-1);
+      }, 4500);
+
+      this.pendingRoomProbes.set(probeId, {
+        roomId,
+        sentAt,
+        timer,
+        resolve
+      });
+
+      this.send({
+        type: 'ROOM_PING_PROBE',
+        roomId,
+        probeId,
+        clientSentAt: sentAt,
+        t0: sentAt
+      });
+    });
   }
 
   private startPingLoop(): void {
@@ -175,24 +327,47 @@ export class SignalingClient {
   }
 
   public connect(): Promise<void> {
-    this.resetIcePromise();
-    return new Promise((resolve) => {
-      try {
-        try {
-          this.ws = new WebSocket(this.url);
-        } catch {
-          this.ws = (WebSocket as unknown as (u: string) => WebSocket)(this.url);
-        }
+    const { connecting, open } = SignalingClient.getWsReadyStateConstants();
+    if (this.isOpen()) return Promise.resolve();
+    if (this.connectPromise) return this.connectPromise;
+    if (this.ws && (this.ws.readyState === connecting || this.ws.readyState === open)) {
+      return Promise.resolve();
+    }
 
-        this.ws.onopen = () => {
+    this.resetIcePromise();
+    const promise = new Promise<void>((resolve) => {
+      let settled = false;
+      const settleConnect = () => {
+        if (settled) return;
+        settled = true;
+        if (this.connectPromise === promise) {
+          this.connectPromise = null;
+        }
+        resolve();
+      };
+
+      try {
+        let socket: WebSocket;
+        try {
+          socket = new WebSocket(this.url);
+        } catch {
+          socket = (WebSocket as unknown as (u: string) => WebSocket)(this.url);
+        }
+        this.ws = socket;
+
+        socket.onopen = () => {
+          if (this.ws !== socket) return;
           this.isConnected = true;
           this.startPingLoop();
+          this.identify(this.userId ?? readStoredUserId());
+          this.joinLobby();
           this.requestRooms();
           if (this.onConnected) this.onConnected();
-          resolve();
+          settleConnect();
         };
 
-        this.ws.onmessage = (event) => {
+        socket.onmessage = (event) => {
+          if (this.ws !== socket) return;
           try {
             const msg = JSON.parse(event.data as string) as SignalingMessage;
             if (typeof msg.onlineCount === 'number') {
@@ -208,6 +383,62 @@ export class SignalingClient {
                 }
               }
               return;
+            }
+            if (msg.type === 'PING_PROBE') {
+              if (this.isOpen()) {
+                this.send({
+                  type: 'PONG_PROBE',
+                  roomId: msg.roomId,
+                  probeId: msg.probeId,
+                  requesterId: msg.requesterId,
+                  clientSentAt: msg.clientSentAt,
+                  ...(msg.t0 !== undefined ? { t0: msg.t0 } : {})
+                });
+              }
+              return;
+            }
+            if (msg.type === 'ROOM_PING_RESULT') {
+              const roomId = typeof msg.roomId === 'string' ? msg.roomId : '';
+              const probeId = typeof msg.probeId === 'string' ? msg.probeId : '';
+              const rawPing =
+                typeof msg.pingMs === 'number' && Number.isFinite(msg.pingMs)
+                  ? Math.max(1, Math.round(msg.pingMs))
+                  : typeof msg.ping === 'number' && Number.isFinite(msg.ping)
+                    ? Math.max(1, Math.round(msg.ping))
+                    : -1;
+
+              let pendingEntry:
+                | { roomId: string; sentAt: number; timer: ReturnType<typeof setTimeout>; resolve: (ms: number) => void }
+                | undefined;
+              if (probeId && this.pendingRoomProbes.has(probeId)) {
+                pendingEntry = this.pendingRoomProbes.get(probeId);
+                this.pendingRoomProbes.delete(probeId);
+              } else if (roomId) {
+                for (const [k, v] of this.pendingRoomProbes.entries()) {
+                  if (v.roomId === roomId) {
+                    pendingEntry = v;
+                    this.pendingRoomProbes.delete(k);
+                    break;
+                  }
+                }
+              }
+
+              if (pendingEntry) {
+                clearTimeout(pendingEntry.timer);
+                const resolvedMs =
+                  rawPing > 0
+                    ? rawPing
+                    : msg.unreachable
+                      ? -1
+                      : Math.max(1, Math.round(Date.now() - pendingEntry.sentAt));
+                pendingEntry.resolve(resolvedMs);
+              }
+
+              if (roomId && rawPing > 0) {
+                msg.ping = rawPing;
+                msg.pingMs = rawPing;
+                this.onRoomPingResult?.(roomId, rawPing);
+              }
             }
             if ((msg.type === 'ice_config' || msg.type === 'WELCOME') && Array.isArray(msg.iceServers)) {
               console.log('[WebRTC] Servidores ICE recibidos de señalización:', msg.iceServers);
@@ -268,28 +499,38 @@ export class SignalingClient {
           }
         };
 
-        this.ws.onclose = () => {
+        socket.onclose = () => {
+          if (this.ws !== socket) return;
           this.stopPingLoop();
           this.pingMs = null;
           this.isConnected = false;
+          this.ws = null;
+          this.clearPendingRoomProbes();
           if (this.onDisconnected) this.onDisconnected();
           this.emit('telemetry', { pingMs: null, onlineCount: this.onlineCount });
           this.emit('DISCONNECTED', {});
+          settleConnect();
         };
 
-        this.ws.onerror = () => {
+        socket.onerror = () => {
+          if (this.ws !== socket) return;
           this.stopPingLoop();
           this.pingMs = null;
           this.isConnected = false;
-          resolve();
+          this.clearPendingRoomProbes();
+          settleConnect();
         };
       } catch {
         this.stopPingLoop();
         this.pingMs = null;
         this.isConnected = false;
-        resolve();
+        this.clearPendingRoomProbes();
+        settleConnect();
       }
     });
+
+    this.connectPromise = promise;
+    return promise;
   }
 
   public on(event: string, cb: EventCallback): void {
@@ -308,10 +549,15 @@ export class SignalingClient {
   }
 
   public send(msg: SignalingMessage | Record<string, unknown>): void {
-    const payload = { peerId: this.peerId, ...msg };
-    if (this.ws && this.isConnected && this.ws.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify(payload));
-    } else if (this.ws && this.ws.readyState === 1) {
+    const activeUserId = this.userId ?? readStoredUserId();
+    const payload: Record<string, unknown> = {
+      peerId: this.peerId,
+      clientSessionId: this.clientSessionId,
+      ...(activeUserId ? { userId: activeUserId } : {}),
+      ...msg
+    };
+    const { open } = SignalingClient.getWsReadyStateConstants();
+    if (this.ws && (this.isConnected || this.ws.readyState === open) && this.ws.readyState === open) {
       this.ws.send(JSON.stringify(payload));
     }
   }
@@ -412,27 +658,29 @@ export class SignalingClient {
   }
 
   public isOpen(): boolean {
-    const openConst = typeof WebSocket !== 'undefined' && WebSocket.OPEN ? WebSocket.OPEN : 1;
-    return Boolean(this.ws && this.isConnected && this.ws.readyState === openConst);
+    const { open } = SignalingClient.getWsReadyStateConstants();
+    return Boolean(this.ws && this.isConnected && this.ws.readyState === open);
   }
 
   public reconnect(): void {
-    const openConst = typeof WebSocket !== 'undefined' && WebSocket.OPEN ? WebSocket.OPEN : 1;
-    const connectingConst = typeof WebSocket !== 'undefined' && WebSocket.CONNECTING !== undefined ? WebSocket.CONNECTING : 0;
-    if (this.ws && (this.ws.readyState === openConst || this.ws.readyState === connectingConst)) {
+    const { connecting, open } = SignalingClient.getWsReadyStateConstants();
+    if (this.connectPromise || (this.ws && (this.ws.readyState === open || this.ws.readyState === connecting))) {
       return;
     }
-    void this.connect();
+    void this.ensureConnected();
   }
 
   public disconnect(): void {
     this.stopPingLoop();
     this.pingMs = null;
-    if (this.ws) {
-      this.ws.close();
-      this.ws = null;
-    }
+    this.connectPromise = null;
+    this.clearPendingRoomProbes();
+    const sock = this.ws;
+    this.ws = null;
     this.isConnected = false;
+    if (sock) {
+      sock.close();
+    }
   }
 }
 

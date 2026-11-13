@@ -608,13 +608,13 @@ export const DEFAULT_PHYSICS_MODIFIERS: Readonly<PhysicsModifiers> = {
   ballRestitution: 0.412,
   kickStrength: 4.545,
   kickMargin: 4.0,
-  boostMultiplier: 1.75,
-  dashDistance: 37.5,
-  dashesPerFullBar: 4,
-  staminaRechargeRate: 25.0,
-  staminaRegenMoving: true,
-  staminaRegenMovingRate: 100,
-  magnusCurveStrength: 1.05,
+  boostMultiplier: DEFAULT_GAMEPLAY_CONFIG.boostMultiplier,
+  dashDistance: DEFAULT_GAMEPLAY_CONFIG.dashDistance,
+  dashesPerFullBar: DEFAULT_GAMEPLAY_CONFIG.dashesPerFullBar,
+  staminaRechargeRate: DEFAULT_GAMEPLAY_CONFIG.staminaRechargeRate,
+  staminaRegenMoving: false,
+  staminaRegenMovingRate: 25,
+  magnusCurveStrength: DEFAULT_GAMEPLAY_CONFIG.magnusCurveStrength,
   turboEnabled: true,
   dashEnabled: true,
   magnusEnabled: true
@@ -735,7 +735,7 @@ class GameUIStore {
   public settings = $state<SettingsConfig>({ ...DEFAULT_SETTINGS });
   public extrapolationMs = $state<number>(0);
   public activeBanner = $state<MatchBannerPayload>({ kind: 'NONE' });
-  public activeSettingsTab = $state<'controls' | 'audio' | 'video' | 'kits' | 'avatar' | 'club'>('controls');
+  public activeSettingsTab = $state<'controls' | 'audio' | 'video' | 'kits' | 'avatar' | 'club' | 'account'>('controls');
   public keybinds = $state<KeybindConfig>({
     up: [...DEFAULT_KEYBINDS.up],
     down: [...DEFAULT_KEYBINDS.down],
@@ -754,6 +754,12 @@ class GameUIStore {
 
   // Rooms & Lobby (Clean live state, zero mock rooms)
   public rooms = $state<RoomInfo[]>([]);
+  public get availableRooms(): RoomInfo[] {
+    return this.rooms;
+  }
+  public set availableRooms(value: RoomInfo[]) {
+    this.rooms = value;
+  }
   public roomFilterQuery = $state('');
   public filterLockedOnly = $state(false);
   public activeRoom = $state<RoomInfo | null>(null);
@@ -792,9 +798,24 @@ class GameUIStore {
   public previousMatchPhase = $state<number>(0);
   public hasJoinedInitialSync = $state<boolean>(false);
   public isGoldenGoal = $state(false);
+  public slidingEventQueue = $state<SlidingScoreEvent[]>([]);
   public currentSlidingEvent = $state<SlidingScoreEvent | null>(null);
   public matchTimerSeconds = $state<number>(0);
+  public onChatAdded?: (entry: ChatEntry) => void;
+  public onBannerApplied?: (banner: MatchBannerPayload) => void;
   private slidingEventTimeout: ReturnType<typeof setTimeout> | null = null;
+  private slidingEventTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+  private clearAllSlidingEventTimers(): void {
+    if (this.slidingEventTimeout) {
+      clearTimeout(this.slidingEventTimeout);
+      this.slidingEventTimeout = null;
+    }
+    for (const timer of this.slidingEventTimers.values()) {
+      clearTimeout(timer);
+    }
+    this.slidingEventTimers.clear();
+  }
 
   public pushScoreEvent(event: Omit<SlidingScoreEvent, 'id' | 'timestamp'> & { id?: string; timestamp?: number }): void {
     const fullEvent: SlidingScoreEvent = {
@@ -806,13 +827,35 @@ class GameUIStore {
       team: event.team || 'neutral',
       timestamp: event.timestamp || Date.now()
     };
+
+    const existingTimer = this.slidingEventTimers.get(fullEvent.id);
+    if (existingTimer) {
+      clearTimeout(existingTimer);
+      this.slidingEventTimers.delete(fullEvent.id);
+    }
+
+    const nextQueue = [...this.slidingEventQueue.filter((e) => e.id !== fullEvent.id), fullEvent];
+    while (nextQueue.length > 3) {
+      const evicted = nextQueue.shift();
+      if (evicted) {
+        const evictedTimer = this.slidingEventTimers.get(evicted.id);
+        if (evictedTimer) {
+          clearTimeout(evictedTimer);
+          this.slidingEventTimers.delete(evicted.id);
+        }
+      }
+    }
+    this.slidingEventQueue = nextQueue;
     this.currentSlidingEvent = fullEvent;
-    if (this.slidingEventTimeout) clearTimeout(this.slidingEventTimeout);
-    this.slidingEventTimeout = setTimeout(() => {
+
+    const timer = setTimeout(() => {
+      this.slidingEventTimers.delete(fullEvent.id);
+      this.slidingEventQueue = this.slidingEventQueue.filter((e) => e.id !== fullEvent.id);
       if (this.currentSlidingEvent?.id === fullEvent.id) {
-        this.currentSlidingEvent = null;
+        this.currentSlidingEvent = this.slidingEventQueue[this.slidingEventQueue.length - 1] ?? null;
       }
     }, 2400);
+    this.slidingEventTimers.set(fullEvent.id, timer);
   }
   public redPossession = $state(50);
   public bluePossession = $state(50);
@@ -911,11 +954,9 @@ class GameUIStore {
   }
 
   public applyMatchBanner(banner: MatchBannerPayload | null | undefined): void {
-    if (!banner || !banner.kind) {
-      this.activeBanner = { kind: 'NONE' };
-      return;
-    }
-    this.activeBanner = { ...banner };
+    const normalized: MatchBannerPayload = !banner || !banner.kind ? { kind: 'NONE' } : { ...banner };
+    this.activeBanner = normalized;
+    this.onBannerApplied?.(normalized);
   }
 
   public pushLocalSystemNotice(text: string): void {
@@ -1051,6 +1092,12 @@ class GameUIStore {
     if (typeof window === 'undefined') return;
     this.signaling = client;
 
+    client.onRoomPingResult = (roomId: string, pingMs: number) => {
+      if (pingMs > 0) {
+        this.updateRoomHoverPing(roomId, pingMs);
+      }
+    };
+
     client.on('telemetry', (data: { pingMs: number | null; onlineCount: number }) => {
       this.realPing = data.pingMs;
       if (typeof data.onlineCount === 'number') {
@@ -1058,43 +1105,49 @@ class GameUIStore {
       }
     });
 
-    client.on('room_list', (data: { rooms?: Array<any>; onlineCount?: number }) => {
+    const onRoomList = (data: { rooms?: Array<any>; onlineCount?: number }) => {
       if (typeof data.onlineCount === 'number') {
         this.onlineUsersCount = data.onlineCount;
       }
       if (Array.isArray(data.rooms)) {
+        const previousPings = new Map(this.rooms.map((rm) => [rm.id, rm.ping]));
         this.rooms = data.rooms.map((r: any) => {
-          const hostPing = typeof r.hostPingMs === 'number' ? r.hostPingMs : 18;
-          const est = estimateRoomPing(this.realPing, hostPing);
+          const id = r.id || `R-${Math.random().toString(36).substring(2, 6)}`;
+          const prevPing = previousPings.get(id) ?? 0;
+          const livePing = typeof r.ping === 'number' && r.ping > 0 ? Math.round(r.ping) : prevPing;
           return {
-            id: r.id || `R-${Math.random().toString(36).substring(2, 6)}`,
+            id,
             name: r.name || 'Sala Pública',
             playersCount: r.playerCount ?? r.playersCount ?? 1,
             maxPlayers: Math.min(30, Math.max(2, r.maxPlayers ?? 12)),
-            ping: est.ms,
-            hostPingMs: hostPing,
+            ping: livePing,
+            hostPingMs: typeof r.hostPingMs === 'number' ? r.hostPingMs : undefined,
             countryCode: r.countryCode || 'UN',
             roomType: r.roomType === 'ranked' ? 'ranked' : 'casual',
-            isPrivate: Boolean(r.isPrivate),
+            isPrivate: Boolean(r.isPrivate ?? r.hasPassword),
             stadium: r.stadiumId || r.stadium || 'AF 3v3',
             timeLimit: r.timeLimit,
             scoreLimit: r.scoreLimit
           };
         });
       }
-    });
+    };
+
+    client.on('room_list', onRoomList);
+    client.on('ROOM_LIST', onRoomList);
 
     if (!client.isConnected) {
-      client.connect().catch(() => {
+      client.ensureConnected().catch(() => {
         // Fallback silently if offline
       });
     }
   }
 
   public updateRoomHoverPing(roomId: string, ping: number): void {
-    const room = this.rooms.find((r) => r.id === roomId);
-    if (room) {
-      room.ping = ping;
+    const cleanPing = Math.max(1, Math.round(ping));
+    const idx = this.rooms.findIndex((r) => r.id === roomId);
+    if (idx !== -1) {
+      this.rooms[idx] = { ...this.rooms[idx]!, ping: cleanPing };
     }
   }
 
@@ -1149,11 +1202,19 @@ class GameUIStore {
 
         const rawZoom = typeof parsed.cameraZoom === 'number' ? parsed.cameraZoom : DEFAULT_SETTINGS.cameraZoom;
         const clampedZoom = Math.max(0.40, Math.min(2.50, rawZoom));
+        const rawChatOpacity = typeof parsed.chatOpacity === 'number' && Number.isFinite(parsed.chatOpacity)
+          ? parsed.chatOpacity
+          : DEFAULT_SETTINGS.chatOpacity;
+        const normalizedChatOpacityPct =
+          rawChatOpacity > 0 && rawChatOpacity <= 1
+            ? Math.round(rawChatOpacity * 100)
+            : Math.max(10, Math.min(100, Math.round(rawChatOpacity)));
 
         this.settings = {
           ...DEFAULT_SETTINGS,
           ...parsed,
           cameraZoom: clampedZoom,
+          chatOpacity: normalizedChatOpacityPct,
           localKit,
           visitorKit,
           emoteTriggers: Array.isArray(parsed.emoteTriggers) && parsed.emoteTriggers.length > 0
@@ -2043,8 +2104,8 @@ class GameUIStore {
     this.modifiers.dashCooldown = cfg.dashCooldown ?? 1.0;
     this.modifiers.dashesPerFullBar = cfg.dashesPerFullBar ?? 4;
     this.modifiers.staminaRechargeRate = cfg.staminaRechargeRate;
-    this.modifiers.staminaRegenMoving = cfg.staminaRegenMoving !== false;
-    this.modifiers.staminaRegenMovingRate = cfg.staminaRegenMovingRate ?? 100;
+    this.modifiers.staminaRegenMoving = cfg.staminaRegenMoving === true;
+    this.modifiers.staminaRegenMovingRate = cfg.staminaRegenMovingRate ?? 25;
     this.modifiers.magnusCurveStrength = cfg.magnusCurveStrength;
     this.modifiers.magnusCoefficient = cfg.magnusCurveStrength;
     this.modifiers.turboEnabled = cfg.turboEnabled !== false;
@@ -2218,9 +2279,12 @@ class GameUIStore {
     if (this.chatMessages.length > 80) {
       this.chatMessages.shift();
     }
+    this.onChatAdded?.(entry);
   }
 
   public resetRoomSession(): void {
+    this.clearAllSlidingEventTimers();
+    this.isPracticeMode = false;
     this.chatMessages = [];
     this.players = [];
     this.rosterPlayers = [];
@@ -2232,12 +2296,15 @@ class GameUIStore {
     this.redScore = 0;
     this.blueScore = 0;
     this.matchTimeFormatted = '00:00';
+    this.matchTimerSeconds = 0;
     this.activeBanner = { kind: 'NONE' };
     this.matchPhase = 0;
     this.previousMatchPhase = 0;
     this.hasJoinedInitialSync = false;
     this.fsmPhase = 'STOPPED';
     this.isGoldenGoal = false;
+    this.slidingEventQueue = [];
+    this.currentSlidingEvent = null;
     this.postMatchSlide = 1;
     this.clearModalStack();
     this.redKitVariant = 'home';

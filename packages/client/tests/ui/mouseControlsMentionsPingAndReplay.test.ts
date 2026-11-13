@@ -141,8 +141,8 @@ describe('Gate 6: Mouse Controls, Unique Keybinds, @Mentions, Floating Point Fil
     });
   });
 
-  describe('5. Lightweight .LXR (LXR1) Replay Capture & Validation', () => {
-    it('records quantized frames + goal markers, exports valid LXR1 JSON, and rejects corrupt files', () => {
+  describe('5. Lightweight .LXR (LXR2 & LXR1) Replay Capture & Validation', () => {
+    it('records quantized frames + goal markers, exports valid LXR2 JSON, keeps LXR1 backwards-compatible parse, and rejects corrupt files', () => {
       matchRecorder.start(null, {
         roomName: 'Final Clasificatoria',
         stadiumId: 'af_3v3',
@@ -172,16 +172,34 @@ describe('Gate 6: Mouse Controls, Unique Keybinds, @Mentions, Floating Point Fil
       const lxr = matchRecorder.stop();
       expect(matchRecorder.isRecording).toBe(false);
       expect(lxr).not.toBeNull();
-      expect(lxr!.magic).toBe('LXR1');
+      expect(lxr!.magic).toBe('LXR2');
       expect(lxr!.frames.length).toBe(1);
       expect(lxr!.goals.length).toBe(1);
       expect(lxr!.goals[0]!.scorerName).toBe('CyberPro');
 
       const serialized = JSON.stringify(lxr);
       const parsed = matchRecorder.parseReplayText(serialized);
-      expect(parsed.magic).toBe('LXR1');
+      expect(parsed.magic).toBe('LXR2');
       expect(parsed.roomName).toBe('Final Clasificatoria');
       expect(parsed.redScore).toBe(1);
+
+      // Verify backwards-compatible LXR1 parsing still works seamlessly
+      const legacyV1 = JSON.stringify({
+        magic: 'LXR1',
+        version: 1,
+        createdAt: '2026-01-01T00:00:00.000Z',
+        roomName: 'Legacy Sala',
+        stadiumId: 'mediano',
+        durationSeconds: 12,
+        redScore: 1,
+        blueScore: 0,
+        players: [{ id: 1, nickname: 'LegacyUser', team: 'red', avatar: 'LU' }],
+        frames: lxr!.frames,
+        goals: lxr!.goals
+      });
+      const parsedLegacy = matchRecorder.parseReplayText(legacyV1);
+      expect(parsedLegacy.magic).toBe('LXR1');
+      expect(parsedLegacy.roomName).toBe('Legacy Sala');
 
       expect(() => matchRecorder.parseReplayText('{"magic":"WRONG"}')).toThrow(
         'Archivo .lxr inválido o corrupto.'

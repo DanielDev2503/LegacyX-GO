@@ -389,8 +389,23 @@ export class NetworkClient {
     });
   }
 
-  public getInterpolatedState(): GameStateSnapshot | null {
-    return this.jitterBuffer.getInterpolatedState(performance.now());
+  public getInterpolatedState(nowMs: number = performance.now()): GameStateSnapshot | null {
+    const interp = this.jitterBuffer.getInterpolatedState(nowMs);
+    if (interp && this.latestSnapshot) {
+      if (interp.isGoldenGoal === undefined && this.latestSnapshot.isGoldenGoal !== undefined) {
+        interp.isGoldenGoal = this.latestSnapshot.isGoldenGoal;
+      }
+      if (interp.kickoffActive === undefined && this.latestSnapshot.kickoffActive !== undefined) {
+        interp.kickoffActive = this.latestSnapshot.kickoffActive;
+      }
+      if (interp.isNeutralKickoff === undefined && this.latestSnapshot.isNeutralKickoff !== undefined) {
+        interp.isNeutralKickoff = this.latestSnapshot.isNeutralKickoff;
+      }
+      if (interp.kickoffPossessingTeam === undefined && this.latestSnapshot.kickoffPossessingTeam !== undefined) {
+        interp.kickoffPossessingTeam = this.latestSnapshot.kickoffPossessingTeam;
+      }
+    }
+    return interp;
   }
 
   private lastTypingStateSent: boolean | null = null;
