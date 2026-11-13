@@ -1,4 +1,5 @@
 import { createStadium, MatchPhase, type StadiumId } from '@legacyx/core';
+import { drawBallDesign } from '../renderer/ballDesigns.js';
 import { GameRenderer } from '../renderer/GameRenderer.js';
 import type { PlayerVisualInfo } from '../renderer/DiscRenderer.js';
 import type { MatchBannerPayload } from '../ui/state/gameUI.svelte.js';
@@ -286,30 +287,29 @@ function drawScoreboard(ctx: CanvasRenderingContext2D, state: ReplayHudOverlaySt
   ctx.textAlign = 'right';
   ctx.fillText(state.blueAcronym.slice(0, 6), left + barW - 18, top + 22);
 
-  // Golden Goal mini-card docked right of scoreboard
+  // Golden Goal: glowing metallic gold soccer ball emblem right of scoreboard (no card/text)
   if (state.isGoldenGoal) {
-    const ggLeft = left + barW + 10;
-    drawRoundedRect(ctx, ggLeft, top + 4, 134, 36, 10);
-    ctx.fillStyle = 'rgba(42, 29, 7, 0.94)';
-    ctx.fill();
-    ctx.lineWidth = 1.4;
-    ctx.strokeStyle = 'rgba(251, 191, 36, 0.85)';
-    ctx.stroke();
+    const ballX = left + barW + 24;
+    const ballY = top + barH / 2;
+    const ballR = 13;
 
     ctx.save();
-    ctx.shadowColor = 'rgba(251, 191, 36, 0.9)';
-    ctx.shadowBlur = 10;
+    ctx.shadowColor = 'rgba(250, 204, 21, 0.92)';
+    ctx.shadowBlur = 14;
     ctx.beginPath();
-    ctx.arc(ggLeft + 20, top + 22, 6, 0, Math.PI * 2);
-    ctx.fillStyle = '#fbbf24';
+    ctx.arc(ballX, ballY, ballR, 0, Math.PI * 2);
+    ctx.fillStyle = '#FACC15';
     ctx.fill();
     ctx.restore();
 
-    ctx.font = '800 11px Inter, system-ui, sans-serif';
-    ctx.fillStyle = '#fde68a';
-    ctx.textAlign = 'left';
-    ctx.textBaseline = 'middle';
-    ctx.fillText('GOL DE ORO', ggLeft + 34, top + 22);
+    drawBallDesign(ctx, {
+      x: ballX,
+      y: ballY,
+      radius: ballR,
+      skin: 'gold',
+      rotX: 0.35,
+      rotY: 0.25
+    });
   }
 
   ctx.restore();
@@ -425,9 +425,9 @@ function drawCenterBanner(
   if (banner.kind === 'GOAL') {
     const isRed = banner.scoringTeam === 'red';
     const accent = isRed ? '#ef4444' : '#3b82f6';
-    const hasBadges =
-      typeof banner.speedKmh === 'number' || Boolean(banner.isPower) || Boolean(banner.isCurve);
-    const boxH = hasBadges ? 116 : 86;
+    const hasSpeedBadge =
+      typeof banner.speedKmh === 'number' && Number.isFinite(banner.speedKmh) && banner.speedKmh > 0;
+    const boxH = hasSpeedBadge ? 116 : 86;
 
     drawRoundedRect(ctx, cx - 240, cy - boxH / 2, 480, boxH, 16);
     ctx.fillStyle = 'rgba(11, 15, 25, 0.92)';
@@ -447,50 +447,20 @@ function drawCenterBanner(
     ctx.fillStyle = '#f8fafc';
     ctx.fillText(scorerLine, cx, cy - boxH / 2 + 58);
 
-    if (hasBadges) {
-      const chips: Array<{ text: string; bg: string; border: string; fg: string }> = [];
-      if (typeof banner.speedKmh === 'number' && banner.speedKmh > 0) {
-        chips.push({
-          text: `${Math.round(banner.speedKmh)} km/h`,
-          bg: 'rgba(15, 23, 42, 0.95)',
-          border: 'rgba(148, 163, 184, 0.45)',
-          fg: '#e2e8f0'
-        });
-      }
-      if (banner.isPower) {
-        chips.push({
-          text: 'POTENTE',
-          bg: 'rgba(124, 45, 18, 0.92)',
-          border: '#f97316',
-          fg: '#fed7aa'
-        });
-      }
-      if (banner.isCurve) {
-        chips.push({
-          text: 'EFECTO',
-          bg: 'rgba(8, 51, 68, 0.92)',
-          border: '#22d3ee',
-          fg: '#a5f3fc'
-        });
-      }
+    if (hasSpeedBadge) {
       const chipW = 104;
-      const gap = 10;
-      const totalChipsW = chips.length * chipW + (chips.length - 1) * gap;
-      let chipX = cx - totalChipsW / 2;
+      const chipX = cx - chipW / 2;
       const chipY = cy + boxH / 2 - 22;
 
       ctx.font = '800 11px Inter, system-ui, sans-serif';
-      for (const chip of chips) {
-        drawRoundedRect(ctx, chipX, chipY - 12, chipW, 24, 999);
-        ctx.fillStyle = chip.bg;
-        ctx.fill();
-        ctx.lineWidth = 1.2;
-        ctx.strokeStyle = chip.border;
-        ctx.stroke();
-        ctx.fillStyle = chip.fg;
-        ctx.fillText(chip.text, chipX + chipW / 2, chipY);
-        chipX += chipW + gap;
-      }
+      drawRoundedRect(ctx, chipX, chipY - 12, chipW, 24, 999);
+      ctx.fillStyle = 'rgba(15, 23, 42, 0.95)';
+      ctx.fill();
+      ctx.lineWidth = 1.2;
+      ctx.strokeStyle = 'rgba(148, 163, 184, 0.45)';
+      ctx.stroke();
+      ctx.fillStyle = '#e2e8f0';
+      ctx.fillText(`${Math.round(banner.speedKmh!)} km/h`, cx, chipY);
     }
 
     ctx.restore();

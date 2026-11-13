@@ -3,6 +3,29 @@ import { renderIconHTML, renderIcon, Timer, Wifi, Sun, Moon } from '../utils/ico
 import { MatchPhase } from '../../../../core/src/game/GameFSM';
 import { UIStateMachine } from '../UIStateMachine';
 
+const GOLDEN_GOAL_BALL_SVG =
+  '<svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true" style="display:block;overflow:visible;filter:drop-shadow(0 0 6px rgba(250, 204, 21, 0.9))">' +
+    '<defs>' +
+      '<radialGradient id="scoreboard-gold-ball-grad" cx="35%" cy="30%" r="68%">' +
+        '<stop offset="0%" stop-color="#FEF9C3"/>' +
+        '<stop offset="30%" stop-color="#FACC15"/>' +
+        '<stop offset="65%" stop-color="#CA8A04"/>' +
+        '<stop offset="100%" stop-color="#713F12"/>' +
+      '</radialGradient>' +
+      '<clipPath id="scoreboard-gold-ball-clip"><circle cx="12" cy="12" r="10"/></clipPath>' +
+    '</defs>' +
+    '<circle cx="12" cy="12" r="10" fill="url(#scoreboard-gold-ball-grad)" stroke="#CA8A04" stroke-width="1.3"/>' +
+    '<g clip-path="url(#scoreboard-gold-ball-clip)">' +
+      '<path d="M12 7.5L12 2M15.8 10.6L21.2 8.8M14.4 15.2L18 20.5M9.6 15.2L6 20.5M8.2 10.6L2.8 8.8" stroke="#854D0E" stroke-width="1" stroke-linecap="round"/>' +
+      '<polygon points="12,7.8 15.8,10.6 14.4,15.1 9.6,15.1 8.2,10.6" fill="#451A03"/>' +
+      '<circle cx="12" cy="2" r="2.2" fill="#451A03"/>' +
+      '<circle cx="21" cy="9" r="2.2" fill="#451A03"/>' +
+      '<circle cx="18" cy="20" r="2.2" fill="#451A03"/>' +
+      '<circle cx="6" cy="20" r="2.2" fill="#451A03"/>' +
+      '<circle cx="3" cy="9" r="2.2" fill="#451A03"/>' +
+    '</g>' +
+  '</svg>';
+
 export class ScoreboardHUD {
   private redScoreEl: HTMLElement | null = null;
   private blueScoreEl: HTMLElement | null = null;
@@ -223,7 +246,8 @@ export class ScoreboardHUD {
       const goldenGoal = document.createElement('span');
       goldenGoal.id = 'goldenGoalBadge';
       goldenGoal.className = 'golden-goal-badge u-hidden';
-      goldenGoal.textContent = 'GOL DE ORO';
+      goldenGoal.title = 'Gol de Oro';
+      goldenGoal.setAttribute('aria-label', 'Gol de Oro');
 
       capsule.appendChild(scoreDisplay);
       capsule.appendChild(clockContainer);
@@ -625,17 +649,32 @@ export class ScoreboardHUD {
 
     if (this.goldenGoalBadgeEl) {
       if (matchPhase === MatchPhase.VICTORY_CELEBRATION || matchPhase === MatchPhase.MATCH_ENDED) {
-        const winText = isGoldenGoal
-          ? 'GOL DE ORO'
-          : (targetTeam === 1 ? 'VICTORIA ROJO' : (targetTeam === 2 ? 'VICTORIA AZUL' : 'VICTORIA'));
+        const winText =
+          targetTeam === 1 ? 'VICTORIA ROJO' : targetTeam === 2 ? 'VICTORIA AZUL' : 'VICTORIA';
+        this.goldenGoalBadgeEl.innerHTML = '';
         this.goldenGoalBadgeEl.textContent = winText;
+        this.goldenGoalBadgeEl.style.background = '';
+        this.goldenGoalBadgeEl.style.border = '';
+        this.goldenGoalBadgeEl.style.padding = '';
+        this.goldenGoalBadgeEl.style.boxShadow = '';
+        this.goldenGoalBadgeEl.style.animation = '';
         this.goldenGoalBadgeEl.classList.remove('u-hidden', 'ui-screen-hidden');
         this.goldenGoalBadgeEl.style.display = 'inline-flex';
       } else if (isGoldenGoal) {
-        this.goldenGoalBadgeEl.textContent = 'GOL DE ORO';
+        this.goldenGoalBadgeEl.textContent = '';
+        this.goldenGoalBadgeEl.innerHTML = GOLDEN_GOAL_BALL_SVG;
+        this.goldenGoalBadgeEl.title = 'Gol de Oro';
+        this.goldenGoalBadgeEl.setAttribute('aria-label', 'Gol de Oro');
+        this.goldenGoalBadgeEl.style.background = 'transparent';
+        this.goldenGoalBadgeEl.style.border = 'none';
+        this.goldenGoalBadgeEl.style.padding = '0';
+        this.goldenGoalBadgeEl.style.boxShadow = 'none';
+        this.goldenGoalBadgeEl.style.animation = 'none';
         this.goldenGoalBadgeEl.classList.remove('u-hidden', 'ui-screen-hidden');
         this.goldenGoalBadgeEl.style.display = 'inline-flex';
       } else {
+        this.goldenGoalBadgeEl.innerHTML = '';
+        this.goldenGoalBadgeEl.textContent = '';
         this.goldenGoalBadgeEl.classList.add('u-hidden');
         this.goldenGoalBadgeEl.style.display = 'none';
       }

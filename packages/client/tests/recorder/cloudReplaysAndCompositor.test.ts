@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { MatchPhase, type CompactDiscState, type GameStateSnapshot } from '@legacyx/core';
+import { GameMatchPhase, MatchPhase, type CompactDiscState, type GameStateSnapshot } from '@legacyx/core';
 import {
   compressReplayGzip,
   decompressReplayGzip,
@@ -14,6 +14,7 @@ import {
   getVisibleReplayChat,
   renderReplayHudOverlay
 } from '../../src/recorder/ReplayHudCompositor.js';
+import { ScoreboardHUD } from '../../src/controllers/components/ScoreboardHUD.js';
 import { userProfile, validateAccountUsername } from '../../src/ui/state/userProfile.svelte.js';
 import { gameUI } from '../../src/ui/state/gameUI.svelte.js';
 
@@ -85,11 +86,28 @@ function makeSnapshot(overrides: Partial<GameStateSnapshot> = {}): GameStateSnap
 
 function makeMockCanvas2dContext() {
   const fillTexts: string[] = [];
-  const noop = vi.fn();
+  const fillStyles: unknown[] = [];
+  const strokeStyles: unknown[] = [];
+  const gradientStops: Array<[number, string]> = [];
+  const shadowColors: string[] = [];
+  const arcCalls: Array<[number, number, number]> = [];
+  const roundRectCalls: Array<[number, number, number, number, number]> = [];
+  const stateStack: Array<{ shadowColor: string; shadowBlur: number }> = [];
   const ctx: Record<string, unknown> = {
     canvas: { width: 1280, height: 720 },
-    save: vi.fn(),
-    restore: vi.fn(),
+    save: vi.fn(() => {
+      stateStack.push({
+        shadowColor: String(ctx.shadowColor ?? 'transparent'),
+        shadowBlur: Number(ctx.shadowBlur ?? 0)
+      });
+    }),
+    restore: vi.fn(() => {
+      const prev = stateStack.pop();
+      if (prev) {
+        ctx.shadowColor = prev.shadowColor;
+        ctx.shadowBlur = prev.shadowBlur;
+      }
+    }),
     scale: vi.fn(),
     translate: vi.fn(),
     setTransform: vi.fn(),
@@ -97,11 +115,22 @@ function makeMockCanvas2dContext() {
     closePath: vi.fn(),
     moveTo: vi.fn(),
     lineTo: vi.fn(),
-    arc: vi.fn(),
+    arc: vi.fn((x: number, y: number, r: number) => {
+      arcCalls.push([x, y, r]);
+    }),
     rect: vi.fn(),
-    roundRect: vi.fn(),
-    fill: vi.fn(),
-    stroke: vi.fn(),
+    roundRect: vi.fn((x: number, y: number, w: number, h: number, r: number) => {
+      roundRectCalls.push([x, y, w, h, r]);
+    }),
+    fill: vi.fn(() => {
+      fillStyles.push(ctx.fillStyle);
+      if (Number(ctx.shadowBlur ?? 0) > 0) {
+        shadowColors.push(String(ctx.shadowColor));
+      }
+    }),
+    stroke: vi.fn(() => {
+      strokeStyles.push(ctx.strokeStyle);
+    }),
     fillRect: vi.fn(),
     strokeRect: vi.fn(),
     clip: vi.fn(),
@@ -111,8 +140,16 @@ function makeMockCanvas2dContext() {
     }),
     strokeText: vi.fn(),
     measureText: vi.fn((text: string) => ({ width: String(text).length * 8 })),
-    createLinearGradient: vi.fn(() => ({ addColorStop: noop })),
-    createRadialGradient: vi.fn(() => ({ addColorStop: noop })),
+    createLinearGradient: vi.fn(() => ({
+      addColorStop: vi.fn((offset: number, color: string) => {
+        gradientStops.push([offset, color]);
+      })
+    })),
+    createRadialGradient: vi.fn(() => ({
+      addColorStop: vi.fn((offset: number, color: string) => {
+        gradientStops.push([offset, color]);
+      })
+    })),
     fillStyle: '#ffffff',
     strokeStyle: '#ffffff',
     lineWidth: 1,
@@ -127,7 +164,13 @@ function makeMockCanvas2dContext() {
   };
   return {
     ctx: ctx as unknown as CanvasRenderingContext2D,
-    fillTexts
+    fillTexts,
+    fillStyles,
+    strokeStyles,
+    gradientStops,
+    shadowColors,
+    arcCalls,
+    roundRectCalls
   };
 }
 
@@ -753,8 +796,8 @@ describe('Task 4: Gzip LXR2, JWT Refresh, Cloud Replays & 16:9 HUD Compositor', 
       expect(getActiveReplayBanner(banners, 9.0)).toBeNull();
     });
 
-    it('renders room card, scoreboard, 30s pulse, Golden Goal badge, chat & GOAL banner telemetry on Canvas 2D', () => {
-      const { ctx, fillTexts } = makeMockCanvas2dContext();
+    it('renders room card, scoreboard, 30s pulse, Golden Goal metallic gold ball emblem (no card/text), chat & speed-only GOAL banner on Canvas 2D', () => {
+      const { ctx, fillTexts, shadowColors, roundRectCalls } = makeMockCanvas2dContext();
       renderReplayHudOverlay(
         ctx,
         {
@@ -786,10 +829,47 @@ describe('Task 4: Gzip LXR2, JWT Refresh, Cloud Replays & 16:9 HUD Compositor', 
 
       expect(fillTexts.some((t) => t.includes('Torneo Nocturno'))).toBe(true);
       expect(fillTexts.some((t) => t.includes('00:24'))).toBe(true);
+      expect(fillTexts.some((t) => t.includes('Ace (Asist: Wing)'))).toBe(true);
       expect(fillTexts.some((t) => t.includes('128 km/h'))).toBe(true);
-      expect(fillTexts.some((t) => t.includes('POTENTE'))).toBe(true);
-      expect(fillTexts.some((t) => t.includes('EFECTO'))).toBe(true);
+      expect(fillTexts.some((t) => t.includes('POTENTE'))).toBe(false);
+      expect(fillTexts.some((t) => t.includes('EFECTO'))).toBe(false);
       expect(fillTexts.some((t) => t.includes('Buen pase'))).toBe(true);
+      // 30s red warning scoreboard pulse remains active
+      expect(shadowColors.some((c) => c.includes('239, 68, 68'))).toBe(true);
+      expect(roundRectCalls.some(([, , w, h]) => w === 480 && h === 116)).toBe(true);
+
+      // GOAL banner with isPower/isCurve and no positive speedKmh omits badge row cleanly
+      const noSpeedGoal = makeMockCanvas2dContext();
+      renderReplayHudOverlay(
+        noSpeedGoal.ctx,
+        {
+          roomName: 'Final',
+          phase: MatchPhase.PLAYING,
+          matchTimer: 90,
+          redScore: 1,
+          blueScore: 0,
+          isGoldenGoal: false,
+          redAcronym: 'RED',
+          blueAcronym: 'BLU',
+          redColor: '#ef4444',
+          blueColor: '#3b82f6',
+          chatMessages: [],
+          activeBanner: {
+            kind: 'GOAL',
+            scoringTeam: 'red',
+            scorerName: 'Ace',
+            isPower: true,
+            isCurve: true
+          },
+          currentTimeSec: 5.0
+        },
+        1280,
+        720
+      );
+      expect(noSpeedGoal.fillTexts.some((t) => t.includes('POTENTE'))).toBe(false);
+      expect(noSpeedGoal.fillTexts.some((t) => t.includes('EFECTO'))).toBe(false);
+      expect(noSpeedGoal.fillTexts.some((t) => t.includes('km/h'))).toBe(false);
+      expect(noSpeedGoal.roundRectCalls.some(([, , w, h]) => w === 480 && h === 86)).toBe(true);
 
       const gg = makeMockCanvas2dContext();
       renderReplayHudOverlay(
@@ -812,7 +892,129 @@ describe('Task 4: Gzip LXR2, JWT Refresh, Cloud Replays & 16:9 HUD Compositor', 
         1280,
         720
       );
-      expect(gg.fillTexts.some((t) => t.includes('GOL DE ORO'))).toBe(true);
+      expect(gg.fillTexts.some((t) => t.includes('GOL DE ORO'))).toBe(false);
+      expect(gg.roundRectCalls.some(([, , w, h]) => w === 134 && h === 36)).toBe(false);
+      // Gold ball drawn right of scoreboard (centerX=640, barW=336 => right edge=808)
+      expect(gg.arcCalls.some(([x, y, r]) => x > 808 && y < 60 && r >= 10)).toBe(true);
+      const stopColors = gg.gradientStops.map(([, c]) => c.toUpperCase());
+      expect(stopColors).toEqual(
+        expect.arrayContaining(['#FEF9C3', '#FACC15', '#CA8A04', '#713F12'])
+      );
+      expect(gg.fillStyles).toContain('#451A03');
+      expect(gg.strokeStyles).toContain('#854D0E');
+      expect(gg.shadowColors.some((c) => c.includes('250, 204, 21') || c.includes('251, 191, 36'))).toBe(true);
+    });
+
+    it('renders golden soccer ball SVG without GOL DE ORO card/text in ScoreboardHUD while keeping victory text', () => {
+      const elementsById = new Map<string, Record<string, unknown>>();
+      const makeMockEl = (tag: string, id = '', className = '') => {
+        const classSet = new Set(className.split(' ').filter(Boolean));
+        const attrs = new Map<string, string>();
+        const el: Record<string, unknown> = {
+          tagName: tag.toUpperCase(),
+          id,
+          className,
+          style: {} as Record<string, string>,
+          dataset: {} as Record<string, string>,
+          textContent: '',
+          innerHTML: '',
+          title: '',
+          children: [] as unknown[],
+          classList: {
+            add: (...cls: string[]) => {
+              cls.forEach((c) => classSet.add(c));
+              el.className = Array.from(classSet).join(' ');
+            },
+            remove: (...cls: string[]) => {
+              cls.forEach((c) => classSet.delete(c));
+              el.className = Array.from(classSet).join(' ');
+            },
+            toggle: (c: string, force?: boolean) => {
+              const next = force !== undefined ? force : !classSet.has(c);
+              if (next) classSet.add(c);
+              else classSet.delete(c);
+              el.className = Array.from(classSet).join(' ');
+              return next;
+            },
+            contains: (c: string) => classSet.has(c)
+          },
+          setAttribute: (name: string, val: string) => {
+            attrs.set(name, val);
+          },
+          getAttribute: (name: string) => attrs.get(name) ?? null,
+          appendChild: (child: Record<string, unknown>) => {
+            if (typeof child.id === 'string' && child.id) elementsById.set(child.id, child);
+            (el.children as unknown[]).push(child);
+            return child;
+          },
+          removeChild: vi.fn(),
+          addEventListener: vi.fn(),
+          removeEventListener: vi.fn()
+        };
+        return el;
+      };
+
+      const docEl = makeMockEl('html', 'html');
+      const bodyEl = makeMockEl('body', 'body');
+      const appEl = makeMockEl('div', 'app-root');
+      const bannerEl = makeMockEl('header', 'hudTopBanner', 'hud-container hud-top-banner');
+      bodyEl.appendChild(appEl);
+      appEl.appendChild(bannerEl);
+
+      vi.stubGlobal('document', {
+        documentElement: docEl,
+        body: bodyEl,
+        getElementById: (id: string) => elementsById.get(id) ?? null,
+        querySelector: (sel: string) => {
+          if (sel === '.hud-top-banner' || sel === '.hud-container') return bannerEl;
+          return null;
+        },
+        querySelectorAll: () => [],
+        createElement: (tag: string) => makeMockEl(tag),
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn()
+      });
+
+      const hud = new ScoreboardHUD();
+      try {
+        const badge = elementsById.get('goldenGoalBadge') as {
+          textContent: string;
+          innerHTML: string;
+          style: Record<string, string>;
+          classList: { contains: (c: string) => boolean };
+        };
+        expect(badge).toBeDefined();
+        expect(badge.textContent).not.toContain('GOL DE ORO');
+
+        // Active Golden Goal overtime: gold ball SVG only, no GOL DE ORO text, no card box
+        hud.update(2, 2, 14, true, GameMatchPhase.PLAYING);
+        expect(badge.style.display).toBe('inline-flex');
+        expect(badge.classList.contains('u-hidden')).toBe(false);
+        expect(badge.textContent).not.toContain('GOL DE ORO');
+        expect(badge.innerHTML).not.toContain('GOL DE ORO');
+        expect(badge.innerHTML).toContain('<svg');
+        expect(badge.innerHTML).toContain('#FACC15');
+        expect(badge.innerHTML).toContain('#451A03');
+        expect(badge.style.background).toBe('transparent');
+        expect(badge.style.border).toBe('none');
+
+        // Victory after Golden Goal keeps VICTORIA ROJO / VICTORIA AZUL intact (never GOL DE ORO)
+        hud.update(3, 2, 14, true, GameMatchPhase.VICTORY_CELEBRATION, 1);
+        expect(badge.style.display).toBe('inline-flex');
+        expect(badge.textContent).toBe('VICTORIA ROJO');
+        expect(badge.innerHTML).toBe('');
+        expect(badge.style.background).toBe('');
+
+        hud.update(2, 3, 0, false, GameMatchPhase.MATCH_ENDED, 2);
+        expect(badge.textContent).toBe('VICTORIA AZUL');
+
+        // Normal play hides badge
+        hud.update(1, 1, 90, false, GameMatchPhase.PLAYING);
+        expect(badge.style.display).toBe('none');
+        expect(badge.classList.contains('u-hidden')).toBe(true);
+      } finally {
+        hud.destroy();
+      }
     });
 
     it('rejects cleanly in exportReplayToWebm when replay has no frames', async () => {
