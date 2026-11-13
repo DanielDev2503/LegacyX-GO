@@ -10,7 +10,8 @@
     segmentChatMentions
   } from '../utils/chatMentions.js';
 
-  let guestRecWarning = $state(false);
+  let recAuthWarning = $state<string | null>(null);
+  let recAuthWarningTimer: ReturnType<typeof setTimeout> | null = null;
 
   const remainingSeconds = $derived.by(() => {
     if (gameUI.timeLimit <= 0) return 999;
@@ -18,11 +19,23 @@
   });
 
   const isWarning30s = $derived(
-    gameUI.matchPhase === 1 &&
+    (gameUI.matchPhase === 1 || gameUI.matchPhase === 2) &&
     gameUI.timeLimit > 0 &&
     !gameUI.isGoldenGoal &&
     remainingSeconds <= 30 &&
     remainingSeconds > 0
+  );
+
+  const normalizedChatOpacity = $derived.by(() => {
+    const raw = Number(gameUI.settings.chatOpacity ?? 0.95);
+    const normalized = raw > 1 ? raw / 100 : raw;
+    if (!Number.isFinite(normalized)) return 0.95;
+    return Math.max(0.05, Math.min(1, normalized));
+  });
+
+  const slidingEvents = $derived(
+    (gameUI as any).slidingEventQueue ??
+      (gameUI.currentSlidingEvent ? [gameUI.currentSlidingEvent] : [])
   );
 
   let chatMessage = $state('');
@@ -113,14 +126,16 @@
         : '#1e293b'
   );
 
-  let knownRosterNames = $derived(gameUI.rosterPlayers.map((p) => p.name));
+  let knownRosterNames = $derived(gameUI.rosterPlayers.map((p) => p.name ?? p.nickname));
 
   let activeMentionToken = $derived(
     isChatInputActive ? findActiveMentionToken(chatMessage, chatCursor) : null
   );
 
   let mentionCandidates = $derived(
-    activeMentionToken ? getMentionCandidates(activeMentionToken.query, gameUI.rosterPlayers) : []
+    activeMentionToken
+      ? getMentionCandidates(activeMentionToken.query, gameUI.rosterPlayers, gameUI.nickname)
+      : []
   );
 
   let isMentionMenuOpen = $derived(
@@ -330,13 +345,28 @@
     gameUI.openOverlay('SETTINGS');
   }
 
+  function showRecAuthWarning() {
+    recAuthWarning = 'Solo cuentas registradas pueden ver o grabar repeticiones.';
+    if (recAuthWarningTimer) clearTimeout(recAuthWarningTimer);
+    recAuthWarningTimer = setTimeout(() => {
+      recAuthWarning = null;
+      recAuthWarningTimer = null;
+    }, 3800);
+  }
+
+  function openReplayViewer() {
+    soundFX.playUIClick();
+    if (userProfile.isGuest || !userProfile.isAuthenticated) {
+      showRecAuthWarning();
+      return;
+    }
+    gameUI.openOverlay('REPLAY_VIEWER');
+  }
+
   function toggleMatchRecording() {
     soundFX.playUIClick();
     if (!matchRecorder.isRecording && (userProfile.isGuest || !userProfile.isAuthenticated)) {
-      guestRecWarning = true;
-      setTimeout(() => {
-        guestRecWarning = false;
-      }, 3500);
+      showRecAuthWarning();
       return;
     }
     const canvas =
@@ -355,11 +385,6 @@
         team: p.team === 'red' || p.team === 'blue' ? p.team : 'spectator'
       }))
     });
-  }
-
-  function openReplayViewerFromToast() {
-    soundFX.playUIClick();
-    gameUI.openOverlay('REPLAY_VIEWER');
   }
 
   function handleResizePointerDown(e: PointerEvent) {
@@ -460,28 +485,44 @@
     </div>
 
     <!-- TARJETA DESLIZANTE DE EVENTOS BAJO EL MARCADOR -->
-    {#if gameUI.currentSlidingEvent}
+    {#if slidingEvents.length > 0}
       <div class="hud-sliding-event-container" role="status" aria-live="polite">
-        <div
-          class="hud-sliding-event-card team-{gameUI.currentSlidingEvent.team}"
-          style="--event-color: {gameUI.currentSlidingEvent.color};"
-        >
-          <span class="event-badge">{gameUI.currentSlidingEvent.eventType}</span>
-          <span class="event-player">{gameUI.currentSlidingEvent.playerName}</span>
-          <span class="event-points">{gameUI.currentSlidingEvent.pointsText}</span>
-        </div>
+        {#each slidingEvents as ev (ev.id)}
+          <div
+            class="hud-sliding-event-card team-{ev.team}"
+            style="--event-color: {ev.color};"
+          >
+            <span class="event-badge">{ev.eventType}</span>
+            <span class="event-points">{ev.pointsText}</span>
+          </div>
+        {/each}
       </div>
     {/if}
 
-    <!-- C) Cartucho Derecho: Grabadora + 3 Botones de Acción Cyber-Pitch -->
+    <!-- C) Cartucho Derecho: Ver Repeticiones + Grabadora + 3 Botones de Acción Cyber-Pitch -->
     <div class="top-card top-card-right">
-      <!-- 0. Grabadora en Vivo (.webm/.mp4 + .lxr) -->
+      <button
+        type="button"
+        id="btn-hud-replays"
+        class="hud-replay-btn"
+        title="Ver Repeticiones guardadas"
+        aria-label="Ver Repeticiones"
+        onmouseenter={() => soundFX.playUIHover()}
+        onclick={openReplayViewer}
+      >
+        <svg class="replay-btn-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+          <polygon points="5 3 19 12 5 21 5 3"></polygon>
+        </svg>
+        <span class="replay-label">Ver Repeticiones</span>
+      </button>
+
+      <!-- 0. Grabadora en Vivo -->
       <button
         type="button"
         id="btn-hud-record"
         class="hud-rec-btn"
         class:is-recording={matchRecorder.isRecording}
-        title={matchRecorder.isRecording ? 'Detener grabación (Video + Replay .lxr)' : 'Grabar partida en vivo (Video + Replay .lxr)'}
+        title={matchRecorder.isRecording ? 'Detener grabación' : 'Grabar partida en vivo'}
         aria-label={matchRecorder.isRecording ? 'Detener grabación' : 'Iniciar grabación'}
         onmouseenter={() => soundFX.playUIHover()}
         onclick={toggleMatchRecording}
@@ -495,9 +536,9 @@
         {/if}
       </button>
 
-      {#if guestRecWarning}
+      {#if recAuthWarning}
         <div class="rec-auth-warning-toast" role="alert">
-          <span>🔒 Inicia sesión con Google para grabar y guardar repeticiones en la nube.</span>
+          <span>🔒 {recAuthWarning}</span>
         </div>
       {/if}
 
@@ -560,9 +601,9 @@
     </div>
 
     {#if matchRecorder.showPostRecordPrompt && matchRecorder.hasRecordedClip && !matchRecorder.isRecording}
-      <div class="rec-export-toast" role="region" aria-label="Exportar grabación">
+      <div class="rec-export-toast" role="status" aria-live="polite" aria-label="Grabación guardada">
         <div class="rec-export-head">
-          <span class="rec-export-title">GRABACIÓN LISTA</span>
+          <span class="rec-export-title">GRABACIÓN GUARDADA</span>
           <button
             type="button"
             class="rec-export-close"
@@ -575,45 +616,9 @@
             </svg>
           </button>
         </div>
-        <div class="rec-export-actions">
-          <button
-            type="button"
-            class="rec-dl-btn"
-            disabled={!matchRecorder.lastVideoUrl}
-            onclick={() => matchRecorder.downloadVideo()}
-          >
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <polygon points="23 7 16 12 23 17 23 7"></polygon>
-              <rect x="1" y="5" width="15" height="14" rx="2" ry="2"></rect>
-            </svg>
-            <span>VIDEO (.{matchRecorder.lastVideoExt.toUpperCase()})</span>
-          </button>
-          <button
-            type="button"
-            class="rec-dl-btn rec-dl-lxr"
-            disabled={!matchRecorder.lastReplayData}
-            onclick={() => matchRecorder.downloadReplay()}
-          >
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-              <polyline points="7 10 12 15 17 10"></polyline>
-              <line x1="12" y1="15" x2="12" y2="3"></line>
-            </svg>
-            <span>REPLAY (.LXR)</span>
-          </button>
-          {#if matchRecorder.lastReplayData}
-            <button
-              type="button"
-              class="rec-dl-btn rec-dl-view"
-              onclick={openReplayViewerFromToast}
-            >
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <polygon points="5 3 19 12 5 21 5 3"></polygon>
-              </svg>
-              <span>REPRODUCIR</span>
-            </button>
-          {/if}
-        </div>
+        <p class="rec-saved-notice">
+          Grabación guardada en tu cuenta. Ve al Visor de Repeticiones en el Lobby o HUD para verla o descargar el video.
+        </p>
       </div>
     {/if}
   </div>
@@ -643,28 +648,21 @@
           class="vs-team-half vs-local"
           style="
             opacity: 1;
-            background-color: {redKitPrimary};
-            background-image: linear-gradient(135deg, {redKitPrimary} 0%, {redKitPrimary} 38%, {redKitSecondary} 78%, {redKitSecondary} 100%);
-            border: 2px solid {redKitTertiary};
-            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.78), 0 0 18px {redKitPrimary}66;
-            color: {redKitTertiary};
+            border: 2px solid {redKitPrimary};
+            border-left: 6px solid {redKitPrimary};
+            box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06), 0 8px 24px rgba(0, 0, 0, 0.85);
           "
         >
           <span
             class="vs-team-tag"
             style="
+              background: linear-gradient(135deg, {redKitPrimary} 0%, {redKitPrimary} 40%, {redKitSecondary} 85%, {redKitSecondary} 100%);
               color: {redKitTertiary};
-              border-color: {redKitTertiary};
-              {redHasOutline ? '-webkit-text-stroke: 3px #000000; paint-order: stroke fill; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);' : '-webkit-text-stroke: 0px transparent; text-shadow: 0 1px 3px rgba(0, 0, 0, 0.65);'}
+              border-color: {redHasOutline ? '#000000' : redKitTertiary};
+              {redHasOutline ? '-webkit-text-stroke: 2.5px #000000; paint-order: stroke fill; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);' : '-webkit-text-stroke: 0px transparent; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.65);'}
             "
           >{redTeamTag}</span>
-          <span
-            class="vs-team-name"
-            style="
-              color: {redKitTertiary};
-              {redHasOutline ? '-webkit-text-stroke: 3px #000000; paint-order: stroke fill; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);' : '-webkit-text-stroke: 0px transparent; text-shadow: 0 1px 3px rgba(0, 0, 0, 0.72);'}
-            "
-          >{redTeamName}</span>
+          <span class="vs-team-name">{redTeamName}</span>
         </div>
 
         <div class="vs-bolt-badge">
@@ -675,26 +673,19 @@
           class="vs-team-half vs-visitor"
           style="
             opacity: 1;
-            background-color: {blueKitPrimary};
-            background-image: linear-gradient(135deg, {blueKitPrimary} 0%, {blueKitPrimary} 38%, {blueKitSecondary} 78%, {blueKitSecondary} 100%);
-            border: 2px solid {blueKitTertiary};
-            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.78), 0 0 18px {blueKitPrimary}66;
-            color: {blueKitTertiary};
+            border: 2px solid {blueKitPrimary};
+            border-right: 6px solid {blueKitPrimary};
+            box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06), 0 8px 24px rgba(0, 0, 0, 0.85);
           "
         >
-          <span
-            class="vs-team-name"
-            style="
-              color: {blueKitTertiary};
-              {blueHasOutline ? '-webkit-text-stroke: 3px #000000; paint-order: stroke fill; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);' : '-webkit-text-stroke: 0px transparent; text-shadow: 0 1px 3px rgba(0, 0, 0, 0.72);'}
-            "
-          >{blueTeamName}</span>
+          <span class="vs-team-name">{blueTeamName}</span>
           <span
             class="vs-team-tag"
             style="
+              background: linear-gradient(135deg, {blueKitPrimary} 0%, {blueKitPrimary} 40%, {blueKitSecondary} 85%, {blueKitSecondary} 100%);
               color: {blueKitTertiary};
-              border-color: {blueKitTertiary};
-              {blueHasOutline ? '-webkit-text-stroke: 3px #000000; paint-order: stroke fill; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);' : '-webkit-text-stroke: 0px transparent; text-shadow: 0 1px 3px rgba(0, 0, 0, 0.65);'}
+              border-color: {blueHasOutline ? '#000000' : blueKitTertiary};
+              {blueHasOutline ? '-webkit-text-stroke: 2.5px #000000; paint-order: stroke fill; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);' : '-webkit-text-stroke: 0px transparent; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.65);'}
             "
           >{blueTeamTag}</span>
         </div>
@@ -816,7 +807,7 @@
   <!-- ========================================== -->
   <div
     class="hud-chat-container"
-    style="--chat-opacity: {gameUI.settings.chatOpacity ?? 0.95};"
+    style="--chat-opacity: {normalizedChatOpacity};"
   >
     <!-- Tirador superior de redimensionamiento vertical -->
     <div
@@ -853,9 +844,6 @@
           {#if msg.isSystem || msg.team === 'SYSTEM' || msg.senderTeam === 'system'}
             <div class="chat-line chat-line-system">
               <span class="chat-system-notice">
-                <svg class="sys-bolt-svg" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-                  <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
-                </svg>
                 {msg.text}
               </span>
             </div>
@@ -865,7 +853,7 @@
                 {msg.sender}:
               </span>
               <span class="chat-text">
-                {#each segmentChatMentions(msg.text, gameUI.nickname, knownRosterNames) as seg}
+                {#each segmentChatMentions(msg.text, gameUI.nickname, knownRosterNames, msg.sender) as seg}
                   {#if seg.kind === 'mention'}
                     <span class="chat-mention-pill" class:is-self={seg.isSelf} class:is-all={seg.isAll}>{seg.value}</span>
                   {:else}
@@ -1040,6 +1028,7 @@
     border-top: 0;
     border-top-left-radius: 0;
     border-top-right-radius: 0;
+    overflow: visible;
     box-shadow: 0 0 24px rgba(0, 229, 255, 0.18), 0 4px 20px rgba(0, 0, 0, 0.6);
   }
 
@@ -1104,6 +1093,10 @@
     transform: translateX(-50%);
     z-index: 39;
     pointer-events: none;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.35rem;
     animation: slideEventDown 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
   }
 
@@ -1125,12 +1118,6 @@
     font-weight: 900;
     color: var(--event-color, #00e5ff);
     letter-spacing: 0.06em;
-  }
-
-  .hud-sliding-event-card .event-player {
-    font-size: 0.84rem;
-    font-weight: 700;
-    color: #ffffff;
   }
 
   .hud-sliding-event-card .event-points {
@@ -1301,6 +1288,42 @@
     border-top-right-radius: 0;
   }
 
+  .hud-replay-btn {
+    height: 2.15rem;
+    padding: 0 0.65rem;
+    border-radius: 0.45rem;
+    background: #161c26;
+    border: 1px solid rgba(0, 229, 255, 0.35);
+    color: #00e5ff;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.36rem;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.7rem;
+    font-weight: 800;
+    letter-spacing: 0.04em;
+    cursor: pointer;
+    white-space: nowrap;
+    user-select: none;
+    transition: all 0.15s ease;
+  }
+
+  .hud-replay-btn:hover {
+    background: #1b283b;
+    border-color: #00e5ff;
+    box-shadow: 0 0 12px rgba(0, 229, 255, 0.3);
+  }
+
+  .replay-btn-svg {
+    width: 0.8rem;
+    height: 0.8rem;
+    flex-shrink: 0;
+  }
+
+  .replay-label {
+    white-space: nowrap;
+  }
+
   .hud-rec-btn {
     height: 2.15rem;
     padding: 0 0.65rem;
@@ -1409,61 +1432,13 @@
     height: 0.8rem;
   }
 
-  .rec-export-actions {
-    display: flex;
-    align-items: center;
-    gap: 0.4rem;
-  }
-
-  .rec-dl-btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.32rem;
-    padding: 0.3rem 0.55rem;
-    border-radius: 0.38rem;
-    background: #131e30;
-    border: 1px solid rgba(0, 229, 255, 0.35);
-    color: #e2e8f0;
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 0.66rem;
-    font-weight: 800;
-    cursor: pointer;
-    transition: all 0.15s ease;
-  }
-
-  .rec-dl-btn:hover:not(:disabled) {
-    background: #00e5ff;
-    color: #04131a;
-  }
-
-  .rec-dl-btn:disabled {
-    opacity: 0.4;
-    cursor: not-allowed;
-  }
-
-  .rec-dl-btn svg {
-    width: 0.82rem;
-    height: 0.82rem;
-  }
-
-  .rec-dl-lxr {
-    border-color: rgba(255, 215, 0, 0.45);
-    color: #ffd700;
-  }
-
-  .rec-dl-lxr:hover:not(:disabled) {
-    background: #ffd700;
-    color: #161100;
-  }
-
-  .rec-dl-view {
-    border-color: rgba(46, 204, 113, 0.45);
-    color: #2ecc71;
-  }
-
-  .rec-dl-view:hover:not(:disabled) {
-    background: #2ecc71;
-    color: #041a0d;
+  .rec-saved-notice {
+    margin: 0;
+    max-width: 270px;
+    font-family: 'Chivo', system-ui, sans-serif;
+    font-size: 0.75rem;
+    line-height: 1.4;
+    color: #cbd5e1;
   }
 
   .hud-action-btn {
@@ -1618,6 +1593,9 @@
     font-family: 'Chivo', system-ui, sans-serif;
     font-size: 0.8rem;
     line-height: 1.35;
+    user-select: text;
+    -webkit-user-select: text;
+    cursor: text;
   }
 
   .chat-empty-state {
@@ -1651,6 +1629,9 @@
   .chat-text {
     color: #dde2f1;
     word-break: break-word;
+    user-select: text;
+    -webkit-user-select: text;
+    cursor: text;
   }
 
   .chat-mention-pill {
@@ -1685,13 +1666,8 @@
     font-size: 0.74rem;
     font-weight: 700;
     letter-spacing: 0.02em;
-  }
-
-  .sys-bolt-svg {
-    width: 0.8rem;
-    height: 0.8rem;
-    color: #ffd700;
-    flex-shrink: 0;
+    user-select: text;
+    -webkit-user-select: text;
   }
 
   .mention-popup {
@@ -1837,6 +1813,8 @@
     padding: 0.85rem 1.4rem;
     min-width: 195px;
     border-radius: 0.5rem;
+    background: #0c1424;
+    color: #f8fafc;
     opacity: 1;
     box-sizing: border-box;
   }
@@ -1850,7 +1828,7 @@
     font-size: 0.82rem;
     font-weight: 900;
     letter-spacing: 0.08em;
-    padding: 0.22rem 0.55rem;
+    padding: 0.25rem 0.6rem;
     border-radius: 0.32rem;
     background: #080e18;
     border: 1.5px solid currentColor;
@@ -1861,6 +1839,7 @@
     font-size: 1.15rem;
     font-weight: 900;
     letter-spacing: 0.06em;
+    color: #f8fafc;
     text-transform: uppercase;
   }
 

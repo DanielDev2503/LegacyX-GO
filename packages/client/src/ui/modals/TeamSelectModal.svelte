@@ -1,5 +1,11 @@
 <script lang="ts">
-  import { gameUI, type TeamSlot, type RosterPlayer, type MatchStatsSnapshot } from '../state/gameUI.svelte';
+  import {
+    gameUI,
+    type TeamSlot,
+    type RosterPlayer,
+    type MatchStatsSnapshot,
+    type PlayerStatEntry
+  } from '../state/gameUI.svelte';
   import { soundFX } from '../../audio/SoundFX';
   import { gameApp } from '../../net/GameApp';
   import StadiumPreviewCanvas from '../components/StadiumPreviewCanvas.svelte';
@@ -39,11 +45,39 @@
     }
   }
 
-  let expandedPlayerId = $state<string | null>(null);
+  let expandedPlayers = $state<Set<string>>(new Set());
 
-  function toggleAccordion(id: string) {
+  function getPlayerStatKey(team: 'red' | 'blue', idx: number, player: PlayerStatEntry): string {
+    const rawId = (player as any).playerId ?? (player as any).id;
+    return String(rawId ?? `${team}:${idx}:${player.nickname || (player as any).playerName || ''}`);
+  }
+
+  function isTeamAllExpanded(team: 'red' | 'blue'): boolean {
+    const list = team === 'red' ? gameUI.redTeamStats : gameUI.blueTeamStats;
+    if (list.length === 0) return false;
+    return list.every((player, idx) => expandedPlayers.has(getPlayerStatKey(team, idx, player)));
+  }
+
+  function toggleAccordion(key: string) {
     soundFX.playUIClick();
-    expandedPlayerId = expandedPlayerId === id ? null : id;
+    const next = new Set(expandedPlayers);
+    if (next.has(key)) next.delete(key);
+    else next.add(key);
+    expandedPlayers = next;
+  }
+
+  function toggleAllTeam(team: 'red' | 'blue') {
+    soundFX.playUIClick();
+    const list = team === 'red' ? gameUI.redTeamStats : gameUI.blueTeamStats;
+    if (list.length === 0) return;
+    const allExpanded = isTeamAllExpanded(team);
+    const next = new Set(expandedPlayers);
+    list.forEach((player, idx) => {
+      const key = getPlayerStatKey(team, idx, player);
+      if (allExpanded) next.delete(key);
+      else next.add(key);
+    });
+    expandedPlayers = next;
   }
 
   let copyStatus = $state<'idle' | 'copied'>('idle');
@@ -84,11 +118,13 @@
   );
   let matchRedScore = $derived(matchStatsSnapshot ? matchStatsSnapshot.redScore : gameUI.redScore);
   let matchBlueScore = $derived(matchStatsSnapshot ? matchStatsSnapshot.blueScore : gameUI.blueScore);
-  let matchDurationFormatted = $derived(
-    matchStatsSnapshot
-      ? `${String(Math.floor(matchStatsSnapshot.matchDuration / 60)).padStart(2, '0')}:${String(matchStatsSnapshot.matchDuration % 60).padStart(2, '0')}`
-      : gameUI.matchTimeFormatted
-  );
+  let matchDurationFormatted = $derived.by(() => {
+    if (matchStatsSnapshot && Number.isFinite(matchStatsSnapshot.matchDuration)) {
+      const secs = Math.max(0, Math.floor(matchStatsSnapshot.matchDuration));
+      return `${String(Math.floor(secs / 60)).padStart(2, '0')}:${String(secs % 60).padStart(2, '0')}`;
+    }
+    return gameUI.matchTimeFormatted;
+  });
 
   let isRedCaptainOrAdmin = $derived(
     gameUI.isHost || gameUI.isAdmin || (gameUI.allowCaptainKitSwitch && redCaptain && redCaptain.id === gameUI.localPlayerId)
@@ -385,42 +421,214 @@
           <span class="nav-chevron">&gt;</span>
         </button>
 
-        <!-- Tarjeta Central de Estadísticas -->
-        <div class="team-modal-card stats-modal-card">
-          <!-- Header de Estadísticas en 3 Zonas Horizontales (Izquierda: Marcador, Centro: MVP, Derecha: Tiempo) -->
-          <header class="stats-header-row">
-            <!-- Zona Izquierda: Marcador Homologado con HUD y Colores del Capitán -->
-            <div class="stats-scoreboard-banner">
-              <div
-                class="stats-acronym-badge red-acronym"
-                style="
-                  background: linear-gradient(135deg, {redPrimaryColor} 0%, {redPrimaryColor} 25%, {redSecondaryColor} 75%, {redSecondaryColor} 100%);
-                  border: {redHasOutline ? '1.5px solid #000000' : 'none'};
-                  box-shadow: {redHasOutline ? '0 0 0 1.5px #000000' : 'none'};
-                  color: {redKitTertiary};
-                  {redHasOutline ? '-webkit-text-stroke: 3px #000000; paint-order: stroke fill; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);' : '-webkit-text-stroke: 0px transparent; text-shadow: none;'}
-                "
-              >
-                {redTeamTag}
+        <!-- Tarjeta Central de Estadísticas (Competitive Match Hero + Dual Tables) -->
+        {#snippet statsBreakdownDrawer(player: PlayerStatEntry)}
+          {@const goalsPts = (player.goals ?? 0) * 100}
+          {@const powerGoalsPts = ((player as any).powerGoals ?? 0) * 30}
+          {@const curveGoalsPts = ((player as any).curveGoals ?? 0) * 30}
+          {@const assistsPts = (player.assists ?? 0) * 50}
+          {@const curveAssistsPts = ((player as any).curveAssists ?? 0) * 20}
+          {@const savesPts = (player.saves ?? 0) * 100}
+          {@const shotsPts = (player.shots ?? 0) * 20}
+          {@const passesPts = (player.passes ?? 0) * 10}
+          {@const hattrickPts = player.hasHattrickBonus ? 100 : 0}
+          {@const ownGoalPts = player.ownGoals ? -(player.ownGoals * 50) : 0}
+          <div class="accordion-drawer">
+            <div class="drawer-grid">
+              <div class="drawer-chip">
+                <span class="chip-label">Gol (+100)</span>
+                <span class="chip-val" class:text-green={goalsPts > 0} class:text-muted={goalsPts === 0}>+{goalsPts}</span>
               </div>
-              <span class="stats-score-num" id="post-score-red">{matchRedScore}</span>
-              <span class="stats-score-sep">-</span>
-              <span class="stats-score-num" id="post-score-blue">{matchBlueScore}</span>
-              <div
-                class="stats-acronym-badge blue-acronym"
-                style="
-                  background: linear-gradient(135deg, {bluePrimaryColor} 0%, {bluePrimaryColor} 25%, {blueSecondaryColor} 75%, {blueSecondaryColor} 100%);
-                  border: {blueHasOutline ? '1.5px solid #000000' : 'none'};
-                  box-shadow: {blueHasOutline ? '0 0 0 1.5px #000000' : 'none'};
-                  color: {blueKitTertiary};
-                  {blueHasOutline ? '-webkit-text-stroke: 3px #000000; paint-order: stroke fill; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);' : '-webkit-text-stroke: 0px transparent; text-shadow: none;'}
-                "
-              >
-                {blueTeamTag}
+              <div class="drawer-chip">
+                <span class="chip-label">Gol Pot. (+30)</span>
+                <span class="chip-val" class:text-gold={powerGoalsPts > 0} class:text-muted={powerGoalsPts === 0}>+{powerGoalsPts}</span>
+              </div>
+              <div class="drawer-chip">
+                <span class="chip-label">Gol Ef. (+30)</span>
+                <span class="chip-val" class:text-cyan={curveGoalsPts > 0} class:text-muted={curveGoalsPts === 0}>+{curveGoalsPts}</span>
+              </div>
+              <div class="drawer-chip">
+                <span class="chip-label">Asist. (+50)</span>
+                <span class="chip-val" class:text-green={assistsPts > 0} class:text-muted={assistsPts === 0}>+{assistsPts}</span>
+              </div>
+              <div class="drawer-chip">
+                <span class="chip-label">Asist. Ef. (+20)</span>
+                <span class="chip-val" class:text-cyan={curveAssistsPts > 0} class:text-muted={curveAssistsPts === 0}>+{curveAssistsPts}</span>
+              </div>
+              <div class="drawer-chip">
+                <span class="chip-label">Atajada (+100)</span>
+                <span class="chip-val" class:text-green={savesPts > 0} class:text-muted={savesPts === 0}>+{savesPts}</span>
+              </div>
+              <div class="drawer-chip">
+                <span class="chip-label">Tiro (+20)</span>
+                <span class="chip-val" class:text-cyan={shotsPts > 0} class:text-muted={shotsPts === 0}>+{shotsPts}</span>
+              </div>
+              <div class="drawer-chip">
+                <span class="chip-label">Pase (+10)</span>
+                <span class="chip-val" class:text-cyan={passesPts > 0} class:text-muted={passesPts === 0}>+{passesPts}</span>
+              </div>
+              <div class="drawer-chip">
+                <span class="chip-label">Hattrick (+100)</span>
+                <span class="chip-val" class:text-gold={hattrickPts > 0} class:text-muted={hattrickPts === 0}>+{hattrickPts}</span>
+              </div>
+              <div class="drawer-chip">
+                <span class="chip-label">Autogol (-50)</span>
+                <span class="chip-val" class:text-error={ownGoalPts < 0} class:text-muted={ownGoalPts === 0}>{ownGoalPts}</span>
+              </div>
+            </div>
+          </div>
+        {/snippet}
+
+        {#snippet statsTeamTable(
+          team: 'red' | 'blue',
+          teamName: string,
+          primaryColor: string,
+          secondaryColor: string,
+          tertiaryColor: string,
+          hasOutline: boolean,
+          statsList: ReadonlyArray<PlayerStatEntry>
+        )}
+          {@const allExpanded = isTeamAllExpanded(team)}
+          <div
+            class="team-table-box {team}-box"
+            style={team === 'red'
+              ? `--captain-local-primary: ${primaryColor}; --captain-local-glow: ${primaryColor}40; --captain-local-tertiary: ${tertiaryColor};`
+              : `--captain-visitor-primary: ${primaryColor}; --captain-visitor-glow: ${primaryColor}40; --captain-visitor-tertiary: ${tertiaryColor};`}
+          >
+            <div
+              class="table-header {team}-header captain-bicolor-header"
+              style="background: linear-gradient(90deg, {primaryColor} 0%, {primaryColor} 30%, {secondaryColor} 70%, {secondaryColor} 100%);"
+            >
+              <div class="table-header-left">
+                <span
+                  class="col-team-name-hdr"
+                  style="color: {tertiaryColor}; text-shadow: {hasOutline ? '-1px -1px 0 #000000, 1px -1px 0 #000000, -1px 1px 0 #000000, 1px 1px 0 #000000' : 'none'};"
+                >{teamName}</span>
+                <button
+                  type="button"
+                  class="team-expand-all-btn"
+                  disabled={statsList.length === 0}
+                  onclick={() => toggleAllTeam(team)}
+                >
+                  <span>{allExpanded ? 'Contraer todos' : 'Desplegar todos'}</span>
+                  <span aria-hidden="true">{allExpanded ? '▲' : '▼'}</span>
+                </button>
+              </div>
+              <div class="col-headers-right" style="color: {tertiaryColor};">
+                <span class="col-pts">PTS</span>
+                <span class="col-stat">G</span>
+                <span class="col-stat">A</span>
+                <span class="col-stat">S</span>
+                <span class="col-stat">P</span>
+                <span class="col-stat">T</span>
+                <span class="col-arrow"></span>
               </div>
             </div>
 
-            <!-- Zona Centro: Insignia Dorada del MVP -->
+            <div class="table-scroll-body {team === 'red' ? 'custom-scrollbar-red' : 'custom-scrollbar'}">
+              {#each statsList as player, idx (getPlayerStatKey(team, idx, player))}
+                {@const rowKey = getPlayerStatKey(team, idx, player)}
+                {@const isExpanded = expandedPlayers.has(rowKey)}
+                <div
+                  class="player-stat-row"
+                  class:is-mvp={player.isMvp}
+                  class:row-expanded={isExpanded}
+                >
+                  <div
+                    class="row-summary accordion-trigger"
+                    role="button"
+                    tabindex="0"
+                    aria-expanded={isExpanded}
+                    onclick={() => toggleAccordion(rowKey)}
+                    onkeydown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        toggleAccordion(rowKey);
+                      }
+                    }}
+                  >
+                    <span class="col-player bold" class:gold-player={player.isMvp}>
+                      {#if player.isMvp}
+                        <svg class="crown-svg-sm" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                          <path d="M3 18h18v2H3v-2zm0-2l2-9 5 4 2-6 2 6 5-4 2 9H3z"></path>
+                        </svg>
+                      {:else if player.isCaptain}
+                        <span class="badge-cap {team}">C</span>
+                      {/if}
+                      {player.nickname}
+                      {#if player.isHost}
+                        <span class="host-tag">(Host)</span>
+                      {/if}
+                    </span>
+                    <span
+                      class="col-pts"
+                      class:gold-txt={player.isMvp}
+                      class:red-txt={!player.isMvp && team === 'red'}
+                      class:blue-txt={!player.isMvp && team === 'blue'}
+                    >
+                      {player.points ?? 0}
+                    </span>
+                    <span class="col-stat" class:gold-stat={player.isMvp}>{player.goals ?? 0}</span>
+                    <span class="col-stat">{player.assists ?? 0}</span>
+                    <span class="col-stat">{player.saves ?? 0}</span>
+                    <span class="col-stat">{player.passes ?? 0}</span>
+                    <span class="col-stat">{player.shots ?? 0}</span>
+                    <span class="col-arrow chevron-icon">{isExpanded ? '▲' : '▼'}</span>
+                  </div>
+
+                  {#if isExpanded}
+                    {@render statsBreakdownDrawer(player)}
+                  {/if}
+                </div>
+              {/each}
+            </div>
+          </div>
+        {/snippet}
+
+        <div class="team-modal-card stats-modal-card">
+          <!-- Hero Header Competitivo del Partido -->
+          <header class="stats-header-row">
+            <div class="stats-hero-matchup">
+              <div class="hero-team-side hero-red">
+                <div
+                  class="stats-acronym-badge red-acronym"
+                  style="
+                    background: linear-gradient(135deg, {redPrimaryColor} 0%, {redPrimaryColor} 25%, {redSecondaryColor} 75%, {redSecondaryColor} 100%);
+                    border: {redHasOutline ? '1.5px solid #000000' : 'none'};
+                    box-shadow: {redHasOutline ? '0 0 0 1.5px #000000' : 'none'};
+                    color: {redKitTertiary};
+                    {redHasOutline ? '-webkit-text-stroke: 3px #000000; paint-order: stroke fill; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);' : '-webkit-text-stroke: 0px transparent; text-shadow: none;'}
+                  "
+                >
+                  {redTeamTag}
+                </div>
+                <span class="hero-team-label">{redTeamName}</span>
+              </div>
+
+              <div class="stats-hero-score">
+                <span class="stats-score-num" id="post-score-red">{matchRedScore}</span>
+                <span class="stats-score-sep">-</span>
+                <span class="stats-score-num" id="post-score-blue">{matchBlueScore}</span>
+              </div>
+
+              <div class="hero-team-side hero-blue">
+                <span class="hero-team-label">{blueTeamName}</span>
+                <div
+                  class="stats-acronym-badge blue-acronym"
+                  style="
+                    background: linear-gradient(135deg, {bluePrimaryColor} 0%, {bluePrimaryColor} 25%, {blueSecondaryColor} 75%, {blueSecondaryColor} 100%);
+                    border: {blueHasOutline ? '1.5px solid #000000' : 'none'};
+                    box-shadow: {blueHasOutline ? '0 0 0 1.5px #000000' : 'none'};
+                    color: {blueKitTertiary};
+                    {blueHasOutline ? '-webkit-text-stroke: 3px #000000; paint-order: stroke fill; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);' : '-webkit-text-stroke: 0px transparent; text-shadow: none;'}
+                  "
+                >
+                  {blueTeamTag}
+                </div>
+              </div>
+            </div>
+
+            <!-- Centro: MVP Spotlight -->
             <div class="stats-center-zone">
               {#if gameUI.mvp}
                 <div class="mvp-golden-plaque">
@@ -429,201 +637,33 @@
                   </svg>
                   <span class="mvp-title">MVP: {gameUI.mvp.nickname}</span>
                   <span class="mvp-points-chip">({gameUI.mvp.points} pts)</span>
+                  <span class="mvp-mini-line">
+                    {gameUI.mvp.goals}G · {gameUI.mvp.assists}A · {(gameUI.mvp as any).saves ?? 0}S
+                  </span>
                 </div>
               {/if}
             </div>
 
-            <!-- Zona Derecha: Duración del Partido -->
+            <!-- Derecha: Duración y Resultado -->
             <div class="match-status-meta">
+              <span class="match-result-chip">
+                {matchRedScore > matchBlueScore
+                  ? `VICTORIA ${redTeamTag}`
+                  : matchBlueScore > matchRedScore
+                    ? `VICTORIA ${blueTeamTag}`
+                    : 'EMPATE'}
+              </span>
               <span class="match-time-chip">{matchDurationFormatted}</span>
             </div>
           </header>
 
-          <!-- Tablas Duales Paralelas RED y BLUE con Cabeceras Bicolor Suave y Nombres de Capitán -->
+          <!-- Tablas Duales Paralelas RED y BLUE con columnas PTS | G | A | S | P | T -->
           <div class="tables-parallel-grid">
-            <!-- TABLA RED -->
-            <div
-              class="team-table-box red-box"
-              style="--captain-local-primary: {redPrimaryColor}; --captain-local-glow: {redPrimaryColor}40; --captain-local-tertiary: {redKitTertiary};"
-            >
-              <div
-                class="table-header red-header captain-bicolor-header"
-                style="background: linear-gradient(90deg, {redPrimaryColor} 0%, {redPrimaryColor} 30%, {redSecondaryColor} 70%, {redSecondaryColor} 100%);"
-              >
-                <span
-                  class="col-team-name-hdr"
-                  style="color: {redKitTertiary}; text-shadow: {redHasOutline ? '-1px -1px 0 #000000, 1px -1px 0 #000000, -1px 1px 0 #000000, 1px 1px 0 #000000' : 'none'};"
-                >{redTeamName}</span>
-                <div class="col-headers-right" style="color: {redKitTertiary};">
-                  <span class="col-pts">Pts</span>
-                  <span class="col-stat">G</span>
-                  <span class="col-stat">A</span>
-                  <span class="col-stat">P</span>
-                  <span class="col-stat">S</span>
-                  <span class="col-arrow"></span>
-                </div>
-              </div>
-
-                <div class="table-scroll-body custom-scrollbar-red">
-                  {#each gameUI.redTeamStats as player}
-                    {@const isExpanded = expandedPlayerId === player.nickname}
-                    <div class="player-stat-row" class:row-expanded={isExpanded}>
-                      <div
-                        class="row-summary accordion-trigger"
-                        role="button"
-                        tabindex="0"
-                        onclick={() => toggleAccordion(player.nickname)}
-                        onkeydown={(e) => {
-                          if (e.key === 'Enter' || e.key === ' ') {
-                            e.preventDefault();
-                            toggleAccordion(player.nickname);
-                          }
-                        }}
-                      >
-                        <span class="col-player bold">
-                          {#if player.isCaptain}
-                            <span class="badge-cap red">C</span>
-                          {/if}
-                          {player.nickname}
-                        </span>
-                        <span class="col-pts red-txt">{player.points}</span>
-                        <span class="col-stat">{player.goals}</span>
-                        <span class="col-stat">{player.assists}</span>
-                        <span class="col-stat">{player.passes}</span>
-                        <span class="col-stat">{player.shots}</span>
-                        <span class="col-arrow chevron-icon">{isExpanded ? '▲' : '▼'}</span>
-                      </div>
-
-                      {#if isExpanded}
-                        <div class="accordion-drawer">
-                          <div class="drawer-grid">
-                            <div class="drawer-chip">
-                              <span class="chip-label">Toques</span>
-                              <span class="chip-val text-muted">0</span>
-                            </div>
-                            <div class="drawer-chip">
-                              <span class="chip-label">Pases</span>
-                              <span class="chip-val text-cyan">+{player.passes * 10}</span>
-                            </div>
-                            <div class="drawer-chip">
-                              <span class="chip-label">Tiros</span>
-                              <span class="chip-val text-cyan">+{player.shots * 20}</span>
-                            </div>
-                            <div class="drawer-chip">
-                              <span class="chip-label">Goles</span>
-                              <span class="chip-val text-green">+{player.goals * 100}</span>
-                            </div>
-                            <div class="drawer-chip">
-                              <span class="chip-label">Autogol</span>
-                              <span class="chip-val text-error">-{player.ownGoals ? player.ownGoals * 50 : 0}</span>
-                            </div>
-                          </div>
-                        </div>
-                      {/if}
-                    </div>
-                  {/each}
-                </div>
-              </div>
-
-              <!-- TABLA BLUE -->
-              <div
-                class="team-table-box blue-box"
-                style="--captain-visitor-primary: {bluePrimaryColor}; --captain-visitor-glow: {bluePrimaryColor}40; --captain-visitor-tertiary: {blueKitTertiary};"
-              >
-                <div
-                  class="table-header blue-header captain-bicolor-header"
-                  style="background: linear-gradient(90deg, {bluePrimaryColor} 0%, {bluePrimaryColor} 30%, {blueSecondaryColor} 70%, {blueSecondaryColor} 100%);"
-                >
-                  <span
-                    class="col-team-name-hdr"
-                    style="color: {blueKitTertiary}; text-shadow: {blueHasOutline ? '-1px -1px 0 #000000, 1px -1px 0 #000000, -1px 1px 0 #000000, 1px 1px 0 #000000' : 'none'};"
-                  >{blueTeamName}</span>
-                  <div class="col-headers-right" style="color: {blueKitTertiary};">
-                    <span class="col-pts">Pts</span>
-                    <span class="col-stat">G</span>
-                    <span class="col-stat">A</span>
-                    <span class="col-stat">P</span>
-                    <span class="col-stat">S</span>
-                    <span class="col-arrow"></span>
-                  </div>
-                </div>
-
-                <div class="table-scroll-body custom-scrollbar">
-                  {#each gameUI.blueTeamStats as player}
-                    {@const isExpanded = expandedPlayerId === player.nickname}
-                    <div
-                      class="player-stat-row"
-                      class:is-mvp={player.isMvp}
-                      class:row-expanded={isExpanded}
-                    >
-                      <div
-                        class="row-summary accordion-trigger"
-                        role="button"
-                        tabindex="0"
-                        onclick={() => toggleAccordion(player.nickname)}
-                        onkeydown={(e) => {
-                          if (e.key === 'Enter' || e.key === ' ') {
-                            e.preventDefault();
-                            toggleAccordion(player.nickname);
-                          }
-                        }}
-                      >
-                        <span class="col-player bold" class:gold-player={player.isMvp}>
-                          {#if player.isMvp}
-                            <svg class="crown-svg-sm" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-                              <path d="M3 18h18v2H3v-2zm0-2l2-9 5 4 2-6 2 6 5-4 2 9H3z"></path>
-                            </svg>
-                          {:else if player.isCaptain}
-                            <span class="badge-cap blue">C</span>
-                          {/if}
-                          {player.nickname}
-                          {#if player.isHost}
-                            <span class="host-tag">(Host)</span>
-                          {/if}
-                        </span>
-                        <span class="col-pts" class:gold-txt={player.isMvp} class:blue-txt={!player.isMvp}>
-                          {player.points}
-                        </span>
-                        <span class="col-stat" class:gold-stat={player.isMvp}>{player.goals}</span>
-                        <span class="col-stat">{player.assists}</span>
-                        <span class="col-stat">{player.passes}</span>
-                        <span class="col-stat">{player.shots}</span>
-                        <span class="col-arrow chevron-icon">{isExpanded ? '▲' : '▼'}</span>
-                      </div>
-
-                      {#if isExpanded}
-                        <div class="accordion-drawer">
-                          <div class="drawer-grid">
-                            <div class="drawer-chip">
-                              <span class="chip-label">Toques</span>
-                              <span class="chip-val text-muted">0</span>
-                            </div>
-                            <div class="drawer-chip">
-                              <span class="chip-label">Pases</span>
-                              <span class="chip-val text-cyan">+{player.passes * 10}</span>
-                            </div>
-                            <div class="drawer-chip">
-                              <span class="chip-label">Tiros</span>
-                              <span class="chip-val text-cyan">+{player.shots * 20}</span>
-                            </div>
-                            <div class="drawer-chip">
-                              <span class="chip-label">Goles</span>
-                              <span class="chip-val text-gold">+{player.goals * 100}</span>
-                            </div>
-                            <div class="drawer-chip">
-                              <span class="chip-label">Autogol</span>
-                              <span class="chip-val text-muted">0</span>
-                            </div>
-                          </div>
-                        </div>
-                      {/if}
-                    </div>
-                  {/each}
-                </div>
-              </div>
-            </div>
+            {@render statsTeamTable('red', redTeamName, redPrimaryColor, redSecondaryColor, redKitTertiary, redHasOutline, gameUI.redTeamStats)}
+            {@render statsTeamTable('blue', blueTeamName, bluePrimaryColor, blueSecondaryColor, blueKitTertiary, blueHasOutline, gameUI.blueTeamStats)}
           </div>
         </div>
+      </div>
 
       <!-- ======================================================== -->
       <!-- SLIDE 1: MENÚ DE SALA (CORREDOR DESLIZANTE)              -->
@@ -2511,27 +2551,54 @@
   /* VISTA DE ESTADÍSTICAS POST-PARTIDO                       */
   /* ======================================================== */
   .stats-header-row {
-    padding: 0.85rem 1.25rem;
-    background: rgba(8, 14, 24, 0.85);
-    border-bottom: 1px solid rgba(0, 229, 255, 0.25);
+    padding: 0.9rem 1.25rem;
+    background: #080e18;
+    border-bottom: 1px solid rgba(0, 229, 255, 0.28);
     display: grid;
-    grid-template-columns: 1fr auto 1fr;
+    grid-template-columns: minmax(0, 1.3fr) auto minmax(0, 0.9fr);
     align-items: center;
     flex-shrink: 0;
-    gap: 0.75rem;
+    gap: 0.85rem;
   }
 
-  /* Banner Homologado de Marcador de Estadísticas */
-  .stats-scoreboard-banner {
+  .stats-hero-matchup {
     justify-self: start;
     display: flex;
     align-items: center;
-    gap: 0.65rem;
-    background: rgba(10, 16, 26, 0.9);
+    gap: 0.7rem;
+    background: #0d1626;
     border: 1px solid rgba(0, 229, 255, 0.35);
-    border-radius: 0.5rem;
-    padding: 0.25rem 0.65rem;
-    box-shadow: 0 0 12px rgba(0, 229, 255, 0.15);
+    border-radius: 0.65rem;
+    padding: 0.38rem 0.75rem;
+    box-shadow: 0 0 14px rgba(0, 229, 255, 0.14);
+  }
+
+  .hero-team-side {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .hero-team-label {
+    font-family: 'Space Grotesk', system-ui, sans-serif;
+    font-size: 0.84rem;
+    font-weight: 800;
+    color: #e2e8f0;
+    letter-spacing: 0.04em;
+    max-width: 115px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .stats-hero-score {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.22rem 0.65rem;
+    border-radius: 0.45rem;
+    background: #070c16;
+    border: 1px solid rgba(255, 255, 255, 0.12);
   }
 
   .stats-center-zone {
@@ -2594,17 +2661,17 @@
 
   .stats-score-num {
     font-family: 'JetBrains Mono', monospace;
-    font-size: 1.35rem;
-    font-weight: 800;
+    font-size: 1.7rem;
+    font-weight: 900;
     color: #ffffff;
-    min-width: 1.2rem;
+    min-width: 1.35rem;
     text-align: center;
     line-height: 1;
   }
 
   .stats-score-sep {
     font-family: 'JetBrains Mono', monospace;
-    font-size: 1rem;
+    font-size: 1.15rem;
     font-weight: 700;
     color: #849396;
     line-height: 1;
@@ -2616,27 +2683,51 @@
     align-items: center;
     justify-content: flex-end;
     gap: 0.5rem;
+    flex-wrap: wrap;
+  }
+
+  .match-result-chip {
+    font-family: 'Space Grotesk', system-ui, sans-serif;
+    font-size: 0.74rem;
+    font-weight: 800;
+    letter-spacing: 0.05em;
+    color: #00e5ff;
+    background: #0d1626;
+    border: 1px solid rgba(0, 229, 255, 0.35);
+    padding: 0.24rem 0.58rem;
+    border-radius: 0.32rem;
   }
 
   .match-time-chip {
     font-family: 'JetBrains Mono', monospace;
-    font-size: 0.8rem;
+    font-size: 0.82rem;
     color: #ffe16d;
     background: #080e18;
-    padding: 0.2rem 0.5rem;
-    border-radius: 0.25rem;
+    padding: 0.24rem 0.55rem;
+    border-radius: 0.32rem;
     border: 1px solid rgba(255, 219, 60, 0.3);
   }
 
   .mvp-golden-plaque {
     display: flex;
     align-items: center;
-    gap: 0.4rem;
-    background: rgba(255, 219, 60, 0.12);
+    gap: 0.45rem;
+    background: #17140a;
     border: 1px solid #ffe16d;
-    padding: 0.3rem 0.75rem;
-    border-radius: 0.375rem;
-    box-shadow: 0 0 16px rgba(255, 215, 0, 0.4);
+    padding: 0.34rem 0.8rem;
+    border-radius: 0.42rem;
+    box-shadow: 0 0 16px rgba(255, 215, 0, 0.32);
+    flex-wrap: wrap;
+  }
+
+  .mvp-mini-line {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.72rem;
+    font-weight: 700;
+    color: #f8fafc;
+    background: rgba(255, 255, 255, 0.06);
+    padding: 0.1rem 0.4rem;
+    border-radius: 0.25rem;
   }
 
   .mvp-title {
@@ -2690,13 +2781,23 @@
   .table-header {
     display: flex;
     align-items: center;
-    padding: 0.45rem 0.65rem;
+    justify-content: space-between;
+    gap: 0.5rem;
+    padding: 0.5rem 0.65rem;
     font-family: 'Chivo', system-ui, sans-serif;
     font-size: 0.75rem;
     font-weight: 800;
-    letter-spacing: 0.08em;
+    letter-spacing: 0.06em;
     text-transform: uppercase;
     flex-shrink: 0;
+  }
+
+  .table-header-left {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex: 1;
+    min-width: 0;
   }
 
   .col-team-name-hdr {
@@ -2709,7 +2810,36 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    flex: 1;
+  }
+
+  .team-expand-all-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    padding: 0.16rem 0.48rem;
+    border-radius: 0.3rem;
+    background: rgba(8, 14, 24, 0.78);
+    border: 1px solid rgba(255, 255, 255, 0.28);
+    color: #f8fafc;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.64rem;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    text-transform: none;
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: all 0.15s ease;
+  }
+
+  .team-expand-all-btn:hover:not(:disabled) {
+    background: #080e18;
+    border-color: #00e5ff;
+    color: #00e5ff;
+  }
+
+  .team-expand-all-btn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
   }
 
   .col-headers-right {
@@ -2726,8 +2856,8 @@
   }
 
   .col-player { flex: 1; text-align: left; }
-  .col-pts { width: 44px; text-align: right; }
-  .col-stat { width: 30px; text-align: center; }
+  .col-pts { width: 46px; text-align: right; font-variant-numeric: tabular-nums; }
+  .col-stat { width: 28px; text-align: center; font-variant-numeric: tabular-nums; }
   .col-arrow { width: 22px; text-align: center; }
 
   .table-scroll-body {

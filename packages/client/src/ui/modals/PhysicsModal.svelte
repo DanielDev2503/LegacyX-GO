@@ -171,11 +171,11 @@
     {
       key: 'staminaRegenMovingRate',
       label: 'Velocidad de recarga en movimiento',
-      sublabel: 'Porcentaje relativo de recarga al desplazarse sin usar Turbo (0% - 200%)',
+      sublabel: 'Porcentaje relativo de recarga al desplazarse sin usar Turbo (0% - 200%, defecto 25%)',
       min: 0,
       max: 200,
       step: 5,
-      defaultVal: 100,
+      defaultVal: 25,
       unit: '%',
       parentToggle: 'staminaRegenMoving'
     },
@@ -282,6 +282,8 @@
   function handleReset() {
     if (!gameUI.isHost) return;
     gameUI.resetGameplayConfigToDefault();
+    gameUI.updateGameplayConfig('staminaRegenMoving', false);
+    gameUI.updateGameplayConfig('staminaRegenMovingRate', 25);
   }
 
   function handleBackdropClick(e: MouseEvent) {

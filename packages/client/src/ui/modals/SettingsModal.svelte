@@ -1,15 +1,19 @@
 <script lang="ts">
   import { gameUI, formatKeybindCode, type BallSkinType, type PatternType } from '../state/gameUI.svelte.js';
-  import { userProfile } from '../state/userProfile.svelte.js';
+  import { userProfile, validateAccountUsername } from '../state/userProfile.svelte.js';
   import { mouseButtonToCode } from '../../controllers/InputManager.js';
   import { soundFX } from '../../audio/SoundFX.js';
   import { EMOJI_CATALOG } from '../utils/constants.js';
   import { tooltip } from '../actions/tooltip.js';
   import { drawBallDesign, type BallSkin } from '../../renderer/ballDesigns.js';
 
-  type SettingsTab = 'controls' | 'audio' | 'video' | 'kits' | 'avatar';
+  type SettingsTab = 'controls' | 'audio' | 'video' | 'kits' | 'avatar' | 'account';
   let activeTab = $state<SettingsTab>(
-    gameUI.activeSettingsTab === 'club' ? 'avatar' : (gameUI.activeSettingsTab as SettingsTab) || 'controls'
+    (gameUI.activeSettingsTab as string) === 'club'
+      ? 'avatar'
+      : (gameUI.activeSettingsTab as string) === 'account'
+        ? 'account'
+        : ((gameUI.activeSettingsTab as SettingsTab) || 'controls')
   );
 
   // Keybinding remapping state
@@ -84,7 +88,7 @@
   function switchTab(tab: SettingsTab) {
     soundFX.playUIClick();
     activeTab = tab;
-    gameUI.activeSettingsTab = tab;
+    gameUI.activeSettingsTab = tab as any;
   }
 
   function handleClose() {
@@ -250,11 +254,23 @@
   let nameChangeError = $state<string | null>(null);
   let nameChangeSuccess = $state<string | null>(null);
 
+  function goToAuthFromSettings() {
+    soundFX.playUIClick();
+    userProfile.gatekeeperTab = 'login';
+    gameUI.closeOverlay();
+    gameUI.navigateTo('GATEKEEPER');
+  }
+
   async function handleNameChange() {
     nameChangeError = null;
     nameChangeSuccess = null;
     const clean = newUsernameInput.trim();
     if (!clean) return;
+    const validation = validateAccountUsername(clean);
+    if (!validation.valid) {
+      nameChangeError = validation.error ?? 'Nombre inválido (3 a 15 caracteres).';
+      return;
+    }
     if (!confirm(`¿Estás seguro de que deseas fijar tu nombre oficial como "${clean}"? Esta acción no se puede deshacer.`)) {
       return;
     }
@@ -392,6 +408,21 @@
             </svg>
           </span>
           <span class="tab-label">Avatar y emotes</span>
+        </button>
+
+        <button
+          type="button"
+          class="tab-btn"
+          class:active={activeTab === 'account'}
+          onclick={() => switchTab('account')}
+        >
+          <span class="tab-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+              <circle cx="12" cy="7" r="4" />
+            </svg>
+          </span>
+          <span class="tab-label">Cuenta</span>
         </button>
       </nav>
     </aside>
@@ -2124,76 +2155,6 @@
               </div>
             </div>
 
-            <!-- Cambio único de nombre de usuario -->
-            <div class="username-change-card">
-              <div class="card-header-flex">
-                <div class="header-info-title">
-                  <h4 class="card-title">Cambio único de nombre de usuario</h4>
-                  <small class="bind-hint">Permite renombrar tu perfil de jugador una única vez.</small>
-                </div>
-                {#if userProfile.isAuthenticated}
-                  {#if userProfile.nameChanged}
-                    <span class="lock-status-badge locked">
-                      <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2">
-                        <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
-                        <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
-                      </svg>
-                      Cambio ya utilizado
-                    </span>
-                  {:else}
-                    <span class="lock-status-badge available">Disponible (1 uso)</span>
-                  {/if}
-                {:else}
-                  <span class="lock-status-badge guest">Solo cuentas registradas</span>
-                {/if}
-              </div>
-
-              {#if userProfile.isAuthenticated}
-                {#if userProfile.nameChanged}
-                  <div class="name-locked-notice">
-                    <p>Tu nombre oficial está fijado como <strong>{userProfile.username}</strong> y no admite modificaciones adicionales.</p>
-                  </div>
-                {:else}
-                  <div class="name-edit-form">
-                    <div class="name-input-group">
-                      <label for="new-username-input">Nuevo nombre (3 a 20 caracteres):</label>
-                      <div class="input-with-btn">
-                        <input
-                          id="new-username-input"
-                          type="text"
-                          class="initials-input-field name-field"
-                          maxlength="20"
-                          bind:value={newUsernameInput}
-                          placeholder="Tu nuevo apodo"
-                        />
-                        <button
-                          type="button"
-                          class="cyber-btn accent"
-                          disabled={isSavingName || !newUsernameInput.trim() || newUsernameInput.trim() === userProfile.username}
-                          onclick={handleNameChange}
-                        >
-                          {isSavingName ? 'GUARDANDO...' : 'CONFIRMAR CAMBIO'}
-                        </button>
-                      </div>
-                    </div>
-                    {#if nameChangeError}
-                      <p class="error-msg">{nameChangeError}</p>
-                    {/if}
-                    {#if nameChangeSuccess}
-                      <p class="success-msg">{nameChangeSuccess}</p>
-                    {/if}
-                    <p class="warning-alert-text">
-                      ⚠️ <strong>Atención:</strong> Esta acción es irreversible. Una vez modificado, tu nombre no podrá volver a cambiarse.
-                    </p>
-                  </div>
-                {/if}
-              {:else}
-                <div class="guest-name-info">
-                  <p>Estás jugando en modo invitado (<code>{gameUI.nickname}</code>). Inicia sesión con Google para desbloquear tu perfil oficial permanente.</p>
-                </div>
-              {/if}
-            </div>
-
             <!-- Toggler de Emotes en Cancha con Tooltip Explicativo -->
             <div class="emotes-toggle-card">
               <div class="toggle-card-head">
@@ -2337,6 +2298,146 @@
                 </button>
               </div>
             </div>
+          </div>
+        </div>
+      {:else if activeTab === 'account'}
+        <div class="tab-pane">
+          <div class="section-header-row">
+            <h3 class="section-heading">Cuenta y Perfil Oficial</h3>
+          </div>
+
+          <div class="settings-scroll-area">
+            {#if userProfile.isAuthenticated}
+              <!-- Resumen de Cuenta Registrada -->
+              <div class="account-summary-card">
+                <div class="account-summary-top">
+                  <div class="account-identity-block">
+                    <h4 class="account-display-name">{userProfile.username || gameUI.nickname}</h4>
+                    <span class="account-email-line">{userProfile.email || 'Correo no registrado'}</span>
+                  </div>
+                  <div class="account-badges-row">
+                    <span class="account-badge role-badge">{userProfile.role}</span>
+                    <span class="account-badge verify-badge" class:verified={userProfile.isVerified}>
+                      {userProfile.isVerified ? 'Verificada' : 'No verificada'}
+                    </span>
+                    <span class="account-badge elo-badge">{userProfile.elo} ELO</span>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Estadísticas Personales -->
+              <div class="account-stats-card">
+                <div class="card-header-flex">
+                  <h4 class="card-title">Estadísticas competitivas personales</h4>
+                </div>
+                <div class="account-stats-grid">
+                  <div class="account-stat-box">
+                    <span class="stat-box-label">Partidos</span>
+                    <strong class="stat-box-val">{userProfile.stats.matchesPlayed}</strong>
+                  </div>
+                  <div class="account-stat-box">
+                    <span class="stat-box-label">Victorias</span>
+                    <strong class="stat-box-val stat-green">{userProfile.stats.wins}</strong>
+                  </div>
+                  <div class="account-stat-box">
+                    <span class="stat-box-label">Derrotas</span>
+                    <strong class="stat-box-val stat-red">{userProfile.stats.losses}</strong>
+                  </div>
+                  <div class="account-stat-box">
+                    <span class="stat-box-label">Empates</span>
+                    <strong class="stat-box-val">{userProfile.stats.draws}</strong>
+                  </div>
+                  <div class="account-stat-box">
+                    <span class="stat-box-label">Goles</span>
+                    <strong class="stat-box-val stat-cyan">{userProfile.stats.goals}</strong>
+                  </div>
+                  <div class="account-stat-box">
+                    <span class="stat-box-label">Asistencias</span>
+                    <strong class="stat-box-val stat-cyan">{userProfile.stats.assists}</strong>
+                  </div>
+                  <div class="account-stat-box">
+                    <span class="stat-box-label">Atajadas</span>
+                    <strong class="stat-box-val stat-green">{userProfile.stats.saves}</strong>
+                  </div>
+                  <div class="account-stat-box">
+                    <span class="stat-box-label">MVPs</span>
+                    <strong class="stat-box-val stat-gold">{userProfile.stats.mvpCount}</strong>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Cambio único de nombre de usuario (3 a 15 caracteres) -->
+              <div class="username-change-card">
+                <div class="card-header-flex">
+                  <div class="header-info-title">
+                    <h4 class="card-title">Cambio único de nombre de usuario</h4>
+                    <small class="bind-hint">Permite renombrar tu perfil oficial una única vez (3 a 15 caracteres).</small>
+                  </div>
+                  {#if userProfile.nameChanged}
+                    <span class="lock-status-badge locked">
+                      <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2">
+                        <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+                        <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+                      </svg>
+                      Cambio ya utilizado
+                    </span>
+                  {:else}
+                    <span class="lock-status-badge available">Disponible (1 uso)</span>
+                  {/if}
+                </div>
+
+                {#if userProfile.nameChanged}
+                  <div class="name-locked-notice">
+                    <p>Tu nombre oficial está fijado como <strong>{userProfile.username}</strong> y no admite modificaciones adicionales.</p>
+                  </div>
+                {:else}
+                  <div class="name-edit-form">
+                    <div class="name-input-group">
+                      <label for="new-username-input">Nuevo nombre (3 a 15 caracteres):</label>
+                      <div class="input-with-btn">
+                        <input
+                          id="new-username-input"
+                          type="text"
+                          class="initials-input-field name-field"
+                          maxlength="15"
+                          bind:value={newUsernameInput}
+                          placeholder="Tu nuevo apodo"
+                        />
+                        <button
+                          type="button"
+                          class="cyber-btn accent"
+                          disabled={isSavingName || !newUsernameInput.trim() || newUsernameInput.trim() === userProfile.username}
+                          onclick={handleNameChange}
+                        >
+                          {isSavingName ? 'GUARDANDO...' : 'CONFIRMAR CAMBIO'}
+                        </button>
+                      </div>
+                    </div>
+                    {#if nameChangeError}
+                      <p class="error-msg">{nameChangeError}</p>
+                    {/if}
+                    {#if nameChangeSuccess}
+                      <p class="success-msg">{nameChangeSuccess}</p>
+                    {/if}
+                    <p class="warning-alert-text">
+                      ⚠️ <strong>Atención:</strong> Esta acción es irreversible. Una vez modificado, tu nombre no podrá volver a cambiarse.
+                    </p>
+                  </div>
+                {/if}
+              </div>
+            {:else}
+              <div class="account-guest-card">
+                <div class="account-guest-copy">
+                  <h4 class="card-title">Modo Invitado activo</h4>
+                  <p>
+                    Actualmente juegas como <code>{gameUI.nickname}</code>. Inicia sesión o crea una cuenta para guardar tu ELO, estadísticas competitivas, repeticiones en la nube y nombre oficial único.
+                  </p>
+                </div>
+                <button type="button" class="cyber-btn accent" onclick={goToAuthFromSettings}>
+                  Iniciar sesión / Crear cuenta
+                </button>
+              </div>
+            {/if}
           </div>
         </div>
       {/if}
@@ -3907,8 +4008,7 @@
     color: #94a3b8;
   }
 
-  .name-locked-notice p,
-  .guest-name-info p {
+  .name-locked-notice p {
     font-size: 0.88rem;
     color: #94a3b8;
     line-height: 1.45;
@@ -4363,6 +4463,121 @@
     width: 14px;
     height: 14px;
     cursor: pointer;
+  }
+
+  .account-summary-card,
+  .account-stats-card,
+  .account-guest-card {
+    background: #0d1626;
+    border: 1px solid rgba(0, 229, 255, 0.25);
+    border-radius: 0.65rem;
+    padding: 0.9rem 1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+
+  .account-summary-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.85rem;
+    flex-wrap: wrap;
+  }
+
+  .account-identity-block {
+    display: flex;
+    flex-direction: column;
+    gap: 0.18rem;
+  }
+
+  .account-display-name {
+    margin: 0;
+    font-family: 'Space Grotesk', system-ui, sans-serif;
+    font-size: 1.15rem;
+    font-weight: 900;
+    color: #ffffff;
+    letter-spacing: 0.03em;
+  }
+
+  .account-email-line {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.76rem;
+    color: #94a3b8;
+  }
+
+  .account-badges-row {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    flex-wrap: wrap;
+  }
+
+  .account-badge {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.7rem;
+    font-weight: 800;
+    text-transform: uppercase;
+    padding: 0.2rem 0.52rem;
+    border-radius: 0.32rem;
+    border: 1px solid rgba(148, 163, 184, 0.35);
+    background: #080e18;
+    color: #cbd5e1;
+  }
+
+  .account-badge.verify-badge.verified {
+    border-color: rgba(46, 204, 113, 0.55);
+    color: #2ecc71;
+  }
+
+  .account-badge.elo-badge {
+    border-color: rgba(255, 215, 0, 0.5);
+    color: #ffd700;
+  }
+
+  .account-stats-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 0.55rem;
+  }
+
+  .account-stat-box {
+    background: #080e18;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 0.45rem;
+    padding: 0.55rem 0.65rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+  }
+
+  .stat-box-label {
+    font-size: 0.7rem;
+    color: #94a3b8;
+    font-weight: 600;
+  }
+
+  .stat-box-val {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 1rem;
+    font-weight: 800;
+    color: #f8fafc;
+  }
+
+  .stat-box-val.stat-green { color: #2ecc71; }
+  .stat-box-val.stat-red { color: #ff4757; }
+  .stat-box-val.stat-cyan { color: #00e5ff; }
+  .stat-box-val.stat-gold { color: #ffd700; }
+
+  .account-guest-card {
+    align-items: flex-start;
+  }
+
+  .account-guest-copy p {
+    margin: 0.35rem 0 0;
+    font-size: 0.84rem;
+    line-height: 1.45;
+    color: #cbd5e1;
   }
 
   /* Responsive Adjustments */

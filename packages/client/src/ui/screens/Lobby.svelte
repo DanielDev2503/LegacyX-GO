@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { gameUI, estimateRoomPing, type RoomInfo } from '../state/gameUI.svelte.js';
+  import { gameUI, type RoomInfo } from '../state/gameUI.svelte.js';
   import { userProfile, type LeaderboardCategory } from '../state/userProfile.svelte.js';
   import { soundFX } from '../../audio/SoundFX.js';
   import { sharedSignaling } from '../../net/SignalingClient.js';
@@ -10,6 +10,24 @@
   let passwordError = $state('');
   let isRefreshing = $state(false);
   let hoveredRoomId = $state<string | null>(null);
+  const pingProbeTimestamps = new Map<string, number>();
+
+  function getPingTier(pingMs: number): 'optimal' | 'good' | 'high' | 'pending' {
+    if (!(pingMs > 0)) return 'pending';
+    if (pingMs <= 60) return 'optimal';
+    if (pingMs <= 120) return 'good';
+    return 'high';
+  }
+
+  function handleRoomHover(roomId: string) {
+    hoveredRoomId = roomId;
+    const now = Date.now();
+    const lastProbe = pingProbeTimestamps.get(roomId) ?? 0;
+    if (now - lastProbe >= 1500) {
+      pingProbeTimestamps.set(roomId, now);
+      sharedSignaling.probeRoomPing(roomId);
+    }
+  }
 
   const rankingTabs: ReadonlyArray<{ id: LeaderboardCategory; label: string; unit: string }> = [
     { id: 'elo', label: 'Mayor ELO', unit: 'ELO' },
@@ -53,37 +71,51 @@
 
   $effect(() => {
     void userProfile.fetchLeaderboard(userProfile.leaderboardCategory);
+  });
 
-    void sharedSignaling.ensureConnected().then(() => {
-      sharedSignaling.send({ type: 'get_rooms' });
-      sharedSignaling.send({ type: 'ROOM_LIST' });
-    });
-    gameUI.refreshRooms();
+  $effect(() => {
+    let disposed = false;
 
     const onRoomList = (data: { rooms?: Array<any>; onlineCount?: number }) => {
+      if (disposed) return;
       if (Array.isArray(data.rooms)) {
-        gameUI.rooms = data.rooms.map((r: any) => ({
-          id: r.id || `R-${Math.random().toString(36).substring(2, 6)}`,
-          name: r.name || 'Sala Pública',
-          playersCount: r.playerCount ?? r.playersCount ?? 1,
-          maxPlayers: Math.min(30, r.maxPlayers ?? 12),
-          ping: gameUI.realPing ?? 20,
-          hostPingMs: typeof r.hostPingMs === 'number' ? r.hostPingMs : undefined,
-          countryCode: typeof r.countryCode === 'string' && r.countryCode ? r.countryCode : 'UN',
-          roomType: r.roomType === 'ranked' ? 'ranked' : 'casual',
-          isPrivate: Boolean(r.isPrivate ?? r.hasPassword),
-          stadium: r.stadiumId || r.stadium || 'AF 3v3'
-        }));
+        const previousPings = new Map(gameUI.rooms.map((rm) => [rm.id, rm.ping]));
+        gameUI.rooms = data.rooms.map((r: any) => {
+          const id = r.id || `R-${Math.random().toString(36).substring(2, 6)}`;
+          const measuredPing =
+            typeof r.ping === 'number' && r.ping > 0 ? r.ping : (previousPings.get(id) ?? 0);
+          return {
+            id,
+            name: r.name || 'Sala Pública',
+            playersCount: r.playerCount ?? r.playersCount ?? 1,
+            maxPlayers: Math.min(30, Math.max(2, r.maxPlayers ?? 12)),
+            ping: measuredPing,
+            hostPingMs: typeof r.hostPingMs === 'number' ? r.hostPingMs : undefined,
+            countryCode: typeof r.countryCode === 'string' && r.countryCode ? r.countryCode : 'UN',
+            roomType: r.roomType === 'ranked' ? 'ranked' : 'casual',
+            isPrivate: Boolean(r.isPrivate ?? r.hasPassword),
+            stadium: r.stadiumId || r.stadium || 'AF 3v3'
+          };
+        });
       }
       if (typeof data.onlineCount === 'number') {
         gameUI.onlineUsersCount = data.onlineCount;
       }
     };
 
+    sharedSignaling.off('room_list', onRoomList);
+    sharedSignaling.off('ROOM_LIST', onRoomList);
     sharedSignaling.on('room_list', onRoomList);
     sharedSignaling.on('ROOM_LIST', onRoomList);
 
+    void sharedSignaling.ensureConnected().then(() => {
+      if (disposed) return;
+      sharedSignaling.send({ type: 'get_rooms' });
+      sharedSignaling.send({ type: 'ROOM_LIST' });
+    });
+
     return () => {
+      disposed = true;
       sharedSignaling.off('room_list', onRoomList);
       sharedSignaling.off('ROOM_LIST', onRoomList);
     };
@@ -152,19 +184,40 @@
     <section class="rooms-card">
       <header class="card-header">
         <div class="header-left-group">
-          <button
-            type="button"
-            class="nav-pill-btn"
-            onmouseenter={() => soundFX.playUIHover()}
-            onclick={() => gameUI.navigateTo('GATEKEEPER')}
-            title="Volver al Inicio"
-          >
-            <svg class="back-arrow-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4">
-              <line x1="19" y1="12" x2="5" y2="12"></line>
-              <polyline points="12 19 5 12 12 5"></polyline>
-            </svg>
-            <span>Inicio</span>
-          </button>
+          {#if userProfile.isAuthenticated}
+            <button
+              type="button"
+              class="nav-pill-btn"
+              onmouseenter={() => soundFX.playUIHover()}
+              onclick={() => {
+                soundFX.playUIClick();
+                userProfile.logout();
+                gameUI.navigateTo('GATEKEEPER');
+              }}
+              title="Cerrar sesión"
+            >
+              <svg class="back-arrow-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4">
+                <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path>
+                <polyline points="16 17 21 12 16 7"></polyline>
+                <line x1="21" y1="12" x2="9" y2="12"></line>
+              </svg>
+              <span>Cerrar sesión</span>
+            </button>
+          {:else}
+            <button
+              type="button"
+              class="nav-pill-btn"
+              onmouseenter={() => soundFX.playUIHover()}
+              onclick={() => gameUI.navigateTo('GATEKEEPER')}
+              title="Volver al Inicio"
+            >
+              <svg class="back-arrow-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4">
+                <line x1="19" y1="12" x2="5" y2="12"></line>
+                <polyline points="12 19 5 12 12 5"></polyline>
+              </svg>
+              <span>Inicio</span>
+            </button>
+          {/if}
 
           <div class="title-with-bar">
             <div class="accent-bar"></div>
@@ -236,14 +289,11 @@
       <div class="room-list">
         {#each gameUI.filteredRooms as room (room.id)}
           {@const ratio = room.maxPlayers > 0 ? room.playersCount / room.maxPlayers : 0}
-          {@const pingEst = estimateRoomPing(sharedSignaling.pingMs || gameUI.realPing, room.hostPingMs)}
+          {@const pingTier = getPingTier(room.ping)}
           <div
             class="room-row"
             role="listitem"
-            onmouseenter={() => {
-              hoveredRoomId = room.id;
-              gameApp.probeRoomPing(room.id);
-            }}
+            onmouseenter={() => handleRoomHover(room.id)}
             onmouseleave={() => {
               if (hoveredRoomId === room.id) hoveredRoomId = null;
             }}
@@ -269,14 +319,15 @@
             </div>
 
             <div class="room-meta">
-              {#if hoveredRoomId === room.id}
+              {#if hoveredRoomId === room.id || room.ping > 0}
                 <span
                   class="hover-ping-pill"
-                  class:ping-optimal={pingEst.tier === 'optimal'}
-                  class:ping-good={pingEst.tier === 'good'}
-                  class:ping-high={pingEst.tier === 'high'}
+                  class:ping-optimal={pingTier === 'optimal'}
+                  class:ping-good={pingTier === 'good'}
+                  class:ping-high={pingTier === 'high'}
+                  class:ping-pending={pingTier === 'pending'}
                 >
-                  Ping estimado: ~{pingEst.ms} ms ({pingEst.label})
+                  {room.ping > 0 ? `${room.ping} ms` : 'Midiendo...'}
                 </span>
               {/if}
 
@@ -337,18 +388,12 @@
         <button
           type="button"
           class="btn-secondary-hud"
-          title="Abrir reproductor de repeticiones .lxr"
+          title="Abrir reproductor de repeticiones"
           onmouseenter={() => soundFX.playUIHover()}
           onclick={() => {
             soundFX.playUIClick();
             if (!userProfile.isAuthenticated) {
-              gameUI.pushScoreEvent({
-                playerName: 'Debes iniciar sesión para ver repeticiones en la nube',
-                eventType: 'INICIA SESIÓN',
-                pointsText: '',
-                color: '#ff4757',
-                team: 'neutral'
-              });
+              gameUI.lobbyError = 'Solo cuentas registradas pueden ver o grabar repeticiones.';
               return;
             }
             gameUI.openModal('REPLAY_VIEWER');
@@ -388,16 +433,6 @@
           <div class="player-details">
             <div class="nick-row">
               <span class="player-nick">{gameUI.nickname}</span>
-              {#if !userProfile.isGuest && userProfile.isAuthenticated}
-                <button
-                  type="button"
-                  class="btn-logout-compact"
-                  onclick={() => userProfile.logout()}
-                  title="Cerrar sesión"
-                >
-                  CERRAR SESIÓN
-                </button>
-              {/if}
             </div>
             <span class="player-sub">
               {userProfile.isGuest ? 'Sin progreso competitivo' : `${userProfile.elo} ELO · Cuenta verificada`}
@@ -922,6 +957,12 @@
     color: #ff6b7a;
   }
 
+  .hover-ping-pill.ping-pending {
+    background: rgba(148, 163, 184, 0.14);
+    border: 1px solid rgba(148, 163, 184, 0.4);
+    color: #cbd5e1;
+  }
+
   .capacity-badge {
     min-width: 54px;
     text-align: center;
@@ -1132,25 +1173,6 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-  }
-
-  .btn-logout-compact {
-    padding: 2px 7px;
-    font-size: 0.65rem;
-    font-weight: 700;
-    font-family: 'Space Grotesk', sans-serif;
-    color: #ff4757;
-    background: rgba(255, 71, 87, 0.12);
-    border: 1px solid rgba(255, 71, 87, 0.35);
-    border-radius: 4px;
-    cursor: pointer;
-    transition: all 0.15s ease;
-  }
-
-  .btn-logout-compact:hover {
-    background: rgba(255, 71, 87, 0.25);
-    border-color: #ff4757;
-    color: #ffffff;
   }
 
   .player-sub {

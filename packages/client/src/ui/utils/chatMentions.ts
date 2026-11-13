@@ -29,8 +29,8 @@ export function findActiveMentionToken(text: string, cursorIndex: number): Menti
   if (atIndex > 0 && !/\s/.test(before[atIndex - 1]!)) return null;
 
   const query = before.slice(atIndex + 1);
-  // Stop autocomplete once user typed two consecutive spaces or newline
-  if (/[\r\n]|\s{2,}/.test(query)) return null;
+  // Stop autocomplete once user types any whitespace (closes immediately after picking @Handle )
+  if (/\s/.test(query)) return null;
   // Keep single-word or nickname queries concise
   if (query.length > 24) return null;
 
@@ -112,11 +112,14 @@ function escapeRegex(str: string): string {
 export function segmentChatMentions(
   text: string,
   localNickname: string,
-  knownNames: ReadonlyArray<string | undefined> = []
+  knownNames: ReadonlyArray<string | undefined> = [],
+  senderNickname?: string
 ): ChatSegment[] {
   if (!text) return [{ kind: 'text', value: '', isSelf: false, isAll: false }];
 
   const selfLower = (localNickname || '').trim().toLowerCase();
+  const senderLower = (senderNickname ?? '').trim().toLowerCase();
+  const isOwnMessage = selfLower.length > 0 && senderLower === selfLower;
   const sortedNames = [...knownNames]
     .filter((n): n is string => typeof n === 'string')
     .map((n) => n.trim())
@@ -150,7 +153,7 @@ export function segmentChatMentions(
 
     const rawHandle = mentionText.slice(1).toLowerCase();
     const isAll = rawHandle === 'all';
-    const isSelf = isAll || (selfLower.length > 0 && rawHandle === selfLower);
+    const isSelf = !isOwnMessage && (isAll || (selfLower.length > 0 && rawHandle === selfLower));
 
     segments.push({
       kind: 'mention',
