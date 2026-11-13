@@ -218,12 +218,17 @@ describe('Game Scoring Engine & Ball Kinematics (Phase 1)', () => {
       expect(ronaldoStats.points).toBe(r1PrevPoints); // 0 touch points awarded
 
       // Case C: Ronaldo (red) intercepts in own half (x = -50 <= 0)
-      ronaldoDisc.pos.set(-50, 0);
-      engine.ball.pos.set(-50, 0);
+      engine.ball.pos.set(0, 250);
+      engine.ball.vel.set(0, 0);
+      for (let i = 0; i < 245; i++) engine.tick(new Map());
+
+      engine.ball.pos.set(50, 0);
       engine.ball.vel.set(-300, 0);
-      engine.registerBallTouch('b2', true); // b2 shot again
+      engine.registerBallTouch('b2', true); // b2 shot after cooldown from >= 50px away
 
       for (let i = 0; i < 16; i++) engine.tick(new Map());
+      ronaldoDisc.pos.set(-50, 0);
+      engine.ball.pos.set(-50, 0);
       engine.registerBallTouch('r1', false);
       expect(ronaldoStats.saves).toBe(r1PrevSaves + 1); // Save granted!
       expect(ronaldoStats.points).toBeGreaterThanOrEqual(100);

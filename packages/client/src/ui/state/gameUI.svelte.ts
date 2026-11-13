@@ -438,22 +438,6 @@ export function isFloatingScoreCategoryEnabled(
   }
 }
 
-export function estimateRoomPing(
-  clientPingMs: number | null | undefined,
-  hostPingMs?: number | null
-): { ms: number; label: string; tier: 'optimal' | 'good' | 'high' } {
-  const cPing = typeof clientPingMs === 'number' && clientPingMs >= 0 ? clientPingMs : 20;
-  const hPing = typeof hostPingMs === 'number' && hostPingMs >= 0 ? hostPingMs : 18;
-  const ms = Math.max(1, Math.round(cPing + hPing));
-  if (ms < 65) {
-    return { ms, label: 'Óptimo', tier: 'optimal' };
-  }
-  if (ms <= 130) {
-    return { ms, label: 'Estable', tier: 'good' };
-  }
-  return { ms, label: 'Alto', tier: 'high' };
-}
-
 export interface RoomInfo {
   id: string;
   name: string;
