@@ -5,6 +5,7 @@ import {
   PhysicsWorld,
   Player,
   MatchPhase,
+  GameMatchPhase,
   DEFAULT_GAMEPLAY_CONFIG,
   stepPlayerKinematics,
   BinaryProtocol,
@@ -358,45 +359,185 @@ describe('Core Task 1 Fixes & Anti-Cheat Hardening', () => {
     });
   });
 
-  describe('Item 11 + 12: Anti-Exploit Guards & Exact Scoring Arithmetic', () => {
-    it('awards ZERO points and emits ZERO score_event in practice mode, 1v0 rooms, or non-PLAYING phases', () => {
-      // 1) Practice mode
-      const practice = setupCompetitiveEngine();
-      const practiceEvents: ScoreEventEmitPayload[] = [];
-      practice.on('score_event', (e) => practiceEvents.push(e));
+  describe('Item 11 + 12 + Parity Item 1 & 5: Anti-Exploit Guards, Solo/Practice Parity & Exact Scoring Arithmetic', () => {
+    it('emits score_event and awards match points/stats in practice mode (isPracticeMode=true) and 1v0 solo rooms during PLAYING, without km/h in score_event text', () => {
+      // 1) Practice mode via step() from KICKOFF -> PLAYING -> Goal
+      const practice = new EngineInstance('classic');
       practice.isPracticeMode = true;
-      practice.ball.pos.set(practice.stadium.halfWidth + 20, 0);
-      practice.ball.vel.set(500, 0);
-      practice.recordTouch(1, true);
-      practice.handleGoalScored('red');
-      expect(practiceEvents.length).toBe(0);
-      expect(practice.getMatchStats().every((s) => s.points === 0)).toBe(true);
+      practice.addPlayer(1, 'red');
+      practice.playerNames.set(1, 'SoloTrainer');
+      const practiceEvents: ScoreEventEmitPayload[] = [];
+      const practiceGoals: GoalBannerDetails[] = [];
+      practice.on('score_event', (e) => practiceEvents.push(e));
+      practice.on('goal', (g) => practiceGoals.push(g));
 
-      // 2) 1v0 empty opponent team
+      practice.startMatch(false);
+      expect(practice.fsm.state).toBe(MatchPhase.KICKOFF);
+      expect(practice.canAwardMatchPoints()).toBe(false);
+
+      // Kick near right goal from KICKOFF -> transitions to PLAYING before recordTouch & handleGoalScored
+      const hw = practice.stadium.halfWidth;
+      practice.players.get(1)!.pos.set(hw - 35, 0);
+      practice.ball.pos.set(hw - 15, 0);
+      practice.ball.vel.set(500, 0);
+      practice.step(new Map([[1, { inputMask: INPUT_RIGHT | INPUT_KICK }]]));
+      for (let i = 0; i < 6 && practiceGoals.length === 0; i++) {
+        practice.step(new Map());
+      }
+
+      expect(practiceGoals.length).toBe(1);
+      expect(practiceGoals[0].speedKmh).toBeGreaterThanOrEqual(20);
+      const practiceShot = practiceEvents.find((e) => e.category === 'shot');
+      const practiceGoalEv = practiceEvents.find((e) => e.category === 'goal');
+      expect(practiceShot).toBeDefined();
+      expect(practiceShot?.points).toBe(20);
+      expect(practiceGoalEv).toBeDefined();
+      expect(practiceGoalEv?.points).toBeGreaterThanOrEqual(100);
+      expect(practiceGoalEv?.text).not.toMatch(/km\/h/i);
+      const practiceStats = practice.getMatchStats().find((s) => s.playerId === '1')!;
+      expect(practiceStats.goals).toBe(1);
+      expect(practiceStats.shots).toBe(1);
+      expect(practiceStats.points).toBeGreaterThanOrEqual(120);
+
+      // 2) 1v0 solo room (isPracticeMode=false, blue=0) during PLAYING
       const solo = new EngineInstance('classic');
       const soloEvents: ScoreEventEmitPayload[] = [];
       solo.on('score_event', (e) => soloEvents.push(e));
       solo.addPlayer(1, 'red');
+      solo.playerNames.set(1, 'SoloCasual');
       solo.startMatch(false);
       solo.fsm.startPlaying();
-      solo.ball.pos.set(100, 0);
+      expect(solo.canAwardMatchPoints()).toBe(true);
+
+      solo.players.get(1)!.pos.set(hw - 35, 0);
+      solo.ball.pos.set(hw - 15, 0);
       solo.ball.vel.set(450, 0);
       solo.recordTouch(1, true);
+      solo.ball.pos.set(hw + solo.ball.radius + 2, 0);
       solo.handleGoalScored('red');
-      expect(soloEvents.length).toBe(0);
-      expect(solo.getMatchStats().every((s) => s.points === 0)).toBe(true);
 
-      // 3) Outside PLAYING (PAUSED)
-      const paused = setupCompetitiveEngine();
-      const pausedEvents: ScoreEventEmitPayload[] = [];
-      paused.on('score_event', (e) => pausedEvents.push(e));
-      paused.pauseMatch();
-      paused.ball.pos.set(100, 0);
-      paused.ball.vel.set(450, 0);
-      paused.recordTouch(1, true);
-      paused.handleGoalScored('red');
-      expect(pausedEvents.length).toBe(0);
-      expect(paused.getMatchStats().every((s) => s.points === 0)).toBe(true);
+      expect(soloEvents.some((e) => e.category === 'shot' && e.points === 20)).toBe(true);
+      const soloGoalEv = soloEvents.find((e) => e.category === 'goal');
+      expect(soloGoalEv).toBeDefined();
+      expect(soloGoalEv?.text).toBe('¡Gol! +100');
+      expect(soloGoalEv?.text).not.toMatch(/km\/h/i);
+      const soloStats = solo.getMatchStats().find((s) => s.playerId === '1')!;
+      expect(soloStats.goals).toBe(1);
+      expect(soloStats.shots).toBe(1);
+      expect(soloStats.points).toBe(120);
+
+      // 3) GameEngine parity: canAwardPoints() true in PLAYING for both practice & 1v0
+      const ge = new GameEngine('classic');
+      ge.isPracticeMode = true;
+      ge.addPlayer(new Player({ id: 'r1', name: 'Trainer', team: 'red', isHost: true }));
+      ge.fsm.currentState = GameMatchPhase.PLAYING;
+      expect(ge.canAwardPoints()).toBe(true);
+
+      const geEvents: Array<{ playerId: string; text: string; points: number; category?: string }> = [];
+      ge.onScoreEvent = (playerId, text, points, _x, _y, _color, category) => {
+        geEvents.push({ playerId, text, points, category });
+      };
+      ge.ball.pos.set(ge.stadium.halfWidth - 15, 0);
+      ge.ball.vel.set(400, 0);
+      ge.playerDiscs.get('r1')!.pos.set(ge.stadium.halfWidth - 35, 0);
+      ge.registerBallTouch('r1', true);
+      ge.ball.pos.set(ge.stadium.halfWidth + ge.ball.radius + 4, 0);
+      ge.tick(new Map());
+      expect(geEvents.some((e) => e.category === 'shot' && e.points === 20)).toBe(true);
+      expect(geEvents.some((e) => e.category === 'goal' && e.points >= 100 && !/km\/h/i.test(e.text))).toBe(true);
+    });
+
+    it('awards ZERO points and emits ZERO score_event outside MatchPhase.PLAYING (STOP, KICKOFF, PAUSED, GOAL, CELEBRATION)', () => {
+      const blockedPhases = [
+        MatchPhase.STOP,
+        MatchPhase.KICKOFF,
+        MatchPhase.PAUSE,
+        MatchPhase.GOAL,
+        MatchPhase.CELEBRATION
+      ];
+
+      for (const phase of blockedPhases) {
+        const engine = setupCompetitiveEngine();
+        const events: ScoreEventEmitPayload[] = [];
+        engine.on('score_event', (e) => events.push(e));
+        engine.fsm.currentState = phase;
+
+        expect(engine.canAwardMatchPoints()).toBe(false);
+        engine.ball.pos.set(100, 0);
+        engine.ball.vel.set(450, 0);
+        engine.recordTouch(1, true);
+        engine.ball.pos.set(engine.stadium.halfWidth + 20, 0);
+        engine.handleGoalScored('red');
+
+        expect(events.length).toBe(0);
+        expect(engine.getMatchStats().every((s) => s.points === 0)).toBe(true);
+      }
+
+      const ge = new GameEngine('classic');
+      ge.addPlayer(new Player({ id: 'r1', name: 'Red', team: 'red', isHost: true }));
+      ge.addPlayer(new Player({ id: 'b1', name: 'Blue', team: 'blue' }));
+      for (const gePhase of [
+        GameMatchPhase.STOPPED,
+        GameMatchPhase.PAUSED,
+        GameMatchPhase.KICKOFF,
+        GameMatchPhase.GOAL_CELEBRATION,
+        GameMatchPhase.MATCH_ENDED,
+        GameMatchPhase.VICTORY_CELEBRATION
+      ]) {
+        ge.fsm.currentState = gePhase;
+        expect(ge.canAwardPoints()).toBe(false);
+      }
+    });
+
+    it('keeps goal bonus score_event text free of km/h speed across Power, Curve, and Power+Curve goals', () => {
+      const engine = setupCompetitiveEngine();
+      const events: ScoreEventEmitPayload[] = [];
+      engine.on('score_event', (e) => events.push(e));
+      const hw = engine.stadium.halfWidth;
+
+      // Power only
+      engine.currentTick = 100;
+      engine.ball.pos.set(hw - 10, 0);
+      engine.ball.vel.set(950, 0);
+      engine.ball.isPowerShot = true;
+      engine.ball.isCurving = false;
+      engine.ball.spin = 0;
+      engine.recordTouch(1, false);
+      engine.ball.pos.set(hw + 20, 0);
+      engine.handleGoalScored('red');
+
+      // Curve only
+      engine.fsm.startPlaying();
+      engine.currentTick = 200;
+      engine.ball.pos.set(hw - 10, 0);
+      engine.ball.vel.set(400, 0);
+      engine.ball.isPowerShot = false;
+      engine.ball.isCurving = true;
+      engine.ball.spin = 0.25;
+      engine.recordTouch(2, false);
+      engine.ball.pos.set(hw + 20, 0);
+      engine.handleGoalScored('red');
+
+      // Power + Curve
+      engine.fsm.startPlaying();
+      engine.currentTick = 300;
+      engine.ball.pos.set(hw - 10, 0);
+      engine.ball.vel.set(950, 0);
+      engine.ball.isPowerShot = true;
+      engine.ball.isCurving = true;
+      engine.ball.spin = 0.25;
+      engine.recordTouch(3, false);
+      engine.ball.pos.set(hw + 20, 0);
+      engine.handleGoalScored('red');
+
+      const goalTexts = events.filter((e) => e.category === 'goal').map((e) => e.text);
+      expect(goalTexts).toEqual([
+        '¡Gol de Potencia! +130',
+        '¡Gol con Efecto! +130',
+        '¡Golazo Potencia y Efecto! +160'
+      ]);
+      expect(goalTexts.every((t) => !/km\/h/i.test(t))).toBe(true);
+      expect(engine.lastGoalDetails?.speedKmh).toBeGreaterThanOrEqual(150);
     });
 
     it('blocks rival touch reset of shot cooldown, low-speed kicks (<220 px/s), and self-shots toward own goal', () => {

@@ -268,12 +268,7 @@ export class GameEngine {
   }
 
   public canAwardPoints(): boolean {
-    return (
-      !this.isPracticeMode &&
-      this.fsm.currentState === MatchPhase.PLAYING &&
-      this.getTeamActiveCount('red') > 0 &&
-      this.getTeamActiveCount('blue') > 0
-    );
+    return this.fsm.currentState === MatchPhase.PLAYING;
   }
 
   public shouldBypassKickoffBarriers(): boolean {
@@ -1015,6 +1010,16 @@ export class GameEngine {
           this.ball.spin = 0;
           this.ball.isPowerShot = isKickPowerShot;
 
+          if (this.kickoffState.active) {
+            this.kickoffState.active = false;
+            this.updatePhysicsKickoffContext();
+          }
+          if (this.fsm.currentState === MatchPhase.KICKOFF) {
+            this.fsm.currentState = MatchPhase.PLAYING;
+            this.fsm.stateTicksRemaining = 0;
+            this.onStateChange?.(this.fsm.currentState);
+          }
+
           // Patada explícita (isKick = true -> evalúa tiro al arco con cooldown de 4.0s)
           this.registerBallTouch(player.id, true);
           this.ball.isPowerShot = isKickPowerShot;
@@ -1036,16 +1041,6 @@ export class GameEngine {
               const cParallel = ex * ux + ey * uy;
               this.ball.curveBrake = cParallel < 0 ? Math.abs(cParallel) : 0;
             }
-          }
-
-          if (this.kickoffState.active) {
-            this.kickoffState.active = false;
-            this.updatePhysicsKickoffContext();
-          }
-          if (this.fsm.currentState === MatchPhase.KICKOFF) {
-            this.fsm.currentState = MatchPhase.PLAYING;
-            this.fsm.stateTicksRemaining = 0;
-            this.onStateChange?.(this.fsm.currentState);
           }
 
           this.soundMask |= SOUND_KICK;

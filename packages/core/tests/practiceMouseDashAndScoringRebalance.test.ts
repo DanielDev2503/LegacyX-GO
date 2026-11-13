@@ -328,6 +328,57 @@ describe('Gates 3, 4, 5 & BinaryProtocol 12-Byte Mouse Aim', () => {
       expect(engine.matchStats.get('r1')?.passes).toBe(1);
       expect(engine.matchStats.get('r1')?.points).toBe(10);
     });
+
+    it('emits score events and awards stats in GameEngine for both isPracticeMode=true and 1v0 during PLAYING while blocking PAUSED/STOPPED/KICKOFF/CELEBRATION', () => {
+      const pRed = new Player({ id: 'r1', name: 'SoloTrainer', team: 'red', isHost: true });
+      engine.addPlayer(pRed);
+      engine.isPracticeMode = true;
+
+      const emitted: Array<{ playerId: string; text: string; points: number; category?: string }> = [];
+      engine.onScoreEvent = (playerId, text, points, _x, _y, _color, category) => {
+        emitted.push({ playerId, text, points, category });
+      };
+
+      // Blocked outside PLAYING
+      for (const nonPlay of [
+        MatchPhase.STOPPED,
+        MatchPhase.PAUSED,
+        MatchPhase.KICKOFF,
+        MatchPhase.GOAL_CELEBRATION,
+        MatchPhase.VICTORY_CELEBRATION
+      ]) {
+        engine.fsm.currentState = nonPlay;
+        expect(engine.canAwardPoints()).toBe(false);
+      }
+
+      // Allowed in PLAYING for practice mode (1v0)
+      engine.fsm.currentState = MatchPhase.PLAYING;
+      expect(engine.canAwardPoints()).toBe(true);
+      expect(engine.shouldBypassKickoffBarriers()).toBe(true);
+
+      const d1 = engine.playerDiscs.get('r1')!;
+      d1.pos.set(engine.stadium.halfWidth - 35, 0);
+      engine.ball.pos.set(engine.stadium.halfWidth - 15, 0);
+      engine.ball.vel.set(420, 0);
+      engine.registerBallTouch('r1', true);
+
+      engine.ball.pos.set(engine.stadium.halfWidth + engine.ball.radius + 5, 0);
+      engine.tick(new Map());
+
+      expect(emitted.some((e) => e.category === 'shot' && e.points === 20)).toBe(true);
+      const goalEv = emitted.find((e) => e.category === 'goal');
+      expect(goalEv).toBeDefined();
+      expect(goalEv!.points).toBeGreaterThanOrEqual(100);
+      expect(goalEv!.text).not.toMatch(/km\/h/i);
+      expect(engine.matchStats.get('r1')!.goals).toBe(1);
+      expect(engine.matchStats.get('r1')!.points).toBeGreaterThanOrEqual(120);
+
+      // Also works in 1v0 when isPracticeMode=false while kickoff barriers remain enforced
+      engine.isPracticeMode = false;
+      expect(engine.shouldBypassKickoffBarriers()).toBe(false);
+      engine.fsm.currentState = MatchPhase.PLAYING;
+      expect(engine.canAwardPoints()).toBe(true);
+    });
   });
 
   describe('360-Degree Mouse Movement Vector & 12-Byte BinaryProtocol', () => {

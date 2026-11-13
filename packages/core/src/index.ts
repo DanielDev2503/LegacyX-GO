@@ -436,13 +436,8 @@ export class EngineInstance {
     });
   }
 
-  private canAwardMatchPoints(): boolean {
-    return (
-      !this.isPracticeMode &&
-      this.fsm.state === MatchPhase.PLAYING &&
-      this.getTeamPlayerCount('red') > 0 &&
-      this.getTeamPlayerCount('blue') > 0
-    );
+  public canAwardMatchPoints(): boolean {
+    return this.fsm.state === MatchPhase.PLAYING;
   }
 
   private getRuntime(id: number): EngineDashState {
@@ -935,7 +930,7 @@ export class EngineInstance {
 
       if (this.fsm.state === MatchPhase.KICKOFF) {
         const ballVelSq = this.ball.vel.x * this.ball.vel.x + this.ball.vel.y * this.ball.vel.y;
-        if (ballVelSq > 0.0225) {
+        if (ballVelSq > 0.0225 || preStepSpeed > 0.15) {
           this.fsm.startPlaying();
         }
       }
