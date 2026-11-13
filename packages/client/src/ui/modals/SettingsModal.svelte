@@ -1759,22 +1759,6 @@
                         </div>
                         <strong class="ball-name">Oro</strong>
                       </button>
-
-                      <!-- 6. Sólido -->
-                      <button
-                        type="button"
-                        class="ball-card"
-                        class:selected={gameUI.settings.ballSkin === 'solid'}
-                        onclick={() => {
-                          gameUI.settings.ballSkin = 'solid';
-                          gameUI.saveSettings();
-                        }}
-                      >
-                        <div class="ball-circle">
-                          <canvas width="54" height="54" use:ballPreview={{ skin: 'solid', customColor: gameUI.settings.ballCustomColor }}></canvas>
-                        </div>
-                        <strong class="ball-name">Sólido</strong>
-                      </button>
                     </div>
                   {:else}
                     <div class="solid-color-picker-box">
@@ -3219,7 +3203,7 @@
 
   .ball-cards-grid {
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(5, minmax(0, 1fr));
     gap: 0.5rem;
   }
 

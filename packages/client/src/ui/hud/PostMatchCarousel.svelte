@@ -156,20 +156,21 @@
       <!-- DIAPOSITIVA 0: ESTADÍSTICAS Y MVP (ANCHO COMPLETO: 100VW) -->
       <!-- ======================================================== -->
       <div class="carousel-slide-item" id="slide-stats">
-        <!-- BOTÓN FLOTANTE EXTERIOR [ Menú > ] (A la derecha fuera de la tarjeta) -->
-        <button
-          type="button"
-          id="btn-goto-menu"
-          class="external-nav-tab floating-nav-btn right-btn right-tab"
-          aria-label="Ir a Menú de Sala"
-          onclick={() => goToSlide(1)}
-        >
-          <span id="stats-to-menu-btn">Menú</span>
-          <span class="nav-chevron">&gt;</span>
-        </button>
+        <div class="slide-card-stage">
+          <!-- BOTÓN FLOTANTE EXTERIOR [ Menú > ] (A la derecha fuera de la tarjeta) -->
+          <button
+            type="button"
+            id="btn-goto-menu"
+            class="external-nav-tab floating-nav-btn right-btn right-tab"
+            aria-label="Ir a Menú de Sala"
+            onclick={() => goToSlide(1)}
+          >
+            <span id="stats-to-menu-btn">Menú</span>
+            <span class="nav-chevron">&gt;</span>
+          </button>
 
-        <!-- Tarjeta Central de Stats (Regla canónica ** Invariant) -->
-        <div class="stats-card team-modal-card">
+          <!-- Tarjeta Central de Stats (Regla canónica ** Invariant) -->
+          <div class="stats-card team-modal-card">
           <!-- Cabecera de Stats & Marcador Final en 3 Zonas Horizontales -->
           <div class="stats-header-row">
             <!-- Zona Izquierda: Marcador Homologado con HUD y Colores del Capitán -->
@@ -476,26 +477,28 @@
             </div>
           </div>
         </div>
+        </div>
       </div>
 
       <!-- ======================================================== -->
       <!-- DIAPOSITIVA 1: MENÚ DE SALA / ROOM LOBBY (100VW)         -->
       <!-- ======================================================== -->
       <div class="carousel-slide-item" id="slide-lobby">
-        <!-- BOTÓN FLOTANTE EXTERIOR [ < STATS ] (A la izquierda fuera de la tarjeta) -->
-        <button
-          type="button"
-          id="btn-goto-stats"
-          class="external-nav-tab floating-nav-btn left-btn left-tab"
-          aria-label="Volver a Stats"
-          onclick={() => goToSlide(0)}
-        >
-          <span class="nav-chevron">&lt;</span>
-          <span id="lobby-to-stats-btn">STATS</span>
-        </button>
+        <div class="slide-card-stage">
+          <!-- BOTÓN FLOTANTE EXTERIOR [ < STATS ] (A la izquierda fuera de la tarjeta) -->
+          <button
+            type="button"
+            id="btn-goto-stats"
+            class="external-nav-tab floating-nav-btn left-btn left-tab"
+            aria-label="Volver a Stats"
+            onclick={() => goToSlide(0)}
+          >
+            <span class="nav-chevron">&lt;</span>
+            <span id="lobby-to-stats-btn">STATS</span>
+          </button>
 
-        <!-- Tarjeta Central del Menú de Sala (Regla canónica ** Invariant) -->
-        <div class="lobby-card team-modal-card">
+          <!-- Tarjeta Central del Menú de Sala (Regla canónica ** Invariant) -->
+          <div class="lobby-card team-modal-card">
           <!-- Cabecera de Sala -->
           <div class="lobby-header-row">
             <div class="room-title-identity">
@@ -782,6 +785,7 @@
             </div>
           </div>
         </div>
+        </div>
       </div>
     </div>
   </div>
@@ -829,6 +833,14 @@
     flex-shrink: 0;
     box-sizing: border-box;
     padding: 1rem;
+  }
+
+  .slide-card-stage {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    max-width: 100%;
   }
 
   /* Botones Flotantes Exteriores Sólidos Desacoplados */
@@ -888,6 +900,16 @@
 
   .nav-chevron {
     font-size: 0.85rem;
+  }
+
+  @media (max-width: 1080px) {
+    .right-btn {
+      right: 10px;
+    }
+
+    .left-btn {
+      left: 10px;
+    }
   }
 
   /* Tarjeta Central Invariant (Regla canónica **) */

@@ -474,13 +474,36 @@
       </div>
 
       {#if gameUI.isGoldenGoal}
-        <div class="golden-goal-floating-badge" title="Gol de Oro activo: el próximo gol gana el encuentro">
-          <svg class="glowing-ball-svg" viewBox="0 0 24 24" fill="currentColor">
-            <circle cx="12" cy="12" r="9" fill="#ffd700"></circle>
-            <circle cx="12" cy="12" r="3.5" fill="#081221"></circle>
-          </svg>
-          <span>GOL DE ORO</span>
-        </div>
+        <svg class="glowing-ball-svg" viewBox="0 0 28 28" role="img" aria-label="Balón dorado">
+          <defs>
+            <radialGradient id="hud-gold-ball-grad" cx="35%" cy="32%" r="72%" fx="33%" fy="30%">
+              <stop offset="0%" stop-color="#FEF9C3"></stop>
+              <stop offset="30%" stop-color="#FACC15"></stop>
+              <stop offset="65%" stop-color="#CA8A04"></stop>
+              <stop offset="100%" stop-color="#713F12"></stop>
+            </radialGradient>
+            <clipPath id="hud-gold-ball-clip">
+              <circle cx="14" cy="14" r="11.5"></circle>
+            </clipPath>
+          </defs>
+          <circle cx="14" cy="14" r="12" fill="url(#hud-gold-ball-grad)" stroke="#854D0E" stroke-width="1"></circle>
+          <g clip-path="url(#hud-gold-ball-clip)">
+            <path
+              d="M14 9.8 L14 4.2 M18 12.7 L23.2 10.9 M16.5 17.4 L19.6 22 M11.5 17.4 L8.4 22 M10 12.7 L4.8 10.9"
+              stroke="#854D0E"
+              stroke-width="0.95"
+              stroke-linecap="round"
+              fill="none"
+            ></path>
+            <polygon points="14,9.8 18,12.7 16.5,17.4 11.5,17.4 10,12.7" fill="#451A03"></polygon>
+            <polygon points="11.4,2.2 16.6,2.2 14,5.2" fill="#451A03"></polygon>
+            <polygon points="24.5,8.4 25.5,13.6 22,11.1" fill="#451A03"></polygon>
+            <polygon points="22.1,20.8 18.6,24.8 19.2,20.8" fill="#451A03"></polygon>
+            <polygon points="5.9,20.8 9.4,24.8 8.8,20.8" fill="#451A03"></polygon>
+            <polygon points="3.5,8.4 2.5,13.6 6,11.1" fill="#451A03"></polygon>
+          </g>
+          <circle cx="10.4" cy="8.8" r="1.7" fill="#FEF9C3" opacity="0.45"></circle>
+        </svg>
       {/if}
     </div>
 
@@ -513,7 +536,6 @@
         <svg class="replay-btn-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
           <polygon points="5 3 19 12 5 21 5 3"></polygon>
         </svg>
-        <span class="replay-label">Ver Repeticiones</span>
       </button>
 
       <!-- 0. Grabadora en Vivo -->
@@ -728,12 +750,6 @@
               </svg>
               {activeBanner.speedKmh} km/h
             </span>
-          {/if}
-          {#if activeBanner.isPower}
-            <span class="goal-bonus-pill power">POTENCIA +30</span>
-          {/if}
-          {#if activeBanner.isCurve}
-            <span class="goal-bonus-pill curve">EFECTO +30</span>
           {/if}
           {#if activeBanner.assisterName && !activeBanner.isOwnGoal}
             <span class="goal-assist-pill">
@@ -1048,41 +1064,25 @@
     }
   }
 
-  .golden-goal-floating-badge {
+  .glowing-ball-svg {
     position: absolute;
     left: calc(100% + 10px);
     top: 50%;
     transform: translateY(-50%);
-    display: inline-flex;
-    align-items: center;
-    gap: 0.35rem;
-    padding: 0.3rem 0.65rem;
-    background: #111827;
-    border: 1px solid #f59e0b;
-    border-radius: 4px;
-    box-shadow: 0 0 14px rgba(245, 158, 11, 0.45);
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 0.72rem;
-    font-weight: 800;
-    color: #fbbf24;
-    letter-spacing: 0.05em;
-    white-space: nowrap;
-    animation: goldenGoalGlow 1.8s ease-in-out infinite alternate;
+    width: 26px;
+    height: 26px;
+    overflow: visible;
+    filter: drop-shadow(0 0 8px rgba(250, 204, 21, 0.85)) drop-shadow(0 0 16px rgba(202, 138, 4, 0.5));
+    animation: goldenGoalGlow 1.5s ease-in-out infinite alternate;
   }
 
   @keyframes goldenGoalGlow {
     0% {
-      box-shadow: 0 0 10px rgba(245, 158, 11, 0.3);
+      filter: drop-shadow(0 0 6px rgba(250, 204, 21, 0.6)) drop-shadow(0 0 12px rgba(202, 138, 4, 0.35));
     }
     100% {
-      box-shadow: 0 0 22px rgba(245, 158, 11, 0.75);
+      filter: drop-shadow(0 0 12px rgba(254, 249, 195, 0.95)) drop-shadow(0 0 22px rgba(250, 204, 21, 0.8));
     }
-  }
-
-  .glowing-ball-svg {
-    width: 14px;
-    height: 14px;
-    filter: drop-shadow(0 0 4px #ffd700);
   }
 
   /* HUD Sliding Event Card below scoreboard */
@@ -1174,28 +1174,6 @@
     color: #38bdf8;
   }
 
-  .goal-bonus-pill {
-    display: inline-flex;
-    align-items: center;
-    padding: 0.25rem 0.55rem;
-    border-radius: 4px;
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 0.75rem;
-    font-weight: 800;
-    letter-spacing: 0.04em;
-  }
-
-  .goal-bonus-pill.power {
-    background: rgba(239, 68, 68, 0.2);
-    border: 1px solid #ef4444;
-    color: #fca5a5;
-  }
-
-  .goal-bonus-pill.curve {
-    background: rgba(168, 85, 247, 0.2);
-    border: 1px solid #a855f7;
-    color: #d8b4fe;
-  }
 
   .scoreboard-main-row {
     display: flex;
@@ -1261,18 +1239,6 @@
     letter-spacing: 0.08em;
   }
 
-  .golden-goal-chip {
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 0.6rem;
-    font-weight: 800;
-    background: rgba(255, 215, 0, 0.2);
-    color: #ffd700;
-    border: 1px solid rgba(255, 215, 0, 0.5);
-    padding: 0.1rem 0.35rem;
-    border-radius: 0.25rem;
-    animation: pulseGlow 1.5s infinite;
-  }
-
   .top-card-right {
     position: fixed;
     top: 0;
@@ -1289,21 +1255,17 @@
   }
 
   .hud-replay-btn {
+    width: 2.15rem;
     height: 2.15rem;
-    padding: 0 0.65rem;
+    padding: 0;
     border-radius: 0.45rem;
     background: #161c26;
     border: 1px solid rgba(0, 229, 255, 0.35);
     color: #00e5ff;
     display: inline-flex;
     align-items: center;
-    gap: 0.36rem;
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 0.7rem;
-    font-weight: 800;
-    letter-spacing: 0.04em;
+    justify-content: center;
     cursor: pointer;
-    white-space: nowrap;
     user-select: none;
     transition: all 0.15s ease;
   }
@@ -1315,13 +1277,9 @@
   }
 
   .replay-btn-svg {
-    width: 0.8rem;
-    height: 0.8rem;
+    width: 0.9rem;
+    height: 0.9rem;
     flex-shrink: 0;
-  }
-
-  .replay-label {
-    white-space: nowrap;
   }
 
   .hud-rec-btn {

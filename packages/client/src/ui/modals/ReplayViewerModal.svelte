@@ -682,10 +682,36 @@
                 </div>
 
                 {#if hudIsGoldenGoal}
-                  <div class="golden-goal-badge">
-                    <span class="gold-ball"></span>
-                    <span>GOL DE ORO</span>
-                  </div>
+                  <svg class="replay-golden-goal-ball" viewBox="0 0 28 28" role="img" aria-label="Balón dorado">
+                    <defs>
+                      <radialGradient id="replay-gold-ball-grad" cx="35%" cy="32%" r="72%" fx="33%" fy="30%">
+                        <stop offset="0%" stop-color="#FEF9C3"></stop>
+                        <stop offset="30%" stop-color="#FACC15"></stop>
+                        <stop offset="65%" stop-color="#CA8A04"></stop>
+                        <stop offset="100%" stop-color="#713F12"></stop>
+                      </radialGradient>
+                      <clipPath id="replay-gold-ball-clip">
+                        <circle cx="14" cy="14" r="11.5"></circle>
+                      </clipPath>
+                    </defs>
+                    <circle cx="14" cy="14" r="12" fill="url(#replay-gold-ball-grad)" stroke="#854D0E" stroke-width="1"></circle>
+                    <g clip-path="url(#replay-gold-ball-clip)">
+                      <path
+                        d="M14 9.8 L14 4.2 M18 12.7 L23.2 10.9 M16.5 17.4 L19.6 22 M11.5 17.4 L8.4 22 M10 12.7 L4.8 10.9"
+                        stroke="#854D0E"
+                        stroke-width="0.95"
+                        stroke-linecap="round"
+                        fill="none"
+                      ></path>
+                      <polygon points="14,9.8 18,12.7 16.5,17.4 11.5,17.4 10,12.7" fill="#451A03"></polygon>
+                      <polygon points="11.4,2.2 16.6,2.2 14,5.2" fill="#451A03"></polygon>
+                      <polygon points="24.5,8.4 25.5,13.6 22,11.1" fill="#451A03"></polygon>
+                      <polygon points="22.1,20.8 18.6,24.8 19.2,20.8" fill="#451A03"></polygon>
+                      <polygon points="5.9,20.8 9.4,24.8 8.8,20.8" fill="#451A03"></polygon>
+                      <polygon points="3.5,8.4 2.5,13.6 6,11.1" fill="#451A03"></polygon>
+                    </g>
+                    <circle cx="10.4" cy="8.8" r="1.7" fill="#FEF9C3" opacity="0.45"></circle>
+                  </svg>
                 {/if}
               </div>
 
@@ -721,17 +747,9 @@
                           <span class="goal-assist">(Asist: {activeBanner.assisterName})</span>
                         {/if}
                       </div>
-                      {#if typeof activeBanner.speedKmh === 'number' || activeBanner.isPower || activeBanner.isCurve}
+                      {#if typeof activeBanner.speedKmh === 'number' && activeBanner.speedKmh > 0}
                         <div class="goal-telemetry">
-                          {#if typeof activeBanner.speedKmh === 'number' && activeBanner.speedKmh > 0}
-                            <span class="tele-chip speed">{Math.round(activeBanner.speedKmh)} km/h</span>
-                          {/if}
-                          {#if activeBanner.isPower}
-                            <span class="tele-chip power">POTENTE</span>
-                          {/if}
-                          {#if activeBanner.isCurve}
-                            <span class="tele-chip curve">EFECTO</span>
-                          {/if}
+                          <span class="tele-chip speed">{Math.round(activeBanner.speedKmh)} km/h</span>
                         </div>
                       {/if}
                     </div>
@@ -843,6 +861,7 @@
     align-items: center;
     justify-content: center;
     padding: 20px;
+    pointer-events: auto;
   }
 
   .replay-shell {
@@ -856,6 +875,7 @@
     overflow: hidden;
     color: #e2e8f0;
     box-shadow: 0 24px 60px rgba(0, 0, 0, 0.65);
+    pointer-events: auto;
   }
 
   .replay-header {
@@ -1411,27 +1431,25 @@
     color: #fbbf24;
   }
 
-  .golden-goal-badge {
-    height: 36px;
-    padding: 0 12px;
-    border-radius: 10px;
-    background: rgba(42, 29, 7, 0.94);
-    border: 1.5px solid rgba(251, 191, 36, 0.85);
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    color: #fde68a;
-    font-size: 11px;
-    font-weight: 800;
-    letter-spacing: 0.05em;
+  .replay-golden-goal-ball {
+    position: absolute;
+    left: calc(100% + 12px);
+    top: 50%;
+    transform: translateY(-50%);
+    width: 28px;
+    height: 28px;
+    overflow: visible;
+    filter: drop-shadow(0 0 8px rgba(250, 204, 21, 0.85)) drop-shadow(0 0 16px rgba(202, 138, 4, 0.5));
+    animation: replayGoldBallPulse 1.5s ease-in-out infinite alternate;
   }
 
-  .gold-ball {
-    width: 11px;
-    height: 11px;
-    border-radius: 50%;
-    background: #fbbf24;
-    box-shadow: 0 0 10px #fbbf24;
+  @keyframes replayGoldBallPulse {
+    from {
+      filter: drop-shadow(0 0 6px rgba(250, 204, 21, 0.6)) drop-shadow(0 0 12px rgba(202, 138, 4, 0.35));
+    }
+    to {
+      filter: drop-shadow(0 0 12px rgba(254, 249, 195, 0.95)) drop-shadow(0 0 22px rgba(250, 204, 21, 0.8));
+    }
   }
 
   .hud-center-banner {
@@ -1520,18 +1538,6 @@
     border: 1px solid rgba(148, 163, 184, 0.4);
     background: rgba(15, 23, 42, 0.95);
     color: #e2e8f0;
-  }
-
-  .tele-chip.power {
-    border-color: #f97316;
-    background: rgba(124, 45, 18, 0.9);
-    color: #fed7aa;
-  }
-
-  .tele-chip.curve {
-    border-color: #22d3ee;
-    background: rgba(8, 51, 68, 0.9);
-    color: #a5f3fc;
   }
 
   .banner-card.victory {

@@ -199,9 +199,12 @@ describe('Task 5: Chat Mentions, HUD Polish, Stats Redesign, Lobby & Account Tab
 
       gameUI.isGoldenGoal = true;
       const { html: ggHtml } = render(InGameHUD);
-      expect(ggHtml).toContain('golden-goal-floating-badge');
       expect(ggHtml).toContain('glowing-ball-svg');
-      expect(ggHtml).toContain('GOL DE ORO');
+      expect(ggHtml).toContain('#FEF9C3');
+      expect(ggHtml).toContain('#FACC15');
+      expect(ggHtml).toContain('#451A03');
+      expect(ggHtml).not.toContain('golden-goal-floating-badge');
+      expect(ggHtml).not.toMatch(/GOL DE ORO/i);
       expect(ggHtml).not.toContain('is-warning-30s');
     });
 
@@ -224,13 +227,18 @@ describe('Task 5: Chat Mentions, HUD Polish, Stats Redesign, Lobby & Account Tab
       expect(src).toMatch(/\.vs-card\s*\{[\s\S]*background:\s*#080e18/);
     });
 
-    it('Items 18 & 19 & 23: adds Ver Repeticiones left of Grabar, gates unauth, replaces post-stop banner without downloads', () => {
+    it('Items 18 & 19 & 23: adds icon-only Ver Repeticiones left of Grabar, gates unauth, replaces post-stop banner without downloads', () => {
       const { html } = render(InGameHUD);
-      const replayBtnIdx = html.indexOf('Ver Repeticiones');
+      const replayBtnIdx = html.indexOf('id="btn-hud-replays"');
       const recBtnIdx = html.indexOf('id="btn-hud-record"');
       expect(replayBtnIdx).toBeGreaterThan(-1);
       expect(recBtnIdx).toBeGreaterThan(-1);
       expect(replayBtnIdx).toBeLessThan(recBtnIdx);
+      expect(html).toContain('aria-label="Ver Repeticiones"');
+      expect(html).toContain('title="Ver Repeticiones guardadas"');
+      expect(html).toContain('replay-btn-svg');
+      expect(html).not.toContain('replay-label');
+      expect(html).not.toContain('>Ver Repeticiones<');
 
       matchRecorder.showPostRecordPrompt = true;
       (matchRecorder as any).hasRecordedClip = true;
