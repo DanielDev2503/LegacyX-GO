@@ -35,12 +35,15 @@ export class NetworkClient {
   public teamsLocked: boolean = false;
   public jitterBuffer = new JitterBuffer(24, 30, true);
   public latestSnapshot: GameStateSnapshot | null = null;
+  public activeGoalScorerId: number | null = null;
+  public autoExtrapolationMs: number = 0;
 
   public onConnected?: (playerId: number) => void;
   public onDisconnected?: () => void;
   public onRoomClosed?: (reason?: string) => void;
   public onPlayerListUpdated?: (players: PlayerInfo[]) => void;
   public onRoomStateSync?: (msg: Record<string, unknown>) => void;
+  public onGoalScorerIdChanged?: (id: number | null) => void;
   public onChatMessage?: (sender: string, text: string, team?: string, isHost?: boolean, id?: string) => void;
   public onEmote?: (playerId: number, emoji: string) => void;
   public onGameFx?: (fx: string, intensity?: number, countdownValue?: number) => void;
@@ -173,6 +176,11 @@ export class NetworkClient {
         const snapshot = BinaryProtocol.decodeSnapshot(buffer);
         if (!snapshot) return;
         this.latestSnapshot = snapshot;
+        if (snapshot.phase === 3.5) {
+          this.jitterBuffer.setMatchState(3.5);
+        } else if (snapshot.phase === 0 || snapshot.phase === 1) {
+          this.updateActiveGoalScorerId(null);
+        }
         this.jitterBuffer.push(snapshot, performance.now());
         this.onSnapshotDecoded?.(snapshot);
         this.onSnapshotBuffer?.(buffer);
@@ -191,6 +199,14 @@ export class NetworkClient {
         this.onDisconnected?.();
       }
     });
+  }
+
+  private updateActiveGoalScorerId(nextId: number | null): void {
+    const normalized = typeof nextId === 'number' && Number.isFinite(nextId) ? nextId : null;
+    if (this.activeGoalScorerId !== normalized) {
+      this.activeGoalScorerId = normalized;
+      this.onGoalScorerIdChanged?.(normalized);
+    }
   }
 
   private handleReliableMessage(msg: Record<string, unknown>): void {
@@ -227,6 +243,15 @@ export class NetworkClient {
       if (typeof msg.matchPhase === 'number') {
         this.jitterBuffer.setMatchState(msg.matchPhase);
         gameUI.handleMatchPhaseTransition(msg.matchPhase, msg.type === 'INITIAL_STATE_PACKET');
+        if (msg.matchPhase === 0 || msg.matchPhase === 1) {
+          this.updateActiveGoalScorerId(null);
+        } else if ('lastGoalScorerId' in msg || 'scorerPlayerId' in msg) {
+          const rawScorer = msg.lastGoalScorerId ?? msg.scorerPlayerId;
+          this.updateActiveGoalScorerId(typeof rawScorer === 'number' ? rawScorer : null);
+        }
+      } else if ('lastGoalScorerId' in msg || 'scorerPlayerId' in msg) {
+        const rawScorer = msg.lastGoalScorerId ?? msg.scorerPlayerId;
+        this.updateActiveGoalScorerId(typeof rawScorer === 'number' ? rawScorer : null);
       }
       if (msg.activeBanner && typeof msg.activeBanner === 'object') {
         this.onMatchBanner?.(msg.activeBanner as Record<string, unknown>);
@@ -259,6 +284,9 @@ export class NetworkClient {
         const prev = gameUI.pingMs;
         const smoothed = prev > 0 ? Math.round(0.7 * prev + 0.3 * rtt) : rtt;
         gameUI.recordTelemetrySample(smoothed, gameUI.fps);
+        if (typeof (gameUI as any).effectiveExtrapolationMs === 'number') {
+          this.setAutoExtrapolationMs((gameUI as any).effectiveExtrapolationMs);
+        }
       }
     } else if (msg.type === 'MATCH_STATS_SUMMARY') {
       if (msg.snapshot) {
@@ -302,8 +330,22 @@ export class NetworkClient {
         );
       }
     } else if (msg.type === 'MATCH_BANNER_EVENT') {
-      if (msg.banner && typeof msg.banner === 'object') {
-        this.onMatchBanner?.(msg.banner as Record<string, unknown>);
+      const bannerObj =
+        msg.banner && typeof msg.banner === 'object'
+          ? (msg.banner as Record<string, unknown>)
+          : null;
+      const rawScorer =
+        msg.lastGoalScorerId ??
+        msg.scorerPlayerId ??
+        bannerObj?.lastGoalScorerId ??
+        bannerObj?.scorerPlayerId;
+      if (bannerObj?.kind === 'NONE') {
+        this.updateActiveGoalScorerId(null);
+      } else if (rawScorer !== undefined) {
+        this.updateActiveGoalScorerId(typeof rawScorer === 'number' ? rawScorer : null);
+      }
+      if (bannerObj) {
+        this.onMatchBanner?.(bannerObj);
       }
     } else if (msg.type === 'SCORE_EVENT') {
       this.onScoreEvent?.(msg);
@@ -392,6 +434,29 @@ export class NetworkClient {
     });
   }
 
+  public sendSkipGoalReplay(): void {
+    this.peer?.sendReliable({
+      type: 'SKIP_GOAL_REPLAY'
+    });
+  }
+
+  public setAutoExtrapolationMs(ms: number): void {
+    const clamped = Number.isFinite(ms) ? Math.max(0, Math.min(250, Math.round(ms))) : 0;
+    this.autoExtrapolationMs = clamped;
+    const jb = this.jitterBuffer as unknown as {
+      autoExtrapolationMs?: number;
+      setAutoExtrapolationMs?: (val: number) => void;
+      interpolationDelayMs: number;
+    };
+    if (typeof jb.setAutoExtrapolationMs === 'function') {
+      jb.setAutoExtrapolationMs(clamped);
+    } else {
+      jb.autoExtrapolationMs = clamped;
+    }
+    const targetDelay = Math.max(16, Math.min(80, 24 + clamped * 0.25));
+    jb.interpolationDelayMs = jb.interpolationDelayMs * 0.8 + targetDelay * 0.2;
+  }
+
   public getInterpolatedState(nowMs: number = performance.now()): GameStateSnapshot | null {
     const interp = this.jitterBuffer.getInterpolatedState(nowMs);
     if (interp && this.latestSnapshot) {
@@ -453,6 +518,7 @@ export class NetworkClient {
       this.peer = null;
     }
     this.localPlayerId = null;
+    this.updateActiveGoalScorerId(null);
     this.onDisconnected?.();
   }
 }

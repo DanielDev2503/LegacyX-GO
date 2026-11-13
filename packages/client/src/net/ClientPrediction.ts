@@ -40,6 +40,7 @@ export class ClientPredictionReconciler {
   public static readonly MAX_REPLAY_TICKS = 45; // 750 ms limit
 
   public inputSeq: number = 0;
+  public lastRecordedSeq: number = 0;
   public inputBuffer: BufferedClientInput[] = [];
   public visualOffset: { x: number; y: number } = { x: 0, y: 0 };
 
@@ -84,11 +85,22 @@ export class ClientPredictionReconciler {
     aimAngle?: number | null,
     aimThrottle?: number
   ): void {
+    const rawSeq =
+      typeof inputOrTick === 'number'
+        ? inputOrTick
+        : (inputOrTick.seq ?? inputOrTick.tick);
+    const safeRaw = Number.isFinite(rawSeq) ? Math.floor(rawSeq) : 0;
+    const seq = safeRaw > this.lastRecordedSeq ? safeRaw : (this.lastRecordedSeq + 1) >>> 0;
+    this.lastRecordedSeq = seq;
+    if (seq > this.inputSeq) {
+      this.inputSeq = seq;
+    }
+
     if (typeof inputOrTick === 'number') {
       const mask = maskArg ?? 0;
       this.inputBuffer.push({
-        seq: inputOrTick,
-        tick: inputOrTick,
+        seq,
+        tick: seq,
         mask,
         inputMask: mask,
         aimAngle,
@@ -96,9 +108,11 @@ export class ClientPredictionReconciler {
       });
     } else {
       const mask = inputOrTick.inputMask ?? inputOrTick.mask ?? 0;
+      const tick = seq !== safeRaw ? seq : (inputOrTick.tick ?? seq);
       this.inputBuffer.push({
         ...inputOrTick,
-        seq: inputOrTick.seq ?? inputOrTick.tick,
+        seq,
+        tick,
         mask,
         inputMask: mask
       });
@@ -112,6 +126,20 @@ export class ClientPredictionReconciler {
     this.inputBuffer.length = 0;
     this.visualOffset.x = 0;
     this.visualOffset.y = 0;
+    this.inputSeq = 0;
+    this.lastRecordedSeq = 0;
+  }
+
+  private isSnapshotDrivenPhase(phase: number | undefined): boolean {
+    return (
+      phase === 0 ||
+      phase === 0.5 ||
+      phase === 0.6 ||
+      phase === 2.1 ||
+      phase === 2.2 ||
+      phase === 3.5 ||
+      phase === 5
+    );
   }
 
   /**
@@ -144,6 +172,7 @@ export class ClientPredictionReconciler {
     config?: KinematicsConfig,
     dt: number = 1 / 60
   ): number {
+    this.inputSeq = Math.max(this.inputSeq, this.lastRecordedSeq);
     this.inputSeq = (this.inputSeq + 1) >>> 0;
     this.recordInput({
       seq: this.inputSeq,
@@ -186,16 +215,11 @@ export class ClientPredictionReconciler {
       const localDiscId = (localDiscIdOrStadium as number) ?? 1;
 
       const phase = authSnapshot.phase;
-      const isFrozenPhase =
-        phase === 0 ||
-        phase === 0.5 ||
-        phase === 0.6 ||
-        phase === 2.1 ||
-        phase === 2.2 ||
-        phase === 5;
-
-      if (isFrozenPhase) {
+      if (this.isSnapshotDrivenPhase(phase)) {
         engine.setState(authSnapshot);
+        if (phase !== 0 && engine.currentTick < this.lastRecordedSeq) {
+          engine.currentTick = this.lastRecordedSeq;
+        }
         this.visualOffset.x = 0;
         this.visualOffset.y = 0;
         this.inputBuffer.length = 0;
@@ -267,6 +291,10 @@ export class ClientPredictionReconciler {
         engine.step(this.replayMap, true);
       }
 
+      if (engine.currentTick < this.lastRecordedSeq) {
+        engine.currentTick = this.lastRecordedSeq;
+      }
+
       // Compute residual error against pre-reconciliation visual position
       const resimDisc = engine.players.get(localDiscId);
       if (resimDisc) {
@@ -294,6 +322,23 @@ export class ClientPredictionReconciler {
       const stadium = (localDiscIdOrStadium as Stadium) ?? null;
 
       const authDisc = authSnapshot.discs?.find((d) => d.id === localDiscId);
+      if (this.isSnapshotDrivenPhase(authSnapshot.phase)) {
+        if (authDisc) {
+          this.predictedState.pos.x = authDisc.x;
+          this.predictedState.pos.y = authDisc.y;
+          this.predictedState.vel.x = authDisc.vx;
+          this.predictedState.vel.y = authDisc.vy;
+          this.predictedState.stamina = authDisc.stamina ?? 100;
+          this.predictedState.team = authDisc.team === 1 ? 'red' : authDisc.team === 2 ? 'blue' : 'spec';
+          this.predictedState.isTurbo = false;
+          this.predictedState.kicking = false;
+        }
+        this.visualOffset.x = 0;
+        this.visualOffset.y = 0;
+        this.inputBuffer.length = 0;
+        return { replayed: false, hardSnapped: true };
+      }
+
       if (!authDisc) {
         return { replayed: false, hardSnapped: false };
       }

@@ -97,6 +97,8 @@ export class GameApp {
   /** Inputs de jugadores remotos recibidos por el Host (playerId → máscara). */
   public remoteInputs = new Map<number, PlayerInput>();
   public activeMatchToken: string | null = null;
+  public activeGoalScorerId: number | null = null;
+  public hostEngine: any = null;
   public lastJoinError: string | null = null;
   public onScoreEventReceived: ((payload: Record<string, unknown>) => void) | null = null;
 
@@ -339,9 +341,59 @@ export class GameApp {
     }
   }
 
+  private setActiveGoalScorerId(id: number | null): void {
+    const normalized = typeof id === 'number' && Number.isFinite(id) ? id : null;
+    this.activeGoalScorerId = normalized;
+    if (this.networkHost) {
+      this.networkHost.activeGoalScorerId = normalized;
+    }
+    (gameUI as any).activeGoalScorerId = normalized;
+  }
+
+  public attachHostEngine(engine: any): void {
+    this.hostEngine = engine;
+    if (this.networkHost) {
+      this.networkHost.engine = engine;
+    }
+  }
+
+  /** Salta la repetición de gol: Host valida que el jugador local sea el goleador (o modo práctica); Guest delega al Host. */
+  public skipGoalReplay(engineArg?: any): boolean {
+    if (this.isHost || gameUI.isHost || gameUI.isPracticeMode) {
+      const engine = engineArg ?? this.networkHost?.engine ?? this.hostEngine;
+      if (!engine || typeof engine.skipGoalReplay !== 'function') return false;
+      const localId = gameUI.localPlayerId ?? 1;
+      const isPractice = Boolean(gameUI.isPracticeMode || engine.isPracticeMode);
+      if (!isPractice && engine.lastGoalScorerId !== localId) {
+        return false;
+      }
+      const skipped = engine.skipGoalReplay(localId);
+      if (skipped !== false) {
+        this.setActiveGoalScorerId(null);
+        this.networkHost?.broadcastRoomStateSync(true);
+        return true;
+      }
+      return false;
+    }
+
+    if (this.networkClient) {
+      this.networkClient.sendSkipGoalReplay();
+      return true;
+    }
+    return false;
+  }
+
   /** Notifica a los guests la fase actual del partido (Host). */
   public syncMatchPhase(phase: number): void {
-    if (!this.networkHost || this.networkHost.matchPhase === phase) return;
+    if (!this.networkHost) return;
+    if (phase === 0 || phase === 1) {
+      this.setActiveGoalScorerId(null);
+    } else if (phase === 3 || phase === 3.5) {
+      const engine = this.networkHost.engine ?? this.hostEngine;
+      const scorerId = typeof engine?.lastGoalScorerId === 'number' ? engine.lastGoalScorerId : null;
+      this.setActiveGoalScorerId(scorerId);
+    }
+    if (this.networkHost.matchPhase === phase) return;
     this.networkHost.matchPhase = phase;
     this.networkHost.broadcastRoomStateSync();
   }
@@ -502,7 +554,14 @@ export class GameApp {
     host.matchPhase = 0;
     host.gameplayConfig = { ...gameUI.gameplayConfig } as any;
     host.modifiers = { ...gameUI.modifiers } as any;
+    if (this.hostEngine) {
+      host.engine = this.hostEngine;
+    }
     this.networkHost = host;
+    this.setActiveGoalScorerId(null);
+    host.onGoalReplaySkipped = () => {
+      this.setActiveGoalScorerId(null);
+    };
 
     const roomType = params?.roomType === 'ranked' ? 'ranked' : 'casual';
     gameUI.isPracticeMode = false;
@@ -739,6 +798,8 @@ export class GameApp {
     this.isHost = false;
     this.currentRoomId = roomId;
     this.activeMatchToken = null;
+    this.setActiveGoalScorerId(null);
+    this.hostEngine = null;
     this.remoteInputs.clear();
 
     this.networkHost?.destroy();
@@ -838,6 +899,10 @@ export class GameApp {
       this.onScoreEventReceived?.(payload);
     };
 
+    client.onGoalScorerIdChanged = (scorerId) => {
+      this.setActiveGoalScorerId(scorerId);
+    };
+
     client.onRoomClosed = () => this.handleRemoteRoomClosed();
 
     const hostPeerId = msg.hostPeerId || msg.hostId;
@@ -876,6 +941,8 @@ export class GameApp {
       this.currentRoomId = null;
     }
     this.activeMatchToken = null;
+    this.setActiveGoalScorerId(null);
+    this.hostEngine = null;
     this.remoteInputs.clear();
     this.currentRoomConfig = null;
     gameUI.isPracticeMode = false;
@@ -916,6 +983,8 @@ export class GameApp {
     this.isHost = false;
     this.currentRoomConfig = null;
     this.activeMatchToken = null;
+    this.setActiveGoalScorerId(null);
+    this.hostEngine = null;
     this.remoteInputs.clear();
     gameUI.isPracticeMode = false;
     gameUI.activeRoom = null;

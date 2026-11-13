@@ -68,6 +68,14 @@ export class NetworkHost {
   public onTeamChangeRequest?: (playerId: number, team: 'red' | 'blue' | 'spectator') => void;
   public onAdminMatchAction?: (action: string, payload?: Record<string, unknown>) => void;
   public onPlayerTyping?: (playerId: number, isTyping: boolean) => void;
+  public onGoalReplaySkipped?: (playerId: number) => void;
+
+  public engine: {
+    lastGoalScorerId?: number | null;
+    skipGoalReplay?: (requesterPlayerId?: number) => boolean;
+    isPracticeMode?: boolean;
+  } | null = null;
+  public activeGoalScorerId: number | null = null;
 
   public redKitVariant: 'home' | 'away' = 'home';
   public blueKitVariant: 'home' | 'away' = 'away';
@@ -259,8 +267,20 @@ export class NetworkHost {
     await entry.peer.handleSignal(data);
   }
 
+  private resolveGoalScorerId(bannerScorerId?: unknown): number | null {
+    if (this.engine && 'lastGoalScorerId' in this.engine) {
+      const id = (this.engine as any).lastGoalScorerId;
+      return typeof id === 'number' && Number.isFinite(id) ? id : null;
+    }
+    if (typeof bannerScorerId === 'number' && Number.isFinite(bannerScorerId)) {
+      return bannerScorerId;
+    }
+    return this.activeGoalScorerId;
+  }
+
   private buildRoomStateSyncPayload(assignedPlayerId?: number): Record<string, unknown> {
     const playersList = this.getPlayers();
+    const lastGoalScorerId = this.resolveGoalScorerId();
     return {
       type: 'ROOM_STATE_SYNC',
       assignedPlayerId,
@@ -276,6 +296,8 @@ export class NetworkHost {
       timeLimit: this.timeLimit,
       scoreLimit: this.scoreLimit,
       matchPhase: this.matchPhase,
+      lastGoalScorerId,
+      scorerPlayerId: lastGoalScorerId,
       redKitVariant: this.redKitVariant,
       blueKitVariant: this.blueKitVariant,
       gameplayConfig: this.gameplayConfig,
@@ -589,6 +611,16 @@ export class NetworkHost {
         this.onAdminMatchAction?.(action, msg);
         this.broadcastRoomStateSync();
       }
+    } else if (msg.type === 'SKIP_GOAL_REPLAY') {
+      const scorerId = (this.engine as any)?.lastGoalScorerId ?? null;
+      if (typeof scorerId === 'number' && playerId === scorerId) {
+        const skipped = (this.engine as any)?.skipGoalReplay?.(playerId);
+        if (skipped !== false) {
+          this.activeGoalScorerId = null;
+          this.onGoalReplaySkipped?.(playerId);
+          this.broadcastRoomStateSync(true);
+        }
+      }
     }
   }
 
@@ -783,10 +815,28 @@ export class NetworkHost {
   }
 
   public broadcastMatchBanner(banner: Record<string, unknown> | null): void {
-    this.activeBanner = banner;
+    const isCleared = !banner || banner.kind === 'NONE';
+    const rawBannerScorer = banner?.scorerPlayerId ?? banner?.lastGoalScorerId;
+    const scorerId = isCleared ? null : this.resolveGoalScorerId(rawBannerScorer);
+    if (isCleared) {
+      this.activeGoalScorerId = null;
+    } else if (banner?.kind === 'GOAL') {
+      this.activeGoalScorerId = scorerId;
+    }
+    const normalizedBanner = banner
+      ? {
+          ...banner,
+          ...(banner.kind === 'GOAL'
+            ? { lastGoalScorerId: scorerId, scorerPlayerId: scorerId }
+            : {})
+        }
+      : { kind: 'NONE' };
+    this.activeBanner = normalizedBanner;
     this.broadcastReliable({
       type: 'MATCH_BANNER_EVENT',
-      banner: banner ?? { kind: 'NONE' }
+      lastGoalScorerId: scorerId,
+      scorerPlayerId: scorerId,
+      banner: normalizedBanner
     });
   }
 
@@ -812,6 +862,7 @@ export class NetworkHost {
 
   public destroy(): void {
     this.cleanupSignalingListeners();
+    this.activeGoalScorerId = null;
     for (const probeKey of [...this.probePeers.keys()]) {
       this.cleanupProbePeer(probeKey);
     }
