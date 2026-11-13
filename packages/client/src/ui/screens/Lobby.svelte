@@ -10,7 +10,6 @@
   let passwordError = $state('');
   let isRefreshing = $state(false);
   let hoveredRoomId = $state<string | null>(null);
-  const pingProbeTimestamps = new Map<string, number>();
 
   function getPingTier(pingMs: number): 'optimal' | 'good' | 'high' | 'pending' {
     if (!(pingMs > 0)) return 'pending';
@@ -21,12 +20,11 @@
 
   function handleRoomHover(roomId: string) {
     hoveredRoomId = roomId;
-    const now = Date.now();
-    const lastProbe = pingProbeTimestamps.get(roomId) ?? 0;
-    if (now - lastProbe >= 1500) {
-      pingProbeTimestamps.set(roomId, now);
-      sharedSignaling.probeRoomPing(roomId);
-    }
+    void sharedSignaling.probeRoomPing(roomId).then((measured) => {
+      if (measured > 0) {
+        gameUI.updateRoomHoverPing(roomId, measured);
+      }
+    });
   }
 
   const rankingTabs: ReadonlyArray<{ id: LeaderboardCategory; label: string; unit: string }> = [
@@ -294,7 +292,11 @@
             class="room-row"
             role="listitem"
             onmouseenter={() => handleRoomHover(room.id)}
+            onfocusin={() => handleRoomHover(room.id)}
             onmouseleave={() => {
+              if (hoveredRoomId === room.id) hoveredRoomId = null;
+            }}
+            onfocusout={() => {
               if (hoveredRoomId === room.id) hoveredRoomId = null;
             }}
           >
@@ -345,6 +347,7 @@
                 class="join-room-btn"
                 class:private={room.isPrivate}
                 onmouseenter={() => soundFX.playUIHover()}
+                onfocus={() => handleRoomHover(room.id)}
                 onclick={() => handleJoinRoom(room)}
               >
                 {#if room.isPrivate}
@@ -866,8 +869,10 @@
     transition: background 120ms ease, border-color 120ms ease;
   }
 
-  .room-row:hover {
+  .room-row:hover,
+  .room-row:focus-within {
     background: #0d1728;
+    outline: none;
   }
 
   .room-info {

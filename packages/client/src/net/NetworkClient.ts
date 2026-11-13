@@ -177,6 +177,9 @@ export class NetworkClient {
         this.onSnapshotDecoded?.(snapshot);
         this.onSnapshotBuffer?.(buffer);
       },
+      onUnreliableOpen: () => {
+        this.sendPingProbe();
+      },
       onConnected: () => {
         if (!this.helloSent) {
           this.helloSent = true;
@@ -419,15 +422,18 @@ export class NetworkClient {
     });
   }
 
+  private sendPingProbe(): void {
+    this.peer?.sendUnreliableMessage({
+      type: 'PING_PROBE',
+      t: performance.now()
+    });
+  }
+
   public startPingProbe(): void {
+    this.sendPingProbe();
     if (this.pingIntervalId !== null) return;
     this.pingIntervalId = setInterval(() => {
-      if (this.peer) {
-        this.peer.sendUnreliableMessage({
-          type: 'PING_PROBE',
-          t: performance.now()
-        });
-      }
+      this.sendPingProbe();
     }, 1000);
   }
 

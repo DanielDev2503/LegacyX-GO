@@ -13,6 +13,7 @@ export interface PeerConnectionConfig {
 export interface PeerConnectionOptions {
   peerId: string;
   isInitiator?: boolean;
+  unreliableOnly?: boolean;
   iceServers?: RTCIceServer[];
   signalingClient?: {
     isOpen: () => boolean;
@@ -22,6 +23,7 @@ export interface PeerConnectionOptions {
   onReliableMessage?: (msg: unknown) => void;
   onUnreliableSnapshot?: (buffer: ArrayBuffer) => void;
   onUnreliableInput?: (buffer: ArrayBuffer) => void;
+  onUnreliableOpen?: () => void;
   onConnected?: () => void;
   onDisconnected?: () => void;
 }
@@ -71,6 +73,7 @@ export class PeerConnection {
 
   public onReliableMessage: ((data: string) => void) | null = null;
   public onUnreliableMessage: ((data: ArrayBuffer) => void) | null = null;
+  public onUnreliableOpen: (() => void) | null = null;
   public onConnected: (() => void) | null = null;
   public onDisconnected: (() => void) | null = null;
   public onLocalDescription: ((sdp: RTCSessionDescriptionInit) => void) | null = null;
@@ -109,6 +112,7 @@ export class PeerConnection {
       this.remotePeerId = peerIdOrOptions.peerId;
       this.isInitiator = Boolean(peerIdOrOptions.isInitiator);
       this.signalingClient = peerIdOrOptions.signalingClient;
+      if (peerIdOrOptions.onUnreliableOpen) this.onUnreliableOpen = peerIdOrOptions.onUnreliableOpen;
       if (peerIdOrOptions.onConnected) this.onConnected = peerIdOrOptions.onConnected;
       if (peerIdOrOptions.onDisconnected) this.onDisconnected = peerIdOrOptions.onDisconnected;
       if (peerIdOrOptions.onSignal) {
@@ -154,11 +158,13 @@ export class PeerConnection {
     });
     this.setupUnreliableChannel(gameDc);
 
-    // Reliable ordered channel for critical match state, chat, and lobby control
-    const reliableDc = this.pc.createDataChannel('reliable', {
-      ordered: true
-    });
-    this.setupReliableChannel(reliableDc);
+    if (!this.options?.unreliableOnly) {
+      // Reliable ordered channel for critical match state, chat, and lobby control
+      const reliableDc = this.pc.createDataChannel('reliable', {
+        ordered: true
+      });
+      this.setupReliableChannel(reliableDc);
+    }
   }
 
   private setupPeerEvents(): void {
@@ -408,6 +414,7 @@ export class PeerConnection {
     channel.onopen = () => {
       this.linkState = 'connected';
       this.flushReliableOutbox();
+      if (this.onUnreliableOpen) this.onUnreliableOpen();
       if (this.onConnected) this.onConnected();
     };
 
@@ -619,7 +626,9 @@ export class PeerConnection {
 
   public areChannelsOpen(): boolean {
     const uOpen = Boolean(this.unreliableChannel && this.unreliableChannel.readyState === 'open');
-    const rOpen = Boolean(this.reliableChannel && this.reliableChannel.readyState === 'open');
+    const rOpen = this.options?.unreliableOnly
+      ? true
+      : Boolean(this.reliableChannel && this.reliableChannel.readyState === 'open');
     const dOpen = Boolean(this.dataChannel && this.dataChannel.readyState === 'open');
     return (uOpen && rOpen) || dOpen;
   }

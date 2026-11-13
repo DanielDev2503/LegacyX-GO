@@ -25,8 +25,12 @@ export interface PlayerInfo {
 }
 
 export class NetworkHost {
+  private static readonly MAX_PROBE_PEERS = 8;
+  private static readonly PROBE_PEER_TTL_MS = 4000;
+
   private signaling: SignalingClient;
   private peers = new Map<string, PeerConnection>();
+  private probePeers = new Map<string, { peer: PeerConnection; timer: ReturnType<typeof setTimeout> }>();
   private peerToPlayerId = new Map<string, number>();
   private pendingNicknames = new Map<string, string>();
   private players = new Map<number, PlayerInfo>();
@@ -46,6 +50,7 @@ export class NetworkHost {
   private boundOnWelcome!: (msg: any) => void;
   private boundOnPeerJoined!: (msg: any) => void;
   private boundOnSignal!: (msg: any) => void;
+  private boundOnRtcPingSignal!: (msg: any) => void;
   private boundOnPeerLeft!: (msg: any) => void;
 
   public onPlayerInput?: (
@@ -86,6 +91,7 @@ export class NetworkHost {
       number: hostProfile?.number ?? 10,
       isAdmin: true,
       isHost: true,
+      ping: 0,
       avatar: hostProfile?.avatar ?? '1',
       avatarType: hostProfile?.avatarType ?? 'letters',
       kit: hostProfile?.kit,
@@ -148,6 +154,10 @@ export class NetworkHost {
       }
     };
 
+    this.boundOnRtcPingSignal = async (msg) => {
+      await this.handleRtcPingSignal(msg);
+    };
+
     this.boundOnPeerLeft = (msg) => {
       this.handlePeerDisconnect(msg.peerId as string);
     };
@@ -155,6 +165,7 @@ export class NetworkHost {
     this.signaling.on('WELCOME', this.boundOnWelcome);
     this.signaling.on('PEER_JOINED', this.boundOnPeerJoined);
     this.signaling.on('SIGNAL', this.boundOnSignal);
+    this.signaling.on('RTC_PING_SIGNAL', this.boundOnRtcPingSignal);
     this.signaling.on('PEER_LEFT', this.boundOnPeerLeft);
   }
 
@@ -162,7 +173,90 @@ export class NetworkHost {
     this.signaling.off('WELCOME', this.boundOnWelcome);
     this.signaling.off('PEER_JOINED', this.boundOnPeerJoined);
     this.signaling.off('SIGNAL', this.boundOnSignal);
+    this.signaling.off('RTC_PING_SIGNAL', this.boundOnRtcPingSignal);
     this.signaling.off('PEER_LEFT', this.boundOnPeerLeft);
+  }
+
+  private cleanupProbePeer(probeKey: string): void {
+    const entry = this.probePeers.get(probeKey);
+    if (!entry) return;
+    clearTimeout(entry.timer);
+    this.probePeers.delete(probeKey);
+    entry.peer.close();
+  }
+
+  private async handleRtcPingSignal(msg: any): Promise<void> {
+    const fromPeerId = typeof msg?.fromPeerId === 'string' ? msg.fromPeerId : '';
+    const probeId = typeof msg?.probeId === 'string' ? msg.probeId : '';
+    const msgRoomId = typeof msg?.roomId === 'string' ? msg.roomId : '';
+    const data = msg?.data;
+    if (!fromPeerId || !probeId || !data) return;
+    if (msgRoomId && this.roomId && msgRoomId !== this.roomId) return;
+    if (this.bannedPeerIds.has(fromPeerId)) return;
+
+    const probeKey = `${fromPeerId}:${probeId}`;
+    let entry = this.probePeers.get(probeKey);
+    if (!entry) {
+      if (this.probePeers.size >= NetworkHost.MAX_PROBE_PEERS) {
+        const oldestKey = this.probePeers.keys().next().value as string | undefined;
+        if (oldestKey) {
+          this.cleanupProbePeer(oldestKey);
+        }
+      }
+
+      const timer = setTimeout(() => {
+        this.cleanupProbePeer(probeKey);
+      }, NetworkHost.PROBE_PEER_TTL_MS);
+
+      const iceServers = this.iceServers.length > 0 ? this.iceServers : undefined;
+      const probePeer = new PeerConnection({
+        peerId: `probe_${probeKey}`,
+        isInitiator: false,
+        unreliableOnly: true,
+        iceServers,
+        signalingClient: this.signaling,
+        onReliableMessage: (rawMsg: unknown) => {
+          const m =
+            typeof rawMsg === 'string'
+              ? (() => {
+                  try {
+                    return JSON.parse(rawMsg);
+                  } catch {
+                    return null;
+                  }
+                })()
+              : (rawMsg as Record<string, unknown> | null);
+          if (m && m.type === 'PING_PROBE') {
+            probePeer.sendUnreliableMessage({ type: 'PONG_PROBE', t: m.t });
+          }
+        }
+      });
+
+      probePeer.onLocalDescription = (sdp) => {
+        this.signaling.sendRtcPingSignal({
+          roomId: msgRoomId || this.roomId,
+          probeId,
+          targetPeerId: fromPeerId,
+          data: sdp
+        });
+      };
+      probePeer.onLocalCandidate = (cand) => {
+        this.signaling.sendRtcPingSignal({
+          roomId: msgRoomId || this.roomId,
+          probeId,
+          targetPeerId: fromPeerId,
+          data: { candidate: cand }
+        });
+      };
+      probePeer.onDisconnected = () => {
+        this.cleanupProbePeer(probeKey);
+      };
+
+      entry = { peer: probePeer, timer };
+      this.probePeers.set(probeKey, entry);
+    }
+
+    await entry.peer.handleSignal(data);
   }
 
   private buildRoomStateSyncPayload(assignedPlayerId?: number): Record<string, unknown> {
@@ -718,6 +812,9 @@ export class NetworkHost {
 
   public destroy(): void {
     this.cleanupSignalingListeners();
+    for (const probeKey of [...this.probePeers.keys()]) {
+      this.cleanupProbePeer(probeKey);
+    }
     this.peers.forEach((peer) => peer.close());
     this.peers.clear();
     this.peerToPlayerId.clear();

@@ -1,4 +1,4 @@
-import { setDynamicIceServers, DEFAULT_STUN_SERVERS } from './PeerConnection';
+import { PeerConnection, setDynamicIceServers, DEFAULT_STUN_SERVERS } from './PeerConnection';
 
 export interface RoomListing {
   id: string;
@@ -38,6 +38,7 @@ export interface SignalingMessage {
     | 'PEER_JOINED'
     | 'PEER_LEFT'
     | 'SIGNAL'
+    | 'RTC_PING_SIGNAL'
     | 'ERROR'
     | 'PING_PROBE'
     | 'PONG_PROBE'
@@ -76,6 +77,8 @@ export interface SignalingMessage {
   t0?: number;
   pingMs?: number | null;
   ping?: number | null;
+  hostRelayMs?: number;
+  isDedicated?: boolean;
   unreachable?: boolean;
   timedOut?: boolean;
   sdp?: RTCSessionDescriptionInit;
@@ -165,11 +168,26 @@ export class SignalingClient {
   private pingInterval: ReturnType<typeof setInterval> | null = null;
   private listeners = new Map<string, Set<EventCallback>>();
   private connectPromise: Promise<void> | null = null;
+  private static readonly ROOM_PING_CACHE_TTL_MS = 8000;
+  private static readonly RTC_PROBE_TIMEOUT_MS = 1500;
+  private static readonly WS_PROBE_TIMEOUT_MS = 4500;
+
   private probeCounter = 0;
   private pendingRoomProbes = new Map<
     string,
-    { roomId: string; sentAt: number; timer: ReturnType<typeof setTimeout>; resolve: (ms: number) => void }
+    {
+      roomId: string;
+      sentPerfAt: number;
+      timer: ReturnType<typeof setTimeout>;
+      resolve: (ms: number) => void;
+    }
   >();
+  private roomPingCache = new Map<string, { ms: number; measuredAtPerf: number }>();
+  private inFlightRoomProbes = new Map<string, Promise<number>>();
+  private roomMeta = new Map<string, { hostPeerId?: string; isDedicated?: boolean }>();
+  private activeRtcProbeIds = new Set<string>();
+  private activeProbeCleanups = new Set<() => void>();
+  private rtcProbeShortCircuit = new Map<string, () => void>();
 
   public onMessage: ((msg: SignalingMessage) => void) | null = null;
   public onConnected: (() => void) | null = null;
@@ -246,6 +264,14 @@ export class SignalingClient {
       pending.resolve(-1);
     }
     this.pendingRoomProbes.clear();
+    for (const cleanup of [...this.activeProbeCleanups]) {
+      cleanup();
+    }
+    this.activeProbeCleanups.clear();
+    this.activeRtcProbeIds.clear();
+    this.rtcProbeShortCircuit.clear();
+    this.inFlightRoomProbes.clear();
+    this.roomPingCache.clear();
   }
 
   private resetIcePromise(): void {
@@ -281,22 +307,59 @@ export class SignalingClient {
     }
   }
 
-  public probeRoomPing(roomId: string): Promise<number> {
-    if (!roomId || !this.isOpen()) {
-      return Promise.resolve(-1);
-    }
-    const probeId = `probe_${++this.probeCounter}_${Date.now().toString(36)}`;
-    const sentAt = Date.now();
+  public sendRtcPingSignal(payload: {
+    roomId: string;
+    probeId: string;
+    targetPeerId?: string;
+    data: unknown;
+  }): void {
+    if (!this.isOpen()) return;
+    this.send({
+      type: 'RTC_PING_SIGNAL',
+      roomId: payload.roomId,
+      probeId: payload.probeId,
+      ...(payload.targetPeerId ? { targetPeerId: payload.targetPeerId } : {}),
+      data: payload.data
+    });
+  }
 
+  private emitSyntheticRoomPingResult(roomId: string, pingMs: number, probeId?: string): void {
+    if (!roomId || pingMs <= 0) return;
+    this.roomPingCache.set(roomId, { ms: pingMs, measuredAtPerf: performance.now() });
+    this.onRoomPingResult?.(roomId, pingMs);
+    const payload: SignalingMessage = {
+      type: 'ROOM_PING_RESULT',
+      roomId,
+      ...(probeId ? { probeId } : {}),
+      pingMs,
+      ping: pingMs
+    };
+    const invoked = new Set<EventCallback>();
+    for (const key of ['ROOM_PING_RESULT', 'room_ping_result']) {
+      const set = this.listeners.get(key);
+      if (set) {
+        for (const cb of set) {
+          if (!invoked.has(cb)) {
+            invoked.add(cb);
+            cb(payload);
+          }
+        }
+      }
+    }
+  }
+
+  private probeViaWsRelay(roomId: string, probeId: string): Promise<number> {
+    const sentPerfAt = performance.now();
+    const sentAt = Date.now();
     return new Promise<number>((resolve) => {
       const timer = setTimeout(() => {
         this.pendingRoomProbes.delete(probeId);
         resolve(-1);
-      }, 4500);
+      }, SignalingClient.WS_PROBE_TIMEOUT_MS);
 
       this.pendingRoomProbes.set(probeId, {
         roomId,
-        sentAt,
+        sentPerfAt,
         timer,
         resolve
       });
@@ -309,6 +372,180 @@ export class SignalingClient {
         t0: sentAt
       });
     });
+  }
+
+  private probeViaWebRtc(roomId: string, probeId: string, hostPeerId?: string): Promise<number | null> {
+    this.activeRtcProbeIds.add(probeId);
+    return new Promise<number | null>((resolve) => {
+      let settled = false;
+      let rtcTimer: ReturnType<typeof setTimeout> | null = null;
+      let sampleGraceTimer: ReturnType<typeof setTimeout> | null = null;
+      const samples: number[] = [];
+      let probePeer: PeerConnection | null = null;
+
+      const onRtcSignal = (msg: any) => {
+        if (settled || msg?.probeId !== probeId || !msg?.data || !probePeer) return;
+        void probePeer.handleSignal(msg.data);
+      };
+
+      const finish = (result: number | null) => {
+        if (settled) return;
+        settled = true;
+        if (rtcTimer) clearTimeout(rtcTimer);
+        if (sampleGraceTimer) clearTimeout(sampleGraceTimer);
+        this.off('RTC_PING_SIGNAL', onRtcSignal);
+        this.activeProbeCleanups.delete(abortProbe);
+        this.rtcProbeShortCircuit.delete(probeId);
+        this.activeRtcProbeIds.delete(probeId);
+        if (probePeer) {
+          probePeer.close();
+          probePeer = null;
+        }
+        resolve(result);
+      };
+
+      const abortProbe = () => finish(null);
+      this.activeProbeCleanups.add(abortProbe);
+      this.rtcProbeShortCircuit.set(probeId, abortProbe);
+      this.on('RTC_PING_SIGNAL', onRtcSignal);
+
+      try {
+        probePeer = new PeerConnection({
+          peerId: probeId,
+          isInitiator: true,
+          unreliableOnly: true,
+          signalingClient: this,
+          onUnreliableOpen: () => {
+            if (settled || !probePeer) return;
+            for (let seq = 1; seq <= 2; seq++) {
+              probePeer.sendUnreliableMessage({
+                type: 'PING_PROBE',
+                t: performance.now(),
+                seq
+              });
+            }
+          },
+          onReliableMessage: (raw) => {
+            if (settled) return;
+            const m =
+              typeof raw === 'string'
+                ? (() => {
+                    try {
+                      return JSON.parse(raw);
+                    } catch {
+                      return null;
+                    }
+                  })()
+                : (raw as Record<string, unknown> | null);
+            if (!m || m.type !== 'PONG_PROBE') return;
+            const sentT = Number(m.t);
+            if (!Number.isFinite(sentT) || sentT <= 0) return;
+            const rtt = Math.max(1, Math.round(performance.now() - sentT));
+            samples.push(rtt);
+            if (samples.length >= 2) {
+              const avg = Math.max(1, Math.round(samples.reduce((a, b) => a + b, 0) / samples.length));
+              finish(avg);
+            } else if (!sampleGraceTimer) {
+              sampleGraceTimer = setTimeout(() => {
+                finish(samples[0] ?? null);
+              }, 50);
+            }
+          },
+          onDisconnected: () => finish(null)
+        });
+      } catch {
+        finish(null);
+        return;
+      }
+
+      probePeer.onLocalCandidate = (cand) => {
+        if (settled) return;
+        this.sendRtcPingSignal({
+          roomId,
+          probeId,
+          targetPeerId: hostPeerId,
+          data: { candidate: cand }
+        });
+      };
+
+      rtcTimer = setTimeout(() => {
+        finish(samples.length > 0 ? samples[0]! : null);
+      }, SignalingClient.RTC_PROBE_TIMEOUT_MS);
+
+      void probePeer
+        .createOffer()
+        .then((offer) => {
+          if (!settled) {
+            this.sendRtcPingSignal({
+              roomId,
+              probeId,
+              targetPeerId: hostPeerId,
+              data: offer
+            });
+          }
+        })
+        .catch(() => finish(null));
+    });
+  }
+
+  public probeRoomPing(roomId: string, hostPeerId?: string): Promise<number> {
+    if (!roomId || !this.isOpen()) {
+      return Promise.resolve(-1);
+    }
+
+    const cached = this.roomPingCache.get(roomId);
+    if (cached && performance.now() - cached.measuredAtPerf < SignalingClient.ROOM_PING_CACHE_TTL_MS) {
+      this.onRoomPingResult?.(roomId, cached.ms);
+      return Promise.resolve(cached.ms);
+    }
+
+    const inFlight = this.inFlightRoomProbes.get(roomId);
+    if (inFlight) {
+      return inFlight;
+    }
+
+    const meta = this.roomMeta.get(roomId);
+    const resolvedHostPeerId = hostPeerId || meta?.hostPeerId;
+    const isDedicated = Boolean(meta?.isDedicated);
+    const probeId = `probe_${++this.probeCounter}_${Date.now().toString(36)}`;
+
+    const wsPromise = this.probeViaWsRelay(roomId, probeId);
+    const canTryWebRtc = !isDedicated && typeof RTCPeerConnection !== 'undefined';
+
+    const probePromise: Promise<number> = !canTryWebRtc
+      ? wsPromise.then((wsRtt) => {
+          if (wsRtt > 0) {
+            this.roomPingCache.set(roomId, { ms: wsRtt, measuredAtPerf: performance.now() });
+          }
+          return wsRtt;
+        })
+      : (async () => {
+          const p2pRtt = await this.probeViaWebRtc(roomId, probeId, resolvedHostPeerId);
+          if (typeof p2pRtt === 'number' && p2pRtt > 0) {
+            const pendingWs = this.pendingRoomProbes.get(probeId);
+            if (pendingWs) {
+              clearTimeout(pendingWs.timer);
+              this.pendingRoomProbes.delete(probeId);
+              pendingWs.resolve(p2pRtt);
+            }
+            this.emitSyntheticRoomPingResult(roomId, p2pRtt, probeId);
+            return p2pRtt;
+          }
+
+          const wsRtt = await wsPromise;
+          if (wsRtt > 0) {
+            this.emitSyntheticRoomPingResult(roomId, wsRtt, probeId);
+          }
+          return wsRtt;
+        })();
+
+    const tracked = probePromise.finally(() => {
+      if (this.inFlightRoomProbes.get(roomId) === tracked) {
+        this.inFlightRoomProbes.delete(roomId);
+      }
+    });
+    this.inFlightRoomProbes.set(roomId, tracked);
+    return tracked;
   }
 
   private startPingLoop(): void {
@@ -397,18 +634,27 @@ export class SignalingClient {
               }
               return;
             }
+            if ((msg.type === 'room_list' || msg.type === 'ROOM_LIST') && Array.isArray(msg.rooms)) {
+              for (const r of msg.rooms as Array<Record<string, unknown>>) {
+                const rid = typeof r?.id === 'string' ? r.id : '';
+                if (!rid) continue;
+                this.roomMeta.set(rid, {
+                  hostPeerId: typeof r.hostPeerId === 'string' ? r.hostPeerId : undefined,
+                  isDedicated: Boolean(r.isDedicated)
+                });
+              }
+            }
             if (msg.type === 'ROOM_PING_RESULT') {
               const roomId = typeof msg.roomId === 'string' ? msg.roomId : '';
               const probeId = typeof msg.probeId === 'string' ? msg.probeId : '';
-              const rawPing =
-                typeof msg.pingMs === 'number' && Number.isFinite(msg.pingMs)
-                  ? Math.max(1, Math.round(msg.pingMs))
-                  : typeof msg.ping === 'number' && Number.isFinite(msg.ping)
-                    ? Math.max(1, Math.round(msg.ping))
-                    : -1;
 
               let pendingEntry:
-                | { roomId: string; sentAt: number; timer: ReturnType<typeof setTimeout>; resolve: (ms: number) => void }
+                | {
+                    roomId: string;
+                    sentPerfAt: number;
+                    timer: ReturnType<typeof setTimeout>;
+                    resolve: (ms: number) => void;
+                  }
                 | undefined;
               if (probeId && this.pendingRoomProbes.has(probeId)) {
                 pendingEntry = this.pendingRoomProbes.get(probeId);
@@ -423,21 +669,43 @@ export class SignalingClient {
                 }
               }
 
+              const serverTrustedPing: number =
+                Boolean(msg.isDedicated) || msg.hostRelayMs === undefined
+                  ? typeof msg.pingMs === 'number' && Number.isFinite(msg.pingMs) && msg.pingMs > 0
+                    ? Math.max(1, Math.round(msg.pingMs))
+                    : typeof msg.ping === 'number' && Number.isFinite(msg.ping) && msg.ping > 0
+                      ? Math.max(1, Math.round(msg.ping))
+                      : -1
+                  : -1;
+
+              const resolvedMs =
+                msg.unreachable && serverTrustedPing <= 0
+                  ? -1
+                  : serverTrustedPing > 0
+                    ? serverTrustedPing
+                    : pendingEntry
+                      ? Math.max(1, Math.round(performance.now() - pendingEntry.sentPerfAt))
+                      : -1;
+
               if (pendingEntry) {
                 clearTimeout(pendingEntry.timer);
-                const resolvedMs =
-                  rawPing > 0
-                    ? rawPing
-                    : msg.unreachable
-                      ? -1
-                      : Math.max(1, Math.round(Date.now() - pendingEntry.sentAt));
                 pendingEntry.resolve(resolvedMs);
               }
 
-              if (roomId && rawPing > 0) {
-                msg.ping = rawPing;
-                msg.pingMs = rawPing;
-                this.onRoomPingResult?.(roomId, rawPing);
+              if (msg.isDedicated && resolvedMs > 0 && probeId) {
+                this.rtcProbeShortCircuit.get(probeId)?.();
+              }
+
+              if (probeId && this.activeRtcProbeIds.has(probeId)) {
+                // Direct WebRTC probe is still racing; wait for it to finish before notifying UI
+                return;
+              }
+
+              if (roomId && resolvedMs > 0) {
+                msg.ping = resolvedMs;
+                msg.pingMs = resolvedMs;
+                this.roomPingCache.set(roomId, { ms: resolvedMs, measuredAtPerf: performance.now() });
+                this.onRoomPingResult?.(roomId, resolvedMs);
               }
             }
             if ((msg.type === 'ice_config' || msg.type === 'WELCOME') && Array.isArray(msg.iceServers)) {

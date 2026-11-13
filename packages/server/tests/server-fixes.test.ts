@@ -442,7 +442,7 @@ describe('Task 2 Server Fixes: name_changed, Ranked Sanity, Real Hover Ping & On
   });
 
   describe('Item 15 & Item 3-server: Real Room Hover Ping Probe & DedicatedHost', () => {
-    it('relays ROOM_PING_PROBE -> PING_PROBE -> PONG_PROBE -> ROOM_PING_RESULT using real elapsed ms, and handles unreachable host timeout', async () => {
+    it('relays ROOM_PING_PROBE -> PING_PROBE -> PONG_PROBE -> ROOM_PING_RESULT without clock skew, and handles unreachable host timeout', async () => {
       const server = await createEphemeralSignaling({ pingProbeTimeoutMs: 120 });
       cleanups.push(() => server.close());
 
@@ -462,58 +462,68 @@ describe('Task 2 Server Fixes: name_changed, Ranked Sanity, Real Hover Ping & On
       const created = await host.waitFor((m) => m.type === 'ROOM_CREATED');
       const roomId = created.roomId as string;
 
-      const sentAt = Date.now() - 47;
+      // Simulate severe browser clock skew (-5000ms and +5000ms)
+      for (const [probeId, sentAt] of [
+        ['probe-skew-behind', Date.now() - 5000],
+        ['probe-skew-ahead', Date.now() + 5000]
+      ] as const) {
+        guest.ws.send(
+          JSON.stringify({
+            type: 'ROOM_PING_PROBE',
+            roomId,
+            clientSentAt: sentAt,
+            probeId
+          })
+        );
+
+        const pingProbe = await host.waitFor(
+          (m) => m.type === 'PING_PROBE' && m.probeId === probeId
+        );
+        expect(pingProbe.roomId).toBe(roomId);
+        expect(pingProbe.requesterId).toBe(guest.peerId);
+        expect(pingProbe.clientSentAt).toBe(sentAt);
+        expect(pingProbe.probeId).toBe(probeId);
+
+        // Imposter cannot spoof PONG_PROBE for a room it does not own
+        imposter.ws.send(
+          JSON.stringify({
+            type: 'PONG_PROBE',
+            roomId,
+            requesterId: guest.peerId,
+            clientSentAt: sentAt,
+            probeId
+          })
+        );
+
+        // Real host responds
+        host.ws.send(
+          JSON.stringify({
+            type: 'PONG_PROBE',
+            roomId,
+            requesterId: pingProbe.requesterId,
+            clientSentAt: pingProbe.clientSentAt,
+            probeId: pingProbe.probeId
+          })
+        );
+
+        const probeResult = await guest.waitFor(
+          (m) => m.type === 'ROOM_PING_RESULT' && m.probeId === probeId
+        );
+        expect(probeResult.roomId).toBe(roomId);
+        expect(probeResult.clientSentAt).toBe(sentAt);
+        expect(typeof probeResult.hostRelayMs).toBe('number');
+        expect(probeResult.hostRelayMs).toBeGreaterThanOrEqual(0);
+        expect(probeResult.hostRelayMs).toBeLessThan(1000);
+        // Non-dedicated P2P rooms omit server-computed pingMs so the client computes RTT on its own clock
+        expect(probeResult.pingMs).toBeUndefined();
+      }
+
+      // Silent/unresponsive host triggers timeout fallback without clock-skewed pingMs
       guest.ws.send(
         JSON.stringify({
           type: 'ROOM_PING_PROBE',
           roomId,
-          clientSentAt: sentAt,
-          probeId: 'probe-47'
-        })
-      );
-
-      const pingProbe = await host.waitFor((m) => m.type === 'PING_PROBE');
-      expect(pingProbe.roomId).toBe(roomId);
-      expect(pingProbe.requesterId).toBe(guest.peerId);
-      expect(pingProbe.clientSentAt).toBe(sentAt);
-      expect(pingProbe.probeId).toBe('probe-47');
-
-      // Imposter cannot spoof PONG_PROBE for a room it does not own
-      imposter.ws.send(
-        JSON.stringify({
-          type: 'PONG_PROBE',
-          roomId,
-          requesterId: guest.peerId,
-          clientSentAt: sentAt,
-          probeId: 'probe-47'
-        })
-      );
-
-      // Real host responds
-      host.ws.send(
-        JSON.stringify({
-          type: 'PONG_PROBE',
-          roomId,
-          requesterId: pingProbe.requesterId,
-          clientSentAt: pingProbe.clientSentAt,
-          probeId: pingProbe.probeId
-        })
-      );
-
-      const probeResult = await guest.waitFor(
-        (m) => m.type === 'ROOM_PING_RESULT' && m.probeId === 'probe-47'
-      );
-      expect(probeResult.roomId).toBe(roomId);
-      expect(probeResult.clientSentAt).toBe(sentAt);
-      expect(probeResult.pingMs).toBeGreaterThanOrEqual(47);
-      expect(probeResult.pingMs).toBeLessThan(1500);
-
-      // Silent/unresponsive host triggers timeout fallback instead of hanging
-      guest.ws.send(
-        JSON.stringify({
-          type: 'ROOM_PING_PROBE',
-          roomId,
-          clientSentAt: Date.now(),
+          clientSentAt: Date.now() - 5000,
           probeId: 'probe-timeout'
         })
       );
@@ -523,6 +533,7 @@ describe('Task 2 Server Fixes: name_changed, Ranked Sanity, Real Hover Ping & On
       );
       expect(timeoutResult.roomId).toBe(roomId);
       expect(timeoutResult.timedOut).toBe(true);
+      expect(timeoutResult.pingMs).toBeUndefined();
 
       // Co-located dedicated room without active host WS falls back to measured client WS RTT
       const coLocatedRoom = registry.createRoom('colocated-host-peer', {
@@ -536,7 +547,7 @@ describe('Task 2 Server Fixes: name_changed, Ranked Sanity, Real Hover Ping & On
         JSON.stringify({
           type: 'ROOM_PING_PROBE',
           roomId: coLocatedRoom.id,
-          clientSentAt: Date.now(),
+          clientSentAt: Date.now() - 4000,
           probeId: 'colocated-probe'
         })
       );
@@ -546,6 +557,87 @@ describe('Task 2 Server Fixes: name_changed, Ranked Sanity, Real Hover Ping & On
       expect(colocatedRes.roomId).toBe(coLocatedRoom.id);
       expect(colocatedRes.pingMs).toBe(19);
       registry.removeRoom(coLocatedRoom.id);
+    });
+
+    it('relays RTC_PING_SIGNAL between requester and room host without mutating room membership or emitting PEER_JOINED', async () => {
+      const server = await createEphemeralSignaling();
+      cleanups.push(() => server.close());
+
+      const host = await connectClient(server.url);
+      const guest = await connectClient(server.url);
+      const bystander = await connectClient(server.url);
+      cleanups.push(() => host.ws.close(), () => guest.ws.close(), () => bystander.ws.close());
+
+      host.ws.send(
+        JSON.stringify({
+          type: 'CREATE_ROOM',
+          name: 'Direct RTC Probe Room',
+          stadiumId: 'mediano',
+          maxPlayers: 8
+        })
+      );
+      const created = await host.waitFor((m) => m.type === 'ROOM_CREATED');
+      const roomId = created.roomId as string;
+
+      let peerJoinedCount = 0;
+      host.ws.on('message', (raw) => {
+        const msg = JSON.parse(raw.toString());
+        if (msg.type === 'PEER_JOINED') peerJoinedCount += 1;
+      });
+
+      // Unknown room is safely ignored
+      guest.ws.send(
+        JSON.stringify({
+          type: 'RTC_PING_SIGNAL',
+          roomId: 'non-existent-room',
+          probeId: 'rtc-missing',
+          data: { type: 'offer', sdp: 'v=0' }
+        })
+      );
+
+      // Non-host trying to target bystander cannot spoof host reply to bystander
+      guest.ws.send(
+        JSON.stringify({
+          type: 'RTC_PING_SIGNAL',
+          roomId,
+          probeId: 'rtc-probe-1',
+          targetPeerId: bystander.peerId,
+          data: { type: 'offer', sdp: 'probe-offer' }
+        })
+      );
+
+      // Relays to host only, overwriting targetPeerId to room.hostPeerId
+      const hostReceived = await host.waitFor(
+        (m) => m.type === 'RTC_PING_SIGNAL' && m.probeId === 'rtc-probe-1'
+      );
+      expect(hostReceived.roomId).toBe(roomId);
+      expect(hostReceived.fromPeerId).toBe(guest.peerId);
+      expect(hostReceived.targetPeerId).toBe(host.peerId);
+      expect(hostReceived.data).toEqual({ type: 'offer', sdp: 'probe-offer' });
+
+      // Host answers back to guest
+      host.ws.send(
+        JSON.stringify({
+          type: 'RTC_PING_SIGNAL',
+          roomId,
+          probeId: 'rtc-probe-1',
+          targetPeerId: guest.peerId,
+          data: { type: 'answer', sdp: 'probe-answer' }
+        })
+      );
+
+      const guestReceived = await guest.waitFor(
+        (m) => m.type === 'RTC_PING_SIGNAL' && m.probeId === 'rtc-probe-1'
+      );
+      expect(guestReceived.roomId).toBe(roomId);
+      expect(guestReceived.fromPeerId).toBe(host.peerId);
+      expect(guestReceived.targetPeerId).toBe(guest.peerId);
+      expect(guestReceived.data).toEqual({ type: 'answer', sdp: 'probe-answer' });
+
+      await new Promise((r) => setTimeout(r, 40));
+      expect(peerJoinedCount).toBe(0);
+      expect(registry.getRoomById(roomId)?.currentPlayers).toBe(1);
+      expect(registry.getRoomById(roomId)?.guests.size).toBe(0);
     });
 
     it('DedicatedHost answers PING_PROBE over WS, uses staminaRegenMoving:false / rate:25 defaults, and forwards goal/score fields', async () => {
@@ -573,7 +665,7 @@ describe('Task 2 Server Fixes: name_changed, Ranked Sanity, Real Hover Ping & On
       const guest = await connectClient(server.url);
       cleanups.push(() => guest.ws.close());
 
-      const sentAt = Date.now() - 35;
+      const sentAt = Date.now() - 3500;
       guest.ws.send(
         JSON.stringify({
           type: 'ROOM_PING_PROBE',
@@ -587,7 +679,11 @@ describe('Task 2 Server Fixes: name_changed, Ranked Sanity, Real Hover Ping & On
         (m) => m.type === 'ROOM_PING_RESULT' && m.probeId === 'ded-probe-1'
       );
       expect(res.roomId).toBe(dedicated.roomId);
-      expect(res.pingMs).toBeGreaterThanOrEqual(35);
+      expect(res.clientSentAt).toBe(sentAt);
+      expect(typeof res.hostRelayMs).toBe('number');
+      expect(res.hostRelayMs).toBeLessThan(1000);
+      expect(typeof res.pingMs).toBe('number');
+      expect(res.pingMs).toBeLessThan(1000);
 
       // Verify goal banner & score_event forwarding
       const goalBanners: any[] = [];

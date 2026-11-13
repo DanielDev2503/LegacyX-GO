@@ -211,7 +211,14 @@ export function setupSignalingServer(wss: WebSocketServer, options?: SignalingSe
   const socketIdentity = new Map<WebSocket, { userId?: string; clientSessionId?: string }>();
   const pendingPingProbes = new Map<
     string,
-    { timer: NodeJS.Timeout; requesterId: string; hostPeerId: string }
+    {
+      timer: NodeJS.Timeout;
+      requesterId: string;
+      hostPeerId: string;
+      serverForwardedAt: number;
+      clientSentAt: unknown;
+      isDedicated: boolean;
+    }
   >();
   const pingProbeTimeoutMs = Math.max(20, options?.pingProbeTimeoutMs ?? 2500);
 
@@ -535,39 +542,41 @@ export function setupSignalingServer(wss: WebSocketServer, options?: SignalingSe
 
           case 'ROOM_PING_PROBE': {
             const roomId = String(msg.roomId || '');
-            const clientSentAt =
-              typeof msg.clientSentAt === 'number' && Number.isFinite(msg.clientSentAt)
-                ? msg.clientSentAt
-                : Date.now();
+            const clientSentAt = msg.clientSentAt;
             const probeId = typeof msg.probeId === 'string' ? msg.probeId : undefined;
             const targetRoom = registry.getRoomById(roomId);
             const hostWs = targetRoom ? peerSockets.get(targetRoom.hostPeerId) : undefined;
 
-            const sendFallback = (requesterWs: AliveWebSocket, timedOut: boolean): void => {
+            const sendFallback = (
+              requesterWs: AliveWebSocket,
+              timedOut: boolean,
+              hostRelayMs?: number
+            ): void => {
               if (targetRoom?.isDedicated) {
-                const pingMs = Math.max(
-                  1,
-                  Math.round(requesterWs.rttMs ?? Math.max(1, Date.now() - clientSentAt))
-                );
+                const measured =
+                  requesterWs.rttMs !== undefined && Number.isFinite(requesterWs.rttMs)
+                    ? Math.max(1, Math.round(requesterWs.rttMs))
+                    : typeof hostRelayMs === 'number'
+                      ? Math.max(1, Math.round(hostRelayMs))
+                      : undefined;
                 send(requesterWs, {
                   type: 'ROOM_PING_RESULT',
                   roomId,
-                  pingMs,
-                  ping: pingMs,
                   clientSentAt,
                   probeId,
+                  isDedicated: true,
+                  ...(hostRelayMs !== undefined ? { hostRelayMs } : {}),
+                  ...(measured !== undefined ? { pingMs: measured, ping: measured } : {}),
                   ...(timedOut ? { timedOut: true } : {})
                 });
                 return;
               }
-              const pingMs = timedOut ? Math.max(1, Math.round(Date.now() - clientSentAt)) : null;
               send(requesterWs, {
                 type: 'ROOM_PING_RESULT',
                 roomId,
-                pingMs,
-                ping: pingMs,
                 clientSentAt,
                 probeId,
+                ...(hostRelayMs !== undefined ? { hostRelayMs } : {}),
                 ...(timedOut ? { timedOut: true } : {}),
                 unreachable: true
               });
@@ -585,17 +594,23 @@ export function setupSignalingServer(wss: WebSocketServer, options?: SignalingSe
               pendingPingProbes.delete(probeKey);
             }
 
+            const serverForwardedAt = Date.now();
             const timer = setTimeout(() => {
+              const entry = pendingPingProbes.get(probeKey);
               pendingPingProbes.delete(probeKey);
               const requesterWs = peerSockets.get(effectivePeerId) as AliveWebSocket | undefined;
               if (!requesterWs || requesterWs.readyState !== WebSocket.OPEN) return;
-              sendFallback(requesterWs, true);
+              const elapsedRelayMs = Math.max(0, Date.now() - (entry?.serverForwardedAt ?? serverForwardedAt));
+              sendFallback(requesterWs, true, elapsedRelayMs);
             }, pingProbeTimeoutMs);
 
             pendingPingProbes.set(probeKey, {
               timer,
               requesterId: effectivePeerId,
-              hostPeerId: targetRoom.hostPeerId
+              hostPeerId: targetRoom.hostPeerId,
+              serverForwardedAt,
+              clientSentAt,
+              isDedicated: Boolean(targetRoom.isDedicated)
             });
 
             send(hostWs, {
@@ -632,19 +647,25 @@ export function setupSignalingServer(wss: WebSocketServer, options?: SignalingSe
               break;
             }
 
-            const rawSentAt = Number(msg.clientSentAt);
-            const hasValidSentAt = Number.isFinite(rawSentAt) && rawSentAt > 0;
-            const pingMs = hasValidSentAt
-              ? Math.max(1, Math.round(Date.now() - rawSentAt))
-              : Math.max(1, Math.round((requesterWs.rttMs ?? 1) + (ws.rttMs ?? 0)));
+            // Measure only server-side host relay latency; client measures full RTT on its own monotonic clock
+            const hostRelayMs = pending ? Math.max(0, Date.now() - pending.serverForwardedAt) : 0;
+            const isDedicated = pending ? pending.isDedicated : Boolean(targetRoom.isDedicated);
+            const clientSentAt = pending ? pending.clientSentAt : msg.clientSentAt;
+            const dedicatedPingMs = isDedicated
+              ? requesterWs.rttMs !== undefined && Number.isFinite(requesterWs.rttMs)
+                ? Math.max(1, Math.round(requesterWs.rttMs))
+                : Math.max(1, hostRelayMs)
+              : undefined;
 
             send(requesterWs, {
               type: 'ROOM_PING_RESULT',
               roomId,
-              pingMs,
-              ping: pingMs,
-              clientSentAt: msg.clientSentAt,
-              probeId: msg.probeId
+              probeId: msg.probeId,
+              clientSentAt,
+              hostRelayMs,
+              ...(isDedicated && dedicatedPingMs !== undefined
+                ? { pingMs: dedicatedPingMs, ping: dedicatedPingMs, isDedicated: true }
+                : {})
             });
             break;
           }
@@ -1032,6 +1053,45 @@ export function setupSignalingServer(wss: WebSocketServer, options?: SignalingSe
                 fromPeerId: effectivePeerId,
                 senderPeerId: effectivePeerId,
                 targetPeerId: targetId,
+                data: msg.data
+              });
+            }
+            break;
+          }
+
+          case 'RTC_PING_SIGNAL': {
+            const roomId = typeof msg.roomId === 'string' ? msg.roomId : '';
+            const probeId = typeof msg.probeId === 'string' ? msg.probeId : '';
+            if (!roomId || !probeId || !msg.data) {
+              break;
+            }
+            const targetRoom = registry.getRoomById(roomId);
+            if (!targetRoom) {
+              break;
+            }
+            const bannedSet = (targetRoom as { bannedPeerIds?: Set<string> }).bannedPeerIds;
+            const isHostSender =
+              targetRoom.hostPeerId === effectivePeerId ||
+              Boolean(ws.peerIds?.has(targetRoom.hostPeerId));
+            if (!isHostSender && bannedSet?.has(effectivePeerId)) {
+              break;
+            }
+            const targetPeerId = isHostSender
+              ? typeof msg.targetPeerId === 'string'
+                ? msg.targetPeerId
+                : ''
+              : targetRoom.hostPeerId;
+            if (!targetPeerId || targetPeerId === effectivePeerId) {
+              break;
+            }
+            const targetSocket = peerSockets.get(targetPeerId);
+            if (targetSocket && targetSocket.readyState === WebSocket.OPEN) {
+              send(targetSocket, {
+                type: 'RTC_PING_SIGNAL',
+                roomId,
+                probeId,
+                fromPeerId: isHostSender ? targetRoom.hostPeerId : effectivePeerId,
+                targetPeerId,
                 data: msg.data
               });
             }

@@ -79,7 +79,7 @@ export function mapPlayersToRoster(players: PlayerInfo[]): RosterPlayer[] {
       team: p.team,
       isAdmin: Boolean(p.isHost || p.isAdmin),
       isHost: Boolean(p.isHost),
-      ping: p.ping ?? 20,
+      ping: p.isHost ? 0 : (p.ping ?? 20),
       kit: p.kit ?? p.localKit,
       localKit: p.localKit ?? p.kit,
       visitorKit: p.visitorKit ?? p.kit
@@ -260,17 +260,14 @@ export class GameApp {
   public syncPlayerProfile(): void {
     const profile = this.getLocalProfile();
     if (this.isHost && this.networkHost) {
-      const hostPlayer = (this.networkHost as any).players?.get(1);
-      if (hostPlayer) {
-        hostPlayer.nickname = profile.nickname;
-        hostPlayer.name = profile.nickname;
-        hostPlayer.avatar = profile.avatar;
-        hostPlayer.avatarType = profile.avatarType;
-        hostPlayer.localKit = profile.localKit;
-        hostPlayer.visitorKit = profile.visitorKit;
-        hostPlayer.kit = profile.localKit;
-      }
-      this.networkHost.broadcastRoomStateSync();
+      this.networkHost.updateHostProfile({
+        nickname: profile.nickname,
+        avatar: profile.avatar,
+        avatarType: profile.avatarType,
+        kit: profile.localKit,
+        localKit: profile.localKit,
+        visitorKit: profile.visitorKit
+      });
     } else if (!this.isHost && this.networkClient) {
       this.networkClient.sendProfileUpdate(profile);
     }
@@ -349,8 +346,8 @@ export class GameApp {
     this.networkHost.broadcastRoomStateSync();
   }
 
-  public probeRoomPing(roomId: string): Promise<number> {
-    return this.signaling.probeRoomPing(roomId);
+  public probeRoomPing(roomId: string, hostPeerId?: string): Promise<number> {
+    return this.signaling.probeRoomPing(roomId, hostPeerId);
   }
 
   public setKitVariant(team: 'red' | 'blue', variant: 'home' | 'away'): void {
@@ -525,13 +522,14 @@ export class GameApp {
     gameUI.matchTimeFormatted = '00:00';
     gameUI.applyMatchBanner({ kind: 'NONE' });
     gameUI.chatMessages = [];
+    gameUI.recordTelemetrySample(0, gameUI.fps);
     gameUI.activeRoom = {
       id: roomId,
       name,
       stadium,
       maxPlayers,
       playersCount: 1,
-      ping: gameUI.realPing || 20,
+      ping: 0,
       roomType,
       isPrivate: !isPublic,
       password: params?.password,
@@ -771,13 +769,14 @@ export class GameApp {
     gameUI.matchTimeFormatted = '00:00';
     gameUI.applyMatchBanner({ kind: 'NONE' });
     gameUI.chatMessages = [];
+    gameUI.pingMs = 0;
     gameUI.activeRoom = {
       id: roomId,
       name: msg.roomName || msg.name || `Sala ${roomId}`,
       stadium: msg.stadiumId || msg.stadium || 'mediano',
       maxPlayers: msg.maxPlayers || 12,
       playersCount: 2,
-      ping: gameUI.realPing || 20,
+      ping: 0,
       roomType: gameUI.roomType,
       isPrivate: false
     };
