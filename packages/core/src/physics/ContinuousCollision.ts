@@ -385,6 +385,72 @@ export function resolvePredictiveBallCollision(
   return true;
 }
 
+const _sepLocalVel = { x: 0, y: 0 };
+const _sepOtherVel = { x: 0, y: 0 };
+
+/**
+ * Applies smooth client-side predictive render separation between the local predicted disc
+ * and remote/authoritative discs (ball & other players) without mutating `otherDiscs`.
+ */
+export function applyPredictiveRenderSeparation(
+  localDisc: { x: number; y: number; vx: number; vy: number; radius: number },
+  otherDiscs: Array<{ id: number; team: number; x: number; y: number; vx: number; vy: number; radius: number }>,
+  arenaHalfW: number,
+  arenaHalfH: number
+): void {
+  _sepLocalVel.x = localDisc.vx;
+  _sepLocalVel.y = localDisc.vy;
+
+  for (let i = 0; i < otherDiscs.length; i++) {
+    const other = otherDiscs[i]!;
+    if (other.id === 0 || other.team === 0) {
+      resolvePredictiveBallCollision(
+        localDisc,
+        _sepLocalVel,
+        localDisc.radius,
+        other,
+        other.radius
+      );
+    } else {
+      _sepOtherVel.x = other.vx;
+      _sepOtherVel.y = other.vy;
+      resolvePredictivePlayerCollision(
+        localDisc,
+        _sepLocalVel,
+        localDisc.radius,
+        other,
+        _sepOtherVel,
+        other.radius
+      );
+    }
+  }
+
+  localDisc.vx = _sepLocalVel.x;
+  localDisc.vy = _sepLocalVel.y;
+
+  if (arenaHalfW > 0) {
+    const maxX = Math.max(0, arenaHalfW - localDisc.radius);
+    if (localDisc.x < -maxX) {
+      localDisc.x = -maxX;
+      if (localDisc.vx < 0) localDisc.vx = 0;
+    } else if (localDisc.x > maxX) {
+      localDisc.x = maxX;
+      if (localDisc.vx > 0) localDisc.vx = 0;
+    }
+  }
+
+  if (arenaHalfH > 0) {
+    const maxY = Math.max(0, arenaHalfH - localDisc.radius);
+    if (localDisc.y < -maxY) {
+      localDisc.y = -maxY;
+      if (localDisc.vy < 0) localDisc.vy = 0;
+    } else if (localDisc.y > maxY) {
+      localDisc.y = maxY;
+      if (localDisc.vy > 0) localDisc.vy = 0;
+    }
+  }
+}
+
 /**
  * Continuous Collision Detection (CCD) helper:
  * Computes whether a swept circle starting at p0 and moving by velocity * dt

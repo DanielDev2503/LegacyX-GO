@@ -24,6 +24,7 @@ import {
   resolveGoalAndPitchBoundaries,
   resolvePredictivePlayerCollision,
   resolvePredictiveBallCollision,
+  applyPredictiveRenderSeparation,
   sweptCircleCircle,
   CollisionEvent,
   KickoffPhysicsContext,
@@ -254,6 +255,11 @@ export class EngineInstance {
   public lastTouchPlayer: TouchPlayerRecord | null = null;
   public previousTouchPlayer: TouchPlayerRecord | null = null;
   public lastGoalDetails: GoalBannerDetails | null = null;
+  public lastGoalScorerId: number | null = null;
+  private preGoalRingBuffer: GameStateSnapshot[] = [];
+  private goalReplayClip: GameStateSnapshot[] = [];
+  private goalReplayCursor: number = 0;
+  private goalReplayPostTicksRemaining: number = 0;
   private frozenVictoryStats: PlayerMatchStats[] | null = null;
   private frozenVictoryMvp: PlayerMatchStats | null = null;
   private lastWallSoundTick: number = -10;
@@ -346,6 +352,7 @@ export class EngineInstance {
         scoringTeam: team,
         redScore,
         blueScore,
+        scorerPlayerId: this.lastGoalScorerId,
         scorerName: details?.scorerName ?? (team === 'red' ? 'Equipo Rojo' : 'Equipo Azul'),
         assisterName: details?.assisterName ?? null,
         isOwnGoal: details?.isOwnGoal ?? false,
@@ -377,7 +384,16 @@ export class EngineInstance {
     };
 
     this.fsm.onStateChange = (newState, prevState) => {
-      if (newState === MatchPhase.KICKOFF && prevState === MatchPhase.GOAL) {
+      if (newState === MatchPhase.GOAL_REPLAY) {
+        this.goalReplayCursor = 0;
+        this.world.resetNets(false);
+        if (this.goalReplayClip.length > 0) {
+          this.applyReplayFrame(this.goalReplayClip[0]!);
+        }
+      } else if (
+        newState === MatchPhase.KICKOFF &&
+        (prevState === MatchPhase.GOAL || prevState === MatchPhase.GOAL_REPLAY)
+      ) {
         this.resetPositions();
       }
       this.emit('state_change', { newState, prevState });
@@ -611,7 +627,36 @@ export class EngineInstance {
     this.preNetIsCurve = false;
     this.pendingShot = null;
     this.lastPassPair = null;
+    this.preGoalRingBuffer = [];
+    this.goalReplayClip = [];
+    this.goalReplayCursor = 0;
+    this.goalReplayPostTicksRemaining = 0;
     this.world.resetNets(false);
+  }
+
+  public getPlayersList(): Disc[] {
+    return Array.from(this.players.values());
+  }
+
+  /**
+   * Skips an active GOAL_REPLAY when invoked unconditionally or by the scorer / solo player / practice mode.
+   */
+  public skipGoalReplay(requesterPlayerId?: number): boolean {
+    if (this.fsm.currentState !== MatchPhase.GOAL_REPLAY) {
+      return false;
+    }
+    const canSkip =
+      requesterPlayerId === undefined ||
+      this.isPracticeMode ||
+      requesterPlayerId === this.lastGoalScorerId ||
+      this.getPlayersList().length <= 1;
+
+    if (!canSkip) {
+      return false;
+    }
+
+    this.fsm.exitGoalReplay();
+    return true;
   }
 
   public startMatch(withIntro: boolean = false): void {
@@ -951,8 +996,26 @@ export class EngineInstance {
       }
     }
 
+    if (this.fsm.state === MatchPhase.GOAL_REPLAY && !isReplay && this.goalReplayClip.length > 0) {
+      this.goalReplayCursor++;
+      const frameIdx = Math.min(this.goalReplayCursor, this.goalReplayClip.length - 1);
+      this.applyReplayFrame(this.goalReplayClip[frameIdx]!);
+    }
+
     this.fsm.updateTick();
     this.currentTick++;
+
+    if (!isReplay) {
+      if (this.fsm.state === MatchPhase.KICKOFF || this.fsm.state === MatchPhase.PLAYING) {
+        this.preGoalRingBuffer.push(this.getState());
+        if (this.preGoalRingBuffer.length > 240) {
+          this.preGoalRingBuffer.shift();
+        }
+      } else if (this.fsm.state === MatchPhase.GOAL && this.goalReplayPostTicksRemaining > 0) {
+        this.goalReplayClip.push(this.getState());
+        this.goalReplayPostTicksRemaining--;
+      }
+    }
   }
 
   public getOrCreateStats(id: number): PlayerMatchStats {
@@ -1304,6 +1367,7 @@ export class EngineInstance {
       }
     }
 
+    this.lastGoalScorerId = scorerId;
     this.lastGoalDetails = {
       scoringTeam,
       scorerName,
@@ -1325,6 +1389,11 @@ export class EngineInstance {
     this.isNeutralKickoff = false;
     this.kickoffPossessingTeam = scoringTeam === 'red' ? 'blue' : 'red';
     this.fsm.registerGoal(scoringTeam);
+    if (this.fsm.state === MatchPhase.GOAL) {
+      this.goalReplayClip = this.preGoalRingBuffer.slice(-180);
+      this.goalReplayPostTicksRemaining = 60;
+      this.goalReplayCursor = 0;
+    }
   }
 
   public getMatchStats(): PlayerMatchStats[] {
@@ -1361,6 +1430,11 @@ export class EngineInstance {
     this.lastTouchPlayer = null;
     this.previousTouchPlayer = null;
     this.lastGoalDetails = null;
+    this.lastGoalScorerId = null;
+    this.preGoalRingBuffer = [];
+    this.goalReplayClip = [];
+    this.goalReplayCursor = 0;
+    this.goalReplayPostTicksRemaining = 0;
     this.frozenVictoryStats = null;
     this.frozenVictoryMvp = null;
     this.preNetCrossingSpeed = 0;
@@ -1373,6 +1447,37 @@ export class EngineInstance {
       rt.lastSaveTick = -9999;
       rt.cooldownTimer = 0;
       rt.ticksRemaining = 0;
+    }
+  }
+
+  private applyDiscSnapshot(d: CompactDiscState, target: Disc, isReplayFrame: boolean): void {
+    target.pos.set(d.x, d.y);
+    target.prevPos.set(d.x, d.y);
+    target.vel.set(d.vx, d.vy);
+    if (d.id === 0 || d.team === 0) {
+      target.spin = d.spin ?? 0;
+      target.isCurving = Math.abs(target.spin) > 0.001;
+      target.isPowerShot = ((d.flags ?? 0) & (1 << 3)) !== 0;
+    } else {
+      if (d.stamina !== undefined) target.stamina = d.stamina;
+      target.kicking = ((d.flags ?? 0) & (1 << 0)) !== 0;
+      target.isDashing = ((d.flags ?? 0) & (1 << 1)) !== 0;
+      target.isTurbo = isReplayFrame ? ((d.flags ?? 0) & (1 << 4)) !== 0 : false;
+      target.isTyping = ((d.flags ?? 0) & (1 << 5)) !== 0;
+    }
+  }
+
+  private applyReplayFrame(frame: GameStateSnapshot): void {
+    for (let i = 0; i < frame.discs.length; i++) {
+      const d = frame.discs[i]!;
+      if (d.id === 0 || d.team === 0) {
+        this.applyDiscSnapshot(d, this.ball, true);
+      } else {
+        const p = this.players.get(d.id);
+        if (p) {
+          this.applyDiscSnapshot(d, p, true);
+        }
+      }
     }
   }
 
@@ -1396,12 +1501,7 @@ export class EngineInstance {
     for (let i = 0; i < snapshot.discs.length; i++) {
       const d = snapshot.discs[i]!;
       if (d.id === 0 || d.team === 0) {
-        this.ball.pos.set(d.x, d.y);
-        this.ball.prevPos.set(d.x, d.y);
-        this.ball.vel.set(d.vx, d.vy);
-        this.ball.spin = d.spin ?? 0;
-        this.ball.isCurving = Math.abs(this.ball.spin) > 0.001;
-        this.ball.isPowerShot = ((d.flags ?? 0) & (1 << 3)) !== 0;
+        this.applyDiscSnapshot(d, this.ball, false);
       } else {
         seenPlayerIds.add(d.id);
         const teamStr: 'red' | 'blue' | 'spec' = d.team === 1 ? 'red' : d.team === 2 ? 'blue' : 'spec';
@@ -1412,14 +1512,7 @@ export class EngineInstance {
           this.playerTeams.set(d.id, teamStr);
           p.cGroup = teamStr === 'red' ? COLLISION_GROUP_RED : COLLISION_GROUP_BLUE;
         }
-        p.pos.set(d.x, d.y);
-        p.prevPos.set(d.x, d.y);
-        p.vel.set(d.vx, d.vy);
-        if (d.stamina !== undefined) p.stamina = d.stamina;
-        p.kicking = ((d.flags ?? 0) & (1 << 0)) !== 0;
-        p.isDashing = ((d.flags ?? 0) & (1 << 1)) !== 0;
-        p.isTurbo = false;
-        p.isTyping = ((d.flags ?? 0) & (1 << 5)) !== 0;
+        this.applyDiscSnapshot(d, p, false);
       }
     }
     for (const existingId of Array.from(this.players.keys())) {
@@ -1561,6 +1654,7 @@ export {
   resolveGoalAndPitchBoundaries,
   resolvePredictivePlayerCollision,
   resolvePredictiveBallCollision,
+  applyPredictiveRenderSeparation,
   sweptCircleCircle,
   GoalNet,
   Stadium,

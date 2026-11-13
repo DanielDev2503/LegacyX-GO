@@ -60,10 +60,19 @@ describe('FSM Rules and Match Transitions', () => {
     expect(p1.pos.x).toBeGreaterThan(p1OldX);
     expect(engine.fsm.matchTimer).toBe(timerAtGoal);
 
-    // 4. Tras los 180 ticks de celebración canónicos (3.0s a 60 Hz), transiciona a KICKOFF y resetea posiciones
+    // 4. Tras los 180 ticks de celebración canónicos (3.0s a 60 Hz), transiciona a GOAL_REPLAY (240 ticks = 4.0s)
     // Ya consumimos 1 tick en el paso anterior, restan 179
-    const remainingTicks = engine.fsm.stateTicksRemaining;
-    for (let t = 0; t < remainingTicks; t++) {
+    const remainingGoalTicks = engine.fsm.stateTicksRemaining;
+    for (let t = 0; t < remainingGoalTicks; t++) {
+      engine.step(emptyInputs);
+    }
+
+    expect(engine.fsm.state).toBe(MatchPhase.GOAL_REPLAY);
+    expect(engine.fsm.stateTicksRemaining).toBe(240);
+
+    // 5. Tras los 240 ticks de GOAL_REPLAY, transiciona a KICKOFF y resetea posiciones
+    const remainingReplayTicks = engine.fsm.stateTicksRemaining;
+    for (let t = 0; t < remainingReplayTicks; t++) {
       engine.step(emptyInputs);
     }
 

@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   EngineInstance,
   BinaryProtocol,
+  MatchPhase,
   stepPlayerKinematics,
   type PlayerKinematicsState,
   type PlayerInput,
@@ -176,6 +177,20 @@ describe('Non-Host Prediction & Continuous Reconciliation Determinism', () => {
             const authDisc = decoded.discs.find((d) => d.id === 1);
             if (authDisc) {
               totalReconciliations++;
+              if (decoded.phase === MatchPhase.GOAL_REPLAY) {
+                clientInputBuffer.length = 0;
+                clientState.pos.x = authDisc.x;
+                clientState.pos.y = authDisc.y;
+                clientState.vel.x = authDisc.vx;
+                clientState.vel.y = authDisc.vy;
+                clientState.stamina = authDisc.stamina ?? 100;
+                clientState.dashTicksRemaining = (authDisc as any).dashTimer ?? 0;
+                clientState.dashCooldownTimer = (authDisc as any).dashCooldown ?? 0;
+                clientState.isDashing = clientState.dashTicksRemaining > 0;
+                visualOffsetX = 0;
+                visualOffsetY = 0;
+                break;
+              }
               const ackSeq = (authDisc as any).lastAckedInputSeq ?? 0;
 
               // Discard acknowledged inputs

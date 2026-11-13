@@ -42,11 +42,28 @@ export class JitterBuffer<T extends AnySnapshot = any> {
 
   public static readonly MIN_DELAY_MS = 16;
   public static readonly MAX_DELAY_MS = 40;
+  public static readonly DEFAULT_AUTO_EXTRAPOLATION_MS = 200;
+  public static readonly MAX_AUTO_EXTRAPOLATION_MS = 200;
+
+  public autoExtrapolationMs: number = JitterBuffer.DEFAULT_AUTO_EXTRAPOLATION_MS;
+  public arenaBounds: { halfWidth: number; halfHeight: number } | null = null;
 
   constructor(interpolationDelayMs: number = 25, maxBufferSize: number = 30, isAdaptive: boolean = false) {
     this.interpolationDelayMs = interpolationDelayMs;
     this.maxBufferSize = maxBufferSize;
     this.isAdaptive = isAdaptive;
+  }
+
+  public setAutoExtrapolationMs(ms: number): void {
+    this.autoExtrapolationMs = Number.isFinite(ms)
+      ? Math.max(0, Math.min(JitterBuffer.MAX_AUTO_EXTRAPOLATION_MS, ms))
+      : 0;
+  }
+
+  public setArenaBounds(halfWidth: number, halfHeight: number): void {
+    this.arenaBounds = halfWidth > 0 && halfHeight > 0
+      ? { halfWidth, halfHeight }
+      : null;
   }
 
   public setAdaptive(enabled: boolean): void {
@@ -167,7 +184,8 @@ export class JitterBuffer<T extends AnySnapshot = any> {
   }
 
   public getInterpolatedSnapshot(
-    now: number = (typeof performance !== 'undefined' ? performance.now() : Date.now())
+    now: number = (typeof performance !== 'undefined' ? performance.now() : Date.now()),
+    arenaBounds?: { halfWidth: number; halfHeight: number } | null
   ): T | null {
     if (this.buffer.length === 0) return null;
 
@@ -180,9 +198,11 @@ export class JitterBuffer<T extends AnySnapshot = any> {
         ? this.currentMatchState
         : (this.currentMatchState ? toMatchPhase(this.currentMatchState) : (latestSnapshot.matchPhase ?? toMatchPhase(latestSnapshot.matchState)));
 
+      const isGoalReplay = Math.abs(Number(effectivePhase) - 3.5) < 0.01;
       const isSimulationActive = effectivePhase === MatchPhase.PLAYING ||
                                  effectivePhase === MatchPhase.GOAL_CELEBRATION ||
-                                 effectivePhase === MatchPhase.VICTORY_CELEBRATION;
+                                 effectivePhase === MatchPhase.VICTORY_CELEBRATION ||
+                                 isGoalReplay;
 
       if (!isSimulationActive) {
         const frozenDiscs: DiscSnapshot[] = latestSnapshot.discs.map((d: any) => ({
@@ -198,9 +218,10 @@ export class JitterBuffer<T extends AnySnapshot = any> {
       }
     } else if (isBinarySnapshot) {
       const p = latestSnapshot.phase as number;
-      const isForcedPaused = this.currentMatchState === 'PAUSED' || this.currentMatchState === 2.1 || this.currentMatchState === 2.2;
+      const isGoalReplay = Math.abs(p - 3.5) < 0.01;
+      const isForcedPaused = !isGoalReplay && (this.currentMatchState === 'PAUSED' || this.currentMatchState === 2.1 || this.currentMatchState === 2.2);
       const isBinarySimActive =
-        !isForcedPaused && (p === 1 || p === 2 || p === 3 || p === 4);
+        !isForcedPaused && (p === 1 || p === 2 || p === 3 || isGoalReplay || p === 4);
 
       if (!isBinarySimActive) {
         const frozenDiscs = latestSnapshot.discs.map((d: any) => ({
@@ -245,21 +266,66 @@ export class JitterBuffer<T extends AnySnapshot = any> {
       const rawDeltaSec = Math.max(0, (renderTime - latest.receivedAt) / 1000);
       if (rawDeltaSec === 0) return latest.snapshot;
 
-      // Limitar extrapolación cinemática a un máximo estricto de 100 ms (0.10s)
-      const MAX_EXTRAPOLATION_SEC = 0.10;
-      const clampedDeltaSec = Math.min(MAX_EXTRAPOLATION_SEC, rawDeltaSec);
-      // Si transcurren más de 100 ms sin paquetes, amortiguar la velocidad visual suavemente a cero
-      const decay = rawDeltaSec > MAX_EXTRAPOLATION_SEC
-        ? Math.max(0, 1 - (rawDeltaSec - MAX_EXTRAPOLATION_SEC) / 0.10)
-        : 1.0;
+      // Extrapolación cinemática suave hasta autoExtrapolationMs (máx 200 ms) con decaimiento continuo de velocidad
+      const maxExtrapSec = Math.max(0, Math.min(JitterBuffer.MAX_AUTO_EXTRAPOLATION_MS, this.autoExtrapolationMs)) / 1000;
+      if (maxExtrapSec <= 0) return latest.snapshot;
 
-      const extrapolatedDiscs = (latest.snapshot as any).discs.map((d: any) => ({
-        ...d,
-        x: d.x + (d.vx || 0) * clampedDeltaSec,
-        y: d.y + (d.vy || 0) * clampedDeltaSec,
-        vx: (d.vx || 0) * decay,
-        vy: (d.vy || 0) * decay
-      }));
+      const fullSpeedSec = maxExtrapSec * 0.5;
+      const tailSec = maxExtrapSec - fullSpeedSec;
+
+      let effectiveDeltaSec: number;
+      let decay: number;
+      if (rawDeltaSec <= fullSpeedSec) {
+        effectiveDeltaSec = rawDeltaSec;
+        decay = 1.0;
+      } else if (rawDeltaSec < maxExtrapSec && tailSec > 0) {
+        const tailElapsed = rawDeltaSec - fullSpeedSec;
+        effectiveDeltaSec = fullSpeedSec + tailElapsed * (1 - tailElapsed / (2 * tailSec));
+        decay = Math.max(0, 1 - tailElapsed / tailSec);
+      } else {
+        effectiveDeltaSec = fullSpeedSec + 0.5 * tailSec;
+        decay = 0;
+      }
+
+      const bounds = arenaBounds !== undefined ? arenaBounds : this.arenaBounds;
+      const extrapolatedDiscs = (latest.snapshot as any).discs.map((d: any) => {
+        const vx = d.vx || 0;
+        const vy = d.vy || 0;
+        let nextX = d.x + vx * effectiveDeltaSec;
+        let nextY = d.y + vy * effectiveDeltaSec;
+        let nextVx = vx * decay;
+        let nextVy = vy * decay;
+
+        if (bounds && bounds.halfWidth > 0 && bounds.halfHeight > 0) {
+          const r = typeof d.radius === 'number' && d.radius > 0
+            ? d.radius
+            : (d.id === 0 || d.team === 0 ? 10 : 15);
+          const maxX = Math.max(0, bounds.halfWidth - r);
+          const maxY = Math.max(0, bounds.halfHeight - r);
+          if (nextX < -maxX) {
+            nextX = -maxX;
+            if (nextVx < 0) nextVx = 0;
+          } else if (nextX > maxX) {
+            nextX = maxX;
+            if (nextVx > 0) nextVx = 0;
+          }
+          if (nextY < -maxY) {
+            nextY = -maxY;
+            if (nextVy < 0) nextVy = 0;
+          } else if (nextY > maxY) {
+            nextY = maxY;
+            if (nextVy > 0) nextVy = 0;
+          }
+        }
+
+        return {
+          ...d,
+          x: nextX,
+          y: nextY,
+          vx: nextVx,
+          vy: nextVy
+        };
+      });
 
       return {
         ...latest.snapshot,
@@ -322,7 +388,14 @@ export class JitterBuffer<T extends AnySnapshot = any> {
       s0Discs.set(d.id, d);
     }
 
-    const interpolatedDiscs = (s1.snapshot as any).discs.map((d1: any) => {
+    const snap0 = s0.snapshot as any;
+    const snap1 = s1.snapshot as any;
+    const crossesReplayBoundary =
+      snap0.phase !== snap1.phase &&
+      (Math.abs(snap0.phase - 3.5) < 0.01 || Math.abs(snap1.phase - 3.5) < 0.01);
+
+    const interpolatedDiscs = snap1.discs.map((d1: any) => {
+      if (crossesReplayBoundary) return d1;
       const d0 = s0Discs.get(d1.id);
       if (!d0) return d1;
 
@@ -348,8 +421,6 @@ export class JitterBuffer<T extends AnySnapshot = any> {
       };
     });
 
-    const snap0 = s0.snapshot as any;
-    const snap1 = s1.snapshot as any;
     return {
       tick: Math.round(lerp(snap0.tick, snap1.tick, alpha)),
       phase: snap1.phase,
@@ -362,8 +433,9 @@ export class JitterBuffer<T extends AnySnapshot = any> {
   }
 
   public getInterpolatedState(
-    now: number = (typeof performance !== 'undefined' ? performance.now() : Date.now())
+    now: number = (typeof performance !== 'undefined' ? performance.now() : Date.now()),
+    arenaBounds?: { halfWidth: number; halfHeight: number } | null
   ): T | null {
-    return this.getInterpolatedSnapshot(now);
+    return this.getInterpolatedSnapshot(now, arenaBounds);
   }
 }

@@ -7,6 +7,7 @@ export enum MatchPhase {
   PAUSE = 2.1,
   RESUME_COUNTDOWN = 2.2,
   GOAL = 3,
+  GOAL_REPLAY = 3.5,
   CELEBRATION = 4,
   STATS = 5,
 
@@ -24,6 +25,7 @@ export const MatchState = MatchPhase;
 
 export interface FSMConfig {
   goalCelebrationTicks?: number;    // 180 ticks = 3.0 segundos canónicos a 60 Hz
+  goalReplayTicks?: number;         // 240 ticks = 4.0 segundos canónicos a 60 Hz
   victoryCelebrationTicks?: number; // 300 ticks = 5.0 segundos canónicos a 60 Hz
   resumeCountdownTicks?: number;    // 180 ticks = 3.0 segundos canónicos a 60 Hz
   preMatchVsTicks?: number;         // 108 ticks = 1.8 segundos canónicos a 60 Hz
@@ -37,6 +39,7 @@ export class GameFSM {
   public currentState: MatchPhase = MatchPhase.STOP;
   public stateTicksRemaining: number = 0;
   public celebrationDurationTicks: number;
+  public goalReplayDurationTicks: number;
   public victoryCelebrationDurationTicks: number;
   public resumeCountdownDurationTicks: number;
   public preMatchVsDurationTicks: number;
@@ -67,6 +70,7 @@ export class GameFSM {
 
   constructor(config: FSMConfig = {}) {
     this.celebrationDurationTicks = config.goalCelebrationTicks ?? 180;
+    this.goalReplayDurationTicks = config.goalReplayTicks ?? 240;
     this.victoryCelebrationDurationTicks = config.victoryCelebrationTicks ?? 300;
     this.resumeCountdownDurationTicks = config.resumeCountdownTicks ?? 180;
     this.preMatchVsDurationTicks = config.preMatchVsTicks ?? 108;
@@ -233,6 +237,19 @@ export class GameFSM {
   }
 
   /**
+   * Sale de la fase GOAL_REPLAY hacia CELEBRATION (si hay ganador) o KICKOFF
+   */
+  public exitGoalReplay(): void {
+    if (this.currentState !== MatchPhase.GOAL_REPLAY) return;
+    this.stateTicksRemaining = 0;
+    if (this.winningTeam !== null) {
+      this.enterVictoryCelebration(this.winningTeam);
+    } else {
+      this.transitionTo(MatchPhase.KICKOFF);
+    }
+  }
+
+  /**
    * Actualización secuencial del tick en la FSM (60 Hz)
    */
   public updateTick(): void {
@@ -307,11 +324,19 @@ export class GameFSM {
       case MatchPhase.GOAL: {
         this.stateTicksRemaining--;
         if (this.stateTicksRemaining <= 0) {
-          if (this.winningTeam !== null) {
-            this.enterVictoryCelebration(this.winningTeam);
-          } else {
-            this.transitionTo(MatchPhase.KICKOFF);
+          this.stateTicksRemaining = this.goalReplayDurationTicks;
+          this.transitionTo(MatchPhase.GOAL_REPLAY);
+          if (this.stateTicksRemaining <= 0) {
+            this.exitGoalReplay();
           }
+        }
+        break;
+      }
+
+      case MatchPhase.GOAL_REPLAY: {
+        this.stateTicksRemaining--;
+        if (this.stateTicksRemaining <= 0) {
+          this.exitGoalReplay();
         }
         break;
       }

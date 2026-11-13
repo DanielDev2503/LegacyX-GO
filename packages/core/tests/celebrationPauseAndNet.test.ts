@@ -68,9 +68,15 @@ describe('Celebrations (3s/5s), Elastic GoalNet, Pause/Resume Countdown & Match 
     expect(engine.fsm.redScore).toBe(1);
     expect(goalPayloads).toHaveLength(1);
 
-    // Finish remaining ticks of the 180-tick celebration -> resets to KICKOFF
+    // Finish remaining ticks of the 180-tick celebration -> enters 240-tick GOAL_REPLAY -> resets to KICKOFF
     const rem = engine.fsm.stateTicksRemaining;
     for (let i = 0; i < rem; i++) {
+      engine.step(empty);
+    }
+    expect(engine.fsm.state).toBe(MatchPhase.GOAL_REPLAY);
+
+    const replayRem = engine.fsm.stateTicksRemaining;
+    for (let i = 0; i < replayRem; i++) {
       engine.step(empty);
     }
     expect(engine.fsm.state).toBe(MatchPhase.KICKOFF);
@@ -336,9 +342,12 @@ describe('Celebrations (3s/5s), Elastic GoalNet, Pause/Resume Countdown & Match 
     expect(goals[0].assisterName).toBe('Playmaker');
     expect(goals[0].isOwnGoal).toBe(false);
 
-    // Advance past celebration back to KICKOFF
+    // Advance past celebration & goal replay back to KICKOFF
     const rem = engine.fsm.stateTicksRemaining;
     for (let i = 0; i < rem; i++) engine.step(empty);
+    expect(engine.fsm.state).toBe(MatchPhase.GOAL_REPLAY);
+    const replayRem = engine.fsm.stateTicksRemaining;
+    for (let i = 0; i < replayRem; i++) engine.step(empty);
     expect(engine.fsm.state).toBe(MatchPhase.KICKOFF);
 
     // 2. UnluckyDefender (3, blue) touches ball into Blue's own net -> Own Goal!
@@ -374,6 +383,7 @@ describe('Celebrations (3s/5s), Elastic GoalNet, Pause/Resume Countdown & Match 
       MatchPhase.PAUSE,
       MatchPhase.RESUME_COUNTDOWN,
       MatchPhase.GOAL,
+      MatchPhase.GOAL_REPLAY,
       MatchPhase.CELEBRATION
     ]) {
       const snap = { ...engine.getState(), phase };

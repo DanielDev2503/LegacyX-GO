@@ -91,6 +91,7 @@ function encodeWirePhase(phase: number): number {
   if (Math.abs(phase - 0.6) < 0.01) return 16; // START_COUNTDOWN
   if (Math.abs(phase - 2.1) < 0.01) return 21; // PAUSE
   if (Math.abs(phase - 2.2) < 0.01) return 22; // RESUME_COUNTDOWN
+  if (Math.abs(phase - 3.5) < 0.01) return 35; // GOAL_REPLAY
   return Math.round(phase) & 0xff;
 }
 
@@ -99,6 +100,7 @@ function decodeWirePhase(wire: number): number {
   if (wire === 16) return 0.6;
   if (wire === 21) return 2.1;
   if (wire === 22) return 2.2;
+  if (wire === 35) return 3.5;
   return wire;
 }
 
