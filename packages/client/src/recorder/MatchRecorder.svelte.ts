@@ -2,6 +2,34 @@ import type { CompactDiscState, GameStateSnapshot } from '@legacyx/core';
 import type { MatchBannerPayload } from '../ui/state/gameUI.svelte.js';
 import { userProfile } from '../ui/state/userProfile.svelte.js';
 
+export type LxrRoomType = 'casual' | 'ranked';
+
+export type LxrScoreboardDesign =
+  | 'original'
+  | 'wc2006'
+  | 'wc2010'
+  | 'wc2014'
+  | 'wc2018'
+  | 'wc2022'
+  | 'wc2026';
+
+export type LxrBallSkin =
+  | 'classic'
+  | 'retro'
+  | 'neon'
+  | 'cyber'
+  | 'gold'
+  | 'solid'
+  | 'wc2006'
+  | 'wc2010'
+  | 'wc2014'
+  | 'wc2018'
+  | 'wc2022'
+  | 'wc2026'
+  | 'futsal';
+
+export type LxrTheme = 'dark' | 'light';
+
 export interface LxrPlayerMeta {
   id: number;
   nickname: string;
@@ -27,10 +55,55 @@ export interface LxrChatEntry {
   text: string;
 }
 
+export type LxrBannerPayload = Omit<MatchBannerPayload, 'kind'> & {
+  kind: MatchBannerPayload['kind'] | 'GOAL_REPLAY';
+};
+
 export interface LxrBannerEvent {
   t: number;
-  payload: MatchBannerPayload;
+  payload: LxrBannerPayload;
 }
+
+export interface LxrTelemetryPayload {
+  pingMs: number;
+  fps: number;
+}
+
+export interface LxrScoreEventPayload {
+  kind: string;
+  points: number;
+  label: string;
+  playerName: string;
+  team: 'red' | 'blue' | 'neutral';
+  color?: string;
+}
+
+export interface LxrChatPayload {
+  kind: 'chat' | 'system' | 'goal' | 'whisper' | 'team';
+  sender: string;
+  senderTeam?: 'RED' | 'BLUE' | 'SPECTATOR';
+  text: string;
+}
+
+export interface LxrUiOverlayState {
+  overlay: string;
+  activeSlide: string;
+  isPaused: boolean;
+  postMatchStats: Record<string, unknown> | null;
+}
+
+export interface LxrKitsUpdatedPayload {
+  redKit?: Record<string, unknown>;
+  blueKit?: Record<string, unknown>;
+}
+
+export type LxrHudEvent =
+  | { t: number; type: 'telemetry'; payload: LxrTelemetryPayload }
+  | { t: number; type: 'score_event'; payload: LxrScoreEventPayload }
+  | { t: number; type: 'chat'; payload: LxrChatPayload }
+  | { t: number; type: 'banner'; payload: LxrBannerPayload }
+  | { t: number; type: 'ui_overlay'; payload: LxrUiOverlayState }
+  | { t: number; type: 'kits_updated'; payload: LxrKitsUpdatedPayload };
 
 export interface LxrFrame {
   t: number;
@@ -77,10 +150,49 @@ export interface LxrReplayV2 {
   goals: LxrGoalMarker[];
 }
 
-export type LxrReplayFile = LxrReplayV1 | LxrReplayV2;
+export interface LxrReplayV3 {
+  magic: 'LXR3';
+  version: 3;
+  createdAt: string;
+  roomName: string;
+  roomType: LxrRoomType;
+  stadiumId: string;
+  durationSeconds: number;
+  redScore: number;
+  blueScore: number;
+  recordingPlayerId: number | null;
+  recordingPlayerName: string;
+  cameraZoom: number;
+  viewportWidth: number;
+  viewportHeight: number;
+  timeLimitSeconds: number;
+  scoreboardDesign: LxrScoreboardDesign;
+  theme: LxrTheme;
+  ballMode: 'texture' | 'color';
+  ballSkin: LxrBallSkin;
+  ballCustomColor: string;
+  chatOpacity: number;
+  minimapEnabled: boolean;
+  minimapOpacity: number;
+  minimapSize: 'small' | 'medium' | 'large' | number;
+  minimapCameraFrustum: boolean;
+  redKit?: Record<string, unknown>;
+  blueKit?: Record<string, unknown>;
+  players: LxrPlayerMeta[];
+  initialChatMessages: LxrChatEntry[];
+  initialUiOverlay: LxrUiOverlayState;
+  chatMessages: LxrChatEntry[];
+  banners: LxrBannerEvent[];
+  hudEvents: LxrHudEvent[];
+  frames: LxrFrame[];
+  goals: LxrGoalMarker[];
+}
+
+export type LxrReplayFile = LxrReplayV1 | LxrReplayV2 | LxrReplayV3;
 
 export interface MatchRecorderMetadata {
   roomName: string;
+  roomType?: LxrRoomType;
   stadiumId: string;
   redKit?: Record<string, unknown>;
   blueKit?: Record<string, unknown>;
@@ -91,6 +203,94 @@ export interface MatchRecorderMetadata {
   viewportWidth?: number;
   viewportHeight?: number;
   timeLimitSeconds?: number;
+  scoreboardDesign?: LxrScoreboardDesign;
+  theme?: LxrTheme;
+  ballMode?: 'texture' | 'color';
+  ballSkin?: LxrBallSkin;
+  ballCustomColor?: string;
+  chatOpacity?: number;
+  minimapEnabled?: boolean;
+  minimapOpacity?: number;
+  minimapSize?: 'small' | 'medium' | 'large' | number;
+  minimapCameraFrustum?: boolean;
+  initialChatMessages?: LxrChatEntry[];
+  initialUiOverlay?: Partial<LxrUiOverlayState>;
+}
+
+const VALID_SCOREBOARD_DESIGNS = new Set<LxrScoreboardDesign>([
+  'original',
+  'wc2006',
+  'wc2010',
+  'wc2014',
+  'wc2018',
+  'wc2022',
+  'wc2026'
+]);
+
+const VALID_BALL_SKINS = new Set<LxrBallSkin>([
+  'classic',
+  'retro',
+  'neon',
+  'cyber',
+  'gold',
+  'solid',
+  'wc2006',
+  'wc2010',
+  'wc2014',
+  'wc2018',
+  'wc2022',
+  'wc2026',
+  'futsal'
+]);
+
+function normalizeScoreboardDesign(val: unknown): LxrScoreboardDesign {
+  return typeof val === 'string' && VALID_SCOREBOARD_DESIGNS.has(val as LxrScoreboardDesign)
+    ? (val as LxrScoreboardDesign)
+    : 'original';
+}
+
+function normalizeBallSkin(val: unknown): LxrBallSkin {
+  return typeof val === 'string' && VALID_BALL_SKINS.has(val as LxrBallSkin)
+    ? (val as LxrBallSkin)
+    : 'classic';
+}
+
+function cloneKit(kit?: Record<string, unknown>): Record<string, unknown> | undefined {
+  return kit ? { ...kit } : undefined;
+}
+
+function cloneJsonSafe<T>(val: T): T {
+  if (val === null || val === undefined) return val;
+  try {
+    return JSON.parse(JSON.stringify(val)) as T;
+  } catch {
+    return val;
+  }
+}
+
+function defaultUiOverlay(partial?: Partial<LxrUiOverlayState> | null): LxrUiOverlayState {
+  return {
+    overlay: typeof partial?.overlay === 'string' && partial.overlay ? partial.overlay : 'NONE',
+    activeSlide:
+      typeof partial?.activeSlide === 'string' && partial.activeSlide ? partial.activeSlide : 'NONE',
+    isPaused: Boolean(partial?.isPaused),
+    postMatchStats:
+      partial?.postMatchStats && typeof partial.postMatchStats === 'object'
+        ? cloneJsonSafe(partial.postMatchStats)
+        : null
+  };
+}
+
+function normalizeFiniteOpacity(raw: unknown, fallback: number): number {
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 0) return fallback;
+  return n;
+}
+
+function normalizeMinimapSize(raw: unknown): 'small' | 'medium' | 'large' | number {
+  if (raw === 'small' || raw === 'medium' || raw === 'large') return raw;
+  if (typeof raw === 'number' && Number.isFinite(raw) && raw > 0) return raw;
+  return 'medium';
 }
 
 function concatChunks(chunks: Uint8Array[]): Uint8Array {
@@ -131,7 +331,7 @@ export async function compressReplayGzip(replay: LxrReplayFile): Promise<Uint8Ar
 export function normalizeParsedReplay(parsed: Partial<LxrReplayFile>): LxrReplayFile {
   if (
     !parsed ||
-    (parsed.magic !== 'LXR1' && parsed.magic !== 'LXR2') ||
+    (parsed.magic !== 'LXR1' && parsed.magic !== 'LXR2' && parsed.magic !== 'LXR3') ||
     !Array.isArray(parsed.frames)
   ) {
     throw new Error('Archivo .lxr inválido o corrupto.');
@@ -140,6 +340,89 @@ export function normalizeParsedReplay(parsed: Partial<LxrReplayFile>): LxrReplay
   const durationFallback =
     parsed.frames.length > 0 ? parsed.frames[parsed.frames.length - 1]!.t : 1;
   const durationSeconds = Math.max(0.5, Number(parsed.durationSeconds ?? durationFallback));
+
+  if (parsed.magic === 'LXR3' || parsed.version === 3) {
+    const v3 = parsed as Partial<LxrReplayV3>;
+    const hudEvents: LxrHudEvent[] = Array.isArray(v3.hudEvents)
+      ? v3.hudEvents
+          .filter((ev): ev is LxrHudEvent => Boolean(ev && typeof ev.t === 'number' && ev.type))
+          .map((ev) => ({ ...ev, payload: cloneJsonSafe(ev.payload) }) as LxrHudEvent)
+          .sort((a, b) => a.t - b.t)
+      : [];
+
+    const initialChatMessages: LxrChatEntry[] = Array.isArray(v3.initialChatMessages)
+      ? v3.initialChatMessages.map((m) => ({ ...m }))
+      : [];
+
+    const chatMessages: LxrChatEntry[] = Array.isArray(v3.chatMessages)
+      ? v3.chatMessages.map((m) => ({ ...m }))
+      : hudEvents
+          .filter((ev): ev is Extract<LxrHudEvent, { type: 'chat' }> => ev.type === 'chat')
+          .map((ev) => ({ t: ev.t, ...ev.payload }));
+
+    const banners: LxrBannerEvent[] = Array.isArray(v3.banners)
+      ? v3.banners.map((b) => ({ ...b, payload: { ...b.payload } }))
+      : hudEvents
+          .filter((ev): ev is Extract<LxrHudEvent, { type: 'banner' }> => ev.type === 'banner')
+          .map((ev) => ({ t: ev.t, payload: { ...ev.payload } }));
+
+    return {
+      magic: 'LXR3',
+      version: 3,
+      createdAt: v3.createdAt || new Date().toISOString(),
+      roomName: v3.roomName || 'Repetición LegacyX-GO',
+      roomType: v3.roomType === 'ranked' ? 'ranked' : 'casual',
+      stadiumId: v3.stadiumId || 'mediano',
+      durationSeconds,
+      redScore: Number(v3.redScore ?? 0),
+      blueScore: Number(v3.blueScore ?? 0),
+      recordingPlayerId: v3.recordingPlayerId ?? null,
+      recordingPlayerName: String(v3.recordingPlayerName ?? ''),
+      cameraZoom:
+        typeof v3.cameraZoom === 'number' && Number.isFinite(v3.cameraZoom) && v3.cameraZoom > 0
+          ? v3.cameraZoom
+          : 1,
+      viewportWidth:
+        typeof v3.viewportWidth === 'number' &&
+        Number.isFinite(v3.viewportWidth) &&
+        v3.viewportWidth > 0
+          ? v3.viewportWidth
+          : 1280,
+      viewportHeight:
+        typeof v3.viewportHeight === 'number' &&
+        Number.isFinite(v3.viewportHeight) &&
+        v3.viewportHeight > 0
+          ? v3.viewportHeight
+          : 720,
+      timeLimitSeconds:
+        typeof v3.timeLimitSeconds === 'number' && Number.isFinite(v3.timeLimitSeconds)
+          ? v3.timeLimitSeconds
+          : 180,
+      scoreboardDesign: normalizeScoreboardDesign(v3.scoreboardDesign),
+      theme: v3.theme === 'light' ? 'light' : 'dark',
+      ballMode: v3.ballMode === 'color' ? 'color' : 'texture',
+      ballSkin: normalizeBallSkin(v3.ballSkin),
+      ballCustomColor:
+        typeof v3.ballCustomColor === 'string' && v3.ballCustomColor.trim()
+          ? v3.ballCustomColor
+          : '#ffffff',
+      chatOpacity: normalizeFiniteOpacity(v3.chatOpacity, 0.95),
+      minimapEnabled: v3.minimapEnabled !== false,
+      minimapOpacity: normalizeFiniteOpacity(v3.minimapOpacity, 0.6),
+      minimapSize: normalizeMinimapSize(v3.minimapSize),
+      minimapCameraFrustum: v3.minimapCameraFrustum !== false,
+      redKit: cloneKit(v3.redKit),
+      blueKit: cloneKit(v3.blueKit),
+      players: Array.isArray(v3.players) ? v3.players : [],
+      initialChatMessages,
+      initialUiOverlay: defaultUiOverlay(v3.initialUiOverlay),
+      chatMessages,
+      banners,
+      hudEvents,
+      frames: v3.frames ?? [],
+      goals: Array.isArray(v3.goals) ? v3.goals : []
+    };
+  }
 
   if (parsed.magic === 'LXR2' || parsed.version === 2) {
     const v2 = parsed as Partial<LxrReplayV2>;
@@ -159,11 +442,15 @@ export function normalizeParsedReplay(parsed: Partial<LxrReplayFile>): LxrReplay
           ? v2.cameraZoom
           : 1,
       viewportWidth:
-        typeof v2.viewportWidth === 'number' && Number.isFinite(v2.viewportWidth) && v2.viewportWidth > 0
+        typeof v2.viewportWidth === 'number' &&
+        Number.isFinite(v2.viewportWidth) &&
+        v2.viewportWidth > 0
           ? v2.viewportWidth
           : 1280,
       viewportHeight:
-        typeof v2.viewportHeight === 'number' && Number.isFinite(v2.viewportHeight) && v2.viewportHeight > 0
+        typeof v2.viewportHeight === 'number' &&
+        Number.isFinite(v2.viewportHeight) &&
+        v2.viewportHeight > 0
           ? v2.viewportHeight
           : 720,
       timeLimitSeconds:
@@ -283,8 +570,13 @@ class MatchRecorderStore {
   private goalsBuffer: LxrGoalMarker[] = [];
   private chatBuffer: LxrChatEntry[] = [];
   private bannersBuffer: LxrBannerEvent[] = [];
+  private hudEventsBuffer: LxrHudEvent[] = [];
+  private initialChatBuffer: LxrChatEntry[] = [];
+  private initialUiOverlayState: LxrUiOverlayState = defaultUiOverlay();
+  private lastKitsSignature = '';
   private currentMeta: MatchRecorderMetadata = {
     roomName: 'Sala LegacyX-GO',
+    roomType: 'casual',
     stadiumId: 'mediano',
     players: [],
     recordingPlayerId: null,
@@ -292,7 +584,17 @@ class MatchRecorderStore {
     cameraZoom: 1,
     viewportWidth: 1280,
     viewportHeight: 720,
-    timeLimitSeconds: 180
+    timeLimitSeconds: 180,
+    scoreboardDesign: 'original',
+    theme: 'dark',
+    ballMode: 'texture',
+    ballSkin: 'classic',
+    ballCustomColor: '#ffffff',
+    chatOpacity: 0.95,
+    minimapEnabled: true,
+    minimapOpacity: 0.6,
+    minimapSize: 'medium',
+    minimapCameraFrustum: true
   };
   private latestRedScore = 0;
   private latestBlueScore = 0;
@@ -320,6 +622,11 @@ class MatchRecorderStore {
     this.goalsBuffer = [];
     this.chatBuffer = [];
     this.bannersBuffer = [];
+    this.hudEventsBuffer = [];
+    this.initialChatBuffer = Array.isArray(meta?.initialChatMessages)
+      ? meta.initialChatMessages.map((m) => ({ ...m }))
+      : [];
+    this.initialUiOverlayState = defaultUiOverlay(meta?.initialUiOverlay);
     this.latestRedScore = 0;
     this.latestBlueScore = 0;
     this.lastRecordedFrameMs = -999;
@@ -342,11 +649,17 @@ class MatchRecorderStore {
     const canvasW = canvas?.clientWidth || canvas?.width || winW;
     const canvasH = canvas?.clientHeight || canvas?.height || winH;
 
+    const redKit = cloneKit(meta?.redKit);
+    const blueKit = cloneKit(meta?.blueKit);
+    this.lastKitsSignature =
+      redKit || blueKit ? JSON.stringify({ redKit: redKit ?? null, blueKit: blueKit ?? null }) : '';
+
     this.currentMeta = {
       roomName: meta?.roomName || 'Sala LegacyX-GO',
+      roomType: meta?.roomType === 'ranked' ? 'ranked' : 'casual',
       stadiumId: meta?.stadiumId || 'mediano',
-      redKit: meta?.redKit ? { ...meta.redKit } : undefined,
-      blueKit: meta?.blueKit ? { ...meta.blueKit } : undefined,
+      redKit,
+      blueKit,
       players: meta?.players ? meta.players.map((p) => ({ ...p })) : [],
       recordingPlayerId: meta?.recordingPlayerId ?? null,
       recordingPlayerName: meta?.recordingPlayerName ?? '',
@@ -361,7 +674,20 @@ class MatchRecorderStore {
       timeLimitSeconds:
         typeof meta?.timeLimitSeconds === 'number' && meta.timeLimitSeconds >= 0
           ? meta.timeLimitSeconds
-          : 180
+          : 180,
+      scoreboardDesign: normalizeScoreboardDesign(meta?.scoreboardDesign),
+      theme: meta?.theme === 'light' ? 'light' : 'dark',
+      ballMode: meta?.ballMode === 'color' ? 'color' : 'texture',
+      ballSkin: normalizeBallSkin(meta?.ballSkin),
+      ballCustomColor:
+        typeof meta?.ballCustomColor === 'string' && meta.ballCustomColor.trim()
+          ? meta.ballCustomColor
+          : '#ffffff',
+      chatOpacity: normalizeFiniteOpacity(meta?.chatOpacity, 0.95),
+      minimapEnabled: meta?.minimapEnabled !== false,
+      minimapOpacity: normalizeFiniteOpacity(meta?.minimapOpacity, 0.6),
+      minimapSize: normalizeMinimapSize(meta?.minimapSize),
+      minimapCameraFrustum: meta?.minimapCameraFrustum !== false
     };
 
     this.isRecording = true;
@@ -377,9 +703,32 @@ class MatchRecorderStore {
   public updateMetadata(meta: Partial<MatchRecorderMetadata>): void {
     if (!this.isRecording) return;
     if (meta.roomName) this.currentMeta.roomName = meta.roomName;
+    if (meta.roomType === 'casual' || meta.roomType === 'ranked') {
+      this.currentMeta.roomType = meta.roomType;
+    }
     if (meta.stadiumId) this.currentMeta.stadiumId = meta.stadiumId;
-    if (meta.redKit) this.currentMeta.redKit = { ...meta.redKit };
-    if (meta.blueKit) this.currentMeta.blueKit = { ...meta.blueKit };
+
+    if (meta.redKit || meta.blueKit) {
+      const nextRed = meta.redKit ? cloneKit(meta.redKit) : this.currentMeta.redKit;
+      const nextBlue = meta.blueKit ? cloneKit(meta.blueKit) : this.currentMeta.blueKit;
+      const nextSig = JSON.stringify({ redKit: nextRed ?? null, blueKit: nextBlue ?? null });
+      if (!this.lastKitsSignature) {
+        this.currentMeta.redKit = nextRed;
+        this.currentMeta.blueKit = nextBlue;
+        this.lastKitsSignature = nextSig;
+      } else if (nextSig !== this.lastKitsSignature) {
+        this.lastKitsSignature = nextSig;
+        this.hudEventsBuffer.push({
+          t: this.elapsedSec(),
+          type: 'kits_updated',
+          payload: {
+            ...(nextRed ? { redKit: nextRed } : {}),
+            ...(nextBlue ? { blueKit: nextBlue } : {})
+          }
+        });
+      }
+    }
+
     if (meta.players && meta.players.length > 0) {
       this.currentMeta.players = meta.players.map((p) => ({ ...p }));
     }
@@ -401,12 +750,42 @@ class MatchRecorderStore {
     if (typeof meta.timeLimitSeconds === 'number' && meta.timeLimitSeconds >= 0) {
       this.currentMeta.timeLimitSeconds = meta.timeLimitSeconds;
     }
+    if (meta.scoreboardDesign !== undefined) {
+      this.currentMeta.scoreboardDesign = normalizeScoreboardDesign(meta.scoreboardDesign);
+    }
+    if (meta.theme === 'dark' || meta.theme === 'light') {
+      this.currentMeta.theme = meta.theme;
+    }
+    if (meta.ballMode === 'texture' || meta.ballMode === 'color') {
+      this.currentMeta.ballMode = meta.ballMode;
+    }
+    if (meta.ballSkin !== undefined) {
+      this.currentMeta.ballSkin = normalizeBallSkin(meta.ballSkin);
+    }
+    if (typeof meta.ballCustomColor === 'string' && meta.ballCustomColor.trim()) {
+      this.currentMeta.ballCustomColor = meta.ballCustomColor;
+    }
+    if (meta.chatOpacity !== undefined) {
+      this.currentMeta.chatOpacity = normalizeFiniteOpacity(meta.chatOpacity, 0.95);
+    }
+    if (meta.minimapEnabled !== undefined) {
+      this.currentMeta.minimapEnabled = Boolean(meta.minimapEnabled);
+    }
+    if (meta.minimapOpacity !== undefined) {
+      this.currentMeta.minimapOpacity = normalizeFiniteOpacity(meta.minimapOpacity, 0.6);
+    }
+    if (meta.minimapSize !== undefined) {
+      this.currentMeta.minimapSize = normalizeMinimapSize(meta.minimapSize);
+    }
+    if (meta.minimapCameraFrustum !== undefined) {
+      this.currentMeta.minimapCameraFrustum = Boolean(meta.minimapCameraFrustum);
+    }
   }
 
-  public recordFrame(snapshot: GameStateSnapshot, minIntervalMs: number = 30): void {
+  public recordFrame(snapshot: GameStateSnapshot, minIntervalMs: number = 0): void {
     if (!this.isRecording || !snapshot || !Array.isArray(snapshot.discs)) return;
     const now = this.nowMs();
-    if (now - this.lastRecordedFrameMs < minIntervalMs && this.framesBuffer.length > 0) {
+    if (minIntervalMs > 0 && now - this.lastRecordedFrameMs < minIntervalMs && this.framesBuffer.length > 0) {
       return;
     }
     this.lastRecordedFrameMs = now;
@@ -439,24 +818,102 @@ class MatchRecorderStore {
 
   public recordChat(entry: Omit<LxrChatEntry, 't'> & { t?: number }): void {
     if (!this.isRecording) return;
-    this.chatBuffer.push({
-      t: typeof entry.t === 'number' && Number.isFinite(entry.t) ? entry.t : this.elapsedSec(),
+    const t = typeof entry.t === 'number' && Number.isFinite(entry.t) ? entry.t : this.elapsedSec();
+    const chatItem: LxrChatEntry = {
+      t,
       kind: entry.kind,
       sender: entry.sender,
       ...(entry.senderTeam ? { senderTeam: entry.senderTeam } : {}),
       text: entry.text
+    };
+    this.chatBuffer.push(chatItem);
+    this.hudEventsBuffer.push({
+      t,
+      type: 'chat',
+      payload: {
+        kind: entry.kind,
+        sender: entry.sender,
+        ...(entry.senderTeam ? { senderTeam: entry.senderTeam } : {}),
+        text: entry.text
+      }
     });
   }
 
   public recordBanner(payload: MatchBannerPayload, t?: number): void {
     if (!this.isRecording) return;
+    const time = typeof t === 'number' && Number.isFinite(t) ? t : this.elapsedSec();
+    const cloned = { ...payload };
     this.bannersBuffer.push({
-      t: typeof t === 'number' && Number.isFinite(t) ? t : this.elapsedSec(),
-      payload: { ...payload }
+      t: time,
+      payload: cloned
+    });
+    this.hudEventsBuffer.push({
+      t: time,
+      type: 'banner',
+      payload: { ...cloned }
     });
   }
 
-  private async uploadReplayToCloud(replayFile: LxrReplayV2): Promise<void> {
+  public recordTelemetry(pingMs: number, fps: number, t?: number): void {
+    if (!this.isRecording) return;
+    const time = typeof t === 'number' && Number.isFinite(t) ? t : this.elapsedSec();
+    this.hudEventsBuffer.push({
+      t: time,
+      type: 'telemetry',
+      payload: {
+        pingMs: Number.isFinite(pingMs) ? Math.max(0, Math.round(pingMs)) : 0,
+        fps: Number.isFinite(fps) ? Math.max(0, Math.round(fps)) : 60
+      }
+    });
+  }
+
+  public recordScoreEvent(event: LxrScoreEventPayload, t?: number): void {
+    if (!this.isRecording) return;
+    const time = typeof t === 'number' && Number.isFinite(t) ? t : this.elapsedSec();
+    this.hudEventsBuffer.push({
+      t: time,
+      type: 'score_event',
+      payload: {
+        kind: event.kind,
+        points: Number(event.points) || 0,
+        label: event.label,
+        playerName: event.playerName,
+        team: event.team,
+        ...(event.color ? { color: event.color } : {})
+      }
+    });
+  }
+
+  public recordUiOverlay(state: Partial<LxrUiOverlayState>, t?: number): void {
+    if (!this.isRecording) return;
+    const time = typeof t === 'number' && Number.isFinite(t) ? t : this.elapsedSec();
+    this.hudEventsBuffer.push({
+      t: time,
+      type: 'ui_overlay',
+      payload: defaultUiOverlay(state)
+    });
+  }
+
+  public recordKitsUpdated(kits: LxrKitsUpdatedPayload, t?: number): void {
+    if (!this.isRecording) return;
+    const time = typeof t === 'number' && Number.isFinite(t) ? t : this.elapsedSec();
+    const redKit = cloneKit(kits.redKit);
+    const blueKit = cloneKit(kits.blueKit);
+    this.lastKitsSignature = JSON.stringify({
+      redKit: redKit ?? null,
+      blueKit: blueKit ?? null
+    });
+    this.hudEventsBuffer.push({
+      t: time,
+      type: 'kits_updated',
+      payload: {
+        ...(redKit ? { redKit } : {}),
+        ...(blueKit ? { blueKit } : {})
+      }
+    });
+  }
+
+  private async uploadReplayToCloud(replayFile: LxrReplayV3): Promise<void> {
     this.isUploadingToCloud = true;
     this.cloudSaveError = null;
     this.savedCloudNotice = null;
@@ -499,11 +956,16 @@ class MatchRecorderStore {
     );
     this.elapsedSeconds = Math.round(totalSec);
 
-    const replayFile: LxrReplayV2 = {
-      magic: 'LXR2',
-      version: 2,
+    const sortedHudEvents = this.hudEventsBuffer
+      .slice()
+      .sort((a, b) => a.t - b.t);
+
+    const replayFile: LxrReplayV3 = {
+      magic: 'LXR3',
+      version: 3,
       createdAt: new Date().toISOString(),
       roomName: this.currentMeta.roomName,
+      roomType: this.currentMeta.roomType ?? 'casual',
       stadiumId: this.currentMeta.stadiumId,
       durationSeconds: Math.max(0.5, Math.round(totalSec * 100) / 100),
       redScore: this.latestRedScore,
@@ -514,11 +976,24 @@ class MatchRecorderStore {
       viewportWidth: this.currentMeta.viewportWidth ?? 1280,
       viewportHeight: this.currentMeta.viewportHeight ?? 720,
       timeLimitSeconds: this.currentMeta.timeLimitSeconds ?? 180,
-      redKit: this.currentMeta.redKit,
-      blueKit: this.currentMeta.blueKit,
+      scoreboardDesign: this.currentMeta.scoreboardDesign ?? 'original',
+      theme: this.currentMeta.theme ?? 'dark',
+      ballMode: this.currentMeta.ballMode ?? 'texture',
+      ballSkin: this.currentMeta.ballSkin ?? 'classic',
+      ballCustomColor: this.currentMeta.ballCustomColor ?? '#ffffff',
+      chatOpacity: this.currentMeta.chatOpacity ?? 0.95,
+      minimapEnabled: this.currentMeta.minimapEnabled !== false,
+      minimapOpacity: this.currentMeta.minimapOpacity ?? 0.6,
+      minimapSize: this.currentMeta.minimapSize ?? 'medium',
+      minimapCameraFrustum: this.currentMeta.minimapCameraFrustum !== false,
+      redKit: cloneKit(this.currentMeta.redKit),
+      blueKit: cloneKit(this.currentMeta.blueKit),
       players: this.currentMeta.players,
+      initialChatMessages: this.initialChatBuffer.slice(),
+      initialUiOverlay: defaultUiOverlay(this.initialUiOverlayState),
       chatMessages: this.chatBuffer.slice(),
       banners: this.bannersBuffer.slice(),
+      hudEvents: sortedHudEvents,
       frames: this.framesBuffer.slice(),
       goals: this.goalsBuffer.slice()
     };

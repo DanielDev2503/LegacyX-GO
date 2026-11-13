@@ -4,18 +4,23 @@
   import { GameRenderer } from '../../renderer/GameRenderer.js';
   import { gameUI } from '../state/gameUI.svelte.js';
   import { userProfile, type UserReplayRow } from '../state/userProfile.svelte.js';
+  import MatchScoreboard from '../components/MatchScoreboard.svelte';
+  import KitPatternBadge from '../components/KitPatternBadge.svelte';
   import {
     matchRecorder,
-    type LxrBannerEvent,
     type LxrChatEntry,
     type LxrReplayFile,
-    type LxrReplayV2
+    type LxrReplayV2,
+    type LxrReplayV3
   } from '../../recorder/MatchRecorder.svelte.js';
   import {
+    applyReplayRendererConfig,
+    applyReplayRendererKits,
     buildReplayPlayerInfos,
     computeReplayEffectiveZoom,
+    deriveReplayHudTimelineState,
     exportReplayToWebm,
-    getActiveReplayBanner,
+    getActiveReplayKitsAtTime,
     getVisibleReplayChat,
     isReplayTimerWarning,
     REPLAY_STAGE_HEIGHT,
@@ -48,10 +53,14 @@
   let confirmDeleteId = $state<string | null>(null);
 
   const activeReplay = $derived<LxrReplayFile | null>(matchRecorder.lastReplayData);
+  const activeReplayV3 = $derived<LxrReplayV3 | null>(
+    activeReplay && activeReplay.magic === 'LXR3' ? (activeReplay as LxrReplayV3) : null
+  );
   const activeReplayV2 = $derived<LxrReplayV2 | null>(
     activeReplay && activeReplay.magic === 'LXR2' ? (activeReplay as LxrReplayV2) : null
   );
-  const canFollowRecorder = $derived(activeReplayV2?.recordingPlayerId != null);
+  const activeCamMeta = $derived(activeReplayV3 ?? activeReplayV2);
+  const canFollowRecorder = $derived(activeCamMeta?.recordingPlayerId != null);
 
   const totalDuration = $derived(
     activeReplay && activeReplay.durationSeconds > 0
@@ -65,30 +74,55 @@
 
   const hudScale = $derived(Math.max(0.25, stageWidth / REPLAY_STAGE_WIDTH));
 
-  const redAcronym = $derived(
-    String((activeReplay?.redKit as Record<string, unknown> | undefined)?.tag || 'RED').slice(0, 6)
-  );
-  const blueAcronym = $derived(
-    String((activeReplay?.blueKit as Record<string, unknown> | undefined)?.tag || 'BLUE').slice(0, 6)
-  );
-  const redColor = $derived(
-    String((activeReplay?.redKit as Record<string, unknown> | undefined)?.primaryColor || '#ef4444')
-  );
-  const blueColor = $derived(
-    String((activeReplay?.blueKit as Record<string, unknown> | undefined)?.primaryColor || '#3b82f6')
+  const timelineHud = $derived(
+    activeReplay && activeReplay.frames.length > 0
+      ? deriveReplayHudTimelineState(
+          activeReplay,
+          currentFrameSnapshot
+            ? { t: currentTimeSec, snapshot: currentFrameSnapshot }
+            : activeReplay.frames[0]!,
+          currentTimeSec
+        )
+      : null
   );
 
-  const hudMatchTimer = $derived(currentFrameSnapshot?.matchTimer ?? activeReplayV2?.timeLimitSeconds ?? 0);
-  const hudPhase = $derived(currentFrameSnapshot?.phase ?? 2);
-  const hudIsGoldenGoal = $derived(Boolean(currentFrameSnapshot?.isGoldenGoal));
-  const hudIsWarning = $derived(isReplayTimerWarning(hudMatchTimer, hudPhase, hudIsGoldenGoal));
-  const hudRedScore = $derived(currentFrameSnapshot?.redScore ?? activeReplay?.redScore ?? 0);
-  const hudBlueScore = $derived(currentFrameSnapshot?.blueScore ?? activeReplay?.blueScore ?? 0);
+  const hudRedKit = $derived(timelineHud?.redKit ?? activeReplay?.redKit ?? { tag: 'RED', primaryColor: '#ef4444' });
+  const hudBlueKit = $derived(timelineHud?.blueKit ?? activeReplay?.blueKit ?? { tag: 'BLUE', primaryColor: '#3b82f6' });
+  const redAcronym = $derived(timelineHud?.redAcronym ?? 'RED');
+  const blueAcronym = $derived(timelineHud?.blueAcronym ?? 'BLUE');
+  const redColor = $derived(timelineHud?.redColor ?? '#ef4444');
+  const blueColor = $derived(timelineHud?.blueColor ?? '#3b82f6');
+
+  const hudMatchTimer = $derived(
+    timelineHud?.matchTimer ?? currentFrameSnapshot?.matchTimer ?? activeCamMeta?.timeLimitSeconds ?? 0
+  );
+  const hudPhase = $derived(timelineHud?.phase ?? currentFrameSnapshot?.phase ?? 2);
+  const hudIsGoldenGoal = $derived(timelineHud?.isGoldenGoal ?? Boolean(currentFrameSnapshot?.isGoldenGoal));
+  const hudIsWarning = $derived(
+    timelineHud?.isWarning30s ?? isReplayTimerWarning(hudMatchTimer, hudPhase, hudIsGoldenGoal)
+  );
+  const hudRedScore = $derived(timelineHud?.redScore ?? currentFrameSnapshot?.redScore ?? activeReplay?.redScore ?? 0);
+  const hudBlueScore = $derived(timelineHud?.blueScore ?? currentFrameSnapshot?.blueScore ?? activeReplay?.blueScore ?? 0);
+
+  const hudRoomType = $derived(timelineHud?.roomType ?? 'casual');
+  const hudScoreboardDesign = $derived(timelineHud?.scoreboardDesign ?? 'original');
+  const hudChatOpacity = $derived(timelineHud?.chatOpacity ?? 0.95);
+  const hudTelemetry = $derived(timelineHud?.telemetry ?? { pingMs: 0, fps: 60 });
+  const hudSlidingEvents = $derived(timelineHud?.slidingEvents ?? []);
+  const hudUiOverlay = $derived(
+    timelineHud?.uiOverlay ?? { overlay: 'NONE', activeSlide: 'GAME', isPaused: false, postMatchStats: null }
+  );
+  const hudShowExtended = $derived(timelineHud?.showExtendedHud ?? false);
+  const hudStatsPlayers = $derived(
+    Array.isArray(hudUiOverlay.postMatchStats?.players)
+      ? (hudUiOverlay.postMatchStats.players as Array<Record<string, unknown>>).slice(0, 6)
+      : []
+  );
 
   const visibleChat = $derived<LxrChatEntry[]>(
-    getVisibleReplayChat(activeReplayV2?.chatMessages, currentTimeSec)
+    getVisibleReplayChat(timelineHud?.chatMessages, currentTimeSec)
   );
-  const activeBanner = $derived(getActiveReplayBanner(activeReplayV2?.banners, currentTimeSec));
+  const activeBanner = $derived(timelineHud?.activeBanner ?? null);
 
   // Cargar lista de repeticiones en la nube al montar o al cambiar autenticación
   $effect(() => {
@@ -296,25 +330,27 @@
     if (viewMode !== 'player' || !canvas || !stageEl || !replay || replay.frames.length === 0) return;
 
     return untrack(() => {
+      const v3 = replay.magic === 'LXR3' ? (replay as LxrReplayV3) : null;
+      const v2 = replay.magic === 'LXR2' ? (replay as LxrReplayV2) : null;
+      const camMeta = v3 ?? v2;
       const stadium = createStadium((replay.stadiumId || 'mediano') as StadiumId);
       const playerInfos = buildReplayPlayerInfos(replay);
-      const renderer = new GameRenderer(canvas, { stadium, playerInfos });
-      renderer.safeAreaBottom = 0;
-      renderer.chatHeight = 0;
-      renderer.minimapEnabled = true;
+      const renderer = new GameRenderer(
+        canvas,
+        {
+          stadium,
+          playerInfos,
+          theme: v3?.theme === 'light' ? 'light' : 'dark'
+        } as ConstructorParameters<typeof GameRenderer>[1]
+      );
 
-      if (replay.redKit || replay.blueKit) {
-        renderer.setTeamKits(
-          (replay.redKit ?? null) as unknown as Parameters<GameRenderer['setTeamKits']>[0],
-          (replay.blueKit ?? null) as unknown as Parameters<GameRenderer['setTeamKits']>[1]
-        );
-      }
+      applyReplayRendererConfig(renderer, replay, currentTimeSec);
 
-      const v2 = replay.magic === 'LXR2' ? (replay as LxrReplayV2) : null;
-      const recordedZoom = v2?.cameraZoom ?? 1;
-      const recordedW = v2?.viewportWidth ?? REPLAY_STAGE_WIDTH;
-      const recordedH = v2?.viewportHeight ?? REPLAY_STAGE_HEIGHT;
-      const followId = v2?.recordingPlayerId ?? null;
+      const recordedZoom = camMeta?.cameraZoom ?? 1;
+      const recordedW = camMeta?.viewportWidth ?? REPLAY_STAGE_WIDTH;
+      const recordedH = camMeta?.viewportHeight ?? REPLAY_STAGE_HEIGHT;
+      const followId = camMeta?.recordingPlayerId ?? null;
+      let lastKitSig = JSON.stringify(getActiveReplayKitsAtTime(replay, currentTimeSec));
 
       let effectiveZoom = computeReplayEffectiveZoom(recordedZoom, recordedW, recordedH, stageWidth, stageHeight);
 
@@ -354,6 +390,13 @@
           } else {
             currentTimeSec = nextT;
           }
+        }
+
+        const activeKits = getActiveReplayKitsAtTime(replay, currentTimeSec);
+        const kitSig = JSON.stringify(activeKits);
+        if (kitSig !== lastKitSig) {
+          lastKitSig = kitSig;
+          applyReplayRendererKits(renderer, replay, activeKits);
         }
 
         const { f0, f1, alpha } = sampleReplayFrame(replay.frames, currentTimeSec);
@@ -659,27 +702,27 @@
 
             <!-- Capa HUD proporcional 1280x720 escalada -->
             <div class="hud-logical-layer" style:transform="scale({hudScale})">
-              <!-- Room Card Top-Left -->
-              <div class="hud-room-card">
+              <!-- Room Card Top-Left (.is-ranked yellow on Ranked) -->
+              <div class="hud-room-card" class:is-ranked={hudRoomType === 'ranked'}>
                 <span class="room-dot"></span>
                 <span class="room-label">{activeReplay.roomName}</span>
+                {#if hudRoomType === 'ranked'}
+                  <span class="room-ranked-pill">RANKED</span>
+                {/if}
               </div>
 
-              <!-- Scoreboard Top-Center + Warning 30s + Golden Goal -->
-              <div class="hud-scoreboard-wrap">
-                <div class="hud-scoreboard" class:warning-pulse={hudIsWarning}>
-                  <div class="team-pill" style:background={redColor}>
-                    <span class="team-acr">{redAcronym}</span>
-                    <span class="team-pts">{hudRedScore}</span>
-                  </div>
-                  <div class="match-clock" class:golden={hudIsGoldenGoal} class:warning={hudIsWarning}>
-                    {formatHudClock(hudMatchTimer)}
-                  </div>
-                  <div class="team-pill blue" style:background={blueColor}>
-                    <span class="team-pts">{hudBlueScore}</span>
-                    <span class="team-acr">{blueAcronym}</span>
-                  </div>
-                </div>
+              <!-- Scoreboard Top-Center (<MatchScoreboard /> + 30s warning + Golden Goal metallic ball SVG) -->
+              <div class="hud-scoreboard-wrap" class:warning-pulse={hudIsWarning}>
+                <MatchScoreboard
+                  design={hudScoreboardDesign === 'futsal' ? 'original' : hudScoreboardDesign}
+                  redScore={hudRedScore}
+                  blueScore={hudBlueScore}
+                  clockText={formatHudClock(hudMatchTimer)}
+                  redKit={hudRedKit}
+                  blueKit={hudBlueKit}
+                  isWarning30s={hudIsWarning}
+                  isGoldenGoal={false}
+                />
 
                 {#if hudIsGoldenGoal}
                   <svg class="replay-golden-goal-ball" viewBox="0 0 28 28" role="img" aria-label="Balón dorado">
@@ -715,10 +758,61 @@
                 {/if}
               </div>
 
+              <!-- Top-Right HUD Capsule Mirror -->
+              {#if hudShowExtended}
+                <div class="hud-top-right-card" aria-hidden="true">
+                  <span class="hud-icon-pill">
+                    <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2">
+                      <polygon points="5 3 19 12 5 21 5 3"></polygon>
+                    </svg>
+                  </span>
+                  <span class="hud-rec-pill">
+                    <span class="rec-dot"></span>
+                    <span>REC</span>
+                  </span>
+                  <span class="hud-icon-pill">
+                    <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2">
+                      <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
+                      <path d="M15.54 8.46a5 5 0 0 1 0 7.07"></path>
+                    </svg>
+                  </span>
+                  <span class="hud-icon-pill">
+                    <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2">
+                      <line x1="3" y1="6" x2="21" y2="6"></line>
+                      <line x1="3" y1="12" x2="21" y2="12"></line>
+                      <line x1="3" y1="18" x2="21" y2="18"></line>
+                    </svg>
+                  </span>
+                  <span class="hud-icon-pill">
+                    <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2">
+                      <circle cx="12" cy="12" r="3"></circle>
+                      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+                    </svg>
+                  </span>
+                </div>
+              {/if}
+
+              <!-- Sliding Score Event Cards -->
+              {#if hudSlidingEvents.length > 0}
+                <div class="hud-sliding-event-container" role="status" aria-live="polite">
+                  {#each hudSlidingEvents as ev (`${ev.t}-${ev.kind}-${ev.playerName}`)}
+                    <div class="hud-sliding-event-card" style="--event-color: {ev.accentColor};">
+                      <span class="event-badge">{ev.label || ev.kind}</span>
+                      <span class="event-points">{ev.pointsText}</span>
+                    </div>
+                  {/each}
+                </div>
+              {/if}
+
               <!-- Center Banners -->
               {#if activeBanner && activeBanner.kind !== 'NONE'}
                 <div class="hud-center-banner kind-{activeBanner.kind.toLowerCase()}">
-                  {#if activeBanner.kind === 'COUNTDOWN'}
+                  {#if activeBanner.kind === 'GOAL_REPLAY'}
+                    <div class="goal-replay-pill">
+                      <span class="goal-replay-dot"></span>
+                      <span>{activeBanner.label || 'REPETICIÓN DEL GOL'}</span>
+                    </div>
+                  {:else if activeBanner.kind === 'COUNTDOWN'}
                     <div class="banner-card countdown">
                       <span class="countdown-num">
                         {activeBanner.count && activeBanner.count > 0
@@ -731,8 +825,10 @@
                       <span>{activeBanner.isResume ? 'REANUDANDO' : activeBanner.label || 'PARTIDO EN PAUSA'}</span>
                     </div>
                   {:else if activeBanner.kind === 'VS'}
-                    <div class="banner-card vs">
-                      <span>{activeBanner.label || `${redAcronym} VS ${blueAcronym}`}</span>
+                    <div class="banner-card vs vs-rich">
+                      <KitPatternBadge kit={hudRedKit} label={redAcronym} fallbackColor={redColor} />
+                      <span class="vs-label">{activeBanner.label || 'VS'}</span>
+                      <KitPatternBadge kit={hudBlueKit} label={blueAcronym} fallbackColor={blueColor} />
                     </div>
                   {:else if activeBanner.kind === 'GOAL'}
                     <div
@@ -740,7 +836,15 @@
                       class:red={activeBanner.scoringTeam === 'red'}
                       class:blue={activeBanner.scoringTeam === 'blue'}
                     >
-                      <div class="goal-heading">{activeBanner.isOwnGoal ? '¡AUTOGOL!' : '¡GOOOL!'}</div>
+                      <div class="goal-title-row">
+                        <KitPatternBadge
+                          kit={activeBanner.scoringTeam === 'blue' ? hudBlueKit : hudRedKit}
+                          label={activeBanner.scoringTeam === 'blue' ? blueAcronym : redAcronym}
+                          compact={true}
+                          fallbackColor={activeBanner.scoringTeam === 'blue' ? blueColor : redColor}
+                        />
+                        <div class="goal-heading">{activeBanner.isOwnGoal ? '¡AUTOGOL!' : '¡GOOOL!'}</div>
+                      </div>
                       <div class="goal-scorer">
                         {activeBanner.scorerName || 'Jugador'}
                         {#if activeBanner.assisterName}
@@ -770,9 +874,65 @@
                 </div>
               {/if}
 
-              <!-- Chat Bottom-Left -->
+              <!-- Open Menu / Post-Match Stats Timeline Overlay -->
+              {#if hudUiOverlay.activeSlide === 'STATS' || hudUiOverlay.overlay === 'STATS' || hudUiOverlay.overlay === 'stats'}
+                <div class="hud-ui-overlay-panel stats">
+                  <div class="ui-panel-title">ESTADÍSTICAS DEL PARTIDO</div>
+                  <div class="ui-panel-teams">
+                    <KitPatternBadge kit={hudRedKit} label={`${redAcronym} ${hudRedScore}`} fallbackColor={redColor} />
+                    <KitPatternBadge kit={hudBlueKit} label={`${hudBlueScore} ${blueAcronym}`} fallbackColor={blueColor} />
+                  </div>
+                  {#if typeof hudUiOverlay.postMatchStats?.mvpName === 'string'}
+                    <div class="ui-mvp-badge">MVP: {hudUiOverlay.postMatchStats.mvpName}</div>
+                  {/if}
+                  {#if hudStatsPlayers.length > 0}
+                    <div class="ui-stats-rows">
+                      {#each hudStatsPlayers as row, idx (`${row.nickname}-${idx}`)}
+                        <div class="ui-stat-row">
+                          <span class="stat-name" class:blue={row.team === 'blue'}>{String(row.nickname || 'Jugador')}</span>
+                          <span class="stat-vals">G:{Number(row.goals ?? 0)} · A:{Number(row.assists ?? 0)} · {Number(row.points ?? row.score ?? 0)} pts</span>
+                        </div>
+                      {/each}
+                    </div>
+                  {/if}
+                </div>
+              {:else if hudUiOverlay.activeSlide === 'MENU' || hudUiOverlay.overlay === 'MENU' || hudUiOverlay.overlay === 'TEAM_SELECT' || hudUiOverlay.overlay === 'TEAM_MANAGEMENT' || hudUiOverlay.overlay === 'teamSelect'}
+                <div class="hud-ui-overlay-panel menu">
+                  <div class="ui-panel-title">MENÚ DE SALA</div>
+                  <div class="ui-panel-teams">
+                    <KitPatternBadge kit={hudRedKit} label={`${redAcronym} (${hudRedScore})`} fallbackColor={redColor} />
+                    <KitPatternBadge kit={hudBlueKit} label={`${blueAcronym} (${hudBlueScore})`} fallbackColor={blueColor} />
+                  </div>
+                  <div class="ui-menu-status">
+                    {hudUiOverlay.isPaused ? 'Partido en pausa' : activeReplay.roomName}
+                  </div>
+                </div>
+              {/if}
+
+              <!-- Bottom-Left Telemetry Corner (Ping / FPS) -->
+              {#if hudShowExtended}
+                <div class="hud-telemetry-corner">
+                  <span class="tel-dot"></span>
+                  <span class="tel-lbl">Ping:</span>
+                  <span
+                    class="tel-val"
+                    class:good={hudTelemetry.pingMs <= 65}
+                    class:warn={hudTelemetry.pingMs > 65 && hudTelemetry.pingMs <= 130}
+                    class:bad={hudTelemetry.pingMs > 130}
+                  >{hudTelemetry.pingMs} ms</span>
+                  <span class="tel-sep">|</span>
+                  <span class="tel-lbl">FPS:</span>
+                  <span class="tel-fps">{hudTelemetry.fps}</span>
+                </div>
+              {/if}
+
+              <!-- Chat Bottom-Left (respecting recorded chatOpacity) -->
               {#if visibleChat.length > 0}
-                <div class="hud-chat-overlay">
+                <div
+                  class="hud-chat-overlay"
+                  class:above-telemetry={hudShowExtended}
+                  style:opacity={hudChatOpacity}
+                >
                   {#each visibleChat as msg, i (`${msg.t}-${i}-${msg.text}`)}
                     <div class="hud-chat-line kind-{msg.kind}">
                       {#if msg.sender}
@@ -1338,6 +1498,32 @@
     gap: 9px;
   }
 
+  .hud-room-card.is-ranked {
+    background: rgba(66, 32, 6, 0.92);
+    border: 1.5px solid #ffd700;
+    box-shadow: 0 0 14px rgba(234, 179, 8, 0.3);
+  }
+
+  .hud-room-card.is-ranked .room-dot {
+    background: #facc15;
+    box-shadow: 0 0 8px #ffd700;
+  }
+
+  .hud-room-card.is-ranked .room-label {
+    color: #fef08a;
+  }
+
+  .room-ranked-pill {
+    font-size: 9px;
+    font-weight: 900;
+    letter-spacing: 0.06em;
+    color: #fde047;
+    background: rgba(234, 179, 8, 0.22);
+    border: 1px solid #ffd700;
+    border-radius: 5px;
+    padding: 2px 6px;
+  }
+
   .room-dot {
     width: 8px;
     height: 8px;
@@ -1366,69 +1552,250 @@
     gap: 10px;
   }
 
-  .hud-scoreboard {
-    width: 336px;
-    height: 44px;
-    padding: 0 8px;
-    border-radius: 12px;
-    background: rgba(11, 15, 25, 0.9);
-    border: 1px solid rgba(148, 163, 184, 0.28);
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
+  .hud-scoreboard-wrap.warning-pulse {
+    filter: drop-shadow(0 0 14px rgba(239, 68, 68, 0.72));
   }
 
-  .hud-scoreboard.warning-pulse {
-    background: rgba(38, 12, 18, 0.92);
-    border-color: #f87171;
-    box-shadow: 0 0 18px rgba(239, 68, 68, 0.65);
-    animation: warnPulse 0.9s ease-in-out infinite alternate;
-  }
-
-  @keyframes warnPulse {
-    from {
-      box-shadow: 0 0 10px rgba(239, 68, 68, 0.35);
-    }
-    to {
-      box-shadow: 0 0 22px rgba(239, 68, 68, 0.85);
-    }
-  }
-
-  .team-pill {
-    width: 108px;
-    height: 30px;
-    border-radius: 8px;
+  .hud-top-right-card {
+    position: absolute;
+    top: 10px;
+    right: 16px;
+    height: 38px;
     padding: 0 10px;
-    display: flex;
+    border-radius: 12px;
+    background: rgba(11, 15, 25, 0.86);
+    border: 1px solid rgba(148, 163, 184, 0.25);
+    display: inline-flex;
     align-items: center;
-    justify-content: space-between;
-    color: #ffffff;
+    gap: 7px;
   }
 
-  .team-acr {
-    font-size: 12px;
+  .hud-icon-pill {
+    width: 24px;
+    height: 24px;
+    border-radius: 7px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: #38bdf8;
+    background: rgba(15, 23, 42, 0.75);
+    border: 1px solid rgba(148, 163, 184, 0.22);
+  }
+
+  .hud-rec-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    height: 24px;
+    padding: 0 8px;
+    border-radius: 7px;
+    background: rgba(239, 68, 68, 0.18);
+    border: 1px solid rgba(248, 113, 113, 0.45);
+    color: #fecaca;
+    font-size: 10px;
     font-weight: 800;
+  }
+
+  .rec-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: #ef4444;
+  }
+
+  .hud-sliding-event-container {
+    position: absolute;
+    top: 66px;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 5px;
+  }
+
+  .hud-sliding-event-card {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    padding: 4px 14px;
+    border-radius: 999px;
+    background: rgba(9, 13, 22, 0.88);
+    border: 1.5px solid var(--event-color, #38bdf8);
+    font-size: 11px;
+    font-weight: 800;
+  }
+
+  .event-badge {
+    color: #f8fafc;
+    text-transform: uppercase;
     letter-spacing: 0.04em;
   }
 
-  .team-pts {
+  .event-points {
+    color: var(--event-color, #38bdf8);
+  }
+
+  .goal-replay-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 16px;
+    border-radius: 999px;
+    background: rgba(15, 23, 42, 0.92);
+    border: 1.5px solid #fbbf24;
+    color: #fef08a;
+    font-size: 12px;
+    font-weight: 800;
+    letter-spacing: 0.05em;
+  }
+
+  .goal-replay-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #fbbf24;
+  }
+
+  .vs-rich {
+    display: inline-flex;
+    align-items: center;
+    gap: 14px;
+  }
+
+  .vs-label {
     font-size: 18px;
     font-weight: 900;
+    color: #38bdf8;
+    letter-spacing: 0.08em;
   }
 
-  .match-clock {
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 18px;
+  .goal-title-row {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+  }
+
+  .hud-ui-overlay-panel {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -46%);
+    min-width: 340px;
+    max-width: 520px;
+    padding: 16px 20px;
+    border-radius: 14px;
+    background: rgba(10, 15, 28, 0.92);
+    border: 1.5px solid rgba(56, 189, 248, 0.55);
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    align-items: center;
+  }
+
+  .ui-panel-title {
+    font-size: 14px;
+    font-weight: 900;
+    letter-spacing: 0.06em;
+    color: #38bdf8;
+  }
+
+  .ui-panel-teams {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+  }
+
+  .ui-mvp-badge {
+    padding: 4px 12px;
+    border-radius: 8px;
+    background: rgba(234, 179, 8, 0.18);
+    border: 1px solid #facc15;
+    color: #fde047;
+    font-size: 12px;
     font-weight: 800;
-    color: #f8fafc;
   }
 
-  .match-clock.warning {
-    color: #fca5a5;
+  .ui-stats-rows {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
   }
 
-  .match-clock.golden {
+  .ui-stat-row {
+    display: flex;
+    justify-content: space-between;
+    font-size: 12px;
+    color: #e2e8f0;
+  }
+
+  .stat-name {
+    font-weight: 700;
+    color: #f87171;
+  }
+
+  .stat-name.blue {
+    color: #60a5fa;
+  }
+
+  .ui-menu-status {
+    font-size: 12px;
+    font-weight: 600;
+    color: #cbd5e1;
+  }
+
+  .hud-telemetry-corner {
+    position: absolute;
+    left: 16px;
+    bottom: 10px;
+    height: 26px;
+    padding: 0 10px;
+    border-radius: 8px;
+    background: rgba(9, 13, 22, 0.8);
+    border: 1px solid rgba(148, 163, 184, 0.22);
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    font-weight: 700;
+  }
+
+  .tel-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: #22c55e;
+  }
+
+  .tel-lbl {
+    color: #94a3b8;
+  }
+
+  .tel-val.good {
+    color: #4ade80;
+  }
+
+  .tel-val.warn {
     color: #fbbf24;
+  }
+
+  .tel-val.bad {
+    color: #f87171;
+  }
+
+  .tel-sep {
+    color: #475569;
+  }
+
+  .tel-fps {
+    color: #38bdf8;
+  }
+
+  .hud-chat-overlay.above-telemetry {
+    bottom: 44px;
   }
 
   .replay-golden-goal-ball {
