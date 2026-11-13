@@ -56,7 +56,7 @@ describe('Gates 3, 4, 5 & BinaryProtocol 12-Byte Mouse Aim', () => {
       expect(engine.physicsWorld.kickoffContext).toBeNull();
     });
 
-    it('also unlocks kickoff barriers in normal matches if possessingTeam has 0 players on pitch', () => {
+    it('keeps kickoff barriers enforced in normal matches even if possessingTeam has 0 players on pitch', () => {
       engine.isPracticeMode = false;
       const soloRed = new Player({ id: 'r1', name: 'RedAlone', team: 'red', isHost: true });
       engine.addPlayer(soloRed);
@@ -71,15 +71,15 @@ describe('Gates 3, 4, 5 & BinaryProtocol 12-Byte Mouse Aim', () => {
 
       const disc = engine.playerDiscs.get('r1')!;
       engine.ball.pos.set(300, 0);
-      disc.pos.set(-10, 0);
+      disc.pos.set(-120, 0);
       disc.vel.set(240, 0);
 
       const inputs = new Map<string, number>([['r1', INPUT_RIGHT]]);
-      for (let i = 0; i < 10; i++) {
+      for (let i = 0; i < 30; i++) {
         engine.tick(inputs);
       }
 
-      expect(disc.pos.x).toBeGreaterThan(0);
+      expect(disc.pos.x).toBeLessThanOrEqual(-disc.radius + 0.01);
     });
 
     it('respects unlimited timeLimit=0 / scoreLimit=0 vs explicit scoreLimit=2 victory trigger', () => {
@@ -242,14 +242,28 @@ describe('Gates 3, 4, 5 & BinaryProtocol 12-Byte Mouse Aim', () => {
       expect(engine.matchStats.get('r1')!.shots).toBe(1);
       expect(engine.matchStats.get('r1')!.points).toBe(20);
 
-      // 4) Rival defender touches the ball -> resets Striker's shot cooldown immediately!
+      // 4) Rival defender touching the ball MUST NOT reset Striker's 240t shot cooldown
       blueDisc.pos.set(200, 0);
       engine.ball.pos.set(176, 0);
       engine.ball.vel.set(0, 0);
       engine.tick(new Map([['b1', INPUT_KICK]]));
 
-      // Move defender away and let Striker shoot again -> +20 pts awarded immediately!
+      // Striker shoots immediately within 240 ticks -> still blocked by anti-spam
       blueDisc.pos.set(0, 240);
+      redDisc.pos.set(120, 0);
+      engine.ball.pos.set(144, 0);
+      engine.ball.vel.set(0, 0);
+      engine.tick(new Map([['r1', INPUT_KICK]]));
+
+      expect(engine.matchStats.get('r1')!.shots).toBe(1);
+      expect(engine.matchStats.get('r1')!.points).toBe(20);
+
+      // Advance past remaining 240 ticks with ball stopped away from goal -> Striker can shoot again
+      engine.ball.pos.set(0, 200);
+      engine.ball.vel.set(0, 0);
+      for (let i = 0; i < 245; i++) {
+        engine.tick(new Map());
+      }
       redDisc.pos.set(120, 0);
       engine.ball.pos.set(144, 0);
       engine.ball.vel.set(0, 0);

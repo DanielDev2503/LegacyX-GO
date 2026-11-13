@@ -169,22 +169,23 @@ describe('Shared Stamina System (Turbo, Dash, Immobility Recharge & Tackle)', ()
     engine.tick(inputs);
     expect(playerRed.stamina).toBeCloseTo(25 / 60, 4);
 
-    // Case 2a: default staminaRegenMoving = true -> holding move key without Turbo recharges at 100% of base rate
-    playerRed.stamina = 0;
-    disc.vel.set(0, 0);
-    inputs.set('p1', INPUT_UP);
-    engine.tick(inputs);
-    expect(playerRed.stamina).toBeCloseTo(25 / 60, 4);
-
-    // Case 2b: when staminaRegenMoving = false -> holding move key does NOT recharge
-    engine.setGameplayConfig({ staminaRegenMoving: false });
+    // Case 2a: default staminaRegenMoving = false -> holding move key without Turbo does NOT recharge
     playerRed.stamina = 0;
     disc.vel.set(0, 0);
     inputs.set('p1', INPUT_UP);
     engine.tick(inputs);
     expect(playerRed.stamina).toBe(0);
 
+    // Case 2b: when staminaRegenMoving = true (rate 100%) -> holding move key recharges at 100% of base rate
+    engine.setGameplayConfig({ staminaRegenMoving: true, staminaRegenMovingRate: 100 });
+    playerRed.stamina = 0;
+    disc.vel.set(0, 0);
+    inputs.set('p1', INPUT_UP);
+    engine.tick(inputs);
+    expect(playerRed.stamina).toBeCloseTo(25 / 60, 4);
+
     // Case 3: complete stillness with inputs == 0 -> recharge +25%/s
+    playerRed.stamina = 0;
     disc.vel.set(0, 0);
     inputs.set('p1', 0);
     for (let i = 0; i < 60; i++) {

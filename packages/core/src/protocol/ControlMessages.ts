@@ -253,6 +253,8 @@ export type ScoreEventCategory =
 export interface ScoreEventPacket {
   type: 'SCORE_EVENT';
   playerId: string;
+  playerName?: string | undefined;
+  team?: 'red' | 'blue' | 'spec' | undefined;
   text: string;
   points: number;
   x: number;
@@ -260,6 +262,8 @@ export interface ScoreEventPacket {
   color?: string | undefined;
   category?: ScoreEventCategory | undefined;
 }
+
+export type ScoreEventPayload = ScoreEventPacket;
 
 export interface MatchEndStatsPacket {
   type: 'MATCH_END_STATS';
@@ -293,11 +297,14 @@ export type MatchBannerPayload =
   | {
       kind: 'GOAL';
       scoringTeam: 'red' | 'blue';
-      scorerName: string;
+      scorerName: string | null;
       assisterName: string | null;
       isOwnGoal: boolean;
       redScore: number;
       blueScore: number;
+      speedKmh?: number | undefined;
+      isPower?: boolean | undefined;
+      isCurve?: boolean | undefined;
     }
   | {
       kind: 'VICTORY';

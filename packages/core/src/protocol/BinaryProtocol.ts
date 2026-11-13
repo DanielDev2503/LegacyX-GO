@@ -23,6 +23,11 @@ export enum SoundEvent {
 export const SOUND_KICK = 1 << 0;
 export const SOUND_POST_HIT = 1 << 1;
 export const SOUND_GOAL = 1 << 2;
+export const SOUND_MASK_BITS = 0x07;
+export const SNAPSHOT_FLAG_KICKOFF_ACTIVE = 1 << 4;
+export const SNAPSHOT_FLAG_GOLDEN_GOAL = 1 << 5;
+export const SNAPSHOT_FLAG_NEUTRAL_KICKOFF = 1 << 6;
+export const SNAPSHOT_FLAG_KICKOFF_BLUE = 1 << 7;
 
 export const INPUT_FLAG_UP = 1 << 0;
 export const INPUT_FLAG_DOWN = 1 << 1;
@@ -74,6 +79,10 @@ export interface GameStateSnapshot {
   redScore: number;
   blueScore: number;
   soundMask: number;
+  kickoffActive?: boolean | undefined;
+  isGoldenGoal?: boolean | undefined;
+  isNeutralKickoff?: boolean | undefined;
+  kickoffPossessingTeam?: 'red' | 'blue' | undefined;
   discs: CompactDiscState[];
 }
 
@@ -231,7 +240,13 @@ export class BinaryProtocol {
     view.setUint16(6, snapshot.matchTimer & 0xffff, false);
     view.setUint8(8, snapshot.redScore & 0xff);
     view.setUint8(9, snapshot.blueScore & 0xff);
-    view.setUint8(10, snapshot.soundMask & 0xff);
+    const kickoffActive = snapshot.kickoffActive ?? (snapshot.phase === 1);
+    let byte10 = snapshot.soundMask & SOUND_MASK_BITS;
+    if (kickoffActive) byte10 |= SNAPSHOT_FLAG_KICKOFF_ACTIVE;
+    if (snapshot.isGoldenGoal) byte10 |= SNAPSHOT_FLAG_GOLDEN_GOAL;
+    if (snapshot.isNeutralKickoff) byte10 |= SNAPSHOT_FLAG_NEUTRAL_KICKOFF;
+    if (snapshot.kickoffPossessingTeam === 'blue') byte10 |= SNAPSHOT_FLAG_KICKOFF_BLUE;
+    view.setUint8(10, byte10 & 0xff);
     view.setUint8(11, discCount & 0xff);
 
     let offset = this.SNAPSHOT_HEADER_SIZE;
@@ -267,7 +282,13 @@ export class BinaryProtocol {
     const matchTimer = view.getUint16(6, false);
     const redScore = view.getUint8(8);
     const blueScore = view.getUint8(9);
-    const soundMask = view.getUint8(10);
+    const metaByte = view.getUint8(10);
+    const soundMask = metaByte & SOUND_MASK_BITS;
+    const kickoffActive = (metaByte & SNAPSHOT_FLAG_KICKOFF_ACTIVE) !== 0;
+    const isGoldenGoal = (metaByte & SNAPSHOT_FLAG_GOLDEN_GOAL) !== 0;
+    const isNeutralKickoff = (metaByte & SNAPSHOT_FLAG_NEUTRAL_KICKOFF) !== 0;
+    const kickoffPossessingTeam: 'red' | 'blue' =
+      (metaByte & SNAPSHOT_FLAG_KICKOFF_BLUE) !== 0 ? 'blue' : 'red';
     const discCount = view.getUint8(11);
 
     const discs: CompactDiscState[] = [];
@@ -354,6 +375,10 @@ export class BinaryProtocol {
       redScore,
       blueScore,
       soundMask,
+      kickoffActive,
+      isGoldenGoal,
+      isNeutralKickoff,
+      kickoffPossessingTeam,
       discs
     };
   }

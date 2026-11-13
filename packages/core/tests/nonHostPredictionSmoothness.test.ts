@@ -29,6 +29,8 @@ interface QueuedSnapshot {
 describe('Non-Host Prediction & Continuous Reconciliation Determinism', () => {
   it('achieves residual post-replay error < 0.01 px across 1,000 ticks with simulated 80±15ms latency and Float32 precision', () => {
     const hostEngine = new EngineInstance('AF 3v3');
+    // Solo 1-player free-roam prediction test requires practice mode to bypass competitive kickoff barriers
+    hostEngine.isPracticeMode = true;
     hostEngine.startMatch(false);
     const hostPlayer = hostEngine.addPlayer(1, 'red');
 

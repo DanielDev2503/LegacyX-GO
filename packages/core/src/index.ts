@@ -88,7 +88,15 @@ import {
   GameEngine,
   SHOT_ON_GOAL_COOLDOWN_TICKS,
   COMPLETED_PASS_COOLDOWN_TICKS,
-  MIN_PASS_DISTANCE_PX
+  MIN_PASS_DISTANCE_PX,
+  SAVE_COOLDOWN_TICKS,
+  MIN_SHOT_SPEED_PX_SEC,
+  MIN_PASS_SPEED_PX_SEC,
+  SHOT_STALE_TICKS,
+  MIN_SAVE_SHOT_FLIGHT_PX,
+  MIN_SAVE_BALL_SPEED_PX_SEC,
+  ASSIST_WINDOW_TICKS,
+  isBallOnGoalCorridor
 } from './game/GameEngine';
 import {
   BinaryProtocol,
@@ -107,6 +115,11 @@ import {
   SOUND_KICK,
   SOUND_POST_HIT,
   SOUND_GOAL,
+  SOUND_MASK_BITS,
+  SNAPSHOT_FLAG_KICKOFF_ACTIVE,
+  SNAPSHOT_FLAG_GOLDEN_GOAL,
+  SNAPSHOT_FLAG_NEUTRAL_KICKOFF,
+  SNAPSHOT_FLAG_KICKOFF_BLUE,
   INPUT_FLAG_UP,
   INPUT_FLAG_DOWN,
   INPUT_FLAG_LEFT,
@@ -165,6 +178,8 @@ export type GameEvent =
 
 export interface ScoreEventEmitPayload {
   playerId: string;
+  playerName: string;
+  team: 'red' | 'blue' | 'spec';
   text: string;
   points: number;
   x: number;
@@ -179,6 +194,7 @@ export interface TouchPlayerRecord {
   team: 'red' | 'blue';
   tick: number;
   wasCurve?: boolean;
+  wasPower?: boolean;
 }
 
 export interface GoalBannerDetails {
@@ -186,6 +202,9 @@ export interface GoalBannerDetails {
   scorerName: string;
   assisterName: string | null;
   isOwnGoal: boolean;
+  speedKmh: number;
+  isPower: boolean;
+  isCurve: boolean;
 }
 
 interface EngineDashState {
@@ -197,6 +216,7 @@ interface EngineDashState {
   lastShotTick: number;
   lastPassTick: number;
   lastTouchTick: number;
+  lastSaveTick: number;
   lastProcessedInputSeq: number;
 }
 
@@ -218,8 +238,19 @@ export class EngineInstance {
     ballX: number;
     ballY: number;
     wasCurve: boolean;
+    wasPower: boolean;
   }> = [];
-  private pendingShot: { shooterId: number; shooterTeam: 'red' | 'blue'; tick: number } | null = null;
+  private pendingShot: {
+    shooterId: number;
+    shooterTeam: 'red' | 'blue';
+    tick: number;
+    originX: number;
+    originY: number;
+  } | null = null;
+  private lastPassPair: { pairKey: string; count: number } | null = null;
+  private preNetCrossingSpeed: number = 0;
+  private preNetIsPower: boolean = false;
+  private preNetIsCurve: boolean = false;
   public lastTouchPlayer: TouchPlayerRecord | null = null;
   public previousTouchPlayer: TouchPlayerRecord | null = null;
   public lastGoalDetails: GoalBannerDetails | null = null;
@@ -285,18 +316,20 @@ export class EngineInstance {
             this.ball.resetCurve();
           }
           if (other?.isPost) {
+            this.pendingShot = null;
             this.soundMask |= SOUND_POST_HIT;
             this.emit('post_hit', { ball: this.ball, post: other });
           } else if (other && !other.isBall) {
-            if (isCompetitivePhase) {
-              this.recordTouch(other.id, false);
-            }
             if (this.fsm.state === MatchPhase.KICKOFF) {
               this.fsm.startPlaying();
+            }
+            if (isCompetitivePhase) {
+              this.recordTouch(other.id, false, e.preBallVx, e.preBallVy);
             }
           }
         }
       } else if (e.type === 'disc-segment' && e.discA.isBall) {
+        this.pendingShot = null;
         this.ball.resetCurve();
         const bSpeed = Math.hypot(this.ball.vel.x, this.ball.vel.y);
         if (bSpeed > 25 && this.currentTick - this.lastWallSoundTick >= 4) {
@@ -315,7 +348,10 @@ export class EngineInstance {
         blueScore,
         scorerName: details?.scorerName ?? (team === 'red' ? 'Equipo Rojo' : 'Equipo Azul'),
         assisterName: details?.assisterName ?? null,
-        isOwnGoal: details?.isOwnGoal ?? false
+        isOwnGoal: details?.isOwnGoal ?? false,
+        speedKmh: details?.speedKmh ?? 20,
+        isPower: details?.isPower ?? false,
+        isCurve: details?.isCurve ?? false
       });
     };
 
@@ -376,6 +412,39 @@ export class EngineInstance {
     this.emit('score_event', payload);
   }
 
+  private emitPlayerScoreEvent(
+    id: number,
+    text: string,
+    points: number,
+    x: number,
+    y: number,
+    color: string,
+    category: ScoreEventCategory
+  ): void {
+    const playerName = this.playerNames.get(id) || `Jugador ${id}`;
+    const team = this.playerTeams.get(id) ?? 'spec';
+    this.emitScoreEvent({
+      playerId: String(id),
+      playerName,
+      team,
+      text,
+      points,
+      x,
+      y,
+      color,
+      category
+    });
+  }
+
+  private canAwardMatchPoints(): boolean {
+    return (
+      !this.isPracticeMode &&
+      this.fsm.state === MatchPhase.PLAYING &&
+      this.getTeamPlayerCount('red') > 0 &&
+      this.getTeamPlayerCount('blue') > 0
+    );
+  }
+
   private getRuntime(id: number): EngineDashState {
     let rt = this.playerRuntime.get(id);
     if (!rt) {
@@ -388,6 +457,7 @@ export class EngineInstance {
         lastShotTick: -9999,
         lastPassTick: -9999,
         lastTouchTick: -9999,
+        lastSaveTick: -9999,
         lastProcessedInputSeq: 0
       };
       this.playerRuntime.set(id, rt);
@@ -419,11 +489,7 @@ export class EngineInstance {
   }
 
   public shouldBypassKickoffBarriers(): boolean {
-    if (this.isPracticeMode) return true;
-    if (!this.isNeutralKickoff && this.getTeamPlayerCount(this.kickoffPossessingTeam) === 0) {
-      return true;
-    }
-    return false;
+    return this.isPracticeMode === true;
   }
 
   public addPlayer(id: number, team: 'red' | 'blue' | 'spec'): Disc {
@@ -545,6 +611,11 @@ export class EngineInstance {
       if (isRed) redIndex++; else blueIndex++;
     }
 
+    this.preNetCrossingSpeed = 0;
+    this.preNetIsPower = false;
+    this.preNetIsCurve = false;
+    this.pendingShot = null;
+    this.lastPassPair = null;
     this.world.resetNets(false);
   }
 
@@ -592,10 +663,6 @@ export class EngineInstance {
       const baseKickCfg = (this.modifiers as any).kickStrength !== undefined
         ? ((this.modifiers as any).kickStrength / 4.545) * 450.0
         : (this.modifiers.baseKickStrength ?? 450.0);
-      const rechargePerTick = ((this.modifiers as any).staminaRechargeRate ?? 25.0) / 60;
-      const regenMovingEnabled = (this.modifiers as any).staminaRegenMoving !== false;
-      const regenMovingFactor = ((this.modifiers as any).staminaRegenMovingRate ?? 100) / 100;
-      const dashCooldownCfg = (this.modifiers as any).dashCooldown ?? 1.0;
 
       for (const [id, player] of this.players.entries()) {
         const rt = this.getRuntime(id);
@@ -693,6 +760,9 @@ export class EngineInstance {
             this.ball.spin = 0;
 
             this.soundMask |= SOUND_KICK;
+            if (this.fsm.state === MatchPhase.KICKOFF) {
+              this.fsm.startPlaying();
+            }
             if (!isCelebration) {
               this.recordTouch(player.id, true);
             }
@@ -702,10 +772,6 @@ export class EngineInstance {
               isPowerShot: this.ball.isPowerShot,
               strength: this.ball.isPowerShot ? 1.8 : 1.0
             });
-
-            if (this.fsm.state === MatchPhase.KICKOFF) {
-              this.fsm.startPlaying();
-            }
           }
 
         if (this.fsm.state === MatchPhase.KICKOFF) {
@@ -820,10 +886,18 @@ export class EngineInstance {
           if (this.lastTouchPlayer && this.lastTouchPlayer.id === controllerIdNum) {
             this.lastTouchPlayer.wasCurve = true;
           }
+          const lastEntry = this.touchHistory.length > 0 ? this.touchHistory[this.touchHistory.length - 1] : null;
+          if (lastEntry && lastEntry.playerId === controllerIdNum) {
+            lastEntry.wasCurve = true;
+          }
         } else if (desiredDir === 1 && this.ball.magnusTimer > 0 && this.ball.isCurvingAllowed) {
           this.ball.applyMagnusCurve(false, true, kMagnus);
           if (this.lastTouchPlayer && this.lastTouchPlayer.id === controllerIdNum) {
             this.lastTouchPlayer.wasCurve = true;
+          }
+          const lastEntry = this.touchHistory.length > 0 ? this.touchHistory[this.touchHistory.length - 1] : null;
+          if (lastEntry && lastEntry.playerId === controllerIdNum) {
+            lastEntry.wasCurve = true;
           }
         } else {
           this.ball.isCurving = false;
@@ -842,6 +916,15 @@ export class EngineInstance {
 
       if (this.ball.isPowerShot && bSpeed < baseKickCfg * 0.65) {
         this.ball.isPowerShot = false;
+      }
+
+      const preStepSpeed = Math.hypot(this.ball.vel.x, this.ball.vel.y);
+      const preStepIsPower = Boolean(this.ball.isPowerShot || preStepSpeed >= POWER_SHOT_SPEED_THRESHOLD);
+      const preStepIsCurve = Boolean(this.ball.isCurving || Math.abs(this.ball.spin) > 0.001);
+      if (Math.abs(this.ball.pos.x) <= this.stadium.halfWidth || this.preNetCrossingSpeed === 0) {
+        this.preNetCrossingSpeed = preStepSpeed;
+        this.preNetIsPower = preStepIsPower;
+        this.preNetIsCurve = preStepIsCurve;
       }
 
       this.world.step(CORE_DT, isReplay);
@@ -900,7 +983,11 @@ export class EngineInstance {
         shotsPowerCurve: 0,
         assistsNormal: 0,
         assistsCurve: 0,
-        hattrickBonus: 0
+        hattrickBonus: 0,
+        ownGoals: 0,
+        powerGoals: 0,
+        curveGoals: 0,
+        curveAssists: 0
       };
       this.matchStats.set(id, s);
     }
@@ -908,46 +995,59 @@ export class EngineInstance {
   }
 
   private checkEngineHattrick(id: number, stats: PlayerMatchStats): void {
-    if (stats.hasHattrickBonus) return;
+    if (stats.hasHattrickBonus || !this.canAwardMatchPoints()) return;
     if (stats.goals >= 3 || stats.assists >= 3 || stats.saves >= 3) {
       stats.hasHattrickBonus = true;
       stats.hattrickBonus = 100;
       stats.points += 100;
       const pDisc = this.players.get(id);
-      this.emitScoreEvent({
-        playerId: String(id),
-        text: '¡Hattrick Bonus +100!',
-        points: 100,
-        x: pDisc ? pDisc.pos.x : 0,
-        y: pDisc ? pDisc.pos.y : 0,
-        color: '#ffd700',
-        category: 'hattrick'
-      });
+      this.emitPlayerScoreEvent(
+        id,
+        '¡Hattrick Bonus +100!',
+        100,
+        pDisc ? pDisc.pos.x : 0,
+        pDisc ? pDisc.pos.y : 0,
+        '#ffd700',
+        'hattrick'
+      );
     }
   }
 
-  public recordTouch(id: number, isKick: boolean): void {
+  public recordTouch(
+    id: number,
+    isKick: boolean,
+    incomingBallVx?: number,
+    incomingBallVy?: number
+  ): void {
     const team = this.playerTeams.get(id);
     if (team !== 'red' && team !== 'blue') return;
 
+    const canAward = this.canAwardMatchPoints();
     const rt = this.getRuntime(id);
     const hasTouchCooldownPassed = (this.currentTick - rt.lastTouchTick) >= 15;
+    const evalVx = isKick ? this.ball.vel.x : (incomingBallVx ?? this.ball.vel.x);
+    const evalVy = isKick ? this.ball.vel.y : (incomingBallVy ?? this.ball.vel.y);
+    const ballSpeed = Math.hypot(evalVx, evalVy);
+    const wasPower = Boolean(this.ball.isPowerShot || ballSpeed >= POWER_SHOT_SPEED_THRESHOLD);
+    const wasCurve = Boolean(this.ball.isCurving || Math.abs(this.ball.spin) > 0.001);
 
-    // Resetear cooldown de tiro al arco a los jugadores del equipo rival
-    for (const [otherId, otherTeam] of this.playerTeams.entries()) {
-      if ((otherTeam === 'red' || otherTeam === 'blue') && otherTeam !== team) {
-        this.getRuntime(otherId).lastShotTick = -9999;
+    if (this.lastPassPair) {
+      const duoIds = this.lastPassPair.pairKey.split(':').map(Number);
+      if (!duoIds.includes(id)) {
+        this.lastPassPair = null;
       }
     }
 
     const playerName = this.playerNames.get(id) || `Jugador ${id}`;
     if (!this.lastTouchPlayer || this.lastTouchPlayer.id !== id) {
       this.previousTouchPlayer = this.lastTouchPlayer;
-      this.lastTouchPlayer = { id, name: playerName, team, tick: this.currentTick, wasCurve: false };
+      this.lastTouchPlayer = { id, name: playerName, team, tick: this.currentTick, wasCurve, wasPower };
     } else {
       this.lastTouchPlayer.name = playerName;
       this.lastTouchPlayer.team = team;
       this.lastTouchPlayer.tick = this.currentTick;
+      this.lastTouchPlayer.wasCurve = wasCurve;
+      this.lastTouchPlayer.wasPower = wasPower;
     }
 
     const stats = this.getOrCreateStats(id);
@@ -957,91 +1057,117 @@ export class EngineInstance {
 
     if (hasTouchCooldownPassed) {
       rt.lastTouchTick = this.currentTick;
-      stats.touches++;
-      // 0 puntos por toque
+      if (canAward) {
+        stats.touches++;
+      }
     }
 
     if (hasTouchCooldownPassed || isKick) {
       const lastTouch = this.touchHistory.length > 0 ? this.touchHistory[this.touchHistory.length - 1] : null;
 
-      // Pase completado (+10 pts): distancia >= 90 px entre compañeros distintos y cooldown de 3.0s (180 ticks)
-      if (lastTouch && lastTouch.playerId !== id && lastTouch.team === team) {
+      // Pase completado (+10 pts): >= 140 px, velocidad >= 90 px/s, 180t cooldown y max 2 seguidos por pareja
+      if (lastTouch && lastTouch.playerId !== id && lastTouch.team === team && canAward) {
         const travelDist = Math.hypot(this.ball.pos.x - lastTouch.ballX, this.ball.pos.y - lastTouch.ballY);
         const passerRt = this.getRuntime(lastTouch.playerId);
-        if (travelDist >= MIN_PASS_DISTANCE_PX && (this.currentTick - passerRt.lastPassTick) >= COMPLETED_PASS_COOLDOWN_TICKS) {
+        const pairKey = lastTouch.playerId < id ? `${lastTouch.playerId}:${id}` : `${id}:${lastTouch.playerId}`;
+        const pairCount = (this.lastPassPair && this.lastPassPair.pairKey === pairKey)
+          ? this.lastPassPair.count + 1
+          : 1;
+
+        if (
+          travelDist >= MIN_PASS_DISTANCE_PX &&
+          ballSpeed >= MIN_PASS_SPEED_PX_SEC &&
+          (this.currentTick - passerRt.lastPassTick) >= COMPLETED_PASS_COOLDOWN_TICKS &&
+          pairCount <= 2
+        ) {
+          this.lastPassPair = { pairKey, count: pairCount };
           passerRt.lastPassTick = this.currentTick;
           const prevStats = this.getOrCreateStats(lastTouch.playerId);
           prevStats.passes++;
           prevStats.points += 10;
           const passerDisc = this.players.get(lastTouch.playerId);
-          this.emitScoreEvent({
-            playerId: String(lastTouch.playerId),
-            text: 'Pase completado +10',
-            points: 10,
-            x: passerDisc ? passerDisc.pos.x : px,
-            y: passerDisc ? passerDisc.pos.y : py,
-            color: '#00e5ff',
-            category: 'pass'
-          });
+          this.emitPlayerScoreEvent(
+            lastTouch.playerId,
+            'Pase completado +10',
+            10,
+            passerDisc ? passerDisc.pos.x : px,
+            passerDisc ? passerDisc.pos.y : py,
+            '#00e5ff',
+            'pass'
+          );
         }
       }
 
-      // Atajada (+100 pts): interceptar tiro rival en campo propio
-      if (this.pendingShot && this.pendingShot.shooterTeam !== team) {
-        const inOwnHalf = (team === 'red' && px <= 0) || (team === 'blue' && px >= 0);
-        if (inOwnHalf) {
-          stats.saves++;
-          stats.points += 100;
-          this.emitScoreEvent({
-            playerId: String(id),
-            text: 'Atajada +100',
-            points: 100,
-            x: px,
-            y: py,
-            color: '#00e676',
-            category: 'save'
-          });
-          this.checkEngineHattrick(id, stats);
-        }
+      // Atajada (+100 pts): interceptar tiro rival válido en campo propio
+      if (this.pendingShot) {
+        const shot = this.pendingShot;
         this.pendingShot = null;
+        if (shot.shooterTeam !== team && canAward) {
+          this.lastPassPair = null;
+          const inOwnHalf = (team === 'red' && px <= 0) || (team === 'blue' && px >= 0);
+          const saveCooldownPassed = (this.currentTick - rt.lastSaveTick) >= SAVE_COOLDOWN_TICKS;
+          const elapsedShotTicks = this.currentTick - shot.tick;
+          const flightDist = Math.hypot(this.ball.pos.x - shot.originX, this.ball.pos.y - shot.originY);
+          const onGoalCorridor = isBallOnGoalCorridor(
+            this.ball.pos.x,
+            this.ball.pos.y,
+            evalVx,
+            evalVy,
+            team,
+            this.stadium.halfWidth,
+            this.stadium.goalHalfHeight
+          );
+
+          if (
+            inOwnHalf &&
+            saveCooldownPassed &&
+            elapsedShotTicks <= SHOT_STALE_TICKS &&
+            flightDist >= MIN_SAVE_SHOT_FLIGHT_PX &&
+            ballSpeed >= MIN_SAVE_BALL_SPEED_PX_SEC &&
+            onGoalCorridor
+          ) {
+            rt.lastSaveTick = this.currentTick;
+            stats.saves++;
+            stats.points += 100;
+            this.emitPlayerScoreEvent(id, 'Atajada +100', 100, px, py, '#00e676', 'save');
+            this.checkEngineHattrick(id, stats);
+          }
+        }
       }
     }
 
-    // Tiro al arco (+20 pts): SOLO en patada explícita (isKick) dirigida entre los tres palos rivales con cooldown de 4.0s
-    if (isKick) {
-      const hw = this.stadium.halfWidth;
-      const gh = this.stadium.goalHalfHeight;
-      let isShotOnGoal = false;
+    // Tiro al arco (+20 pts): patada explícita >= 220 px/s hacia arco rival con cooldown estricto de 240t
+    if (isKick && canAward && ballSpeed >= MIN_SHOT_SPEED_PX_SEC) {
+      const defendingTeam = team === 'red' ? 'blue' : 'red';
+      const isShotOnGoal = isBallOnGoalCorridor(
+        this.ball.pos.x,
+        this.ball.pos.y,
+        this.ball.vel.x,
+        this.ball.vel.y,
+        defendingTeam,
+        this.stadium.halfWidth,
+        this.stadium.goalHalfHeight
+      );
 
-      if (team === 'red' && this.ball.vel.x > 50 && this.ball.pos.x < hw) {
-        const t = (hw - this.ball.pos.x) / this.ball.vel.x;
-        const yPred = this.ball.pos.y + this.ball.vel.y * t;
-        if (Math.abs(yPred) <= gh) isShotOnGoal = true;
-      } else if (team === 'blue' && this.ball.vel.x < -50 && this.ball.pos.x > -hw) {
-        const t = (-hw - this.ball.pos.x) / this.ball.vel.x;
-        const yPred = this.ball.pos.y + this.ball.vel.y * t;
-        if (Math.abs(yPred) <= gh) isShotOnGoal = true;
-      }
-
-      if (isShotOnGoal && (this.currentTick - rt.lastShotTick) >= SHOT_ON_GOAL_COOLDOWN_TICKS) {
-        rt.lastShotTick = this.currentTick;
-        stats.shots++;
-        stats.shotsNormal = (stats.shotsNormal || 0) + 1;
-        stats.points += 20;
-        this.pendingShot = { shooterId: id, shooterTeam: team, tick: this.currentTick };
-        this.emitScoreEvent({
-          playerId: String(id),
-          text: 'Tiro al arco +20',
-          points: 20,
-          x: px,
-          y: py,
-          color: '#ffbe0b',
-          category: 'shot'
-        });
+      if (isShotOnGoal) {
+        this.lastPassPair = null;
+        if ((this.currentTick - rt.lastShotTick) >= SHOT_ON_GOAL_COOLDOWN_TICKS) {
+          rt.lastShotTick = this.currentTick;
+          stats.shots++;
+          stats.shotsNormal = (stats.shotsNormal || 0) + 1;
+          stats.points += 20;
+          this.pendingShot = {
+            shooterId: id,
+            shooterTeam: team,
+            tick: this.currentTick,
+            originX: this.ball.pos.x,
+            originY: this.ball.pos.y
+          };
+          this.emitPlayerScoreEvent(id, 'Tiro al arco +20', 20, px, py, '#ffbe0b', 'shot');
+        }
       }
     }
 
-    const wasCurve = Boolean(this.ball.isCurving || Math.abs(this.ball.spin) > 0.001);
     this.touchHistory.push({
       playerId: id,
       team,
@@ -1049,7 +1175,8 @@ export class EngineInstance {
       isKick,
       ballX: this.ball.pos.x,
       ballY: this.ball.pos.y,
-      wasCurve
+      wasCurve,
+      wasPower
     });
     if (this.touchHistory.length > 50) {
       this.touchHistory.shift();
@@ -1057,14 +1184,19 @@ export class EngineInstance {
   }
 
   public handleGoalScored(scoringTeam: 'red' | 'blue'): void {
+    const canAward = this.canAwardMatchPoints();
+    const currentSpeed = Math.hypot(this.ball.vel.x, this.ball.vel.y);
+    const ballSpeedPxSec = this.preNetCrossingSpeed > 0 ? this.preNetCrossingSpeed : currentSpeed;
+    const speedKmh = Math.max(20, Math.round(ballSpeedPxSec * 0.18));
+
     let scorerId: number | null = null;
     let assisterId: number | null = null;
+    let assisterWasCurve = false;
     let scorerName = scoringTeam === 'red' ? 'Equipo Rojo' : 'Equipo Azul';
     let assisterName: string | null = null;
     let isOwnGoal = false;
 
     const lastTouch = this.lastTouchPlayer;
-    const prevTouch = this.previousTouchPlayer;
 
     if (lastTouch) {
       if (lastTouch.team === scoringTeam) {
@@ -1072,9 +1204,17 @@ export class EngineInstance {
         scorerId = lastTouch.id;
         scorerName = this.playerNames.get(lastTouch.id) || lastTouch.name;
 
-        if (prevTouch && prevTouch.team === scoringTeam && prevTouch.id !== lastTouch.id) {
-          assisterId = prevTouch.id;
-          assisterName = this.playerNames.get(prevTouch.id) || prevTouch.name;
+        for (let i = this.touchHistory.length - 1; i >= 0; i--) {
+          const entry = this.touchHistory[i]!;
+          if (entry.team !== scoringTeam) break;
+          if (entry.playerId !== scorerId) {
+            if ((this.currentTick - entry.tick) <= ASSIST_WINDOW_TICKS) {
+              assisterId = entry.playerId;
+              assisterName = this.playerNames.get(entry.playerId) || `Jugador ${entry.playerId}`;
+              assisterWasCurve = Boolean(entry.wasCurve);
+            }
+            break;
+          }
         }
       } else {
         isOwnGoal = true;
@@ -1085,73 +1225,108 @@ export class EngineInstance {
       }
     }
 
-    if (isOwnGoal && scorerId !== null) {
-      const ogStats = this.getOrCreateStats(scorerId);
-      ogStats.points -= 50;
-      const ogDisc = this.players.get(scorerId);
-      this.emitScoreEvent({
-        playerId: String(scorerId),
-        text: 'Autogol -50',
-        points: -50,
-        x: ogDisc ? ogDisc.pos.x : this.ball.pos.x,
-        y: ogDisc ? ogDisc.pos.y : this.ball.pos.y,
-        color: '#ff4757',
-        category: 'ownGoal'
-      });
-    } else if (scorerId !== null && !isOwnGoal) {
-      const sStats = this.getOrCreateStats(scorerId);
-      sStats.goals++;
-      const isCurveGoal = Boolean(this.ball.isCurving || Math.abs(this.ball.spin) > 0.001 || lastTouch?.wasCurve);
-      const goalPts = isCurveGoal ? 120 : 100;
-      sStats.points += goalPts;
-      const scDisc = this.players.get(scorerId);
-      this.emitScoreEvent({
-        playerId: String(scorerId),
-        text: isCurveGoal ? '¡Gol con efecto! +120' : '¡Gol! +100',
-        points: goalPts,
-        x: scDisc ? scDisc.pos.x : this.ball.pos.x,
-        y: scDisc ? scDisc.pos.y : this.ball.pos.y,
-        color: '#ffd700',
-        category: 'goal'
-      });
-      this.checkEngineHattrick(scorerId, sStats);
-    }
+    const isPowerGoal = !isOwnGoal && Boolean(
+      this.preNetIsPower ||
+      this.ball.isPowerShot ||
+      ballSpeedPxSec >= POWER_SHOT_SPEED_THRESHOLD ||
+      lastTouch?.wasPower
+    );
+    const isCurveGoal = !isOwnGoal && Boolean(
+      this.preNetIsCurve ||
+      this.ball.isCurving ||
+      Math.abs(this.ball.spin) > 0.001 ||
+      lastTouch?.wasCurve
+    );
 
-    if (assisterId !== null && !isOwnGoal) {
-      const aStats = this.getOrCreateStats(assisterId);
-      aStats.assists++;
-      const isCurveAssist = Boolean(prevTouch?.wasCurve);
-      const assistPts = isCurveAssist ? 70 : 50;
-      if (isCurveAssist) {
-        aStats.assistsCurve = (aStats.assistsCurve || 0) + 1;
-      } else {
-        aStats.assistsNormal = (aStats.assistsNormal || 0) + 1;
+    if (canAward) {
+      if (isOwnGoal && scorerId !== null) {
+        const ogStats = this.getOrCreateStats(scorerId);
+        ogStats.ownGoals = (ogStats.ownGoals || 0) + 1;
+        ogStats.points -= 50;
+        const ogDisc = this.players.get(scorerId);
+        this.emitPlayerScoreEvent(
+          scorerId,
+          'Autogol -50',
+          -50,
+          ogDisc ? ogDisc.pos.x : this.ball.pos.x,
+          ogDisc ? ogDisc.pos.y : this.ball.pos.y,
+          '#ff4757',
+          'ownGoal'
+        );
+      } else if (scorerId !== null && !isOwnGoal) {
+        const sStats = this.getOrCreateStats(scorerId);
+        sStats.goals++;
+        let goalPts = 100;
+        if (isPowerGoal) {
+          goalPts += 30;
+          sStats.powerGoals = (sStats.powerGoals || 0) + 1;
+        }
+        if (isCurveGoal) {
+          goalPts += 30;
+          sStats.curveGoals = (sStats.curveGoals || 0) + 1;
+        }
+        let goalLabel = '¡Gol! +100';
+        if (isPowerGoal && isCurveGoal) goalLabel = '¡Golazo Potencia y Efecto! +160';
+        else if (isPowerGoal) goalLabel = '¡Gol de Potencia! +130';
+        else if (isCurveGoal) goalLabel = '¡Gol con Efecto! +130';
+
+        sStats.points += goalPts;
+        const scDisc = this.players.get(scorerId);
+        this.emitPlayerScoreEvent(
+          scorerId,
+          goalLabel,
+          goalPts,
+          scDisc ? scDisc.pos.x : this.ball.pos.x,
+          scDisc ? scDisc.pos.y : this.ball.pos.y,
+          '#ffd700',
+          'goal'
+        );
+        this.checkEngineHattrick(scorerId, sStats);
       }
-      aStats.points += assistPts;
-      const asDisc = this.players.get(assisterId);
-      this.emitScoreEvent({
-        playerId: String(assisterId),
-        text: isCurveAssist ? 'Asistencia con efecto +70' : 'Asistencia +50',
-        points: assistPts,
-        x: asDisc ? asDisc.pos.x : this.ball.pos.x,
-        y: asDisc ? asDisc.pos.y : this.ball.pos.y,
-        color: '#00e5ff',
-        category: 'assist'
-      });
-      this.checkEngineHattrick(assisterId, aStats);
+
+      if (assisterId !== null && !isOwnGoal) {
+        const aStats = this.getOrCreateStats(assisterId);
+        aStats.assists++;
+        const assistPts = assisterWasCurve ? 70 : 50;
+        if (assisterWasCurve) {
+          aStats.curveAssists = (aStats.curveAssists || 0) + 1;
+          aStats.assistsCurve = (aStats.assistsCurve || 0) + 1;
+        } else {
+          aStats.assistsNormal = (aStats.assistsNormal || 0) + 1;
+        }
+        aStats.points += assistPts;
+        const asDisc = this.players.get(assisterId);
+        this.emitPlayerScoreEvent(
+          assisterId,
+          assisterWasCurve ? 'Asistencia con Efecto +70' : 'Asistencia +50',
+          assistPts,
+          asDisc ? asDisc.pos.x : this.ball.pos.x,
+          asDisc ? asDisc.pos.y : this.ball.pos.y,
+          '#00e5ff',
+          'assist'
+        );
+        this.checkEngineHattrick(assisterId, aStats);
+      }
     }
 
     this.lastGoalDetails = {
       scoringTeam,
       scorerName,
       assisterName,
-      isOwnGoal
+      isOwnGoal,
+      speedKmh,
+      isPower: isPowerGoal,
+      isCurve: isCurveGoal
     };
 
     this.touchHistory = [];
     this.pendingShot = null;
+    this.lastPassPair = null;
     this.lastTouchPlayer = null;
     this.previousTouchPlayer = null;
+    this.preNetCrossingSpeed = 0;
+    this.preNetIsPower = false;
+    this.preNetIsCurve = false;
     this.isNeutralKickoff = false;
     this.kickoffPossessingTeam = scoringTeam === 'red' ? 'blue' : 'red';
     this.fsm.registerGoal(scoringTeam);
@@ -1187,15 +1362,20 @@ export class EngineInstance {
     this.matchStats.clear();
     this.touchHistory = [];
     this.pendingShot = null;
+    this.lastPassPair = null;
     this.lastTouchPlayer = null;
     this.previousTouchPlayer = null;
     this.lastGoalDetails = null;
     this.frozenVictoryStats = null;
     this.frozenVictoryMvp = null;
+    this.preNetCrossingSpeed = 0;
+    this.preNetIsPower = false;
+    this.preNetIsCurve = false;
     for (const rt of this.playerRuntime.values()) {
       rt.lastShotTick = -9999;
       rt.lastPassTick = -9999;
       rt.lastTouchTick = -9999;
+      rt.lastSaveTick = -9999;
       rt.cooldownTimer = 0;
       rt.ticksRemaining = 0;
     }
@@ -1206,7 +1386,16 @@ export class EngineInstance {
     this.fsm.currentState = snapshot.phase as MatchPhase;
     this.fsm.redScore = snapshot.redScore;
     this.fsm.blueScore = snapshot.blueScore;
-    this.soundMask = snapshot.soundMask;
+    this.soundMask = snapshot.soundMask & SOUND_MASK_BITS;
+    if (snapshot.isGoldenGoal !== undefined) {
+      this.fsm.isOvertime = snapshot.isGoldenGoal;
+    }
+    if (snapshot.isNeutralKickoff !== undefined) {
+      this.isNeutralKickoff = snapshot.isNeutralKickoff;
+    }
+    if (snapshot.kickoffPossessingTeam !== undefined) {
+      this.kickoffPossessingTeam = snapshot.kickoffPossessingTeam;
+    }
 
     const seenPlayerIds = new Set<number>();
     for (let i = 0; i < snapshot.discs.length; i++) {
@@ -1234,7 +1423,7 @@ export class EngineInstance {
         if (d.stamina !== undefined) p.stamina = d.stamina;
         p.kicking = ((d.flags ?? 0) & (1 << 0)) !== 0;
         p.isDashing = ((d.flags ?? 0) & (1 << 1)) !== 0;
-        p.isTurbo = ((d.flags ?? 0) & (1 << 4)) !== 0;
+        p.isTurbo = false;
         p.isTyping = ((d.flags ?? 0) & (1 << 5)) !== 0;
       }
     }
@@ -1301,7 +1490,11 @@ export class EngineInstance {
       matchTimer: elapsedSeconds,
       redScore: this.fsm.redScore,
       blueScore: this.fsm.blueScore,
-      soundMask: this.soundMask,
+      soundMask: this.soundMask & SOUND_MASK_BITS,
+      kickoffActive: this.fsm.state === MatchPhase.KICKOFF,
+      isGoldenGoal: this.fsm.isOvertime,
+      isNeutralKickoff: this.isNeutralKickoff,
+      kickoffPossessingTeam: this.kickoffPossessingTeam,
       discs: discStates
     };
   }
@@ -1406,6 +1599,14 @@ export {
   SHOT_ON_GOAL_COOLDOWN_TICKS,
   COMPLETED_PASS_COOLDOWN_TICKS,
   MIN_PASS_DISTANCE_PX,
+  SAVE_COOLDOWN_TICKS,
+  MIN_SHOT_SPEED_PX_SEC,
+  MIN_PASS_SPEED_PX_SEC,
+  SHOT_STALE_TICKS,
+  MIN_SAVE_SHOT_FLIGHT_PX,
+  MIN_SAVE_BALL_SPEED_PX_SEC,
+  ASSIST_WINDOW_TICKS,
+  isBallOnGoalCorridor,
   BinaryProtocol,
   EventType,
   SoundEvent,
@@ -1421,6 +1622,11 @@ export {
   SOUND_KICK,
   SOUND_POST_HIT,
   SOUND_GOAL,
+  SOUND_MASK_BITS,
+  SNAPSHOT_FLAG_KICKOFF_ACTIVE,
+  SNAPSHOT_FLAG_GOLDEN_GOAL,
+  SNAPSHOT_FLAG_NEUTRAL_KICKOFF,
+  SNAPSHOT_FLAG_KICKOFF_BLUE,
   INPUT_FLAG_UP,
   INPUT_FLAG_DOWN,
   INPUT_FLAG_LEFT,

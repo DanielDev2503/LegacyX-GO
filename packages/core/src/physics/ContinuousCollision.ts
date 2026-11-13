@@ -14,6 +14,8 @@ export interface CollisionEvent {
   discA: Disc;
   discB?: Disc;
   segment?: Segment;
+  preBallVx?: number | undefined;
+  preBallVy?: number | undefined;
 }
 
 /**
@@ -86,6 +88,10 @@ export function resolveDiscDiscCollision(
     d2.resetCurve();
   }
 
+  const ballDisc = d1.isBall ? d1 : (d2.isBall ? d2 : null);
+  const preBallVx = ballDisc ? ballDisc.vel.x : undefined;
+  const preBallVy = ballDisc ? ballDisc.vel.y : undefined;
+
   // Do not resolve if velocities are already separating
   if (velAlongNormal < 0) {
     const restitution = Math.min(d1.bounciness, d2.bounciness);
@@ -96,7 +102,7 @@ export function resolveDiscDiscCollision(
   }
 
   if (onCollision) {
-    onCollision({ type: 'disc-disc', discA: d1, discB: d2 });
+    onCollision({ type: 'disc-disc', discA: d1, discB: d2, preBallVx, preBallVy });
   }
 
   return true;

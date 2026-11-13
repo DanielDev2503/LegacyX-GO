@@ -287,12 +287,10 @@ export class PhysicsWorld {
   }
 
   public shouldBypassKickoffBarrier(
-    kickoffTeam: 'red' | 'blue' | null = null,
-    kickoffTeamCount?: number
+    _kickoffTeam: 'red' | 'blue' | null = null,
+    _kickoffTeamCount?: number
   ): boolean {
-    if (this.isPracticeMode) return true;
-    if (kickoffTeam && kickoffTeamCount !== undefined && kickoffTeamCount <= 0) return true;
-    return false;
+    return this.isPracticeMode === true;
   }
 
   public enforceMidfieldBarrier(

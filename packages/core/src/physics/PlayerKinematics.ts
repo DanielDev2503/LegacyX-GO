@@ -185,7 +185,7 @@ export function stepPlayerKinematics(
     const turboAccel = effectiveAccel * kAccelTurbo;
 
     const canTurbo = config?.turboEnabled !== false;
-    const wantsTurbo = canTurbo && (((mask & INPUT_TURBO) !== 0) || player.isTurbo);
+    const wantsTurbo = canTurbo && ((mask & INPUT_TURBO) !== 0);
 
     if (wantsTurbo && hasMoveInput && player.stamina > 0) {
       player.isTurbo = true;
@@ -224,8 +224,8 @@ export function stepPlayerKinematics(
     const staminaRechargeRate = config?.staminaRechargeRate ?? 25.0;
     if (!hasMoveInput) {
       player.stamina = Math.min(100, player.stamina + staminaRechargeRate * dt);
-    } else if (config?.staminaRegenMoving !== false) {
-      const movingFactor = (config?.staminaRegenMovingRate ?? 100) / 100;
+    } else if (config?.staminaRegenMoving === true) {
+      const movingFactor = Math.max(0, Math.min(200, config?.staminaRegenMovingRate ?? 25)) / 100;
       if (movingFactor > 0) {
         player.stamina = Math.min(
           100,
