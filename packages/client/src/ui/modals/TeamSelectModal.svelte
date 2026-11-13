@@ -9,6 +9,7 @@
   import { soundFX } from '../../audio/SoundFX';
   import { gameApp } from '../../net/GameApp';
   import StadiumPreviewCanvas from '../components/StadiumPreviewCanvas.svelte';
+  import { getKitPatternCss } from '../utils/kitPatterns.js';
 
   let {
     onStartMatch = () => {},
@@ -110,6 +111,11 @@
   let blueHasOutline = $derived(
     Boolean(blueActiveKit?.outline === true || blueActiveKit?.hasOutline === true)
   );
+
+  let redResolvedKit = $derived(redActiveKit ?? gameUI.redTeamKit);
+  let blueResolvedKit = $derived(blueActiveKit ?? gameUI.blueTeamKit);
+  let redKitBg = $derived(getKitPatternCss(redResolvedKit, redPrimaryColor));
+  let blueKitBg = $derived(getKitPatternCss(blueResolvedKit, bluePrimaryColor));
 
   let matchStatsSnapshot = $derived<MatchStatsSnapshot | null>(
     gameUI.lastMatchStats && !Array.isArray(gameUI.lastMatchStats)
@@ -489,6 +495,7 @@
           statsList: ReadonlyArray<PlayerStatEntry>
         )}
           {@const allExpanded = isTeamAllExpanded(team)}
+          {@const headerBg = team === 'red' ? redKitBg : blueKitBg}
           <div
             class="team-table-box {team}-box"
             style={team === 'red'
@@ -497,12 +504,12 @@
           >
             <div
               class="table-header {team}-header captain-bicolor-header"
-              style="background: linear-gradient(90deg, {primaryColor} 0%, {primaryColor} 30%, {secondaryColor} 70%, {secondaryColor} 100%);"
+              style="background: {headerBg}; border: {hasOutline ? '1.5px solid #000000' : 'none'};"
             >
               <div class="table-header-left">
                 <span
                   class="col-team-name-hdr"
-                  style="color: {tertiaryColor}; text-shadow: {hasOutline ? '-1px -1px 0 #000000, 1px -1px 0 #000000, -1px 1px 0 #000000, 1px 1px 0 #000000' : 'none'};"
+                  style="color: {tertiaryColor}; {hasOutline ? '-webkit-text-stroke: 2px #000000; paint-order: stroke fill; text-shadow: -1px -1px 0 #000000, 1px -1px 0 #000000, -1px 1px 0 #000000, 1px 1px 0 #000000;' : 'text-shadow: 0 1px 2px rgba(0, 0, 0, 0.65);'}"
                 >{teamName}</span>
                 <button
                   type="button"
@@ -514,7 +521,10 @@
                   <span aria-hidden="true">{allExpanded ? '▲' : '▼'}</span>
                 </button>
               </div>
-              <div class="col-headers-right" style="color: {tertiaryColor};">
+              <div
+                class="col-headers-right"
+                style="color: {tertiaryColor}; {hasOutline ? 'text-shadow: -1px -1px 0 #000000, 1px -1px 0 #000000, -1px 1px 0 #000000, 1px 1px 0 #000000;' : ''}"
+              >
                 <span class="col-pts">PTS</span>
                 <span class="col-stat">G</span>
                 <span class="col-stat">A</span>
@@ -593,7 +603,7 @@
                 <div
                   class="stats-acronym-badge red-acronym"
                   style="
-                    background: linear-gradient(135deg, {redPrimaryColor} 0%, {redPrimaryColor} 25%, {redSecondaryColor} 75%, {redSecondaryColor} 100%);
+                    background: {redKitBg};
                     border: {redHasOutline ? '1.5px solid #000000' : 'none'};
                     box-shadow: {redHasOutline ? '0 0 0 1.5px #000000' : 'none'};
                     color: {redKitTertiary};
@@ -616,7 +626,7 @@
                 <div
                   class="stats-acronym-badge blue-acronym"
                   style="
-                    background: linear-gradient(135deg, {bluePrimaryColor} 0%, {bluePrimaryColor} 25%, {blueSecondaryColor} 75%, {blueSecondaryColor} 100%);
+                    background: {blueKitBg};
                     border: {blueHasOutline ? '1.5px solid #000000' : 'none'};
                     box-shadow: {blueHasOutline ? '0 0 0 1.5px #000000' : 'none'};
                     color: {blueKitTertiary};
@@ -1110,11 +1120,11 @@
                 >
                   <div
                     class="bench-card-header red-header captain-bicolor-header"
-                    style="background: linear-gradient(90deg, {redPrimaryColor} 0%, {redPrimaryColor} 30%, {redSecondaryColor} 70%, {redSecondaryColor} 100%);"
+                    style="background: {redKitBg}; border: {redHasOutline ? '1.5px solid #000000' : 'none'};"
                   >
                     <span
                       class="team-name"
-                      style="color: {redKitTertiary}; text-shadow: {redHasOutline ? '-1px -1px 0 #000000, 1px -1px 0 #000000, -1px 1px 0 #000000, 1px 1px 0 #000000' : 'none'};"
+                      style="color: {redKitTertiary}; {redHasOutline ? '-webkit-text-stroke: 2px #000000; paint-order: stroke fill; text-shadow: -1px -1px 0 #000000, 1px -1px 0 #000000, -1px 1px 0 #000000, 1px 1px 0 #000000;' : 'text-shadow: 0 1px 2px rgba(0, 0, 0, 0.65);'}"
                     >{redTeamName}</span>
                     <div class="kit-variant-toggles" role="group" aria-label="Equipación del equipo rojo">
                       <button
@@ -1256,11 +1266,11 @@
                 >
                   <div
                     class="bench-card-header blue-header captain-bicolor-header"
-                    style="background: linear-gradient(90deg, {bluePrimaryColor} 0%, {bluePrimaryColor} 30%, {blueSecondaryColor} 70%, {blueSecondaryColor} 100%);"
+                    style="background: {blueKitBg}; border: {blueHasOutline ? '1.5px solid #000000' : 'none'};"
                   >
                     <span
                       class="team-name"
-                      style="color: {blueKitTertiary}; text-shadow: {blueHasOutline ? '-1px -1px 0 #000000, 1px -1px 0 #000000, -1px 1px 0 #000000, 1px 1px 0 #000000' : 'none'};"
+                      style="color: {blueKitTertiary}; {blueHasOutline ? '-webkit-text-stroke: 2px #000000; paint-order: stroke fill; text-shadow: -1px -1px 0 #000000, 1px -1px 0 #000000, -1px 1px 0 #000000, 1px 1px 0 #000000;' : 'text-shadow: 0 1px 2px rgba(0, 0, 0, 0.65);'}"
                     >{blueTeamName}</span>
                     <div class="kit-variant-toggles" role="group" aria-label="Equipación del equipo azul">
                       <button

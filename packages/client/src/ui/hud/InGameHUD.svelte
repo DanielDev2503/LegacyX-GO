@@ -3,6 +3,9 @@
   import { userProfile } from '../state/userProfile.svelte.js';
   import { soundFX } from '../../audio/SoundFX.js';
   import { matchRecorder } from '../../recorder/MatchRecorder.svelte.js';
+  import MatchScoreboard, { type ScoreboardDesign } from '../components/MatchScoreboard.svelte';
+  import KitPatternBadge from '../components/KitPatternBadge.svelte';
+  import { getKitPatternCss } from '../utils/kitPatterns.js';
   import {
     applyMentionCandidate,
     findActiveMentionToken,
@@ -87,6 +90,26 @@
   let redTeamTag = $derived(redActiveKit?.tag || gameUI.redTeamKit?.tag || 'RED');
   let blueTeamTag = $derived(blueActiveKit?.tag || gameUI.blueTeamKit?.tag || 'BLUE');
 
+  let redResolvedKit = $derived(redActiveKit ?? gameUI.redTeamKit);
+  let blueResolvedKit = $derived(blueActiveKit ?? gameUI.blueTeamKit);
+  let redKitBg = $derived(getKitPatternCss(redResolvedKit, redKitPrimary));
+  let blueKitBg = $derived(getKitPatternCss(blueResolvedKit, blueKitPrimary));
+
+  let isRankedRoom = $derived(gameUI.roomType === 'ranked' && !gameUI.isPracticeMode);
+  let scoreboardDesign = $derived(
+    ((gameUI as any).effectiveScoreboardDesign ??
+      (gameUI.settings as any).scoreboardDesign ??
+      'original') as ScoreboardDesign
+  );
+  let isGoalReplay = $derived(gameUI.matchPhase === 3.5);
+  let activeGoalScorerId = $derived((gameUI as any).activeGoalScorerId ?? null);
+  let canSkipGoalReplay = $derived(
+    isGoalReplay &&
+      gameUI.localPlayerId !== null &&
+      activeGoalScorerId !== null &&
+      gameUI.localPlayerId === activeGoalScorerId
+  );
+
   let activeBanner = $derived(gameUI.activeBanner);
   let showPauseBanner = $derived(
     (activeBanner.kind === 'PAUSED' || gameUI.matchPhase === 2.1 || gameUI.fsmPhase === 'PAUSED') &&
@@ -104,6 +127,10 @@
   let goalTertiaryColor = $derived(
     activeBanner.scoringTeam === 'blue' ? blueKitTertiary : redKitTertiary
   );
+  let goalResolvedKit = $derived(
+    activeBanner.scoringTeam === 'blue' ? blueResolvedKit : redResolvedKit
+  );
+  let goalStripBg = $derived(getKitPatternCss(goalResolvedKit, goalPrimaryColor));
   let victoryWinnerName = $derived(
     activeBanner.winner === 'red'
       ? redTeamName
@@ -307,6 +334,9 @@
         }
 
         const modal = gameUI.activeModal;
+        if (canSkipGoalReplay && modal === 'NONE') {
+          return;
+        }
         const isAllowedModal =
           modal === 'NONE' ||
           modal === 'TEAM_MANAGEMENT' ||
@@ -419,8 +449,11 @@
   <!-- ========================================== -->
   <div class="top-bar-container">
     <!-- A) Cartucho Izquierdo: Nombre de Sala -->
-    <div class="top-card top-card-left">
+    <div class="top-card top-card-left" class:is-ranked={isRankedRoom}>
       <div class="room-title-block">
+        {#if isRankedRoom}
+          <span class="room-ranked-tag">RANKED</span>
+        {/if}
         <h1 class="room-title">
           {gameUI.activeRoomName || 'TORNEO NOCTURNO #12'}
         </h1>
@@ -428,84 +461,30 @@
     </div>
 
     <!-- B) Cartucho Central: Marcador y Reloj -->
-    <div class="top-card top-card-center" class:is-warning-30s={isWarning30s}>
-      <div class="scoreboard-main-row">
-        <!-- Tarjeta de Siglas RED -->
-        <div
-          class="team-acronym-card red-acronym"
-          style="
-            background: linear-gradient(135deg, {redKitPrimary} 0%, {redKitPrimary} 25%, {redKitSecondary} 75%, {redKitSecondary} 100%);
-            border: {redHasOutline ? '1.5px solid #000000' : 'none'};
-            box-shadow: {redHasOutline ? '0 0 0 1.5px #000000, 0 2px 6px rgba(0, 0, 0, 0.5)' : '0 2px 6px rgba(0, 0, 0, 0.5)'};
-            color: {redKitTertiary};
-            {redHasOutline ? '-webkit-text-stroke: 3px #000000; paint-order: stroke fill; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);' : '-webkit-text-stroke: 0px transparent; text-shadow: none;'}
-          "
-        >
-          {redActiveKit?.tag || 'RED'}
-        </div>
-
-        <span class="team-score-number" id="hud-score-red">{gameUI.redScore}</span>
-
-        <!-- Reloj Central -->
-        <div class="timer-center-block">
-          <svg class="timer-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true">
-            <circle cx="12" cy="13" r="8"></circle>
-            <polyline points="12 9 12 13 14.5 14.5"></polyline>
-            <line x1="9" y1="2" x2="15" y2="2"></line>
-          </svg>
-          <span class="timer-clock" id="hud-timer">{gameUI.matchPhase === 0 ? '00:00' : gameUI.matchTimeFormatted}</span>
-        </div>
-
-        <span class="team-score-number" id="hud-score-blue">{gameUI.blueScore}</span>
-
-        <!-- Tarjeta de Siglas BLUE -->
-        <div
-          class="team-acronym-card blue-acronym"
-          style="
-            background: linear-gradient(135deg, {blueKitPrimary} 0%, {blueKitPrimary} 25%, {blueKitSecondary} 75%, {blueKitSecondary} 100%);
-            border: {blueHasOutline ? '1.5px solid #000000' : 'none'};
-            box-shadow: {blueHasOutline ? '0 0 0 1.5px #000000, 0 2px 6px rgba(0, 0, 0, 0.5)' : '0 2px 6px rgba(0, 0, 0, 0.5)'};
-            color: {blueKitTertiary};
-            {blueHasOutline ? '-webkit-text-stroke: 3px #000000; paint-order: stroke fill; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);' : '-webkit-text-stroke: 0px transparent; text-shadow: none;'}
-          "
-        >
-          {blueActiveKit?.tag || 'BLUE'}
-        </div>
-      </div>
-
-      {#if gameUI.isGoldenGoal}
-        <svg class="glowing-ball-svg" viewBox="0 0 28 28" role="img" aria-label="Balón dorado">
-          <defs>
-            <radialGradient id="hud-gold-ball-grad" cx="35%" cy="32%" r="72%" fx="33%" fy="30%">
-              <stop offset="0%" stop-color="#FEF9C3"></stop>
-              <stop offset="30%" stop-color="#FACC15"></stop>
-              <stop offset="65%" stop-color="#CA8A04"></stop>
-              <stop offset="100%" stop-color="#713F12"></stop>
-            </radialGradient>
-            <clipPath id="hud-gold-ball-clip">
-              <circle cx="14" cy="14" r="11.5"></circle>
-            </clipPath>
-          </defs>
-          <circle cx="14" cy="14" r="12" fill="url(#hud-gold-ball-grad)" stroke="#854D0E" stroke-width="1"></circle>
-          <g clip-path="url(#hud-gold-ball-clip)">
-            <path
-              d="M14 9.8 L14 4.2 M18 12.7 L23.2 10.9 M16.5 17.4 L19.6 22 M11.5 17.4 L8.4 22 M10 12.7 L4.8 10.9"
-              stroke="#854D0E"
-              stroke-width="0.95"
-              stroke-linecap="round"
-              fill="none"
-            ></path>
-            <polygon points="14,9.8 18,12.7 16.5,17.4 11.5,17.4 10,12.7" fill="#451A03"></polygon>
-            <polygon points="11.4,2.2 16.6,2.2 14,5.2" fill="#451A03"></polygon>
-            <polygon points="24.5,8.4 25.5,13.6 22,11.1" fill="#451A03"></polygon>
-            <polygon points="22.1,20.8 18.6,24.8 19.2,20.8" fill="#451A03"></polygon>
-            <polygon points="5.9,20.8 9.4,24.8 8.8,20.8" fill="#451A03"></polygon>
-            <polygon points="3.5,8.4 2.5,13.6 6,11.1" fill="#451A03"></polygon>
-          </g>
-          <circle cx="10.4" cy="8.8" r="1.7" fill="#FEF9C3" opacity="0.45"></circle>
-        </svg>
-      {/if}
+    <div class="top-card-center top-card-center-slot" class:is-warning-30s={isWarning30s}>
+      <MatchScoreboard
+        design={scoreboardDesign}
+        redScore={gameUI.redScore}
+        blueScore={gameUI.blueScore}
+        clockText={gameUI.matchPhase === 0 ? '00:00' : gameUI.matchTimeFormatted}
+        redKit={redResolvedKit}
+        blueKit={blueResolvedKit}
+        {isWarning30s}
+        isGoldenGoal={gameUI.isGoldenGoal}
+      />
     </div>
+
+    {#if isGoalReplay}
+      <div class="goal-replay-pill-bar" id="hud-goal-replay-indicator" role="status" aria-live="polite">
+        <span class="goal-replay-pill">
+          <span class="goal-replay-dot" aria-hidden="true"></span>
+          <span>REPETICIÓN DEL GOL</span>
+        </span>
+        {#if canSkipGoalReplay}
+          <span class="goal-replay-skip-hint">Pulsa ENTER para saltar</span>
+        {/if}
+      </div>
+    {/if}
 
     <!-- TARJETA DESLIZANTE DE EVENTOS BAJO EL MARCADOR -->
     {#if slidingEvents.length > 0}
@@ -678,7 +657,7 @@
           <span
             class="vs-team-tag"
             style="
-              background: linear-gradient(135deg, {redKitPrimary} 0%, {redKitPrimary} 40%, {redKitSecondary} 85%, {redKitSecondary} 100%);
+              background: {redKitBg};
               color: {redKitTertiary};
               border-color: {redHasOutline ? '#000000' : redKitTertiary};
               {redHasOutline ? '-webkit-text-stroke: 2.5px #000000; paint-order: stroke fill; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);' : '-webkit-text-stroke: 0px transparent; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.65);'}
@@ -704,7 +683,7 @@
           <span
             class="vs-team-tag"
             style="
-              background: linear-gradient(135deg, {blueKitPrimary} 0%, {blueKitPrimary} 40%, {blueKitSecondary} 85%, {blueKitSecondary} 100%);
+              background: {blueKitBg};
               color: {blueKitTertiary};
               border-color: {blueHasOutline ? '#000000' : blueKitTertiary};
               {blueHasOutline ? '-webkit-text-stroke: 2.5px #000000; paint-order: stroke fill; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);' : '-webkit-text-stroke: 0px transparent; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.65);'}
@@ -730,12 +709,14 @@
         class="goal-banner-card"
         style="--goal-c1: {goalPrimaryColor}; --goal-c2: {goalSecondaryColor}; --goal-c3: {goalTertiaryColor};"
       >
-        <div class="goal-accent-strip"></div>
+        <div class="goal-accent-strip" style="background: {goalStripBg};"></div>
         <h2 class="goal-banner-title">
-          <svg class="banner-inline-svg text-cyan" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-            <circle cx="12" cy="12" r="10"></circle>
-            <polygon points="12 7 16.5 10.2 14.8 15.5 9.2 15.5 7.5 10.2 12 7"></polygon>
-          </svg>
+          <KitPatternBadge
+            kit={goalResolvedKit}
+            label={activeBanner.scoringTeam === 'blue' ? blueTeamTag : redTeamTag}
+            compact
+            fallbackColor={goalPrimaryColor}
+          />
           <span>¡GOOOOL DE {goalTeamName.toUpperCase()}!</span>
         </h2>
         <div class="goal-credits-row">
@@ -786,11 +767,21 @@
           {/if}
         </h2>
         <div class="victory-score-strip">
-          <span class="victory-tag" style="color: {redKitPrimary};">{redTeamTag}</span>
+          <KitPatternBadge
+            kit={redResolvedKit}
+            label={redTeamTag}
+            compact
+            fallbackColor={redKitPrimary}
+          />
           <span class="victory-digits">
             {activeBanner.redScore ?? gameUI.redScore} - {activeBanner.blueScore ?? gameUI.blueScore}
           </span>
-          <span class="victory-tag" style="color: {blueKitPrimary};">{blueTeamTag}</span>
+          <KitPatternBadge
+            kit={blueResolvedKit}
+            label={blueTeamTag}
+            compact
+            fallbackColor={blueKitPrimary}
+          />
         </div>
         {#if activeBanner.scorerName}
           <div class="victory-last-goal">
@@ -994,6 +985,34 @@
     border-top-right-radius: 0;
   }
 
+  .top-card-left.is-ranked {
+    background: #422006;
+    background-image: linear-gradient(180deg, rgba(234, 179, 8, 0.16) 0%, rgba(161, 98, 7, 0.22) 100%);
+    border-color: #ffd700;
+    box-shadow: 0 0 16px rgba(255, 215, 0, 0.28), 0 4px 20px rgba(0, 0, 0, 0.65);
+  }
+
+  .top-card-left.is-ranked .room-title {
+    color: #fde047;
+    text-shadow: 0 0 8px rgba(250, 204, 21, 0.45);
+  }
+
+  .room-ranked-tag {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.12rem 0.42rem;
+    border-radius: 0.25rem;
+    background: rgba(250, 204, 21, 0.18);
+    border: 1px solid #facc15;
+    color: #fef08a;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.62rem;
+    font-weight: 900;
+    letter-spacing: 0.08em;
+    line-height: 1;
+    flex-shrink: 0;
+  }
+
   .room-title-block {
     display: flex;
     align-items: center;
@@ -1048,9 +1067,74 @@
     box-shadow: 0 0 24px rgba(0, 229, 255, 0.18), 0 4px 20px rgba(0, 0, 0, 0.6);
   }
 
+  .top-card-center.top-card-center-slot {
+    height: auto;
+    min-width: 0;
+    padding: 0;
+    background: transparent;
+    border: none;
+    box-shadow: none;
+  }
+
   .top-card-center.is-warning-30s {
     border-color: #ef4444;
     animation: warningPulse30s 1s ease-in-out infinite alternate;
+  }
+
+  .top-card-center-slot.is-warning-30s {
+    animation: none;
+    background: transparent;
+  }
+
+  .goal-replay-pill-bar {
+    position: fixed;
+    top: 66px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 39;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.55rem;
+    pointer-events: none;
+    user-select: none;
+  }
+
+  .goal-replay-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.42rem;
+    padding: 0.28rem 0.78rem;
+    border-radius: 999px;
+    background: #0d1626;
+    border: 1px solid rgba(250, 204, 21, 0.72);
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.65);
+    color: #fef08a;
+    font-family: 'Space Grotesk', system-ui, sans-serif;
+    font-size: 0.72rem;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  .goal-replay-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 999px;
+    background: #ef4444;
+    box-shadow: 0 0 8px #ef4444;
+  }
+
+  .goal-replay-skip-hint {
+    padding: 0.24rem 0.65rem;
+    border-radius: 999px;
+    background: #0b1320;
+    border: 1px solid rgba(0, 229, 255, 0.5);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.6);
+    color: #e2e8f0;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 0.03em;
   }
 
   @keyframes warningPulse30s {
