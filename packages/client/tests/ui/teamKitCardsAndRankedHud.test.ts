@@ -62,6 +62,7 @@ describe('Team Kit Cards, World Cup Scoreboard, Goal Replay HUD & Ranked Room Ca
     gameUI.nickname = 'CapRojo';
     gameUI.timeLimit = 3;
     gameUI.matchTimerSeconds = 45;
+    gameUI.matchTimeFormatted = '00:45';
     gameUI.redScore = 2;
     gameUI.blueScore = 1;
     gameUI.isGoldenGoal = false;
@@ -141,12 +142,12 @@ describe('Team Kit Cards, World Cup Scoreboard, Goal Replay HUD & Ranked Room Ca
       gameUI.isPracticeMode = false;
 
       const { html } = render(InGameHUD);
-      expect(html).toContain('top-card-left is-ranked');
+      expect(html).toMatch(/top-card-left[^>]*is-ranked/);
       expect(html).toContain('RANKED');
 
       (gameUI.settings as any).scoreboardDesign = 'wc2026';
       const { html: wcHtml } = render(InGameHUD);
-      expect(wcHtml).toContain('top-card-left is-ranked');
+      expect(wcHtml).toMatch(/top-card-left[^>]*is-ranked/);
       expect(wcHtml).toContain('data-design="wc2026"');
 
       const hudSrc = readUiFile('hud/InGameHUD.svelte');
@@ -160,19 +161,21 @@ describe('Team Kit Cards, World Cup Scoreboard, Goal Replay HUD & Ranked Room Ca
       gameUI.roomType = 'casual';
       gameUI.isPracticeMode = false;
       const { html: casualHtml } = render(InGameHUD);
-      expect(casualHtml).not.toContain('top-card-left is-ranked');
+      expect(casualHtml).not.toMatch(/top-card-left[^>]*is-ranked/);
 
       gameUI.roomType = 'ranked';
       gameUI.isPracticeMode = true;
       const { html: practiceHtml } = render(InGameHUD);
-      expect(practiceHtml).not.toContain('top-card-left is-ranked');
+      expect(practiceHtml).not.toMatch(/top-card-left[^>]*is-ranked/);
     });
   });
 
   describe('2. World Cup / Original Scoreboard Integration (InGameHUD)', () => {
     it('delegates top-center scoreboard to MatchScoreboard and keeps 30s pulse + Golden Goal gold ball SVG', () => {
       const hudSrc = readUiFile('hud/InGameHUD.svelte');
-      expect(hudSrc).toContain("import MatchScoreboard from '../components/MatchScoreboard.svelte'");
+      expect(hudSrc).toMatch(
+        /import MatchScoreboard(?:\s*,\s*\{[^}]*\})?\s+from '\.\.\/components\/MatchScoreboard\.svelte'/
+      );
       expect(hudSrc).toContain('<MatchScoreboard');
       expect(hudSrc).not.toContain('class="scoreboard-main-row"');
 

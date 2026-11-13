@@ -184,6 +184,7 @@ class UserProfileStore {
   public onUsernameChanged: ((newUsername: string) => void) | null = null;
 
   constructor() {
+    gameUI.setAuthStatusReader(() => Boolean(this.isAuthenticated && !this.isGuest));
     this.loadPersistedSession();
     void this.handleOAuthRedirect();
   }

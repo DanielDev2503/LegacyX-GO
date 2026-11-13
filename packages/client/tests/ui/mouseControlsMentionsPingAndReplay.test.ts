@@ -172,14 +172,14 @@ describe('Gate 6: Mouse Controls, Unique Keybinds, @Mentions, Floating Point Fil
       const lxr = matchRecorder.stop();
       expect(matchRecorder.isRecording).toBe(false);
       expect(lxr).not.toBeNull();
-      expect(lxr!.magic).toBe('LXR2');
+      expect(lxr!.magic).toBe('LXR3');
       expect(lxr!.frames.length).toBe(1);
       expect(lxr!.goals.length).toBe(1);
       expect(lxr!.goals[0]!.scorerName).toBe('CyberPro');
 
       const serialized = JSON.stringify(lxr);
       const parsed = matchRecorder.parseReplayText(serialized);
-      expect(parsed.magic).toBe('LXR2');
+      expect(parsed.magic).toBe('LXR3');
       expect(parsed.roomName).toBe('Final Clasificatoria');
       expect(parsed.redScore).toBe(1);
 

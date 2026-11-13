@@ -714,7 +714,7 @@
               <!-- Scoreboard Top-Center (<MatchScoreboard /> + 30s warning + Golden Goal metallic ball SVG) -->
               <div class="hud-scoreboard-wrap" class:warning-pulse={hudIsWarning}>
                 <MatchScoreboard
-                  design={hudScoreboardDesign === 'futsal' ? 'original' : hudScoreboardDesign}
+                  design={hudScoreboardDesign}
                   redScore={hudRedScore}
                   blueScore={hudBlueScore}
                   clockText={formatHudClock(hudMatchTimer)}

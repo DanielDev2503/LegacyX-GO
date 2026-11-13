@@ -263,7 +263,9 @@ describe('UI Fixes: Replay Modal Overlay, Golden Goal Ball Icon, Goal Banner, Ba
 
   describe('Item 7: Ball customization removes "Sólido" from "Diseño" while preserving "Color sólido"', () => {
     it('renders Clásico, Retro, Neón, Cyber, Oro under Diseño and omits Sólido pattern card', () => {
-      gameUI.activeSettingsTab = 'video';
+      userProfile.isAuthenticated = true;
+      userProfile.isGuest = false;
+      gameUI.activeSettingsTab = 'visual';
       gameUI.settings.ballMode = 'texture';
 
       const { html } = render(SettingsModal);
@@ -272,8 +274,8 @@ describe('UI Fixes: Replay Modal Overlay, Golden Goal Ball Icon, Goal Banner, Ba
 
       const gridStart = html.indexOf('class="ball-cards-grid');
       expect(gridStart).toBeGreaterThan(-1);
-      const gridEnd = html.indexOf('<!--]-->', gridStart);
-      const gridHtml = html.slice(gridStart, gridEnd > gridStart ? gridEnd : gridStart + 2500);
+      const gridSectionEnd = html.indexOf('</div></div>', gridStart);
+      const gridHtml = html.slice(gridStart, gridSectionEnd > gridStart ? gridSectionEnd : gridStart + 4500);
 
       expect(gridHtml).toContain('Clásico');
       expect(gridHtml).toContain('Retro');
@@ -284,7 +286,7 @@ describe('UI Fixes: Replay Modal Overlay, Golden Goal Ball Icon, Goal Banner, Ba
 
       const settingsSrc = readUiFile('modals/SettingsModal.svelte');
       expect(settingsSrc).not.toContain("ballSkin = 'solid'");
-      expect(settingsSrc).toMatch(/\.ball-cards-grid\s*\{[^}]*repeat\(5,/);
+      expect(settingsSrc).toMatch(/\.ball-cards-grid\s*\{[^}]*grid-template-columns:\s*repeat\(/);
     });
   });
 

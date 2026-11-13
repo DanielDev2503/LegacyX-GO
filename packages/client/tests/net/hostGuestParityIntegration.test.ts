@@ -5,6 +5,8 @@ import {
   BinaryProtocol,
   DEFAULT_GAMEPLAY_CONFIG,
   EngineInstance,
+  MatchPhase,
+  applyPredictiveRenderSeparation,
   createStadium,
   type GameStateSnapshot
 } from '@legacyx/core';
@@ -13,6 +15,7 @@ import { NetworkClient } from '../../src/net/NetworkClient.js';
 import { NetworkHost } from '../../src/net/NetworkHost.js';
 import { GameApp } from '../../src/net/GameApp.js';
 import { ClientPredictionReconciler } from '../../src/net/ClientPrediction.js';
+import { matchRecorder } from '../../src/recorder/MatchRecorder.svelte.js';
 import {
   gameUI,
   DEFAULT_PHYSICS_MODIFIERS,
@@ -801,6 +804,199 @@ describe('Task 6: Strict Host & Non-Host Parity Integration', () => {
 
       host.destroy();
       netClient.disconnect();
+    });
+  });
+
+  describe('Wave-3 Integration: GOAL_REPLAY + Zero Overlap + LXR3 Timeline + Guest Auth Gating', () => {
+    it('wires userProfile auth reader into gameUI so guests fall back cleanly without circular imports', () => {
+      userProfile.isAuthenticated = false;
+      userProfile.isGuest = true;
+      gameUI.settings.ballMode = 'color';
+      gameUI.settings.ballSkin = 'wc2026';
+      gameUI.settings.ballCustomColor = '#ff00aa';
+      (gameUI.settings as any).scoreboardDesign = 'wc2026';
+
+      expect(gameUI.isAuthenticatedUser).toBe(false);
+      expect(gameUI.effectiveBallMode).toBe('texture');
+      expect(gameUI.effectiveBallSkin).toBe('classic');
+      expect(gameUI.effectiveBallCustomColor).toBe('#ffffff');
+      expect(gameUI.effectiveScoreboardDesign).toBe('original');
+
+      userProfile.isAuthenticated = true;
+      userProfile.isGuest = false;
+      expect(gameUI.isAuthenticatedUser).toBe(true);
+      expect(gameUI.effectiveBallMode).toBe('color');
+      expect(gameUI.effectiveBallSkin).toBe('wc2026');
+      expect(gameUI.effectiveBallCustomColor).toBe('#ff00aa');
+      expect(gameUI.effectiveScoreboardDesign).toBe('wc2026');
+
+      const profileSrc = readClientFile('ui/state/userProfile.svelte.ts');
+      expect(profileSrc).toContain('gameUI.setAuthStatusReader(');
+    });
+
+    it('synchronizes GOAL_REPLAY + scorer-only skipGoalReplay across Host, Guest, and App.svelte wiring', () => {
+      const app = new GameApp();
+      const engine = new EngineInstance('mediano');
+      engine.setPlayerTeam(1, 'red');
+      engine.setPlayerTeam(2, 'blue');
+      engine.startMatch(false);
+      engine.fsm.startPlaying();
+
+      gameUI.isHost = true;
+      gameUI.isPracticeMode = false;
+      gameUI.localPlayerId = 1;
+      app.attachHostEngine(engine);
+
+      // Force goal scored by player 2 while local host is player 1
+      engine.lastGoalScorerId = 2;
+      (engine as any).goalReplayClip = [engine.getState()];
+      (engine as any).goalReplayCursor = 0;
+      (engine.fsm as any).state = MatchPhase.GOAL_REPLAY;
+      gameUI.handleMatchPhaseTransition(MatchPhase.GOAL_REPLAY);
+      gameUI.activeGoalScorerId = 2;
+
+      // Non-scorer local host cannot skip another player's goal replay
+      expect(app.skipGoalReplay()).toBe(false);
+      expect(engine.fsm.state).toBe(MatchPhase.GOAL_REPLAY);
+
+      // Scorer can skip and resets activeGoalScorerId
+      gameUI.localPlayerId = 2;
+      expect(app.skipGoalReplay()).toBe(true);
+      expect(engine.fsm.state).toBe(MatchPhase.KICKOFF);
+      gameUI.handleMatchPhaseTransition(MatchPhase.KICKOFF);
+      expect(gameUI.activeGoalScorerId).toBeNull();
+
+      // Guest onGoalScorerIdChanged syncs activeGoalScorerId and resets on KICKOFF/STOP
+      const signaling = new SignalingClient('ws://localhost:8080', false);
+      const netClient = new NetworkClient(signaling, 'GuestTwo', 2);
+      const sentSkip: any[] = [];
+      (netClient as any).peer = {
+        sendReliable: (msg: any) => sentSkip.push(msg),
+        close: () => {}
+      };
+      netClient.onGoalScorerIdChanged = (scorerId) => {
+        gameUI.activeGoalScorerId = scorerId;
+      };
+      (netClient as any).handleReliableMessage({
+        type: 'ROOM_STATE_SYNC',
+        matchPhase: MatchPhase.GOAL_REPLAY,
+        lastGoalScorerId: 2,
+        playersList: []
+      });
+      expect(gameUI.activeGoalScorerId).toBe(2);
+      netClient.sendSkipGoalReplay();
+      expect(sentSkip).toEqual([{ type: 'SKIP_GOAL_REPLAY' }]);
+
+      gameUI.handleMatchPhaseTransition(MatchPhase.STOP);
+      expect(gameUI.activeGoalScorerId).toBeNull();
+
+      const appSrc = readClientFile('App.svelte');
+      expect(appSrc).toContain('gameApp.attachHostEngine(engine)');
+      expect(appSrc).toContain('MatchPhase.GOAL_REPLAY');
+      expect(appSrc).toContain('gameApp.skipGoalReplay(');
+      expect(appSrc).toContain('renderer.focusBallOnly = gameUI.isFocusingBall || liveRenderPhase === MatchPhase.GOAL_REPLAY');
+
+      netClient.disconnect();
+    });
+
+    it('wires applyPredictiveRenderSeparation, effectiveExtrapolationMs, and effectiveBall visuals in App.svelte', () => {
+      const localDisc = { x: 10, y: 0, vx: 120, vy: 0, radius: 15 };
+      const remoteOther = [
+        { id: 0, team: 0, x: 18, y: 0, vx: 0, vy: 0, radius: 5.8 },
+        { id: 2, team: 2, x: 25, y: 0, vx: 0, vy: 0, radius: 15 }
+      ];
+      applyPredictiveRenderSeparation(localDisc, remoteOther, 420, 200);
+      expect(localDisc.x).toBeLessThan(10);
+      expect(remoteOther[0]!.x).toBe(18);
+      expect(remoteOther[1]!.x).toBe(25);
+
+      const signaling = new SignalingClient('ws://localhost:8080', false);
+      const netClient = new NetworkClient(signaling, 'GuestExtrapolation', 2);
+      gameUI.settings.autoExtrapolation = true;
+      gameUI.pingMs = 120;
+      netClient.setAutoExtrapolationMs(gameUI.effectiveExtrapolationMs);
+      expect((netClient as any).autoExtrapolationMs).toBe(gameUI.effectiveExtrapolationMs);
+
+      const appSrc = readClientFile('App.svelte');
+      expect(appSrc).toContain('applyPredictiveRenderSeparation(');
+      expect(appSrc).toContain('gameApp.networkClient.setAutoExtrapolationMs(effExtrapMs)');
+      expect(appSrc).toContain('gameUI.effectiveBallSkin');
+      expect(appSrc).toContain('gameUI.effectiveBallMode');
+      expect(appSrc).toContain('gameUI.effectiveBallCustomColor');
+
+      netClient.disconnect();
+    });
+
+    it('wires full LXR3 HUD timeline metadata and events into MatchRecorder', () => {
+      userProfile.isAuthenticated = true;
+      userProfile.isGuest = false;
+      gameUI.roomType = 'ranked';
+      gameUI.isPracticeMode = false;
+      (gameUI.settings as any).scoreboardDesign = 'wc2022';
+      gameUI.settings.theme = 'light';
+      gameUI.settings.ballMode = 'color';
+      gameUI.settings.ballSkin = 'wc2022';
+      gameUI.settings.ballCustomColor = '#38bdf8';
+
+      matchRecorder.start(null, {
+        roomName: 'Copa LXR3',
+        roomType: 'ranked',
+        stadiumId: 'mediano',
+        scoreboardDesign: 'wc2022',
+        theme: 'light',
+        ballMode: 'color',
+        ballSkin: 'wc2022',
+        ballCustomColor: '#38bdf8',
+        chatOpacity: 0.75,
+        minimapEnabled: true,
+        minimapOpacity: 0.55,
+        minimapSize: 'large',
+        minimapCameraFrustum: false
+      });
+
+      matchRecorder.recordFrame({
+        tick: 1,
+        phase: MatchPhase.PLAYING,
+        matchTimer: 5,
+        redScore: 1,
+        blueScore: 0,
+        soundMask: 0,
+        discs: [{ id: 0, team: 0, x: 0, y: 0, vx: 0, vy: 0, flags: 0 }]
+      });
+      matchRecorder.recordTelemetry(28, 120);
+      matchRecorder.recordScoreEvent({
+        kind: 'GOL',
+        points: 100,
+        label: 'GOL',
+        playerName: 'CapRojo',
+        team: 'red',
+        color: '#ff0055'
+      });
+      matchRecorder.recordUiOverlay({
+        overlay: 'NONE',
+        activeSlide: 'MENU',
+        isPaused: false,
+        postMatchStats: null
+      });
+
+      const clip = matchRecorder.stop();
+      expect(clip?.magic).toBe('LXR3');
+      if (clip?.magic !== 'LXR3') throw new Error('Expected LXR3');
+      expect(clip.roomType).toBe('ranked');
+      expect(clip.scoreboardDesign).toBe('wc2022');
+      expect(clip.theme).toBe('light');
+      expect(clip.ballMode).toBe('color');
+      expect(clip.ballCustomColor).toBe('#38bdf8');
+      expect(clip.hudEvents.some((e) => e.type === 'telemetry')).toBe(true);
+      expect(clip.hudEvents.some((e) => e.type === 'score_event')).toBe(true);
+      expect(clip.hudEvents.some((e) => e.type === 'ui_overlay')).toBe(true);
+
+      const appSrc = readClientFile('App.svelte');
+      expect(appSrc).toContain('gameUI.onHudStateChange =');
+      expect(appSrc).toContain('matchRecorder.recordTelemetry(');
+      expect(appSrc).toContain('matchRecorder.recordScoreEvent(');
+      expect(appSrc).toContain('matchRecorder.recordUiOverlay(');
+      expect(appSrc).toContain('scoreboardDesign: gameUI.effectiveScoreboardDesign');
     });
   });
 });

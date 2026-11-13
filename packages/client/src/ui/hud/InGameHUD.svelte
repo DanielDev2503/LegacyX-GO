@@ -403,11 +403,46 @@
       typeof document !== 'undefined'
         ? (document.querySelector('.canvas-layer canvas') as HTMLCanvasElement | null)
         : null;
+    const rawChatOpacity = Number(gameUI.settings.chatOpacity ?? 85);
+    const rawMinimapOpacity = Number(gameUI.settings.minimapOpacity ?? 60);
     matchRecorder.toggle(canvas, {
       roomName: gameUI.activeRoomName || 'Partida LegacyX-GO',
+      roomType: gameUI.roomType === 'ranked' && !gameUI.isPracticeMode ? 'ranked' : 'casual',
       stadiumId: gameUI.selectedStadiumId || 'mediano',
       redKit: (redActiveKit ?? gameUI.redTeamKit) as any,
       blueKit: (blueActiveKit ?? gameUI.blueTeamKit) as any,
+      scoreboardDesign: gameUI.effectiveScoreboardDesign as any,
+      theme: gameUI.theme,
+      ballMode: gameUI.effectiveBallMode,
+      ballSkin: gameUI.effectiveBallSkin as any,
+      ballCustomColor: gameUI.effectiveBallCustomColor,
+      chatOpacity: rawChatOpacity > 1 ? rawChatOpacity / 100 : rawChatOpacity,
+      minimapEnabled: gameUI.settings.minimapEnabled !== false,
+      minimapOpacity: rawMinimapOpacity > 1 ? rawMinimapOpacity / 100 : rawMinimapOpacity,
+      minimapSize: gameUI.settings.minimapSize,
+      minimapCameraFrustum: gameUI.settings.minimapCameraFrustum !== false,
+      initialUiOverlay: {
+        overlay: gameUI.activeModal ?? 'NONE',
+        activeSlide: gameUI.activeSlide ?? 'MENU',
+        isPaused: gameUI.matchPhase === 2.1 || gameUI.fsmPhase === 'PAUSED',
+        postMatchStats: (gameUI.lastMatchStats as Record<string, unknown> | null) ?? null
+      },
+      initialChatMessages: gameUI.chatMessages.slice(-20).map((entry) => ({
+        t: 0,
+        kind:
+          entry.isSystem || entry.team === 'SYSTEM' || entry.senderTeam === 'system'
+            ? ('system' as const)
+            : ('chat' as const),
+        sender: entry.sender || '',
+        ...(entry.senderTeam === 'red' || entry.team === 'RED'
+          ? { senderTeam: 'RED' as const }
+          : entry.senderTeam === 'blue' || entry.team === 'BLUE'
+            ? { senderTeam: 'BLUE' as const }
+            : entry.senderTeam === 'spectator' || entry.team === 'SPEC'
+              ? { senderTeam: 'SPECTATOR' as const }
+              : {}),
+        text: entry.text || ''
+      })),
       players: gameUI.rosterPlayers.map((p, idx) => ({
         id: Number(p.id) || idx + 1,
         nickname: p.name ?? p.nickname ?? 'Jugador',

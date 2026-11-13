@@ -385,8 +385,8 @@ describe('Task 4: Gzip LXR2, JWT Refresh, Cloud Replays & 16:9 HUD Compositor', 
       // Must NOT trigger any .lxr or video browser download
       expect(createElementSpy).not.toHaveBeenCalled();
 
-      expect(last?.magic).toBe('LXR2');
-      if (last?.magic !== 'LXR2') throw new Error('Expected LXR2');
+      expect(last?.magic).toBe('LXR3');
+      if (last?.magic !== 'LXR3') throw new Error('Expected LXR3');
       expect(last.roomName).toBe('Arena Neon');
       expect(last.recordingPlayerId).toBe(3);
       expect(last.cameraZoom).toBe(0.9);

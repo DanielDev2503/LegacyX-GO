@@ -20,6 +20,7 @@
     INPUT_FLAG_TYPING,
     INPUT_FLAG_MOUSE_AIM,
     INPUT_FLAG_MOUSE_ACTIVE,
+    applyPredictiveRenderSeparation,
     lerp
   } from '@legacyx/core';
 
@@ -125,6 +126,7 @@
     if (isHostInitial) {
       engine = new EngineInstance(gameUI.selectedStadiumId || 'mediano');
       testEngine = engine;
+      gameApp.attachHostEngine(engine);
       engine.isPracticeMode = Boolean(gameUI.isPracticeMode);
       engine.applyModifiers(gameUI.physicsModifiers);
       syncEngineMatchLimits(engine);
@@ -228,6 +230,42 @@
       if (sig === lastRecordedBannerSig) return;
       lastRecordedBannerSig = sig;
       matchRecorder.recordBanner(banner);
+    };
+
+    function recordCurrentUiOverlay(): void {
+      if (!matchRecorder.isRecording) return;
+      matchRecorder.recordUiOverlay({
+        overlay: gameUI.activeModal ?? 'NONE',
+        activeSlide: gameUI.activeSlide ?? 'MENU',
+        isPaused: gameUI.matchPhase === MatchPhase.PAUSE || gameUI.fsmPhase === 'PAUSED',
+        postMatchStats: (gameUI.lastMatchStats as Record<string, unknown> | null) ?? null
+      });
+    }
+
+    gameUI.onHudStateChange = (kind, detail) => {
+      if (!matchRecorder.isRecording) return;
+      if (kind === 'telemetry' && detail) {
+        matchRecorder.recordTelemetry(Number(detail.pingMs ?? 0), Number(detail.fps ?? 60));
+      } else if (kind === 'score_event' && detail) {
+        const ptsText = String(detail.pointsText ?? '0').replace(/[^\d+-]/g, '');
+        matchRecorder.recordScoreEvent({
+          kind: String(detail.eventType || 'EVENT'),
+          points: parseInt(ptsText, 10) || 0,
+          label: String(detail.eventType || ''),
+          playerName: String(detail.playerName || ''),
+          team: detail.team === 'red' || detail.team === 'blue' ? detail.team : 'neutral',
+          ...(detail.color ? { color: String(detail.color) } : {})
+        });
+      } else if (kind === 'ui_overlay') {
+        matchRecorder.recordUiOverlay({
+          overlay: String(detail?.activeModal ?? gameUI.activeModal ?? 'NONE'),
+          activeSlide: String(detail?.activeSlide ?? gameUI.activeSlide ?? 'MENU'),
+          isPaused: gameUI.matchPhase === MatchPhase.PAUSE || gameUI.fsmPhase === 'PAUSED',
+          postMatchStats: (gameUI.lastMatchStats as Record<string, unknown> | null) ?? null
+        });
+      } else if (kind === 'kits_updated') {
+        syncRecorderMetadata();
+      }
     };
 
     function buildMatchStatsSnapshot(
@@ -429,6 +467,7 @@
         engine.applyModifiers(gameUI.physicsModifiers);
         wireHostEngineEvents(engine);
       }
+      gameApp.attachHostEngine(engine);
       const stadiumId = gameUI.selectedStadiumId || 'mediano';
       engine.isPracticeMode = true;
       engine.loadStadium(stadiumId);
@@ -536,6 +575,13 @@
 
         if (typeof payload?.redScore === 'number') gameUI.redScore = payload.redScore;
         if (typeof payload?.blueScore === 'number') gameUI.blueScore = payload.blueScore;
+        const scorerId =
+          typeof payload?.scorerId === 'number'
+            ? payload.scorerId
+            : typeof hostEngine.lastGoalScorerId === 'number'
+              ? hostEngine.lastGoalScorerId
+              : null;
+        gameUI.activeGoalScorerId = scorerId;
 
         matchRecorder.recordGoal({
           scoringTeam: payload?.scoringTeam === 'blue' ? 'blue' : 'red',
@@ -644,7 +690,12 @@
 
         if (newState === MatchPhase.PAUSE) {
           setAndBroadcastBanner({ kind: 'PAUSED' });
-        } else if (newState === MatchPhase.KICKOFF && prevState === MatchPhase.GOAL) {
+        } else if (newState === MatchPhase.GOAL_REPLAY) {
+          setAndBroadcastBanner({ kind: 'NONE' });
+        } else if (
+          newState === MatchPhase.KICKOFF &&
+          (prevState === MatchPhase.GOAL || prevState === MatchPhase.GOAL_REPLAY)
+        ) {
           soundFX.playWhistle();
           gameApp.networkHost?.broadcastGameFx('whistle');
           setAndBroadcastBanner({ kind: 'NONE' });
@@ -826,6 +877,14 @@
         return { inputMask: isTyping ? INPUT_FLAG_TYPING : 0, aimAngle: null, aimThrottle: 0 };
       }
 
+      const currentPhase = gameUI.isHost && engine ? engine.fsm.state : (currSnapshot?.phase ?? gameUI.matchPhase);
+      if (currentPhase === MatchPhase.GOAL_REPLAY) {
+        keyState.clear();
+        dashTriggered = false;
+        gameUI.isFocusingBall = false;
+        return { inputMask: 0, aimAngle: null, aimThrottle: 0 };
+      }
+
       const focusHeld = gameUI.keybinds.focusBall.some((k) => keyState.get(k));
       gameUI.isFocusingBall = focusHeld;
       renderer.focusBallOnly = focusHeld;
@@ -967,6 +1026,38 @@
       const isTyping = activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA');
       if (isTyping) {
         return;
+      }
+
+      if (
+        !e.repeat &&
+        (e.key === 'Enter' || e.code === 'Enter' || e.code === 'NumpadEnter') &&
+        gameUI.currentScreen === 'IN_GAME' &&
+        gameUI.activeModal === 'NONE'
+      ) {
+        const currentPhase = gameUI.isHost && engine ? engine.fsm.state : (currSnapshot?.phase ?? gameUI.matchPhase);
+        if (currentPhase === MatchPhase.GOAL_REPLAY) {
+          const activeFieldPlayers = gameUI.rosterPlayers.filter(
+            (p) => p.team === 'red' || p.team === 'blue'
+          ).length;
+          const isScorer =
+            gameUI.localPlayerId > 0 &&
+            gameUI.activeGoalScorerId !== null &&
+            gameUI.localPlayerId === gameUI.activeGoalScorerId;
+          const isSoloOrPractice = gameUI.isPracticeMode || activeFieldPlayers <= 1;
+          if (isScorer || isSoloOrPractice) {
+            e.preventDefault();
+            if (gameUI.isHost && engine) {
+              if (!gameApp.skipGoalReplay(engine)) {
+                engine.skipGoalReplay(gameUI.localPlayerId);
+              }
+              gameApp.syncMatchPhase(engine.fsm.state);
+              gameUI.handleMatchPhaseTransition(engine.fsm.state);
+            } else {
+              gameApp.skipGoalReplay();
+            }
+          }
+          return;
+        }
       }
 
       if (
@@ -1136,6 +1227,11 @@
 
     if (!isHostInitial && gameApp.networkClient) {
       gameApp.networkClient.onSnapshotDecoded = handleAuthoritativeSnapshot;
+      if (!gameApp.networkClient.onGoalScorerIdChanged) {
+        gameApp.networkClient.onGoalScorerIdChanged = (scorerId) => {
+          gameUI.activeGoalScorerId = scorerId;
+        };
+      }
     }
 
     const guestLocalInputMap = new Map<number, PlayerInput>();
@@ -1246,6 +1342,16 @@
       discs: []
     };
     const scratchDiscs: CompactDiscState[] = [];
+    const sepLocalDisc = { x: 0, y: 0, vx: 0, vy: 0, radius: 15 };
+    const sepOtherDiscs: Array<{
+      id: number;
+      team: number;
+      x: number;
+      y: number;
+      vx: number;
+      vy: number;
+      radius: number;
+    }> = [];
 
     function syncRecorderMetadata(): void {
       if (!matchRecorder.isRecording) return;
@@ -1260,8 +1366,11 @@
               : renderer.scale || gameUI.settings.cameraZoom || 1.0;
       const viewportWidth = canvasEl.clientWidth || canvasEl.width || window.innerWidth || 1280;
       const viewportHeight = canvasEl.clientHeight || canvasEl.height || window.innerHeight || 720;
+      const rawChatOpacity = Number(gameUI.settings.chatOpacity ?? 85);
+      const rawMinimapOpacity = Number(gameUI.settings.minimapOpacity ?? 60);
       matchRecorder.updateMetadata({
         roomName: gameUI.activeRoom?.name || gameUI.activeRoomName || 'Partida LegacyX-GO',
+        roomType: gameUI.roomType === 'ranked' && !gameUI.isPracticeMode ? 'ranked' : 'casual',
         stadiumId: gameUI.selectedStadiumId || 'mediano',
         redKit: gameUI.redCaptainKit as unknown as Record<string, unknown>,
         blueKit: gameUI.blueCaptainKit as unknown as Record<string, unknown>,
@@ -1271,6 +1380,16 @@
         viewportWidth,
         viewportHeight,
         timeLimitSeconds: Math.max(0, Number(gameUI.timeLimitMinutes ?? 3)) * 60,
+        scoreboardDesign: gameUI.effectiveScoreboardDesign as any,
+        theme: gameUI.theme,
+        ballMode: gameUI.effectiveBallMode,
+        ballSkin: gameUI.effectiveBallSkin as any,
+        ballCustomColor: gameUI.effectiveBallCustomColor,
+        chatOpacity: rawChatOpacity > 1 ? rawChatOpacity / 100 : rawChatOpacity,
+        minimapEnabled: gameUI.settings.minimapEnabled !== false,
+        minimapOpacity: rawMinimapOpacity > 1 ? rawMinimapOpacity / 100 : rawMinimapOpacity,
+        minimapSize: gameUI.settings.minimapSize,
+        minimapCameraFrustum: gameUI.settings.minimapCameraFrustum !== false,
         players: gameUI.rosterPlayers.map((rp) => ({
           id: rp.id,
           nickname: rp.nickname || rp.name || `P${rp.id}`,
@@ -1291,9 +1410,14 @@
       const alpha = Math.max(0, Math.min(1.0, (currentTime - lastSimTimestamp) / FIXED_DT_MS));
 
       // Sincronizar cámara, zoom y proyección 2D
+      const liveRenderPhase =
+        gameUI.isHost && engine ? engine.fsm.state : (currSnapshot?.phase ?? gameUI.matchPhase);
       renderer.camera.setZoom(gameUI.settings.cameraZoom || 1.0);
       renderer.scale = renderer.camera.zoom;
-      renderer.focusBallOnly = gameUI.isFocusingBall;
+      renderer.focusBallOnly = gameUI.isFocusingBall || liveRenderPhase === MatchPhase.GOAL_REPLAY;
+      if (renderer.theme !== gameUI.theme) {
+        renderer.setTheme(gameUI.theme);
+      }
 
       // Sincronizar ajustes reactivos del minimapa y chat en el renderer
       const sz = gameUI.settings.minimapSize;
@@ -1305,7 +1429,11 @@
       renderer.minimapCameraFrustum = gameUI.settings.minimapCameraFrustum;
       renderer.setChatBounds(measuredChatWidth, Math.max(measuredChatHeight, gameUI.chatHeight));
       renderer.screenShakeEnabled = gameUI.screenShake;
-      renderer.setExtrapolation(gameUI.extrapolationMs);
+      const effExtrapMs = gameUI.effectiveExtrapolationMs;
+      renderer.setExtrapolation(effExtrapMs);
+      if (!gameUI.isHost && gameApp.networkClient) {
+        gameApp.networkClient.setAutoExtrapolationMs(effExtrapMs);
+      }
       renderer.discRenderer.dampingBall = gameUI.modifiers.ballFriction ?? gameUI.modifiers.pitchFriction ?? 0.99;
       renderer.discRenderer.dampingPlayer = gameUI.modifiers.playerFriction ?? 0.96;
       renderer.setGoalNets(gameUI.isHost && engine ? engine.world.goalNets : null);
@@ -1316,9 +1444,9 @@
       renderer.setTeamKits(redActiveKit, blueActiveKit);
       renderer.discRenderer.ballRadius = gameUI.gameplayConfig.ballRadius || gameUI.modifiers.ballRadius || 5.8;
       renderer.discRenderer.playerRadius = gameUI.gameplayConfig.playerRadius || gameUI.modifiers.playerRadius || 15.0;
-      renderer.discRenderer.ballSkin = gameUI.settings.ballSkin as any;
-      renderer.discRenderer.ballMode = gameUI.settings.ballMode;
-      renderer.discRenderer.ballCustomColor = gameUI.settings.ballCustomColor;
+      renderer.discRenderer.ballSkin = gameUI.effectiveBallSkin as any;
+      renderer.discRenderer.ballMode = gameUI.effectiveBallMode;
+      renderer.discRenderer.ballCustomColor = gameUI.effectiveBallCustomColor;
       renderer.discRenderer.playerGlowEnabled = gameUI.settings.playerGlowEnabled !== false;
       renderer.discRenderer.ballTrailEnabled = gameUI.settings.ballTrailEnabled !== false;
 
@@ -1379,7 +1507,38 @@
             if (predDisc.isTyping) predFlags |= 1 << 5;
 
             scratchDiscs.length = 0;
+            sepOtherDiscs.length = 0;
             const inDiscs = interpSnap.discs;
+            const ballRad = renderer.discRenderer.ballRadius || 5.8;
+            const playerRad = renderer.discRenderer.playerRadius || 15.0;
+            sepLocalDisc.x = predX;
+            sepLocalDisc.y = predY;
+            sepLocalDisc.vx = predDisc.vel.x;
+            sepLocalDisc.vy = predDisc.vel.y;
+            sepLocalDisc.radius = playerRad;
+
+            for (let i = 0; i < inDiscs.length; i++) {
+              const d = inDiscs[i]!;
+              if (d.id !== localId) {
+                sepOtherDiscs.push({
+                  id: d.id,
+                  team: d.team,
+                  x: d.x,
+                  y: d.y,
+                  vx: d.vx,
+                  vy: d.vy,
+                  radius: d.id === 0 || d.team === 0 ? ballRad : playerRad
+                });
+              }
+            }
+
+            applyPredictiveRenderSeparation(
+              sepLocalDisc,
+              sepOtherDiscs,
+              renderer.stadium.halfWidth,
+              renderer.stadium.halfHeight
+            );
+
             for (let i = 0; i < inDiscs.length; i++) {
               const d = inDiscs[i]!;
               if (d.id === localId) {
@@ -1387,10 +1546,10 @@
                 scratchDiscs.push({
                   id: d.id,
                   team: d.team,
-                  x: predX,
-                  y: predY,
-                  vx: predDisc.vel.x,
-                  vy: predDisc.vel.y,
+                  x: sepLocalDisc.x,
+                  y: sepLocalDisc.y,
+                  vx: sepLocalDisc.vx,
+                  vy: sepLocalDisc.vy,
                   flags: predFlags || d.flags,
                   stamina: predDisc.stamina,
                   spin: d.spin,
@@ -1421,6 +1580,8 @@
           if (matchRecorder.isRecording && !wasRecordingPrevFrame) {
             lastRecordedBannerSig = '';
             syncRecorderMetadata();
+            matchRecorder.recordTelemetry(gameUI.pingMs, gameUI.fps);
+            recordCurrentUiOverlay();
             if (gameUI.activeBanner && gameUI.activeBanner.kind !== 'NONE') {
               gameUI.onBannerApplied?.(gameUI.activeBanner);
             }
@@ -1434,6 +1595,8 @@
         if (matchRecorder.isRecording && !wasRecordingPrevFrame) {
           lastRecordedBannerSig = '';
           syncRecorderMetadata();
+          matchRecorder.recordTelemetry(0, gameUI.fps);
+          recordCurrentUiOverlay();
           if (gameUI.activeBanner && gameUI.activeBanner.kind !== 'NONE') {
             gameUI.onBannerApplied?.(gameUI.activeBanner);
           }
@@ -1522,6 +1685,7 @@
       gameUI.onTriggerShake = null;
       gameUI.onChatAdded = undefined;
       gameUI.onBannerApplied = undefined;
+      gameUI.onHudStateChange = undefined;
       gameUI.isFocusingBall = false;
       chatResizeObserver?.disconnect();
       chatResizeObserver = null;
@@ -1539,6 +1703,7 @@
       window.removeEventListener('focusin', onFocusIn);
       renderer.destroy();
       rendererInstance = null;
+      gameApp.attachHostEngine(null);
       testEngine = null;
     };
   }

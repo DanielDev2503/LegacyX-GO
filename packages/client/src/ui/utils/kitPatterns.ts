@@ -39,7 +39,7 @@ export interface ResolvedKitStyle {
   hasOutline: boolean;
 }
 
-const KNOWN_PATTERNS = new Set<KitPatternId>([
+export const KIT_PATTERNS: readonly KitPatternId[] = [
   'solid',
   'vertical',
   'hoop',
@@ -52,7 +52,9 @@ const KNOWN_PATTERNS = new Set<KitPatternId>([
   'diagonal_checks',
   'cross',
   'chevrons'
-]);
+] as const;
+
+const KNOWN_PATTERNS = new Set<KitPatternId>(KIT_PATTERNS);
 
 export function normalizeKitPattern(pattern?: string | null): KitPatternId {
   if (pattern && KNOWN_PATTERNS.has(pattern as KitPatternId)) {
