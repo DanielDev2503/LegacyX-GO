@@ -373,10 +373,26 @@ describe('UI Fixes: Replay Modal Overlay, Golden Goal Ball Icon, Goal Banner, Ba
 
       vi.stubGlobal(
         'fetch',
-        vi.fn(async () => ({
-          ok: true,
-          json: async () => [{ username: 'CampeonPro', display_name: 'CampeonPro', name_changed: true }]
-        }))
+        vi.fn(async (url: string | URL | Request) => {
+          const target = String(url);
+          if (target.includes('/rpc/change_username_once')) {
+            return {
+              ok: true,
+              status: 200,
+              json: async () => ({
+                success: true,
+                username: 'CampeonPro',
+                display_name: 'CampeonPro',
+                name_changed: true
+              })
+            };
+          }
+          return {
+            ok: true,
+            status: 200,
+            json: async () => []
+          };
+        })
       );
       vi.stubGlobal('localStorage', {
         getItem: vi.fn(() => null),
