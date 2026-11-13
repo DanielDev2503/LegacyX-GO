@@ -9,9 +9,48 @@ import {
   type PlayerInput,
   CORE_TICK_RATE,
   CORE_DT,
+  INPUT_FLAG_UP,
+  INPUT_FLAG_DOWN,
+  INPUT_FLAG_LEFT,
+  INPUT_FLAG_RIGHT,
+  INPUT_FLAG_KICK,
+  INPUT_FLAG_DASH,
+  INPUT_FLAG_MAGNUS_LEFT,
+  INPUT_FLAG_MAGNUS_RIGHT,
   type ServerSignalMessage,
   type ClientSignalMessage
 } from '@legacyx/core';
+
+export type DedicatedPhysicsModifiers = PhysicsModifiers & {
+  staminaRegenMoving?: boolean;
+  staminaRegenMovingRate?: number;
+};
+
+export interface DedicatedGoalBanner {
+  kind: 'GOAL';
+  scoringTeam: 'red' | 'blue';
+  scorerName: string | null;
+  assisterName: string | null;
+  isOwnGoal: boolean;
+  redScore: number;
+  blueScore: number;
+  speedKmh?: number;
+  isPower?: boolean;
+  isCurve?: boolean;
+}
+
+export interface DedicatedScoreEvent {
+  type: 'SCORE_EVENT';
+  playerId: string;
+  playerName: string;
+  team: 'red' | 'blue' | 'spec';
+  text: string;
+  points: number;
+  x: number;
+  y: number;
+  color?: string;
+  category?: string;
+}
 
 export interface DedicatedHostConfig {
   signalingUrl: string;
@@ -21,7 +60,7 @@ export interface DedicatedHostConfig {
   maxPlayers: number;
   autoBalance: boolean;
   autoRestartDelayMs: number;
-  modifiers: PhysicsModifiers;
+  modifiers: DedicatedPhysicsModifiers;
 }
 
 export const DEFAULT_DEDICATED_CONFIG: DedicatedHostConfig = {
@@ -32,7 +71,11 @@ export const DEFAULT_DEDICATED_CONFIG: DedicatedHostConfig = {
   maxPlayers: 6,
   autoBalance: true,
   autoRestartDelayMs: 5000,
-  modifiers: { ...DEFAULT_PHYSICS_MODIFIERS }
+  modifiers: {
+    ...DEFAULT_PHYSICS_MODIFIERS,
+    staminaRegenMoving: false,
+    staminaRegenMovingRate: 25
+  }
 };
 
 export class DedicatedHost {
@@ -41,6 +84,10 @@ export class DedicatedHost {
   public ws: WebSocket | null = null;
   public hostPeerId: string | null = null;
   public roomId: string | null = null;
+  public lastGoalBanner: DedicatedGoalBanner | null = null;
+  public lastScoreEvent: DedicatedScoreEvent | null = null;
+  public onGoalBanner?: (banner: DedicatedGoalBanner) => void;
+  public onScoreEvent?: (event: DedicatedScoreEvent) => void;
 
   private isRunning: boolean = false;
   private tickInterval: NodeJS.Timeout | null = null;
@@ -54,7 +101,7 @@ export class DedicatedHost {
       ...DEFAULT_DEDICATED_CONFIG,
       ...partialConfig,
       modifiers: {
-        ...DEFAULT_PHYSICS_MODIFIERS,
+        ...DEFAULT_DEDICATED_CONFIG.modifiers,
         ...(partialConfig?.modifiers ?? {})
       }
     };
@@ -68,8 +115,67 @@ export class DedicatedHost {
   }
 
   private setupEngineHooks(): void {
-    this.engine.on('goal', ({ scoringTeam, redScore, blueScore }) => {
-      console.log(`[DedicatedHost] ¡GOL del equipo ${scoringTeam.toUpperCase()}! Marcador: ROJO ${redScore} - ${blueScore} AZUL`);
+    this.engine.on('goal', (payload: any) => {
+      const details = this.engine.lastGoalDetails as any;
+      const speedKmh =
+        typeof payload?.speedKmh === 'number'
+          ? payload.speedKmh
+          : typeof details?.speedKmh === 'number'
+            ? details.speedKmh
+            : undefined;
+      const isPower =
+        typeof payload?.isPower === 'boolean'
+          ? payload.isPower
+          : typeof details?.isPower === 'boolean'
+            ? details.isPower
+            : undefined;
+      const isCurve =
+        typeof payload?.isCurve === 'boolean'
+          ? payload.isCurve
+          : typeof details?.isCurve === 'boolean'
+            ? details.isCurve
+            : undefined;
+
+      const banner: DedicatedGoalBanner = {
+        kind: 'GOAL',
+        scoringTeam: payload.scoringTeam,
+        scorerName: payload.scorerName ?? details?.scorerName ?? null,
+        assisterName: payload.assisterName ?? details?.assisterName ?? null,
+        isOwnGoal: Boolean(payload.isOwnGoal ?? details?.isOwnGoal),
+        redScore: Number(payload.redScore ?? 0),
+        blueScore: Number(payload.blueScore ?? 0),
+        ...(speedKmh !== undefined ? { speedKmh } : {}),
+        ...(isPower !== undefined ? { isPower } : {}),
+        ...(isCurve !== undefined ? { isCurve } : {})
+      };
+      this.lastGoalBanner = banner;
+      this.onGoalBanner?.(banner);
+      console.log(
+        `[DedicatedHost] ¡GOL del equipo ${String(payload.scoringTeam).toUpperCase()}! Marcador: ROJO ${payload.redScore} - ${payload.blueScore} AZUL`
+      );
+    });
+
+    this.engine.on('score_event', (payload: any) => {
+      const pidNum = Number(payload?.playerId);
+      const fallbackName = Number.isFinite(pidNum) ? this.engine.playerNames.get(pidNum) : undefined;
+      const fallbackTeam = Number.isFinite(pidNum) ? this.engine.playerTeams.get(pidNum) : undefined;
+      const eventPacket: DedicatedScoreEvent = {
+        type: 'SCORE_EVENT',
+        playerId: String(payload?.playerId ?? ''),
+        playerName:
+          typeof payload?.playerName === 'string' && payload.playerName
+            ? payload.playerName
+            : (fallbackName ?? ''),
+        team: (payload?.team ?? fallbackTeam ?? 'spec') as 'red' | 'blue' | 'spec',
+        text: String(payload?.text ?? ''),
+        points: Number(payload?.points ?? 0),
+        x: Number(payload?.x ?? 0),
+        y: Number(payload?.y ?? 0),
+        ...(payload?.color !== undefined ? { color: payload.color } : {}),
+        ...(payload?.category !== undefined ? { category: payload.category } : {})
+      };
+      this.lastScoreEvent = eventPacket;
+      this.onScoreEvent?.(eventPacket);
     });
 
     this.engine.on('state_change', ({ newState, prevState }) => {
@@ -107,11 +213,16 @@ export class DedicatedHost {
     this.engine.step(this.pendingInputs);
     // Limpiar inputs transitorios (patadas, dashes)
     for (const [id, input] of this.pendingInputs.entries()) {
-      if (input.kick || input.dash) {
+      const hasTransientMask =
+        typeof input.inputMask === 'number' && (input.inputMask & (INPUT_FLAG_KICK | INPUT_FLAG_DASH)) !== 0;
+      if (input.kick || input.dash || hasTransientMask) {
         this.pendingInputs.set(id, {
           ...input,
           kick: false,
-          dash: false
+          dash: false,
+          ...(typeof input.inputMask === 'number'
+            ? { inputMask: input.inputMask & ~(INPUT_FLAG_KICK | INPUT_FLAG_DASH) }
+            : {})
         });
       }
     }
@@ -171,7 +282,20 @@ export class DedicatedHost {
   public receiveInput(peerId: string, input: PlayerInput): void {
     const playerId = this.peerToIdMap.get(peerId);
     if (playerId !== undefined) {
-      this.pendingInputs.set(playerId, input);
+      let normalized = input;
+      if (input.inputMask === undefined) {
+        let mask = 0;
+        if ((input.dirX ?? 0) < -0.3) mask |= INPUT_FLAG_LEFT;
+        if ((input.dirX ?? 0) > 0.3) mask |= INPUT_FLAG_RIGHT;
+        if ((input.dirY ?? 0) < -0.3) mask |= INPUT_FLAG_UP;
+        if ((input.dirY ?? 0) > 0.3) mask |= INPUT_FLAG_DOWN;
+        if (input.kick) mask |= INPUT_FLAG_KICK;
+        if (input.dash) mask |= INPUT_FLAG_DASH;
+        if (input.magnusLeft) mask |= INPUT_FLAG_MAGNUS_LEFT;
+        if (input.magnusRight) mask |= INPUT_FLAG_MAGNUS_RIGHT;
+        normalized = { ...input, inputMask: mask };
+      }
+      this.pendingInputs.set(playerId, normalized);
     }
   }
 
@@ -206,16 +330,16 @@ export class DedicatedHost {
       });
 
       this.ws.on('message', (data: Buffer | string) => {
-        let msg: ServerSignalMessage;
+        let msg: ServerSignalMessage | Record<string, any>;
         try {
           msg = JSON.parse(data.toString());
         } catch {
           return;
         }
 
-        switch (msg.type) {
+        switch ((msg as any).type) {
           case 'WELCOME': {
-            this.hostPeerId = msg.peerId;
+            this.hostPeerId = (msg as any).peerId;
             console.log(`[DedicatedHost] Asignado PeerID de anfitrión: ${this.hostPeerId}`);
 
             // Crear sala dedicada en el registro público
@@ -232,18 +356,33 @@ export class DedicatedHost {
           }
 
           case 'ROOM_CREATED': {
-            this.roomId = msg.roomId;
+            this.roomId = (msg as any).roomId;
             console.log(`[DedicatedHost] ¡SALA DEDICADA REGISTRADA EXITOSAMENTE! ID: ${this.roomId}`);
             break;
           }
 
+          case 'PING_PROBE': {
+            if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+              this.ws.send(
+                JSON.stringify({
+                  type: 'PONG_PROBE',
+                  roomId: (msg as any).roomId ?? this.roomId,
+                  requesterId: (msg as any).requesterId,
+                  clientSentAt: (msg as any).clientSentAt,
+                  probeId: (msg as any).probeId
+                })
+              );
+            }
+            break;
+          }
+
           case 'PEER_JOINED': {
-            this.registerPlayer(msg.peerId);
+            this.registerPlayer((msg as any).peerId);
             break;
           }
 
           case 'PEER_DISCONNECT': {
-            this.unregisterPlayer(msg.peerId);
+            this.unregisterPlayer((msg as any).peerId);
             break;
           }
 

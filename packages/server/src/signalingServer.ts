@@ -8,6 +8,7 @@ import {
   canJoinRankedRoom,
   formatGuestNickname,
   isGuestNickname,
+  validateRankedMatchReport,
   RANKED_GUEST_REJECT_MESSAGE
 } from './auth/AuthService.js';
 import type { RoomCategory } from '@legacyx/core';
@@ -200,9 +201,19 @@ export const getRuntimeIceServers = getMeteredIceServers;
 
 export const registry = new RoomRegistry();
 
-export function setupSignalingServer(wss: WebSocketServer) {
+export interface SignalingServerOptions {
+  pingProbeTimeoutMs?: number;
+}
+
+export function setupSignalingServer(wss: WebSocketServer, options?: SignalingServerOptions) {
   const peerSockets = new Map<string, WebSocket>();
   const socketToPeerId = new Map<WebSocket, string>();
+  const socketIdentity = new Map<WebSocket, { userId?: string; clientSessionId?: string }>();
+  const pendingPingProbes = new Map<
+    string,
+    { timer: NodeJS.Timeout; requesterId: string; hostPeerId: string }
+  >();
+  const pingProbeTimeoutMs = Math.max(20, options?.pingProbeTimeoutMs ?? 2500);
 
   function send(ws: WebSocket, data: object): void {
     if (ws && ws.readyState === WebSocket.OPEN) {
@@ -214,14 +225,71 @@ export function setupSignalingServer(wss: WebSocketServer) {
     }
   }
 
-  function getRealOnlineCount(): number {
-    let count = 0;
-    for (const client of wss.clients) {
-      if (client.readyState === WebSocket.OPEN) {
-        count++;
+  function updateSocketIdentity(socket: WebSocket, msg: any, explicitUserId?: string): void {
+    const current = { ...(socketIdentity.get(socket) ?? {}) };
+    let changed = false;
+
+    if (explicitUserId) {
+      if (current.userId !== explicitUserId) {
+        current.userId = explicitUserId;
+        changed = true;
+      }
+    } else if (msg && typeof msg === 'object' && 'userId' in msg) {
+      const nextUserId =
+        typeof msg.userId === 'string' && msg.userId.trim() ? msg.userId.trim() : undefined;
+      if (current.userId !== nextUserId) {
+        if (nextUserId) current.userId = nextUserId;
+        else delete current.userId;
+        changed = true;
       }
     }
-    return count;
+
+    if (msg && typeof msg === 'object' && 'clientSessionId' in msg) {
+      const nextSessionId =
+        typeof msg.clientSessionId === 'string' && msg.clientSessionId.trim()
+          ? msg.clientSessionId.trim()
+          : undefined;
+      if (current.clientSessionId !== nextSessionId) {
+        if (nextSessionId) current.clientSessionId = nextSessionId;
+        else delete current.clientSessionId;
+        changed = true;
+      }
+    }
+
+    if (changed) {
+      if (current.userId || current.clientSessionId) {
+        socketIdentity.set(socket, current);
+      } else {
+        socketIdentity.delete(socket);
+      }
+    }
+  }
+
+  function clearPendingProbesForPeers(peerIds: Iterable<string>): void {
+    const peerSet = new Set(peerIds);
+    for (const [key, entry] of pendingPingProbes.entries()) {
+      if (peerSet.has(entry.requesterId) || peerSet.has(entry.hostPeerId)) {
+        clearTimeout(entry.timer);
+        pendingPingProbes.delete(key);
+      }
+    }
+  }
+
+  function getRealOnlineCount(): number {
+    const seenKeys = new Set<string>();
+    let anonymousCount = 0;
+    for (const client of wss.clients) {
+      if (client.readyState !== WebSocket.OPEN) continue;
+      const ident = socketIdentity.get(client);
+      if (ident?.userId) {
+        seenKeys.add(`user:${ident.userId}`);
+      } else if (ident?.clientSessionId) {
+        seenKeys.add(`session:${ident.clientSessionId}`);
+      } else {
+        anonymousCount++;
+      }
+    }
+    return seenKeys.size + anonymousCount;
   }
 
   function broadcastRoomList(): void {
@@ -360,12 +428,16 @@ export function setupSignalingServer(wss: WebSocketServer) {
 
   wss.on('close', () => {
     clearInterval(heartbeatInterval);
+    for (const entry of pendingPingProbes.values()) {
+      clearTimeout(entry.timer);
+    }
+    pendingPingProbes.clear();
   });
 
   wss.on('connection', async (socket: WebSocket, req?: IncomingMessage) => {
     const ws = socket as AliveWebSocket;
     ws.isAlive = true;
-    ws.rttMs = 24;
+    ws.rttMs = undefined;
     ws.detectedCountry = resolveCountryCode({ headers: req?.headers });
     const initialPeerId = randomUUID().slice(0, 8);
     ws.peerId = initialPeerId;
@@ -373,6 +445,10 @@ export function setupSignalingServer(wss: WebSocketServer) {
 
     peerSockets.set(initialPeerId, socket);
     socketToPeerId.set(socket, initialPeerId);
+
+    ws.on('error', () => {
+      socketIdentity.delete(socket);
+    });
 
     const iceServers = await getMeteredIceServers();
     if (socket.readyState === WebSocket.OPEN) {
@@ -405,7 +481,7 @@ export function setupSignalingServer(wss: WebSocketServer) {
       ws.isAlive = true;
       if (ws.lastPingSentAt) {
         const measured = Math.max(1, Math.round(Date.now() - ws.lastPingSentAt));
-        ws.rttMs = ws.rttMs ? Math.round(ws.rttMs * 0.65 + measured * 0.35) : measured;
+        ws.rttMs = ws.rttMs !== undefined ? Math.round(ws.rttMs * 0.65 + measured * 0.35) : measured;
         if (ws.peerId) {
           const room = registry.getRoomOfPeer(ws.peerId);
           if (room && room.hostPeerId === ws.peerId) {
@@ -459,14 +535,116 @@ export function setupSignalingServer(wss: WebSocketServer) {
 
           case 'ROOM_PING_PROBE': {
             const roomId = String(msg.roomId || '');
+            const clientSentAt =
+              typeof msg.clientSentAt === 'number' && Number.isFinite(msg.clientSentAt)
+                ? msg.clientSentAt
+                : Date.now();
+            const probeId = typeof msg.probeId === 'string' ? msg.probeId : undefined;
             const targetRoom = registry.getRoomById(roomId);
-            const hostPing = targetRoom?.hostPingMs ?? 20;
-            const clientPing = ws.rttMs ?? 20;
-            const estimatedPing = Math.max(8, Math.round((clientPing + hostPing) * 0.75));
-            send(ws, {
+            const hostWs = targetRoom ? peerSockets.get(targetRoom.hostPeerId) : undefined;
+
+            const sendFallback = (requesterWs: AliveWebSocket, timedOut: boolean): void => {
+              if (targetRoom?.isDedicated) {
+                const pingMs = Math.max(
+                  1,
+                  Math.round(requesterWs.rttMs ?? Math.max(1, Date.now() - clientSentAt))
+                );
+                send(requesterWs, {
+                  type: 'ROOM_PING_RESULT',
+                  roomId,
+                  pingMs,
+                  ping: pingMs,
+                  clientSentAt,
+                  probeId,
+                  ...(timedOut ? { timedOut: true } : {})
+                });
+                return;
+              }
+              const pingMs = timedOut ? Math.max(1, Math.round(Date.now() - clientSentAt)) : null;
+              send(requesterWs, {
+                type: 'ROOM_PING_RESULT',
+                roomId,
+                pingMs,
+                ping: pingMs,
+                clientSentAt,
+                probeId,
+                ...(timedOut ? { timedOut: true } : {}),
+                unreachable: true
+              });
+            };
+
+            if (!targetRoom || !hostWs || hostWs.readyState !== WebSocket.OPEN) {
+              sendFallback(ws, false);
+              break;
+            }
+
+            const probeKey = `${roomId}:${effectivePeerId}:${probeId ?? ''}`;
+            const prevPending = pendingPingProbes.get(probeKey);
+            if (prevPending) {
+              clearTimeout(prevPending.timer);
+              pendingPingProbes.delete(probeKey);
+            }
+
+            const timer = setTimeout(() => {
+              pendingPingProbes.delete(probeKey);
+              const requesterWs = peerSockets.get(effectivePeerId) as AliveWebSocket | undefined;
+              if (!requesterWs || requesterWs.readyState !== WebSocket.OPEN) return;
+              sendFallback(requesterWs, true);
+            }, pingProbeTimeoutMs);
+
+            pendingPingProbes.set(probeKey, {
+              timer,
+              requesterId: effectivePeerId,
+              hostPeerId: targetRoom.hostPeerId
+            });
+
+            send(hostWs, {
+              type: 'PING_PROBE',
+              roomId,
+              requesterId: effectivePeerId,
+              clientSentAt,
+              probeId
+            });
+            break;
+          }
+
+          case 'PONG_PROBE': {
+            const roomId = String(msg.roomId || '');
+            const requesterId = String(msg.requesterId || '');
+            const probeId = typeof msg.probeId === 'string' ? msg.probeId : undefined;
+            const targetRoom = registry.getRoomById(roomId);
+            if (
+              !targetRoom ||
+              (targetRoom.hostPeerId !== effectivePeerId && !ws.peerIds?.has(targetRoom.hostPeerId))
+            ) {
+              break;
+            }
+
+            const probeKey = `${roomId}:${requesterId}:${probeId ?? ''}`;
+            const pending = pendingPingProbes.get(probeKey);
+            if (pending) {
+              clearTimeout(pending.timer);
+              pendingPingProbes.delete(probeKey);
+            }
+
+            const requesterWs = peerSockets.get(requesterId) as AliveWebSocket | undefined;
+            if (!requesterWs || requesterWs.readyState !== WebSocket.OPEN) {
+              break;
+            }
+
+            const rawSentAt = Number(msg.clientSentAt);
+            const hasValidSentAt = Number.isFinite(rawSentAt) && rawSentAt > 0;
+            const pingMs = hasValidSentAt
+              ? Math.max(1, Math.round(Date.now() - rawSentAt))
+              : Math.max(1, Math.round((requesterWs.rttMs ?? 1) + (ws.rttMs ?? 0)));
+
+            send(requesterWs, {
               type: 'ROOM_PING_RESULT',
               roomId,
-              ping: estimatedPing
+              pingMs,
+              ping: pingMs,
+              clientSentAt: msg.clientSentAt,
+              probeId: msg.probeId
             });
             break;
           }
@@ -537,6 +715,8 @@ export function setupSignalingServer(wss: WebSocketServer) {
               hostAccessToken: accessToken
             });
 
+            updateSocketIdentity(socket, msg, hostUserId);
+
             send(socket, {
               type: 'ROOM_CREATED',
               roomId: room.id,
@@ -570,13 +750,21 @@ export function setupSignalingServer(wss: WebSocketServer) {
             break;
           }
 
+          case 'IDENTIFY':
           case 'ROOM_LIST':
           case 'LIST_ROOMS':
           case 'GET_ROOMS':
           case 'JOIN_LOBBY': {
-            const activePeerIds = new Set(peerSockets.keys());
-            const publicRooms = registry.getPublicRooms(activePeerIds);
-            send(socket, { type: 'room_list', rooms: publicRooms, onlineCount: getRealOnlineCount() });
+            const prevOnline = getRealOnlineCount();
+            updateSocketIdentity(socket, msg);
+            const nextOnline = getRealOnlineCount();
+            if (nextOnline !== prevOnline) {
+              broadcastRoomList();
+            } else {
+              const activePeerIds = new Set(peerSockets.keys());
+              const publicRooms = registry.getPublicRooms(activePeerIds);
+              send(socket, { type: 'room_list', rooms: publicRooms, onlineCount: nextOnline });
+            }
             break;
           }
 
@@ -647,6 +835,7 @@ export function setupSignalingServer(wss: WebSocketServer) {
             }
 
             const room = result.room;
+            updateSocketIdentity(socket, msg, joinerUserId);
 
             send(socket, {
               type: 'ROOM_JOINED',
@@ -730,26 +919,63 @@ export function setupSignalingServer(wss: WebSocketServer) {
               return;
             }
 
-            const reportRes = await authService.reportRankedMatch({
+            if (
+              !room ||
+              room.roomType !== 'ranked' ||
+              (room.hostPeerId !== effectivePeerId && !ws.peerIds?.has(room.hostPeerId))
+            ) {
+              send(socket, {
+                type: 'RANKED_MATCH_RESULT',
+                roomId: String(msg.roomId || room?.id || ''),
+                success: false,
+                error: 'La sala no es Clasificatoria o no pertenece al anfitrión autorizado.'
+              });
+              return;
+            }
+
+            const reportPayload = {
               matchToken: String(msg.matchToken || ''),
               hostUserId: hostProfile.id,
-              stadiumId: String(msg.stadiumId || room?.stadiumId || 'mediano'),
-              durationSeconds: Number(msg.durationSeconds || 0),
-              redScore: Number(msg.redScore || 0),
-              blueScore: Number(msg.blueScore || 0),
-              winner: msg.winner === 'red' || msg.winner === 'blue' ? msg.winner : 'draw',
-              status: msg.status === 'ABORTED' ? 'ABORTED' : 'COMPLETED',
+              stadiumId: String(msg.stadiumId || room.stadiumId || 'mediano'),
+              durationSeconds: typeof msg.durationSeconds === 'number' ? msg.durationSeconds : Number.NaN,
+              redScore: typeof msg.redScore === 'number' ? msg.redScore : Number.NaN,
+              blueScore: typeof msg.blueScore === 'number' ? msg.blueScore : Number.NaN,
+              winner:
+                msg.winner === 'red' || msg.winner === 'blue' || msg.winner === 'draw'
+                  ? msg.winner
+                  : String(msg.winner || ''),
+              status:
+                msg.status === 'ABORTED'
+                  ? ('ABORTED' as const)
+                  : msg.status === undefined || msg.status === 'COMPLETED'
+                    ? ('COMPLETED' as const)
+                    : (msg.status as any),
               participants: Array.isArray(msg.participants) ? msg.participants : [],
               accessToken
-            });
+            };
 
-            if (room && room.activeMatchToken === msg.matchToken) {
+            const validation = validateRankedMatchReport(reportPayload, {
+              expectedMatchToken: room.activeMatchToken ?? null
+            });
+            if (!validation.valid) {
+              send(socket, {
+                type: 'RANKED_MATCH_RESULT',
+                roomId: String(msg.roomId || room.id || ''),
+                success: false,
+                error: validation.error || 'Reporte clasificatorio inválido.'
+              });
+              return;
+            }
+
+            const reportRes = await authService.reportRankedMatch(reportPayload);
+
+            if (room.activeMatchToken === msg.matchToken) {
               room.activeMatchToken = null;
             }
 
             send(socket, {
               type: 'RANKED_MATCH_RESULT',
-              roomId: String(msg.roomId || room?.id || ''),
+              roomId: String(msg.roomId || room.id || ''),
               success: reportRes.success,
               status: reportRes.status,
               error: reportRes.error
@@ -831,6 +1057,8 @@ export function setupSignalingServer(wss: WebSocketServer) {
         peerSockets.delete(pid);
       }
       socketToPeerId.delete(socket);
+      socketIdentity.delete(socket);
+      clearPendingProbesForPeers(allSocketPeerIds);
 
       handlePeerLeave(allSocketPeerIds);
       registry.purgeInactiveRooms(new Set(peerSockets.keys()));
@@ -838,7 +1066,7 @@ export function setupSignalingServer(wss: WebSocketServer) {
     });
   });
 
-  return { registry, peerSockets };
+  return { registry, peerSockets, getRealOnlineCount };
 }
 
 export const setupSignaling = setupSignalingServer;

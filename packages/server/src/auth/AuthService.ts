@@ -17,6 +17,7 @@ export interface UserProfileRecord {
   email: string;
   role: UserRole;
   isVerified: boolean;
+  nameChanged: boolean;
   elo: number;
   matchesPlayed: number;
   wins: number;
@@ -26,6 +27,170 @@ export interface UserProfileRecord {
   assists: number;
   saves: number;
   mvpCount: number;
+}
+
+export interface RankedMatchReportInput {
+  matchToken: string;
+  hostUserId?: string;
+  stadiumId?: string;
+  durationSeconds: number;
+  redScore: number;
+  blueScore: number;
+  winner: 'red' | 'blue' | 'draw' | string;
+  status?: 'COMPLETED' | 'ABORTED';
+  participants: RankedParticipantStat[];
+}
+
+export interface RankedMatchValidationResult {
+  valid: boolean;
+  error?: string;
+}
+
+const MAX_RANKED_DURATION_SECONDS = 7200;
+const MAX_RANKED_SCORE = 100;
+const MAX_RANKED_SAVES = 300;
+const MAX_RANKED_PARTICIPANTS = 30;
+
+export function validateRankedMatchReport(
+  report: RankedMatchReportInput,
+  options?: { expectedMatchToken?: string | null }
+): RankedMatchValidationResult {
+  if (!report || typeof report !== 'object') {
+    return { valid: false, error: 'Reporte clasificatorio inválido.' };
+  }
+  if (typeof report.matchToken !== 'string' || !report.matchToken.trim()) {
+    return { valid: false, error: 'MatchToken activo requerido.' };
+  }
+  if (options && 'expectedMatchToken' in options) {
+    if (!options.expectedMatchToken || report.matchToken !== options.expectedMatchToken) {
+      return { valid: false, error: 'MatchToken no corresponde a una partida clasificatoria activa.' };
+    }
+  }
+
+  const status =
+    report.status === 'ABORTED'
+      ? 'ABORTED'
+      : report.status === undefined || report.status === 'COMPLETED'
+        ? 'COMPLETED'
+        : null;
+  if (!status) {
+    return { valid: false, error: 'Estado de partida clasificatoria inválido.' };
+  }
+
+  if (
+    typeof report.durationSeconds !== 'number' ||
+    !Number.isFinite(report.durationSeconds) ||
+    report.durationSeconds < (status === 'ABORTED' ? 0 : 1) ||
+    report.durationSeconds > MAX_RANKED_DURATION_SECONDS
+  ) {
+    return { valid: false, error: 'Duración de partida fuera de límites válidos.' };
+  }
+
+  if (
+    typeof report.redScore !== 'number' ||
+    !Number.isInteger(report.redScore) ||
+    report.redScore < 0 ||
+    report.redScore > MAX_RANKED_SCORE ||
+    typeof report.blueScore !== 'number' ||
+    !Number.isInteger(report.blueScore) ||
+    report.blueScore < 0 ||
+    report.blueScore > MAX_RANKED_SCORE
+  ) {
+    return { valid: false, error: 'Marcador de partida inválido o fuera de rango.' };
+  }
+
+  if (status === 'ABORTED') {
+    return { valid: true };
+  }
+
+  const expectedWinner =
+    report.redScore > report.blueScore
+      ? 'red'
+      : report.blueScore > report.redScore
+        ? 'blue'
+        : 'draw';
+  if (report.winner !== expectedWinner) {
+    return { valid: false, error: 'El ganador declarado no coincide con el marcador.' };
+  }
+
+  if (
+    !Array.isArray(report.participants) ||
+    report.participants.length < 2 ||
+    report.participants.length > MAX_RANKED_PARTICIPANTS
+  ) {
+    return { valid: false, error: 'La partida clasificatoria requiere al menos un jugador por equipo.' };
+  }
+
+  const seenUsers = new Set<string>();
+  let redCount = 0;
+  let blueCount = 0;
+  let mvpCount = 0;
+  let redGoals = 0;
+  let blueGoals = 0;
+  let redAssists = 0;
+  let blueAssists = 0;
+
+  for (const p of report.participants) {
+    if (!p || typeof p !== 'object') {
+      return { valid: false, error: 'Datos de participante inválidos.' };
+    }
+    const uid = typeof p.userId === 'string' ? p.userId.trim() : '';
+    if (!uid || seenUsers.has(uid)) {
+      return { valid: false, error: 'Identificador de participante faltante o duplicado.' };
+    }
+    seenUsers.add(uid);
+
+    if (p.team !== 'red' && p.team !== 'blue') {
+      return { valid: false, error: 'Equipo de participante inválido en reporte clasificatorio.' };
+    }
+
+    if (
+      typeof p.goals !== 'number' ||
+      !Number.isInteger(p.goals) ||
+      p.goals < 0 ||
+      p.goals > MAX_RANKED_SCORE ||
+      typeof p.assists !== 'number' ||
+      !Number.isInteger(p.assists) ||
+      p.assists < 0 ||
+      p.assists > MAX_RANKED_SCORE ||
+      typeof p.saves !== 'number' ||
+      !Number.isInteger(p.saves) ||
+      p.saves < 0 ||
+      p.saves > MAX_RANKED_SAVES
+    ) {
+      return { valid: false, error: 'Estadísticas individuales negativas o fuera de rango.' };
+    }
+
+    if (p.elo !== undefined && (typeof p.elo !== 'number' || !Number.isFinite(p.elo) || p.elo < 0 || p.elo > 10000)) {
+      return { valid: false, error: 'ELO de participante inválido.' };
+    }
+
+    if (p.isMvp) mvpCount++;
+    if (p.team === 'red') {
+      redCount++;
+      redGoals += p.goals;
+      redAssists += p.assists;
+    } else {
+      blueCount++;
+      blueGoals += p.goals;
+      blueAssists += p.assists;
+    }
+  }
+
+  if (redCount < 1 || blueCount < 1) {
+    return { valid: false, error: 'Deben existir participantes en ambos equipos (Rojo y Azul).' };
+  }
+  if (mvpCount > 1) {
+    return { valid: false, error: 'Solo puede existir un MVP por partida.' };
+  }
+  if (redGoals > report.redScore || blueGoals > report.blueScore) {
+    return { valid: false, error: 'La suma de goles individuales excede el marcador del equipo.' };
+  }
+  if (redAssists > report.redScore || blueAssists > report.blueScore) {
+    return { valid: false, error: 'La suma de asistencias excede el marcador del equipo.' };
+  }
+
+  return { valid: true };
 }
 
 export interface LeaderboardEntry {
@@ -245,7 +410,7 @@ export class AuthService {
 
   public async fetchFullProfile(userId: string, bearerToken?: string): Promise<UserProfileRecord | null> {
     const profileRes = await fetch(
-      `${this.supabaseUrl}/rest/v1/profiles?id=eq.${encodeURIComponent(userId)}&select=id,username,display_name,email,role,is_verified`,
+      `${this.supabaseUrl}/rest/v1/profiles?id=eq.${encodeURIComponent(userId)}&select=id,username,display_name,email,role,is_verified,name_changed`,
       { headers: this.buildHeaders(bearerToken, Boolean(this.serviceRoleKey)) }
     );
     if (!profileRes.ok) return null;
@@ -267,6 +432,7 @@ export class AuthService {
       email: p.email,
       role: (p.role as UserRole) || 'jugador',
       isVerified: Boolean(p.is_verified),
+      nameChanged: Boolean(p.name_changed),
       elo: Number(r.elo ?? 1000),
       matchesPlayed: Number(r.matches_played ?? 0),
       wins: Number(r.wins ?? 0),
@@ -669,6 +835,11 @@ export class AuthService {
     const verified = this.verifyMatchToken(params.matchToken);
     if (!verified || verified.hostUserId !== params.hostUserId) {
       return { success: false, error: 'MatchToken inválido o no coincide con el Host autorizado.' };
+    }
+
+    const validation = validateRankedMatchReport(params);
+    if (!validation.valid) {
+      return { success: false, error: validation.error || 'Reporte clasificatorio inválido.' };
     }
 
     const status = params.status === 'ABORTED' ? 'ABORTED' : 'COMPLETED';

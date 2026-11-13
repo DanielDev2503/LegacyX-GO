@@ -239,11 +239,14 @@ export {
   canCreateRankedRoom,
   canJoinRankedRoom,
   calculateEloDelta,
+  validateRankedMatchReport,
   RANKED_GUEST_REJECT_MESSAGE,
   type UserRole,
   type UserProfileRecord,
   type LeaderboardCategory,
-  type LeaderboardEntry
+  type LeaderboardEntry,
+  type RankedMatchReportInput,
+  type RankedMatchValidationResult
 } from './auth/AuthService.js';
 export { MAX_ROOM_PLAYERS } from './rooms/RoomRegistry.js';
 export {
