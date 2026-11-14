@@ -423,6 +423,7 @@
       }
       gameUI.clearModalStack();
       gameUI.activeModal = 'TEAM_SELECT';
+      gameUI.syncUiOverlay();
     };
 
     gameUI.onTogglePause = () => {
@@ -752,6 +753,7 @@
         if (!gameUI.isSecondaryOverlayOpen) {
           gameUI.clearModalStack();
           gameUI.activeModal = 'TEAM_SELECT';
+          gameUI.syncUiOverlay();
         }
       });
     }

@@ -3,6 +3,7 @@ import { drawBallDesign, type BallSkin } from '../renderer/ballDesigns.js';
 import { GameRenderer } from '../renderer/GameRenderer.js';
 import type { PlayerVisualInfo } from '../renderer/DiscRenderer.js';
 import { drawKitPatternCanvas } from '../ui/utils/kitPatterns.js';
+import { WebmMuxer, type WebmVideoCodec } from './WebmMuxer.js';
 import type {
   LxrBannerEvent,
   LxrBannerPayload,
@@ -421,11 +422,11 @@ export function getTimelineBanners(replay: LxrReplayFile): LxrBannerEvent[] {
 export function getVisibleReplayChat(
   chatMessages: LxrChatEntry[] | undefined,
   currentTimeSec: number,
-  maxAgeSec: number = 18,
+  maxAgeSec: number = Infinity,
   maxLines: number = 6
 ): LxrChatEntry[] {
   if (!Array.isArray(chatMessages) || chatMessages.length === 0) return [];
-  const minTime = currentTimeSec - maxAgeSec;
+  const minTime = Number.isFinite(maxAgeSec) ? currentTimeSec - maxAgeSec : -Infinity;
   const visible = chatMessages.filter((entry) => entry.t <= currentTimeSec && entry.t >= minTime);
   return visible.slice(-maxLines);
 }
@@ -543,6 +544,25 @@ export function getActiveUiOverlayAtTime(
     }
   }
   return current;
+}
+
+/**
+ * Resuelve la vista de overlay de sala activa en un instante de replay.
+ * Garantiza que `overlay === 'NONE'` nunca muestre el menú o estadísticas encima del partido
+ * aunque `activeSlide` conserve su último valor `'MENU'`.
+ */
+export function resolveReplayOverlayView(ui?: LxrUiOverlayState | null): 'NONE' | 'MENU' | 'STATS' {
+  if (!ui) return 'NONE';
+  const overlayUp = String(ui.overlay || 'NONE').toUpperCase();
+  const isRoomOverlayOpen =
+    overlayUp === 'MENU' ||
+    overlayUp === 'TEAM_SELECT' ||
+    overlayUp === 'TEAM_MANAGEMENT' ||
+    overlayUp === 'STATS';
+  if (!isRoomOverlayOpen) return 'NONE';
+  const slideUp = String(ui.activeSlide || '').toUpperCase();
+  if (overlayUp === 'STATS' || slideUp === 'STATS') return 'STATS';
+  return 'MENU';
 }
 
 export function deriveReplayHudTimelineState(
@@ -1175,8 +1195,25 @@ function drawTelemetryCorner(
   ctx.save();
   const x = 16;
   const y = REPLAY_STAGE_HEIGHT - 36;
-  const w = 176;
   const h = 26;
+
+  const ping = Math.max(0, Math.round(telemetry.pingMs));
+  const fps = Math.max(1, Math.round(telemetry.fps));
+  const pingColor = ping <= 65 ? '#4ade80' : ping <= 130 ? '#fbbf24' : '#f87171';
+
+  ctx.font = '700 11px "JetBrains Mono", monospace';
+  const pingLabel = 'Ping:';
+  const pingVal = `${ping}ms`;
+  const sepLabel = '|';
+  const fpsLabel = 'FPS:';
+  const fpsVal = `${fps}`;
+
+  const xPingLabel = x + 21;
+  const xPingVal = xPingLabel + Math.max(33, ctx.measureText(pingLabel).width) + 5;
+  const xSep = xPingVal + Math.max(30, ctx.measureText(pingVal).width) + 7;
+  const xFpsLabel = xSep + Math.max(5, ctx.measureText(sepLabel).width) + 7;
+  const xFpsVal = xFpsLabel + Math.max(28, ctx.measureText(fpsLabel).width) + 5;
+  const w = Math.max(180, Math.ceil(xFpsVal + Math.max(20, ctx.measureText(fpsVal).width) + 12 - x));
 
   drawRoundedRect(ctx, x, y, w, h, 8);
   ctx.fillStyle = 'rgba(9, 13, 22, 0.8)';
@@ -1186,27 +1223,22 @@ function drawTelemetryCorner(
   ctx.stroke();
 
   ctx.beginPath();
-  ctx.arc(x + 12, y + 13, 3.2, 0, Math.PI * 2);
+  ctx.arc(x + 11.5, y + 13, 3.2, 0, Math.PI * 2);
   ctx.fillStyle = '#22c55e';
   ctx.fill();
 
-  const ping = Math.max(0, Math.round(telemetry.pingMs));
-  const fps = Math.max(1, Math.round(telemetry.fps));
-  const pingColor = ping <= 65 ? '#4ade80' : ping <= 130 ? '#fbbf24' : '#f87171';
-
-  ctx.font = '700 11px "JetBrains Mono", monospace';
   ctx.textAlign = 'left';
   ctx.textBaseline = 'middle';
   ctx.fillStyle = '#94a3b8';
-  ctx.fillText('Ping:', x + 22, y + 13.5);
+  ctx.fillText(pingLabel, xPingLabel, y + 13.5);
   ctx.fillStyle = pingColor;
-  ctx.fillText(`${ping}ms`, x + 56, y + 13.5);
+  ctx.fillText(pingVal, xPingVal, y + 13.5);
   ctx.fillStyle = '#475569';
-  ctx.fillText('|', x + 99, y + 13.5);
+  ctx.fillText(sepLabel, xSep, y + 13.5);
   ctx.fillStyle = '#94a3b8';
-  ctx.fillText('FPS:', x + 108, y + 13.5);
+  ctx.fillText(fpsLabel, xFpsLabel, y + 13.5);
   ctx.fillStyle = '#38bdf8';
-  ctx.fillText(`${fps}`, x + 138, y + 13.5);
+  ctx.fillText(fpsVal, xFpsVal, y + 13.5);
 
   ctx.restore();
 }
@@ -1481,17 +1513,11 @@ function drawCenterBanner(
 }
 
 function drawUiOverlayPanel(ctx: CanvasRenderingContext2D, state: ReplayHudOverlayState): void {
-  const ui = state.uiOverlay;
-  if (!ui) return;
-  const isStatsOpen = ui.activeSlide === 'STATS' || ui.overlay === 'STATS' || ui.overlay === 'stats';
-  const isMenuOpen =
-    ui.activeSlide === 'MENU' ||
-    ui.overlay === 'MENU' ||
-    ui.overlay === 'TEAM_SELECT' ||
-    ui.overlay === 'TEAM_MANAGEMENT' ||
-    ui.overlay === 'teamSelect';
-
-  if (!isStatsOpen && !isMenuOpen) return;
+  const overlayView = resolveReplayOverlayView(state.uiOverlay);
+  if (overlayView === 'NONE') return;
+  const ui = state.uiOverlay!;
+  const isStatsOpen = overlayView === 'STATS';
+  const isMenuOpen = overlayView === 'MENU';
 
   ctx.save();
   const cx = REPLAY_STAGE_WIDTH / 2;
@@ -1706,72 +1732,175 @@ function renderSingleExportFrame(
   ctx.restore();
 }
 
-export async function exportReplayToWebm(
+function buildCleanWebmFilename(roomName?: string): string {
+  const cleanBase = (roomName || 'legacyx-replay')
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 32);
+  return `${cleanBase || 'legacyx-replay'}.webm`;
+}
+
+interface ResolvedWebCodecsExportConfig {
+  encoderConfig: VideoEncoderConfig;
+  muxCodec: WebmVideoCodec;
+  mimeType: string;
+}
+
+async function pickSupportedWebCodecsConfig(
+  width: number,
+  height: number,
+  fps: number
+): Promise<ResolvedWebCodecsExportConfig | null> {
+  if (
+    typeof VideoEncoder === 'undefined' ||
+    typeof VideoFrame === 'undefined' ||
+    typeof VideoEncoder.isConfigSupported !== 'function'
+  ) {
+    return null;
+  }
+
+  const candidates: Array<{ codec: string; muxCodec: WebmVideoCodec; mimeType: string }> = [
+    { codec: 'vp09.00.41.08', muxCodec: 'V_VP9', mimeType: 'video/webm;codecs=vp9' },
+    { codec: 'vp09.00.40.08', muxCodec: 'V_VP9', mimeType: 'video/webm;codecs=vp9' },
+    { codec: 'vp8', muxCodec: 'V_VP8', mimeType: 'video/webm;codecs=vp8' }
+  ];
+
+  for (const cand of candidates) {
+    try {
+      const config: VideoEncoderConfig = {
+        codec: cand.codec,
+        width,
+        height,
+        bitrate: 6_000_000,
+        framerate: fps
+      };
+      const support = await VideoEncoder.isConfigSupported(config);
+      if (support.supported) {
+        return {
+          encoderConfig: support.config ?? config,
+          muxCodec: cand.muxCodec,
+          mimeType: cand.mimeType
+        };
+      }
+    } catch {
+      // Probar siguiente códec candidato
+    }
+  }
+  return null;
+}
+
+async function exportReplayWithWebCodecs(
+  canvas: HTMLCanvasElement,
+  renderer: GameRenderer,
+  ctx: CanvasRenderingContext2D,
   replay: LxrReplayFile,
-  onProgress?: (pct: number) => void,
-  options?: { followRecorder?: boolean }
+  totalDuration: number,
+  totalFrames: number,
+  effZoom: number,
+  followPlayerId: number | null,
+  lastKitSigRef: { value: string },
+  webCodecs: ResolvedWebCodecsExportConfig,
+  onProgress?: (pct: number) => void
 ): Promise<WebmExportResult> {
-  if (!replay || !Array.isArray(replay.frames) || replay.frames.length === 0) {
-    throw new Error('La repetición no contiene frames reproducibles.');
-  }
-  if (typeof document === 'undefined' || typeof MediaRecorder === 'undefined') {
-    throw new Error('La exportación a video WebM no es compatible en este entorno.');
-  }
+  const muxer = new WebmMuxer({
+    width: REPLAY_STAGE_WIDTH,
+    height: REPLAY_STAGE_HEIGHT,
+    fps: EXPORT_FIXED_FPS,
+    codec: webCodecs.muxCodec
+  });
 
-  const canvas = document.createElement('canvas');
-  canvas.width = REPLAY_STAGE_WIDTH;
-  canvas.height = REPLAY_STAGE_HEIGHT;
-  canvas.style.width = `${REPLAY_STAGE_WIDTH}px`;
-  canvas.style.height = `${REPLAY_STAGE_HEIGHT}px`;
+  let encodeError: Error | null = null;
+  const encoder = new VideoEncoder({
+    output: (chunk) => {
+      const bytes = new Uint8Array(chunk.byteLength);
+      chunk.copyTo(bytes);
+      muxer.addVideoFrame(bytes, chunk.type === 'key', chunk.timestamp);
+    },
+    error: (err) => {
+      encodeError = err instanceof Error ? err : new Error(String(err));
+    }
+  });
 
-  if (typeof canvas.captureStream !== 'function') {
+  const frameDurationUs = Math.round(1_000_000 / EXPORT_FIXED_FPS);
+  try {
+    encoder.configure(webCodecs.encoderConfig);
+    onProgress?.(0);
+
+    for (let frameIndex = 0; frameIndex <= totalFrames; frameIndex++) {
+      if (encodeError) throw encodeError;
+      while (encoder.encodeQueueSize > 8 && !encodeError) {
+        await yieldCooperativeTick();
+      }
+      if (encodeError) throw encodeError;
+
+      const virtualTimeSec =
+        frameIndex === 0 ? 0 : Math.min(totalDuration, frameIndex * EXPORT_FIXED_DT_SEC);
+      const { f0, f1, alpha } = sampleReplayFrame(replay.frames, virtualTimeSec);
+      renderSingleExportFrame(
+        renderer,
+        ctx,
+        replay,
+        f0,
+        f1,
+        alpha,
+        virtualTimeSec,
+        effZoom,
+        followPlayerId,
+        lastKitSigRef
+      );
+
+      const timestampUs = Math.round((frameIndex * 1_000_000) / EXPORT_FIXED_FPS);
+      const videoFrame = new VideoFrame(canvas, {
+        timestamp: timestampUs,
+        duration: frameDurationUs
+      });
+      try {
+        encoder.encode(videoFrame, { keyFrame: frameIndex % 120 === 0 });
+      } finally {
+        videoFrame.close();
+      }
+
+      if (frameIndex > 0 && frameIndex % 4 === 0) {
+        await yieldCooperativeTick();
+      }
+      onProgress?.(Math.min(99, Math.round((frameIndex / totalFrames) * 100)));
+    }
+
+    await encoder.flush();
+    if (encodeError) throw encodeError;
+
+    const blob = muxer.finalize();
+    onProgress?.(100);
+    return {
+      blob,
+      filename: buildCleanWebmFilename(replay.roomName),
+      mimeType: webCodecs.mimeType
+    };
+  } finally {
+    try {
+      if (encoder.state !== 'closed') encoder.close();
+    } catch {
+      // Ignorado
+    }
+  }
+}
+
+async function exportReplayWithMediaRecorder(
+  canvas: HTMLCanvasElement,
+  renderer: GameRenderer,
+  ctx: CanvasRenderingContext2D,
+  replay: LxrReplayFile,
+  totalDuration: number,
+  totalFrames: number,
+  effZoom: number,
+  followPlayerId: number | null,
+  lastKitSigRef: { value: string },
+  onProgress?: (pct: number) => void
+): Promise<WebmExportResult> {
+  if (typeof canvas.captureStream !== 'function' || typeof MediaRecorder === 'undefined') {
     throw new Error('Tu navegador no soporta captura de canvas a video WebM.');
   }
-
-  // IMPORTANT: NEVER call canvas.getContext('2d') before GameRenderer initializes { alpha: false }!
-  const v3 = replay.magic === 'LXR3' ? (replay as LxrReplayV3) : null;
-  const v2 = replay.magic === 'LXR2' ? (replay as LxrReplayV2) : null;
-  const recordedTheme: LxrTheme = v3?.theme === 'light' ? 'light' : 'dark';
-  const stadium = createStadium((replay.stadiumId || 'mediano') as StadiumId);
-  const playerInfos = buildReplayPlayerInfos(replay);
-  const renderer = new GameRenderer(
-    canvas,
-    {
-      stadium,
-      playerInfos,
-      overrideDpr: 1,
-      theme: recordedTheme
-    } as ConstructorParameters<typeof GameRenderer>[1]
-  );
-
-  const ctx = renderer.ctx;
-  if (!ctx) {
-    renderer.destroy();
-    throw new Error('No se pudo inicializar el contexto Canvas 2D para exportar.');
-  }
-
-  applyReplayRendererConfig(renderer, replay, 0);
-  renderer.resize(REPLAY_STAGE_WIDTH, REPLAY_STAGE_HEIGHT);
-
-  const camMeta = v3 ?? v2;
-  const effZoom = computeReplayEffectiveZoom(
-    camMeta?.cameraZoom ?? 1,
-    camMeta?.viewportWidth ?? REPLAY_STAGE_WIDTH,
-    camMeta?.viewportHeight ?? REPLAY_STAGE_HEIGHT,
-    REPLAY_STAGE_WIDTH,
-    REPLAY_STAGE_HEIGHT
-  );
-  const followPlayerId =
-    options?.followRecorder !== false && camMeta?.recordingPlayerId != null
-      ? camMeta.recordingPlayerId
-      : null;
-  renderer.focusBallOnly = followPlayerId == null;
-
-  const totalDuration = Math.max(
-    0.5,
-    replay.durationSeconds || replay.frames[replay.frames.length - 1]!.t || 0.5
-  );
-  const totalFrames = Math.max(1, Math.ceil(totalDuration * EXPORT_FIXED_FPS));
 
   const stream = canvas.captureStream(0);
   const videoTrack = stream.getVideoTracks()[0] as
@@ -1793,20 +1922,13 @@ export async function exportReplayToWebm(
     recorder.onstop = () => {
       const outMime = mimeType || 'video/webm';
       const blob = new Blob(chunks, { type: outMime });
-      const cleanBase = (replay.roomName || 'legacyx-replay')
-        .toLowerCase()
-        .replace(/[^a-z0-9_-]+/g, '-')
-        .replace(/^-+|-+$/g, '')
-        .slice(0, 32);
       resolve({
         blob,
-        filename: `${cleanBase || 'legacyx-replay'}.webm`,
+        filename: buildCleanWebmFilename(replay.roomName),
         mimeType: outMime
       });
     };
   });
-
-  const lastKitSigRef = { value: JSON.stringify(getActiveReplayKitsAtTime(replay, 0)) };
 
   try {
     onProgress?.(0);
@@ -1863,6 +1985,116 @@ export async function exportReplayToWebm(
         // Ignored
       }
     }
+  }
+}
+
+export async function exportReplayToWebm(
+  replay: LxrReplayFile,
+  onProgress?: (pct: number) => void,
+  options?: { followRecorder?: boolean }
+): Promise<WebmExportResult> {
+  if (!replay || !Array.isArray(replay.frames) || replay.frames.length === 0) {
+    throw new Error('La repetición no contiene frames reproducibles.');
+  }
+  if (typeof document === 'undefined') {
+    throw new Error('La exportación a video WebM no es compatible en este entorno.');
+  }
+
+  const webCodecs = await pickSupportedWebCodecsConfig(
+    REPLAY_STAGE_WIDTH,
+    REPLAY_STAGE_HEIGHT,
+    EXPORT_FIXED_FPS
+  );
+  if (!webCodecs && typeof MediaRecorder === 'undefined') {
+    throw new Error('La exportación a video WebM no es compatible en este entorno.');
+  }
+
+  const canvas = document.createElement('canvas');
+  canvas.width = REPLAY_STAGE_WIDTH;
+  canvas.height = REPLAY_STAGE_HEIGHT;
+  canvas.style.width = `${REPLAY_STAGE_WIDTH}px`;
+  canvas.style.height = `${REPLAY_STAGE_HEIGHT}px`;
+
+  if (!webCodecs && typeof canvas.captureStream !== 'function') {
+    throw new Error('Tu navegador no soporta captura de canvas a video WebM.');
+  }
+
+  // IMPORTANT: NEVER call canvas.getContext('2d') before GameRenderer initializes { alpha: false }!
+  const v3 = replay.magic === 'LXR3' ? (replay as LxrReplayV3) : null;
+  const v2 = replay.magic === 'LXR2' ? (replay as LxrReplayV2) : null;
+  const recordedTheme: LxrTheme = v3?.theme === 'light' ? 'light' : 'dark';
+  const stadium = createStadium((replay.stadiumId || 'mediano') as StadiumId);
+  const playerInfos = buildReplayPlayerInfos(replay);
+  const renderer = new GameRenderer(
+    canvas,
+    {
+      stadium,
+      playerInfos,
+      overrideDpr: 1,
+      theme: recordedTheme
+    } as ConstructorParameters<typeof GameRenderer>[1]
+  );
+
+  const ctx = renderer.ctx;
+  if (!ctx) {
+    renderer.destroy();
+    throw new Error('No se pudo inicializar el contexto Canvas 2D para exportar.');
+  }
+
+  try {
+    applyReplayRendererConfig(renderer, replay, 0);
+    renderer.resize(REPLAY_STAGE_WIDTH, REPLAY_STAGE_HEIGHT);
+
+    const camMeta = v3 ?? v2;
+    const effZoom = computeReplayEffectiveZoom(
+      camMeta?.cameraZoom ?? 1,
+      camMeta?.viewportWidth ?? REPLAY_STAGE_WIDTH,
+      camMeta?.viewportHeight ?? REPLAY_STAGE_HEIGHT,
+      REPLAY_STAGE_WIDTH,
+      REPLAY_STAGE_HEIGHT
+    );
+    const followPlayerId =
+      options?.followRecorder !== false && camMeta?.recordingPlayerId != null
+        ? camMeta.recordingPlayerId
+        : null;
+    renderer.focusBallOnly = followPlayerId == null;
+
+    const totalDuration = Math.max(
+      0.5,
+      replay.durationSeconds || replay.frames[replay.frames.length - 1]!.t || 0.5
+    );
+    const totalFrames = Math.max(1, Math.ceil(totalDuration * EXPORT_FIXED_FPS));
+    const lastKitSigRef = { value: JSON.stringify(getActiveReplayKitsAtTime(replay, 0)) };
+
+    if (webCodecs) {
+      return await exportReplayWithWebCodecs(
+        canvas,
+        renderer,
+        ctx,
+        replay,
+        totalDuration,
+        totalFrames,
+        effZoom,
+        followPlayerId,
+        lastKitSigRef,
+        webCodecs,
+        onProgress
+      );
+    }
+
+    return await exportReplayWithMediaRecorder(
+      canvas,
+      renderer,
+      ctx,
+      replay,
+      totalDuration,
+      totalFrames,
+      effZoom,
+      followPlayerId,
+      lastKitSigRef,
+      onProgress
+    );
+  } finally {
     renderer.destroy();
   }
 }

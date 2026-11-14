@@ -25,6 +25,7 @@
     isReplayTimerWarning,
     REPLAY_STAGE_HEIGHT,
     REPLAY_STAGE_WIDTH,
+    resolveReplayOverlayView,
     sampleReplayFrame,
     triggerWebmDownload
   } from '../../recorder/ReplayHudCompositor.js';
@@ -112,6 +113,7 @@
   const hudUiOverlay = $derived(
     timelineHud?.uiOverlay ?? { overlay: 'NONE', activeSlide: 'GAME', isPaused: false, postMatchStats: null }
   );
+  const hudOverlayView = $derived(resolveReplayOverlayView(hudUiOverlay));
   const hudShowExtended = $derived(timelineHud?.showExtendedHud ?? false);
   const hudStatsPlayers = $derived(
     Array.isArray(hudUiOverlay.postMatchStats?.players)
@@ -875,7 +877,7 @@
               {/if}
 
               <!-- Open Menu / Post-Match Stats Timeline Overlay -->
-              {#if hudUiOverlay.activeSlide === 'STATS' || hudUiOverlay.overlay === 'STATS' || hudUiOverlay.overlay === 'stats'}
+              {#if hudOverlayView === 'STATS'}
                 <div class="hud-ui-overlay-panel stats">
                   <div class="ui-panel-title">ESTADÍSTICAS DEL PARTIDO</div>
                   <div class="ui-panel-teams">
@@ -896,7 +898,7 @@
                     </div>
                   {/if}
                 </div>
-              {:else if hudUiOverlay.activeSlide === 'MENU' || hudUiOverlay.overlay === 'MENU' || hudUiOverlay.overlay === 'TEAM_SELECT' || hudUiOverlay.overlay === 'TEAM_MANAGEMENT' || hudUiOverlay.overlay === 'teamSelect'}
+              {:else if hudOverlayView === 'MENU'}
                 <div class="hud-ui-overlay-panel menu">
                   <div class="ui-panel-title">MENÚ DE SALA</div>
                   <div class="ui-panel-teams">

@@ -990,6 +990,13 @@ class GameUIStore {
   private emitHudStateChange(kind: string, detail?: any): void {
     this.onHudStateChange?.(kind, detail);
   }
+
+  public syncUiOverlay(): void {
+    this.emitHudStateChange('ui_overlay', {
+      activeModal: this.activeModal,
+      activeSlide: this._activeSlide
+    });
+  }
   private slidingEventTimeout: ReturnType<typeof setTimeout> | null = null;
   private slidingEventTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
@@ -2213,6 +2220,7 @@ class GameUIStore {
    */
   public handleMatchPhaseTransition(newPhase: number, isInitialSync: boolean = false): void {
     const prev = this.previousMatchPhase;
+    const prevModal = this.activeModal;
     const isFirstSync = !this.hasJoinedInitialSync || isInitialSync;
 
     if (isFirstSync) {
@@ -2235,6 +2243,9 @@ class GameUIStore {
         }
       } else {
         this.enforceStopMenu();
+      }
+      if (this.activeModal !== prevModal) {
+        this.emitHudStateChange('ui_overlay', { activeModal: this.activeModal, activeSlide: this._activeSlide });
       }
       return;
     }
@@ -2279,6 +2290,10 @@ class GameUIStore {
       this.matchPhase = newPhase;
       this.previousMatchPhase = newPhase;
     }
+
+    if (this.activeModal !== prevModal) {
+      this.emitHudStateChange('ui_overlay', { activeModal: this.activeModal, activeSlide: this._activeSlide });
+    }
   }
 
   /** Conmuta el menú de sala in-game (`Escape` / botón ☰). En `0: STOP` permanece abierto. */
@@ -2307,8 +2322,12 @@ class GameUIStore {
       !this.isSecondaryOverlayOpen &&
       !this.isRoomPanelOpen
     ) {
+      const prevModal = this.activeModal;
       this.modalStack = [];
       this.activeModal = 'TEAM_MANAGEMENT';
+      if (this.activeModal !== prevModal) {
+        this.emitHudStateChange('ui_overlay', { activeModal: this.activeModal, activeSlide: this._activeSlide });
+      }
     }
   }
 

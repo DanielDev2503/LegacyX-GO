@@ -17,12 +17,16 @@ import {
   applyReplayRendererConfig,
   deriveReplayHudTimelineState,
   exportReplayToWebm,
+  getVisibleReplayChat,
   renderReplayHudOverlay,
   REPLAY_STAGE_HEIGHT,
-  REPLAY_STAGE_WIDTH
+  REPLAY_STAGE_WIDTH,
+  resolveReplayOverlayView
 } from '../../src/recorder/ReplayHudCompositor.js';
+import { WebmMuxer } from '../../src/recorder/WebmMuxer.js';
 import { GameRenderer } from '../../src/renderer/GameRenderer.js';
 import ReplayViewerModal from '../../src/ui/modals/ReplayViewerModal.svelte';
+import { gameUI } from '../../src/ui/state/gameUI.svelte.js';
 
 function makeSnapshot(overrides?: Partial<GameStateSnapshot>): GameStateSnapshot {
   return {
@@ -631,5 +635,193 @@ describe('LXR3 HUD Timeline Recording & Deterministic WebM Export', () => {
 
     const { html } = render(ReplayViewerModal);
     expect(html).toContain('role="dialog"');
+  });
+
+  it('prevents stuck MENÚ DE SALA when overlay is NONE even if activeSlide is MENU, keeps long-lived chat, and syncs phase transitions', () => {
+    expect(resolveReplayOverlayView({ overlay: 'NONE', activeSlide: 'MENU', isPaused: false, postMatchStats: null })).toBe('NONE');
+    expect(resolveReplayOverlayView({ overlay: 'TEAM_MANAGEMENT', activeSlide: 'MENU', isPaused: false, postMatchStats: null })).toBe('MENU');
+    expect(resolveReplayOverlayView({ overlay: 'TEAM_MANAGEMENT', activeSlide: 'STATS', isPaused: false, postMatchStats: null })).toBe('STATS');
+    expect(resolveReplayOverlayView({ overlay: 'STATS', activeSlide: 'MENU', isPaused: false, postMatchStats: null })).toBe('STATS');
+
+    const replay = makeSampleV3Replay({
+      initialUiOverlay: { overlay: 'NONE', activeSlide: 'MENU', isPaused: false, postMatchStats: null },
+      hudEvents: [{ t: 0.1, type: 'telemetry', payload: { pingMs: 12, fps: 60 } }],
+      chatMessages: [
+        { t: 0, kind: 'system', sender: 'Sala', text: 'Inicio' },
+        { t: 2, kind: 'chat', sender: 'Ace', senderTeam: 'RED', text: 'Mensaje antiguo' }
+      ]
+    });
+    const mock = makeMockCanvas2dContext();
+    const state = deriveReplayHudTimelineState(replay, replay.frames[1]!, 45.0);
+    renderReplayHudOverlay(mock.ctx, state, REPLAY_STAGE_WIDTH, REPLAY_STAGE_HEIGHT);
+
+    // Must NEVER draw room menu when overlay === 'NONE'
+    expect(mock.fillTexts.some((t) => t.includes('MENÚ DE SALA'))).toBe(false);
+    // Telemetry keeps Ping & FPS separated
+    expect(mock.fillTexts).toContain('Ping:');
+    expect(mock.fillTexts).toContain('12ms');
+    // Default chat view does not vanish after 18s; finite maxAgeSec still filters when requested
+    expect(mock.fillTexts.some((t) => t.includes('Mensaje antiguo'))).toBe(true);
+    expect(getVisibleReplayChat(replay.chatMessages, 45.0, 18)).toEqual([]);
+
+    // gameUI phase transitions emit ui_overlay changes
+    const prevCallback = gameUI.onHudStateChange;
+    const events: Array<{ kind: string; detail: Record<string, unknown> }> = [];
+    gameUI.currentScreen = 'IN_GAME';
+    gameUI.hasJoinedInitialSync = false;
+    gameUI.previousMatchPhase = 0;
+    gameUI.activeModal = 'TEAM_MANAGEMENT';
+    gameUI.activeSlide = 'MENU';
+    gameUI.onHudStateChange = (kind, detail) => {
+      events.push({ kind, detail });
+    };
+    try {
+      gameUI.handleMatchPhaseTransition(0, true);
+      gameUI.handleMatchPhaseTransition(2);
+      gameUI.handleMatchPhaseTransition(5);
+      expect(events.some((e) => e.kind === 'ui_overlay' && e.detail.activeModal === 'NONE')).toBe(true);
+      expect(events.some((e) => e.kind === 'ui_overlay' && e.detail.activeModal === 'STATS')).toBe(true);
+    } finally {
+      gameUI.onHudStateChange = prevCallback;
+      gameUI.activeModal = 'NONE';
+      gameUI.hasJoinedInitialSync = false;
+      gameUI.currentScreen = 'LOBBY';
+    }
+  });
+
+  it('muxes deterministic EBML/WebM containers with Info Duration, multiple Clusters, and Cues index', async () => {
+    const muxer = new WebmMuxer({ width: 1280, height: 720, fps: 60, codec: 'V_VP8' });
+    muxer.addVideoFrame(new Uint8Array([1, 2, 3, 4]), true, 0);
+    muxer.addVideoFrame(new Uint8Array([5, 6, 7]), false, 16_667);
+    // Cross the 30s cluster ceiling to force a second Cluster + Cues entry
+    muxer.addVideoFrame(new Uint8Array([8, 9, 10, 11]), true, 32_000_000);
+    const blob = muxer.finalize();
+    const bytes = new Uint8Array(await blob.arrayBuffer());
+
+    // EBML header magic
+    expect(Array.from(bytes.slice(0, 4))).toEqual([0x1a, 0x45, 0xdf, 0xa3]);
+    const textSig = new TextDecoder('latin1').decode(bytes);
+    expect(textSig).toContain('webm');
+    expect(textSig).toContain('V_VP8');
+
+    // Count Cluster EBML IDs [0x1F, 0x43, 0xB6, 0x75] and verify Cues [0x1C, 0x53, 0xBB, 0x6B]
+    let clusterCount = 0;
+    let hasCues = false;
+    for (let i = 0; i <= bytes.length - 4; i++) {
+      if (bytes[i] === 0x1f && bytes[i + 1] === 0x43 && bytes[i + 2] === 0xb6 && bytes[i + 3] === 0x75) {
+        clusterCount++;
+      }
+      if (bytes[i] === 0x1c && bytes[i + 1] === 0x53 && bytes[i + 2] === 0xbb && bytes[i + 3] === 0x6b) {
+        hasCues = true;
+      }
+    }
+    expect(clusterCount).toBe(2);
+    expect(hasCues).toBe(true);
+
+    // Verify backpatched Info Duration float64 immediately after [0x44, 0x89, 0x88] matches > 32,000 ms
+    let encodedDurationMs = 0;
+    for (let i = 0; i <= bytes.length - 11; i++) {
+      if (bytes[i] === 0x44 && bytes[i + 1] === 0x89 && bytes[i + 2] === 0x88) {
+        encodedDurationMs = new DataView(bytes.buffer, bytes.byteOffset + i + 3, 8).getFloat64(0, false);
+        break;
+      }
+    }
+    expect(encodedDurationMs).toBeGreaterThan(32_000);
+    expect(encodedDurationMs).toBeLessThan(32_100);
+  });
+
+  it('prefers WebCodecs VideoEncoder + WebmMuxer when available with exact 1/60s deterministic timestamps', async () => {
+    const replay = makeSampleV3Replay({ durationSeconds: 0.05 });
+    const mock2d = makeMockCanvas2dContext();
+    const exportCanvas = {
+      width: 0,
+      height: 0,
+      style: {} as Record<string, string>,
+      getContext: vi.fn(() => mock2d.ctx),
+      captureStream: vi.fn()
+    };
+
+    let created = 0;
+    vi.stubGlobal('document', {
+      createElement: vi.fn((tag: string) => {
+        if (tag === 'canvas') {
+          created++;
+          return (created === 1
+            ? exportCanvas
+            : {
+                width: 0,
+                height: 0,
+                style: {} as Record<string, string>,
+                getContext: vi.fn(() => makeMockCanvas2dContext().ctx)
+              }) as unknown as HTMLCanvasElement;
+        }
+        return {} as HTMLElement;
+      })
+    });
+    vi.stubGlobal('window', { devicePixelRatio: 1 });
+    vi.spyOn(GameRenderer.prototype, 'renderAtFixedStep').mockImplementation(() => {});
+
+    const encodedTimestamps: number[] = [];
+    const encodedKeyFlags: boolean[] = [];
+
+    class FakeVideoFrame {
+      public readonly timestamp: number;
+      public readonly duration: number;
+      public closed = false;
+      constructor(_source: unknown, init: { timestamp: number; duration: number }) {
+        this.timestamp = init.timestamp;
+        this.duration = init.duration;
+      }
+      close() {
+        this.closed = true;
+      }
+    }
+
+    class FakeVideoEncoder {
+      static async isConfigSupported(cfg: { codec: string }) {
+        return { supported: cfg.codec === 'vp09.00.41.08', config: cfg };
+      }
+      public state: 'unconfigured' | 'configured' | 'closed' = 'unconfigured';
+      public encodeQueueSize = 0;
+      private readonly outputCb: (chunk: unknown) => void;
+      constructor(init: { output: (chunk: unknown) => void; error: (err: unknown) => void }) {
+        this.outputCb = init.output;
+      }
+      configure() {
+        this.state = 'configured';
+      }
+      encode(frame: FakeVideoFrame, opts?: { keyFrame?: boolean }) {
+        encodedTimestamps.push(frame.timestamp);
+        encodedKeyFlags.push(Boolean(opts?.keyFrame));
+        this.outputCb({
+          byteLength: 16,
+          type: opts?.keyFrame ? 'key' : 'delta',
+          timestamp: frame.timestamp,
+          copyTo(dst: Uint8Array) {
+            dst.fill(0x55);
+          }
+        });
+      }
+      async flush() {}
+      close() {
+        this.state = 'closed';
+      }
+    }
+
+    vi.stubGlobal('VideoFrame', FakeVideoFrame);
+    vi.stubGlobal('VideoEncoder', FakeVideoEncoder);
+
+    const res = await exportReplayToWebm(replay);
+    expect(res.mimeType).toBe('video/webm;codecs=vp9');
+    expect(exportCanvas.captureStream).not.toHaveBeenCalled();
+    expect(encodedTimestamps.length).toBeGreaterThanOrEqual(31);
+    expect(encodedTimestamps[0]).toBe(0);
+    expect(encodedTimestamps[1]).toBe(16667);
+    expect(encodedTimestamps[2]).toBe(33333);
+    expect(encodedTimestamps[3]).toBe(50000);
+    expect(encodedKeyFlags[0]).toBe(true);
+
+    const header = new Uint8Array(await res.blob.arrayBuffer()).slice(0, 4);
+    expect(Array.from(header)).toEqual([0x1a, 0x45, 0xdf, 0xa3]);
   });
 });
