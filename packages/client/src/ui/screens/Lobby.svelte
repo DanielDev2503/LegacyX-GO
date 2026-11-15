@@ -173,7 +173,36 @@
     if (userProfile.leaderboardCategory === 'saves') return `${pr.saves} Ataj.`;
     return `${pr.elo} ELO`;
   }
+
+  type DisconnectKind = 'kicked' | 'banned' | 'banned_join' | 'closed';
+
+  function getDisconnectBadgeLabel(kind: DisconnectKind): string {
+    if (kind === 'banned') return 'BANEADO DE LA SALA';
+    if (kind === 'banned_join') return 'ACCESO DENEGADO';
+    if (kind === 'kicked') return 'EXPULSADO DE LA SALA';
+    return 'SALA CERRADA';
+  }
+
+  function getDisconnectVariant(kind: DisconnectKind): 'ban' | 'kick' | 'closed' {
+    if (kind === 'banned' || kind === 'banned_join') return 'ban';
+    if (kind === 'kicked') return 'kick';
+    return 'closed';
+  }
+
+  function dismissRoomDisconnectNotice() {
+    soundFX.playUIClick();
+    gameUI.clearRoomDisconnectNotice();
+  }
+
+  function handleLobbyWindowKeyDown(e: KeyboardEvent) {
+    if (e.key === 'Escape' && gameUI.roomDisconnectNotice) {
+      e.preventDefault();
+      dismissRoomDisconnectNotice();
+    }
+  }
 </script>
+
+<svelte:window onkeydown={handleLobbyWindowKeyDown} />
 
 <div class="lobby-root">
   <!-- Main Full-Height Layout: h-[calc(100vh-2rem)] -->
@@ -586,6 +615,76 @@
             ENTRAR
           </button>
         </div>
+      </div>
+    </div>
+  {/if}
+
+  <!-- ROOM DISCONNECT / KICK / BAN / CLOSED MODAL -->
+  {#if gameUI.roomDisconnectNotice}
+    {@const notice = gameUI.roomDisconnectNotice}
+    {@const variant = getDisconnectVariant(notice.kind)}
+    <div
+      class="modal-backdrop disconnect-backdrop"
+      role="presentation"
+      onclick={(e) => {
+        if (e.target === e.currentTarget) dismissRoomDisconnectNotice();
+      }}
+    >
+      <div
+        id="room-disconnect-modal"
+        class="disconnect-modal-card variant-{variant}"
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby="disconnect-modal-title"
+        aria-describedby="disconnect-modal-message"
+      >
+        <div class="disconnect-top-bar" aria-hidden="true"></div>
+
+        <div class="disconnect-icon-badge" aria-hidden="true">
+          {#if variant === 'ban'}
+            <svg viewBox="0 0 24 24" width="30" height="30" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 2l7 4v6c0 5-3.5 8.5-7 10-3.5-1.5-7-5-7-10V6l7-4z"></path>
+              <circle cx="12" cy="12" r="4"></circle>
+              <line x1="9.2" y1="9.2" x2="14.8" y2="14.8"></line>
+            </svg>
+          {:else if variant === 'kick'}
+            <svg viewBox="0 0 24 24" width="30" height="30" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path>
+              <polyline points="16 17 21 12 16 7"></polyline>
+              <line x1="21" y1="12" x2="9" y2="12"></line>
+            </svg>
+          {:else}
+            <svg viewBox="0 0 24 24" width="30" height="30" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M16.72 11.06A10.94 10.94 0 0 1 19 12.55"></path>
+              <path d="M5 12.55a10.94 10.94 0 0 1 5.17-2.39"></path>
+              <path d="M10.71 5.05A16 16 0 0 1 22.58 9"></path>
+              <path d="M1.42 9a15.91 15.91 0 0 1 4.7-2.88"></path>
+              <path d="M8.53 16.11a6 6 0 0 1 6.95 0"></path>
+              <line x1="12" y1="20" x2="12.01" y2="20"></line>
+              <line x1="2" y1="2" x2="22" y2="22"></line>
+            </svg>
+          {/if}
+        </div>
+
+        <span class="disconnect-kind-chip">{getDisconnectBadgeLabel(notice.kind)}</span>
+
+        {#if notice.roomName}
+          <div class="disconnect-room-pill">
+            <span class="room-pill-label">SALA</span>
+            <strong class="room-pill-name">{notice.roomName}</strong>
+          </div>
+        {/if}
+
+        <h3 id="disconnect-modal-title" class="disconnect-title">{notice.title}</h3>
+        <p id="disconnect-modal-message" class="disconnect-message">{notice.message}</p>
+
+        <button
+          type="button"
+          class="disconnect-confirm-btn"
+          onclick={dismissRoomDisconnectNotice}
+        >
+          ENTENDIDO
+        </button>
       </div>
     </div>
   {/if}
@@ -1516,5 +1615,165 @@
     color: #050811;
     font-weight: 800;
     cursor: pointer;
+  }
+
+  /* Room Disconnect / Kick / Ban / Closed Modal */
+  .disconnect-backdrop {
+    z-index: 75;
+    background: rgba(4, 7, 14, 0.92);
+  }
+
+  .disconnect-modal-card {
+    --disc-accent: #38bdf8;
+    --disc-soft: #7dd3fc;
+    --disc-glow: rgba(56, 189, 248, 0.34);
+    --disc-surface: rgba(56, 189, 248, 0.14);
+    position: relative;
+    overflow: hidden;
+    width: min(430px, 92vw);
+    background: linear-gradient(180deg, #0d1627 0%, #070c16 100%);
+    border: 1px solid var(--disc-accent);
+    border-radius: 10px;
+    padding: 24px 22px 20px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    gap: 11px;
+    box-shadow: 0 22px 54px rgba(0, 0, 0, 0.78), 0 0 28px var(--disc-glow);
+    box-sizing: border-box;
+  }
+
+  .disconnect-modal-card.variant-ban {
+    --disc-accent: #ff4757;
+    --disc-soft: #fda4af;
+    --disc-glow: rgba(255, 71, 87, 0.38);
+    --disc-surface: rgba(255, 71, 87, 0.14);
+  }
+
+  .disconnect-modal-card.variant-kick {
+    --disc-accent: #f59e0b;
+    --disc-soft: #fcd34d;
+    --disc-glow: rgba(245, 158, 11, 0.36);
+    --disc-surface: rgba(245, 158, 11, 0.14);
+  }
+
+  .disconnect-modal-card.variant-closed {
+    --disc-accent: #38bdf8;
+    --disc-soft: #94a3b8;
+    --disc-glow: rgba(56, 189, 248, 0.32);
+    --disc-surface: rgba(56, 189, 248, 0.13);
+  }
+
+  .disconnect-top-bar {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 3px;
+    background: linear-gradient(90deg, transparent 0%, var(--disc-accent) 50%, transparent 100%);
+  }
+
+  .disconnect-icon-badge {
+    width: 60px;
+    height: 60px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--disc-surface);
+    border: 1.5px solid var(--disc-accent);
+    color: var(--disc-soft);
+    box-shadow: 0 0 22px var(--disc-glow), inset 0 0 12px var(--disc-surface);
+    margin-bottom: 2px;
+  }
+
+  .disconnect-kind-chip {
+    display: inline-flex;
+    align-items: center;
+    padding: 3px 10px;
+    border-radius: 999px;
+    background: var(--disc-surface);
+    border: 1px solid var(--disc-accent);
+    color: var(--disc-soft);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10.5px;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  .disconnect-room-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    max-width: 100%;
+    padding: 4px 10px;
+    border-radius: 6px;
+    background: rgba(15, 23, 42, 0.85);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    font-size: 11.5px;
+    color: #cbd5e1;
+  }
+
+  .room-pill-label {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 9.5px;
+    font-weight: 800;
+    color: #64748b;
+    letter-spacing: 0.06em;
+  }
+
+  .room-pill-name {
+    color: #f8fafc;
+    font-family: 'Space Grotesk', sans-serif;
+    font-weight: 700;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .disconnect-title {
+    margin: 2px 0 0;
+    font-family: 'Space Grotesk', sans-serif;
+    font-size: 18px;
+    font-weight: 800;
+    color: #ffffff;
+    line-height: 1.25;
+  }
+
+  .disconnect-message {
+    margin: 0;
+    font-size: 13px;
+    color: #b6c4d8;
+    line-height: 1.5;
+  }
+
+  .disconnect-confirm-btn {
+    margin-top: 6px;
+    width: 100%;
+    height: 42px;
+    border-radius: 7px;
+    border: 1px solid rgba(255, 255, 255, 0.25);
+    background: var(--disc-accent);
+    color: #050811;
+    font-family: 'Chakra Petch', 'Space Grotesk', sans-serif;
+    font-size: 13.5px;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    cursor: pointer;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.45), 0 6px 18px var(--disc-glow);
+    transition: transform 0.16s ease, filter 0.16s ease, box-shadow 0.16s ease;
+  }
+
+  .disconnect-confirm-btn:hover {
+    transform: translateY(-1.5px);
+    filter: brightness(1.08);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.55), 0 0 22px var(--disc-glow);
+  }
+
+  .disconnect-confirm-btn:active {
+    transform: translateY(0) scale(0.98);
   }
 </style>

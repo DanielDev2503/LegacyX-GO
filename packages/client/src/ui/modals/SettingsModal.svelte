@@ -50,6 +50,21 @@
     { id: 'wc2026', label: 'Norteamérica 2026', era: 'WC 2026' }
   ];
 
+  const FPS_CAP_OPTIONS: readonly { value: 0 | 30 | 60 | 120 | 144 | 240; label: string }[] = [
+    { value: 30, label: '30' },
+    { value: 60, label: '60' },
+    { value: 120, label: '120' },
+    { value: 144, label: '144' },
+    { value: 240, label: '240' },
+    { value: 0, label: 'Ilimitado' }
+  ];
+
+  function setFpsCap(cap: 0 | 30 | 60 | 120 | 144 | 240) {
+    soundFX.playUIClick();
+    gameUI.settings.fpsCap = cap;
+    gameUI.saveSettings();
+  }
+
   // Keybinding remapping state
   let rebindingAction = $state<string | null>(null);
 
@@ -367,8 +382,13 @@
         Actualmente juegas como <code>{gameUI.nickname || 'inv_'}</code>. {description}
       </p>
     </div>
-    <button type="button" class="cyber-btn accent" onclick={goToAuthFromSettings}>
-      Iniciar sesión / Crear cuenta
+    <button type="button" class="cyber-btn cyber-btn-auth" onclick={goToAuthFromSettings}>
+      <svg class="cyber-btn-icon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M12 2l7 4v6c0 5-3.5 8.5-7 10-3.5-1.5-7-5-7-10V6l7-4z"></path>
+        <circle cx="12" cy="10" r="2.2"></circle>
+        <path d="M8.8 15.2a4.2 4.2 0 0 1 6.4 0"></path>
+      </svg>
+      <span>Iniciar sesión / Crear cuenta</span>
     </button>
   </div>
 {/snippet}
@@ -1141,16 +1161,27 @@
             <h3 class="section-heading">Video y Gráficos</h3>
           </div>
 
-          <div class="settings-scroll-area">
-            <div class="video-grid-2col">
-              <!-- COLUMNA 1: Cámara e Interfaz -->
-              <div class="graphics-card">
-                <h4 class="card-title">Cámara e Interfaz</h4>
+          <div class="settings-scroll-area video-cards-stack">
+            <!-- TARJETA 1: CÁMARA Y RENDIMIENTO -->
+            <section class="graphics-card video-section-card" aria-labelledby="video-card-camera">
+              <div class="video-card-head">
+                <span class="video-card-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path>
+                    <circle cx="12" cy="13" r="4"></circle>
+                  </svg>
+                </span>
+                <div>
+                  <h4 id="video-card-camera" class="card-title">Cámara y Rendimiento</h4>
+                  <p class="video-card-sub">Óptica de cancha, tasa de refresco y compensación visual de red</p>
+                </div>
+              </div>
 
-                <!-- Zoom de la cámara -->
-                <div class="slider-row">
-                  <div class="slider-meta">
-                    <span class="param-name label-with-tooltip">
+              <!-- Zoom de la cámara -->
+              <div class="slider-block">
+                <div class="slider-meta">
+                  <div class="setting-copy">
+                    <span class="setting-title label-with-tooltip">
                       Zoom de la cámara
                       <span
                         class="info-tooltip-wrapper"
@@ -1166,100 +1197,151 @@
                         </svg>
                       </span>
                     </span>
-                    <strong class="param-val">{gameUI.settings.cameraZoom.toFixed(2)}x ({Math.round(gameUI.settings.cameraZoom * 100)}%)</strong>
+                    <span class="setting-desc">Ajusta cuánto campo abarca tu vista durante el partido</span>
                   </div>
-                  <div class="zoom-stepper-control flex items-center gap-2">
+                  <strong class="param-val-pill">{gameUI.settings.cameraZoom.toFixed(2)}x ({Math.round(gameUI.settings.cameraZoom * 100)}%)</strong>
+                </div>
+
+                <div class="zoom-stepper-control">
+                  <button
+                    type="button"
+                    class="zoom-step-btn"
+                    aria-label="Reducir zoom 0.05x"
+                    disabled={gameUI.settings.cameraZoom <= 0.40}
+                    onclick={() => {
+                      const next = Math.max(0.40, Math.round((gameUI.settings.cameraZoom - 0.05) * 100) / 100);
+                      gameUI.settings.cameraZoom = next;
+                      gameUI.saveSettings();
+                    }}
+                  >-</button>
+                  <input
+                    type="range"
+                    class="custom-slider"
+                    min="0.40"
+                    max="2.50"
+                    step="0.05"
+                    style:--val-percent="{((gameUI.settings.cameraZoom - 0.40) / (2.50 - 0.40)) * 100}%"
+                    value={gameUI.settings.cameraZoom}
+                    oninput={(e) => {
+                      const val = Math.max(0.40, Math.min(2.50, Number((e.currentTarget as HTMLInputElement).value)));
+                      gameUI.settings.cameraZoom = val;
+                      gameUI.saveSettings();
+                    }}
+                  />
+                  <button
+                    type="button"
+                    class="zoom-step-btn"
+                    aria-label="Aumentar zoom 0.05x"
+                    disabled={gameUI.settings.cameraZoom >= 2.50}
+                    onclick={() => {
+                      const next = Math.min(2.50, Math.round((gameUI.settings.cameraZoom + 0.05) * 100) / 100);
+                      gameUI.settings.cameraZoom = next;
+                      gameUI.saveSettings();
+                    }}
+                  >+</button>
+                </div>
+
+                <div class="zoom-presets-row">
+                  {#each [0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 2.5] as preset}
                     <button
                       type="button"
-                      class="zoom-step-btn"
-                      aria-label="Reducir zoom 0.05x"
-                      disabled={gameUI.settings.cameraZoom <= 0.40}
+                      class="zoom-preset-chip"
+                      class:active={Math.abs(gameUI.settings.cameraZoom - preset) < 0.02}
                       onclick={() => {
-                        const next = Math.max(0.40, Math.round((gameUI.settings.cameraZoom - 0.05) * 100) / 100);
-                        gameUI.settings.cameraZoom = next;
+                        gameUI.settings.cameraZoom = preset;
                         gameUI.saveSettings();
                       }}
-                    >-</button>
-                    <input
-                      type="range"
-                      class="custom-slider"
-                      min="0.40"
-                      max="2.50"
-                      step="0.05"
-                      style="--val-percent: {((gameUI.settings.cameraZoom - 0.40) / (2.50 - 0.40)) * 100}%;"
-                      value={gameUI.settings.cameraZoom}
-                      oninput={(e) => {
-                        const val = Math.max(0.40, Math.min(2.50, Number((e.currentTarget as HTMLInputElement).value)));
-                        gameUI.settings.cameraZoom = val;
-                        gameUI.saveSettings();
-                      }}
-                    />
-                    <button
-                      type="button"
-                      class="zoom-step-btn"
-                      aria-label="Aumentar zoom 0.05x"
-                      disabled={gameUI.settings.cameraZoom >= 2.50}
-                      onclick={() => {
-                        const next = Math.min(2.50, Math.round((gameUI.settings.cameraZoom + 0.05) * 100) / 100);
-                        gameUI.settings.cameraZoom = next;
-                        gameUI.saveSettings();
-                      }}
-                    >+</button>
-                  </div>
-                  <div class="zoom-presets-row flex flex-wrap gap-1 mt-1">
-                    {#each [0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 2.5] as preset}
+                    >{preset}x</button>
+                  {/each}
+                </div>
+              </div>
+
+              <div class="card-inner-divider"></div>
+
+              <!-- Límite de FPS -->
+              <div class="video-setting-row wrap-on-narrow">
+                <div class="setting-copy">
+                  <span class="setting-title label-with-tooltip">
+                    Límite de FPS
+                    <span
+                      class="info-tooltip-wrapper"
+                      tabindex="0"
+                      role="button"
+                      aria-label="Info límite de FPS"
+                      use:tooltip={"Limita la frecuencia de renderizado visual sin alterar el paso físico fijo de 60 Hz."}
+                    >
+                      <svg class="info-help-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="12" cy="12" r="10"></circle>
+                        <line x1="12" y1="16" x2="12" y2="12"></line>
+                        <line x1="12" y1="8" x2="12.01" y2="8"></line>
+                      </svg>
+                    </span>
+                  </span>
+                  <span class="setting-desc">Frecuencia máxima de cuadros por segundo (Ilimitado usa el refresco nativo)</span>
+                </div>
+                <div class="setting-control">
+                  <div class="segmented-pills fps-pills" role="group" aria-label="Límite de FPS">
+                    {#each FPS_CAP_OPTIONS as opt (opt.value)}
                       <button
                         type="button"
-                        class="zoom-preset-chip {Math.abs(gameUI.settings.cameraZoom - preset) < 0.02 ? 'active' : ''}"
-                        onclick={() => {
-                          gameUI.settings.cameraZoom = preset;
-                          gameUI.saveSettings();
-                        }}
-                      >{preset}x</button>
+                        class="seg-pill"
+                        class:active={(gameUI.settings.fpsCap ?? 0) === opt.value}
+                        onclick={() => setFpsCap(opt.value)}
+                      >
+                        {opt.label}
+                      </button>
                     {/each}
                   </div>
                 </div>
+              </div>
 
-                <!-- Extrapolación automática + manual (0 - 250 ms) -->
-                <div class="slider-row pt-2">
-                  <div class="toggle-row auto-extrap-row">
-                    <span class="param-name label-with-tooltip">
-                      Extrapolación automática (según ping)
-                      <span
-                        class="info-tooltip-wrapper"
-                        tabindex="0"
-                        role="button"
-                        aria-label="Info extrapolación automática"
-                        use:tooltip={"Ajusta automáticamente la extrapolación visual entre 0 ms (ping <= 20 ms) y 85 ms según tu latencia actual."}
-                      >
-                        <svg class="info-help-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                          <circle cx="12" cy="12" r="10"></circle>
-                          <line x1="12" y1="16" x2="12" y2="12"></line>
-                          <line x1="12" y1="8" x2="12.01" y2="8"></line>
-                        </svg>
-                      </span>
+              <div class="card-inner-divider"></div>
+
+              <!-- Extrapolación automática inteligente -->
+              <div class="video-setting-row">
+                <div class="setting-copy">
+                  <span class="setting-title label-with-tooltip">
+                    Extrapolación automática (según ping)
+                    <span
+                      class="info-tooltip-wrapper"
+                      tabindex="0"
+                      role="button"
+                      aria-label="Info extrapolación automática"
+                      use:tooltip={"Ajusta automáticamente la extrapolación visual entre 0 ms (ping <= 20 ms) y 85 ms según tu latencia actual."}
+                    >
+                      <svg class="info-help-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="12" cy="12" r="10"></circle>
+                        <line x1="12" y1="16" x2="12" y2="12"></line>
+                        <line x1="12" y1="8" x2="12.01" y2="8"></line>
+                      </svg>
                     </span>
-                    <div class="auto-extrap-controls">
-                      {#if gameUI.settings.autoExtrapolation !== false}
-                        <span class="val-badge auto-extrap-badge">Auto: {gameUI.effectiveExtrapolationMs} ms</span>
-                      {/if}
-                      <label class="switch-toggle" aria-label="Extrapolación automática (según ping)">
-                        <input
-                          id="toggle-auto-extrapolation"
-                          type="checkbox"
-                          checked={gameUI.settings.autoExtrapolation !== false}
-                          onchange={(e) => {
-                            soundFX.playUIClick();
-                            gameUI.saveSettings({ autoExtrapolation: (e.currentTarget as HTMLInputElement).checked });
-                          }}
-                        />
-                        <span class="toggle-slider"></span>
-                      </label>
-                    </div>
-                  </div>
+                  </span>
+                  <span class="setting-desc">Calibra dinámicamente la predicción visual según tu latencia en sala</span>
+                </div>
+                <div class="setting-control auto-extrap-controls">
+                  {#if gameUI.settings.autoExtrapolation !== false}
+                    <span class="val-badge auto-extrap-badge">Auto: {gameUI.effectiveExtrapolationMs} ms</span>
+                  {/if}
+                  <label class="switch-toggle" aria-label="Extrapolación automática (según ping)">
+                    <input
+                      id="toggle-auto-extrapolation"
+                      type="checkbox"
+                      checked={gameUI.settings.autoExtrapolation !== false}
+                      onchange={(e) => {
+                        soundFX.playUIClick();
+                        gameUI.saveSettings({ autoExtrapolation: (e.currentTarget as HTMLInputElement).checked });
+                      }}
+                    />
+                    <span class="toggle-slider"></span>
+                  </label>
+                </div>
+              </div>
 
-                  <div class="slider-meta">
-                    <span class="param-name label-with-tooltip">
+              <!-- Extrapolación manual (0 - 250 ms) -->
+              <div class="slider-block" class:control-dimmed={gameUI.settings.autoExtrapolation !== false}>
+                <div class="slider-meta">
+                  <div class="setting-copy">
+                    <span class="setting-title label-with-tooltip">
                       Extrapolación manual (0 - 250 ms)
                       <span
                         class="info-tooltip-wrapper"
@@ -1275,78 +1357,142 @@
                         </svg>
                       </span>
                     </span>
-                    <div class="extrap-stepper-group">
-                      <button
-                        type="button"
-                        class="extrap-step-btn"
-                        aria-label="Reducir extrapolación 5 ms"
-                        disabled={gameUI.settings.autoExtrapolation !== false || gameUI.extrapolationMs <= 0}
-                        onclick={() => {
-                          soundFX.playUIClick();
-                          gameUI.setExtrapolationMs(gameUI.extrapolationMs - 5);
-                        }}
-                      >
-                        −
-                      </button>
+                    <span class="setting-desc">Desactiva el modo automático para fijar un adelanto manual en milisegundos</span>
+                  </div>
+                  <div class="extrap-stepper-group">
+                    <button
+                      type="button"
+                      class="extrap-step-btn"
+                      aria-label="Reducir extrapolación 5 ms"
+                      disabled={gameUI.settings.autoExtrapolation !== false || gameUI.extrapolationMs <= 0}
+                      onclick={() => {
+                        soundFX.playUIClick();
+                        gameUI.setExtrapolationMs(gameUI.extrapolationMs - 5);
+                      }}
+                    >
+                      −
+                    </button>
+                    <input
+                      id="input-extrapolation-ms"
+                      type="number"
+                      class="extrap-number-input"
+                      min="0"
+                      max="250"
+                      step="5"
+                      aria-label="Extrapolación en milisegundos"
+                      disabled={gameUI.settings.autoExtrapolation !== false}
+                      value={gameUI.extrapolationMs}
+                      oninput={(e) => {
+                        const raw = Number((e.currentTarget as HTMLInputElement).value);
+                        if (Number.isFinite(raw)) {
+                          gameUI.setExtrapolationMs(raw);
+                        }
+                      }}
+                    />
+                    <span class="extrap-unit-badge">ms</span>
+                    <button
+                      type="button"
+                      class="extrap-step-btn"
+                      aria-label="Aumentar extrapolación 5 ms"
+                      disabled={gameUI.settings.autoExtrapolation !== false || gameUI.extrapolationMs >= 250}
+                      onclick={() => {
+                        soundFX.playUIClick();
+                        gameUI.setExtrapolationMs(gameUI.extrapolationMs + 5);
+                      }}
+                    >
+                      +
+                    </button>
+                  </div>
+                </div>
+                <input
+                  id="slider-extrapolation-ms"
+                  type="range"
+                  class="custom-slider"
+                  min="0"
+                  max="250"
+                  step="5"
+                  disabled={gameUI.settings.autoExtrapolation !== false}
+                  style:--val-percent="{(gameUI.extrapolationMs / 250) * 100}%"
+                  value={gameUI.extrapolationMs}
+                  oninput={(e) => {
+                    gameUI.setExtrapolationMs(Number((e.currentTarget as HTMLInputElement).value));
+                  }}
+                />
+              </div>
+            </section>
+
+            <!-- TARJETA 2: JUGADORES Y EFECTOS VISUALES -->
+            <section class="graphics-card video-section-card" aria-labelledby="video-card-players">
+              <div class="video-card-head">
+                <span class="video-card-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="12" cy="12" r="9"></circle>
+                    <path d="M12 3a9 9 0 0 1 6 15.7"></path>
+                    <circle cx="12" cy="12" r="3"></circle>
+                  </svg>
+                </span>
+                <div>
+                  <h4 id="video-card-players" class="card-title">Jugadores y Efectos Visuales</h4>
+                  <p class="video-card-sub">Visibilidad de discos, indicadores sociales y efectos sobre el campo</p>
+                </div>
+              </div>
+
+              <div class="toggles-column video-toggles-list">
+                <!-- Ver avatares de cada jugador -->
+                <div class="video-setting-row">
+                  <div class="setting-copy">
+                    <span class="setting-title">Ver avatares de cada jugador</span>
+                    <span class="setting-desc">Al desactivarlo, los discos muestran únicamente el color y diseño de su camiseta.</span>
+                  </div>
+                  <div class="setting-control">
+                    <label class="switch-toggle" aria-label="Ver avatares de cada jugador">
                       <input
-                        id="input-extrapolation-ms"
-                        type="number"
-                        class="extrap-number-input"
-                        min="0"
-                        max="250"
-                        step="5"
-                        aria-label="Extrapolación en milisegundos"
-                        disabled={gameUI.settings.autoExtrapolation !== false}
-                        value={gameUI.extrapolationMs}
-                        oninput={(e) => {
-                          const raw = Number((e.currentTarget as HTMLInputElement).value);
-                          if (Number.isFinite(raw)) {
-                            gameUI.setExtrapolationMs(raw);
-                          }
+                        type="checkbox"
+                        checked={gameUI.settings.showPlayerAvatars !== false}
+                        onchange={(e) => {
+                          soundFX.playUIClick();
+                          gameUI.settings.showPlayerAvatars = (e.currentTarget as HTMLInputElement).checked;
+                          gameUI.saveSettings();
                         }}
                       />
-                      <span class="extrap-unit-badge">ms</span>
-                      <button
-                        type="button"
-                        class="extrap-step-btn"
-                        aria-label="Aumentar extrapolación 5 ms"
-                        disabled={gameUI.settings.autoExtrapolation !== false || gameUI.extrapolationMs >= 250}
-                        onclick={() => {
-                          soundFX.playUIClick();
-                          gameUI.setExtrapolationMs(gameUI.extrapolationMs + 5);
-                        }}
-                      >
-                        +
-                      </button>
-                    </div>
+                      <span class="toggle-slider"></span>
+                    </label>
                   </div>
-                  <input
-                    id="slider-extrapolation-ms"
-                    type="range"
-                    class="custom-slider"
-                    min="0"
-                    max="250"
-                    step="5"
-                    disabled={gameUI.settings.autoExtrapolation !== false}
-                    style="--val-percent: {(gameUI.extrapolationMs / 250) * 100}%;"
-                    value={gameUI.extrapolationMs}
-                    oninput={(e) => {
-                      gameUI.setExtrapolationMs(Number((e.currentTarget as HTMLInputElement).value));
-                    }}
-                  />
                 </div>
 
-                <!-- Opacidad del minimapa -->
-                <div class="slider-row pt-2">
-                  <div class="slider-meta">
-                    <span class="param-name label-with-tooltip">
-                      Opacidad del minimapa
+                <!-- Mostrar burbuja de escribiendo -->
+                <div class="video-setting-row">
+                  <div class="setting-copy">
+                    <span class="setting-title">Mostrar burbuja de escribiendo</span>
+                    <span class="setting-desc">Muestra u oculta el indicador sobre el jugador cuando está escribiendo en el chat.</span>
+                  </div>
+                  <div class="setting-control">
+                    <label class="switch-toggle" aria-label="Mostrar burbuja de escribiendo">
+                      <input
+                        type="checkbox"
+                        checked={gameUI.settings.showTypingIndicator !== false}
+                        onchange={(e) => {
+                          soundFX.playUIClick();
+                          gameUI.settings.showTypingIndicator = (e.currentTarget as HTMLInputElement).checked;
+                          gameUI.saveSettings();
+                        }}
+                      />
+                      <span class="toggle-slider"></span>
+                    </label>
+                  </div>
+                </div>
+
+                <!-- Resplandor / Aura en jugadores -->
+                <div class="video-setting-row">
+                  <div class="setting-copy">
+                    <span class="setting-title label-with-tooltip">
+                      Resplandor / Aura en jugadores
                       <span
                         class="info-tooltip-wrapper"
                         tabindex="0"
                         role="button"
-                        aria-label="Info opacidad minimapa"
-                        use:tooltip={"Transparencia del radar sobre el campo de juego"}
+                        aria-label="Info aura"
+                        use:tooltip={"Aura neón distintiva alrededor del disco del jugador"}
                       >
                         <svg class="info-help-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                           <circle cx="12" cy="12" r="10"></circle>
@@ -1355,27 +1501,158 @@
                         </svg>
                       </span>
                     </span>
-                    <strong class="param-val">{Math.round(gameUI.settings.minimapOpacity)}%</strong>
+                    <span class="setting-desc">Halo luminoso alrededor de los discos para distinguir el ritmo en cancha</span>
                   </div>
-                  <input
-                    type="range"
-                    class="custom-slider"
-                    min="10"
-                    max="100"
-                    step="5"
-                    style="--val-percent: {((gameUI.settings.minimapOpacity - 10) / 90) * 100}%;"
-                    value={gameUI.settings.minimapOpacity}
-                    oninput={(e) => {
-                      gameUI.settings.minimapOpacity = Number((e.currentTarget as HTMLInputElement).value);
-                      gameUI.saveSettings();
-                    }}
-                  />
+                  <div class="setting-control">
+                    <label class="switch-toggle" aria-label="Resplandor de jugadores">
+                      <input
+                        type="checkbox"
+                        checked={gameUI.settings.playerGlowEnabled}
+                        onchange={(e) => {
+                          soundFX.playUIClick();
+                          gameUI.settings.playerGlowEnabled = (e.currentTarget as HTMLInputElement).checked;
+                          gameUI.saveSettings();
+                        }}
+                      />
+                      <span class="toggle-slider"></span>
+                    </label>
+                  </div>
                 </div>
 
-                <!-- Opacidad del chat -->
-                <div class="slider-row pt-2">
-                  <div class="slider-meta">
-                    <span class="param-name label-with-tooltip">
+                <!-- Estela de curva Magnus -->
+                <div class="video-setting-row">
+                  <div class="setting-copy">
+                    <span class="setting-title label-with-tooltip">
+                      Estela de curva Magnus
+                      <span
+                        class="info-tooltip-wrapper"
+                        tabindex="0"
+                        role="button"
+                        aria-label="Info estela"
+                        use:tooltip={"Rastro visual curvado al aplicar efecto de giro al balón"}
+                      >
+                        <svg class="info-help-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                          <circle cx="12" cy="12" r="10"></circle>
+                          <line x1="12" y1="16" x2="12" y2="12"></line>
+                          <line x1="12" y1="8" x2="12.01" y2="8"></line>
+                        </svg>
+                      </span>
+                    </span>
+                    <span class="setting-desc">Trayectoria luminosa neón cuando el balón lleva efecto de giro</span>
+                  </div>
+                  <div class="setting-control">
+                    <label class="switch-toggle" aria-label="Estela de curva Magnus">
+                      <input
+                        type="checkbox"
+                        checked={gameUI.settings.magnusTrailEnabled}
+                        onchange={(e) => {
+                          soundFX.playUIClick();
+                          gameUI.settings.magnusTrailEnabled = (e.currentTarget as HTMLInputElement).checked;
+                          gameUI.settings.ballTrailEnabled = gameUI.settings.magnusTrailEnabled;
+                          gameUI.saveSettings();
+                        }}
+                      />
+                      <span class="toggle-slider"></span>
+                    </label>
+                  </div>
+                </div>
+
+                <!-- Efecto de fuego en tiros (>950 px/s) -->
+                <div class="video-setting-row">
+                  <div class="setting-copy">
+                    <span class="setting-title label-with-tooltip">
+                      Efecto de fuego en tiros (&gt;950 px/s)
+                      <span
+                        class="info-tooltip-wrapper"
+                        tabindex="0"
+                        role="button"
+                        aria-label="Info fuego"
+                        use:tooltip={"Llamas visuales en lanzamientos de alta potencia"}
+                      >
+                        <svg class="info-help-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                          <circle cx="12" cy="12" r="10"></circle>
+                          <line x1="12" y1="16" x2="12" y2="12"></line>
+                          <line x1="12" y1="8" x2="12.01" y2="8"></line>
+                        </svg>
+                      </span>
+                    </span>
+                    <span class="setting-desc">Ignición en el balón al superar los 950 px/s tras un remate potente</span>
+                  </div>
+                  <div class="setting-control">
+                    <label class="switch-toggle" aria-label="Efecto de fuego">
+                      <input
+                        type="checkbox"
+                        checked={gameUI.settings.fireShotEnabled}
+                        onchange={(e) => {
+                          soundFX.playUIClick();
+                          gameUI.settings.fireShotEnabled = (e.currentTarget as HTMLInputElement).checked;
+                          gameUI.saveSettings();
+                        }}
+                      />
+                      <span class="toggle-slider"></span>
+                    </label>
+                  </div>
+                </div>
+
+                <!-- Sacudida de pantalla (Screen shake) -->
+                <div class="video-setting-row">
+                  <div class="setting-copy">
+                    <span class="setting-title label-with-tooltip">
+                      Sacudida de pantalla (Screen shake)
+                      <span
+                        class="info-tooltip-wrapper"
+                        tabindex="0"
+                        role="button"
+                        aria-label="Info screen shake"
+                        use:tooltip={"Vibración sutil al impactar postes o marcar gol"}
+                      >
+                        <svg class="info-help-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                          <circle cx="12" cy="12" r="10"></circle>
+                          <line x1="12" y1="16" x2="12" y2="12"></line>
+                          <line x1="12" y1="8" x2="12.01" y2="8"></line>
+                        </svg>
+                      </span>
+                    </span>
+                    <span class="setting-desc">Micro-vibración de cámara en goles y choques con los postes</span>
+                  </div>
+                  <div class="setting-control">
+                    <label class="switch-toggle" aria-label="Screen shake">
+                      <input
+                        type="checkbox"
+                        checked={gameUI.screenShake}
+                        onchange={(e) => {
+                          soundFX.playUIClick();
+                          gameUI.screenShake = (e.currentTarget as HTMLInputElement).checked;
+                        }}
+                      />
+                      <span class="toggle-slider"></span>
+                    </label>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <!-- TARJETA 3: INTERFAZ, CHAT Y MINIMAPA -->
+            <section class="graphics-card video-section-card" aria-labelledby="video-card-hud">
+              <div class="video-card-head">
+                <span class="video-card-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <rect x="3" y="3" width="18" height="18" rx="2"></rect>
+                    <line x1="3" y1="9" x2="21" y2="9"></line>
+                    <line x1="9" y1="21" x2="9" y2="9"></line>
+                  </svg>
+                </span>
+                <div>
+                  <h4 id="video-card-hud" class="card-title">Interfaz, Chat y Minimapa</h4>
+                  <p class="video-card-sub">Transparencias del HUD, radar táctico y avisos en cancha</p>
+                </div>
+              </div>
+
+              <!-- Opacidad del chat -->
+              <div class="slider-block">
+                <div class="slider-meta">
+                  <div class="setting-copy">
+                    <span class="setting-title label-with-tooltip">
                       Opacidad del chat
                       <span
                         class="info-tooltip-wrapper"
@@ -1391,32 +1668,78 @@
                         </svg>
                       </span>
                     </span>
-                    <strong class="param-val">{Math.round(gameUI.settings.chatOpacity)}%</strong>
+                    <span class="setting-desc">Controla la visibilidad del fondo y mensajes del chat en partido</span>
                   </div>
-                  <input
-                    type="range"
-                    class="custom-slider"
-                    min="10"
-                    max="100"
-                    step="5"
-                    style="--val-percent: {((gameUI.settings.chatOpacity - 10) / 90) * 100}%;"
-                    value={gameUI.settings.chatOpacity}
-                    oninput={(e) => {
-                      gameUI.settings.chatOpacity = Number((e.currentTarget as HTMLInputElement).value);
-                      gameUI.saveSettings();
-                    }}
-                  />
+                  <strong class="param-val-pill">{Math.round(gameUI.settings.chatOpacity)}%</strong>
                 </div>
+                <input
+                  type="range"
+                  class="custom-slider"
+                  min="10"
+                  max="100"
+                  step="5"
+                  style:--val-percent="{((gameUI.settings.chatOpacity - 10) / 90) * 100}%"
+                  value={gameUI.settings.chatOpacity}
+                  oninput={(e) => {
+                    gameUI.settings.chatOpacity = Number((e.currentTarget as HTMLInputElement).value);
+                    gameUI.saveSettings();
+                  }}
+                />
+              </div>
 
-                <!-- Tamaño del minimapa -->
-                <div class="segmented-control-row pt-3">
-                  <span class="param-name">Tamaño del minimapa</span>
+              <div class="card-inner-divider"></div>
+
+              <!-- Minimapa activo -->
+              <div class="video-setting-row">
+                <div class="setting-copy">
+                  <span class="setting-title label-with-tooltip">
+                    Minimapa activo
+                    <span
+                      class="info-tooltip-wrapper"
+                      tabindex="0"
+                      role="button"
+                      aria-label="Info minimapa"
+                      use:tooltip={"Radar táctico de posiciones en la esquina de la pantalla"}
+                    >
+                      <svg class="info-help-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="12" cy="12" r="10"></circle>
+                        <line x1="12" y1="16" x2="12" y2="12"></line>
+                        <line x1="12" y1="8" x2="12.01" y2="8"></line>
+                      </svg>
+                    </span>
+                  </span>
+                  <span class="setting-desc">Muestra el radar táctico en tiempo real con jugadores y balón</span>
+                </div>
+                <div class="setting-control">
+                  <label class="switch-toggle" aria-label="Minimapa activo">
+                    <input
+                      type="checkbox"
+                      checked={gameUI.settings.minimapEnabled}
+                      onchange={(e) => {
+                        soundFX.playUIClick();
+                        gameUI.settings.minimapEnabled = (e.currentTarget as HTMLInputElement).checked;
+                        gameUI.saveSettings();
+                      }}
+                    />
+                    <span class="toggle-slider"></span>
+                  </label>
+                </div>
+              </div>
+
+              <!-- Tamaño del minimapa -->
+              <div class="video-setting-row wrap-on-narrow">
+                <div class="setting-copy">
+                  <span class="setting-title">Tamaño del minimapa</span>
+                  <span class="setting-desc">Escala visual del radar en la esquina inferior</span>
+                </div>
+                <div class="setting-control">
                   <div class="segmented-pills">
                     <button
                       type="button"
                       class="seg-pill"
                       class:active={gameUI.settings.minimapSize === 'small'}
                       onclick={() => {
+                        soundFX.playUIClick();
                         gameUI.settings.minimapSize = 'small';
                         gameUI.saveSettings();
                       }}
@@ -1428,6 +1751,7 @@
                       class="seg-pill"
                       class:active={gameUI.settings.minimapSize === 'medium'}
                       onclick={() => {
+                        soundFX.playUIClick();
                         gameUI.settings.minimapSize = 'medium';
                         gameUI.saveSettings();
                       }}
@@ -1439,6 +1763,7 @@
                       class="seg-pill"
                       class:active={gameUI.settings.minimapSize === 'large'}
                       onclick={() => {
+                        soundFX.playUIClick();
                         gameUI.settings.minimapSize = 'large';
                         gameUI.saveSettings();
                       }}
@@ -1447,18 +1772,20 @@
                     </button>
                   </div>
                 </div>
+              </div>
 
-                <!-- Toggles Interfaz -->
-                <div class="toggles-column pt-3">
-                  <div class="toggle-item">
-                    <span class="label-with-tooltip">
-                      Minimapa activo
+              <!-- Opacidad del minimapa -->
+              <div class="slider-block">
+                <div class="slider-meta">
+                  <div class="setting-copy">
+                    <span class="setting-title label-with-tooltip">
+                      Opacidad del minimapa
                       <span
                         class="info-tooltip-wrapper"
                         tabindex="0"
                         role="button"
-                        aria-label="Info minimapa"
-                        use:tooltip={"Radar táctico de posiciones en la esquina de la pantalla"}
+                        aria-label="Info opacidad minimapa"
+                        use:tooltip={"Transparencia del radar sobre el campo de juego"}
                       >
                         <svg class="info-help-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                           <circle cx="12" cy="12" r="10"></circle>
@@ -1467,324 +1794,222 @@
                         </svg>
                       </span>
                     </span>
-                    <label class="switch-toggle" aria-label="Minimapa activo">
-                      <input
-                        type="checkbox"
-                        checked={gameUI.settings.minimapEnabled}
-                        onchange={(e) => {
-                          gameUI.settings.minimapEnabled = (e.currentTarget as HTMLInputElement).checked;
-                          gameUI.saveSettings();
-                        }}
-                      />
-                      <span class="toggle-slider"></span>
-                    </label>
+                    <span class="setting-desc">Ajusta la transparencia del radar sobre la cancha</span>
                   </div>
+                  <strong class="param-val-pill">{Math.round(gameUI.settings.minimapOpacity)}%</strong>
+                </div>
+                <input
+                  type="range"
+                  class="custom-slider"
+                  min="10"
+                  max="100"
+                  step="5"
+                  style:--val-percent="{((gameUI.settings.minimapOpacity - 10) / 90) * 100}%"
+                  value={gameUI.settings.minimapOpacity}
+                  oninput={(e) => {
+                    gameUI.settings.minimapOpacity = Number((e.currentTarget as HTMLInputElement).value);
+                    gameUI.saveSettings();
+                  }}
+                />
+              </div>
 
-                  <div class="toggle-item">
-                    <span class="label-with-tooltip">
-                      Cono de visión en minimapa
-                      <span
-                        class="info-tooltip-wrapper"
-                        tabindex="0"
-                        role="button"
-                        aria-label="Info cono de visión"
-                        use:tooltip={"Área proyectada de la cámara visible en el radar"}
-                      >
-                        <svg class="info-help-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                          <circle cx="12" cy="12" r="10"></circle>
-                          <line x1="12" y1="16" x2="12" y2="12"></line>
-                          <line x1="12" y1="8" x2="12.01" y2="8"></line>
-                        </svg>
-                      </span>
+              <!-- Cono de visión / recuadro de cámara en minimapa -->
+              <div class="video-setting-row">
+                <div class="setting-copy">
+                  <span class="setting-title label-with-tooltip">
+                    Cono de visión en minimapa
+                    <span
+                      class="info-tooltip-wrapper"
+                      tabindex="0"
+                      role="button"
+                      aria-label="Info cono de visión"
+                      use:tooltip={"Área proyectada de la cámara visible en el radar"}
+                    >
+                      <svg class="info-help-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="12" cy="12" r="10"></circle>
+                        <line x1="12" y1="16" x2="12" y2="12"></line>
+                        <line x1="12" y1="8" x2="12.01" y2="8"></line>
+                      </svg>
                     </span>
-                    <label class="switch-toggle" aria-label="Cono de visión de cámara">
-                      <input
-                        type="checkbox"
-                        checked={gameUI.settings.cameraFrustumOnMinimap}
-                        onchange={(e) => {
-                          gameUI.settings.cameraFrustumOnMinimap = (e.currentTarget as HTMLInputElement).checked;
-                          gameUI.settings.minimapCameraFrustum = gameUI.settings.cameraFrustumOnMinimap;
-                          gameUI.saveSettings();
-                        }}
-                      />
-                      <span class="toggle-slider"></span>
-                    </label>
-                  </div>
+                  </span>
+                  <span class="setting-desc">Dibuja el recuadro de cámara visible dentro del minimapa</span>
+                </div>
+                <div class="setting-control">
+                  <label class="switch-toggle" aria-label="Cono de visión de cámara">
+                    <input
+                      type="checkbox"
+                      checked={gameUI.settings.cameraFrustumOnMinimap}
+                      onchange={(e) => {
+                        soundFX.playUIClick();
+                        gameUI.settings.cameraFrustumOnMinimap = (e.currentTarget as HTMLInputElement).checked;
+                        gameUI.settings.minimapCameraFrustum = gameUI.settings.cameraFrustumOnMinimap;
+                        gameUI.saveSettings();
+                      }}
+                    />
+                    <span class="toggle-slider"></span>
+                  </label>
                 </div>
               </div>
 
-              <!-- COLUMNA 2: Efectos Visuales de Cancha -->
-              <div class="col-visuals-ball">
-                <!-- Efectos Visuales de Cancha -->
-                <div class="graphics-card">
-                  <h4 class="card-title">Efectos Visuales de Cancha</h4>
-                  <div class="toggles-column">
-                    <div class="toggle-item">
-                      <span class="label-with-tooltip">
-                        Sacudida de pantalla (Screen shake)
-                        <span
-                          class="info-tooltip-wrapper"
-                          tabindex="0"
-                          role="button"
-                          aria-label="Info screen shake"
-                          use:tooltip={"Vibración sutil al impactar postes o marcar gol"}
-                        >
-                          <svg class="info-help-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <circle cx="12" cy="12" r="10"></circle>
-                            <line x1="12" y1="16" x2="12" y2="12"></line>
-                            <line x1="12" y1="8" x2="12.01" y2="8"></line>
-                          </svg>
-                        </span>
-                      </span>
-                      <label class="switch-toggle" aria-label="Screen shake">
-                        <input
-                          type="checkbox"
-                          checked={gameUI.screenShake}
-                          onchange={(e) => {
-                            gameUI.screenShake = (e.currentTarget as HTMLInputElement).checked;
-                          }}
-                        />
-                        <span class="toggle-slider"></span>
-                      </label>
-                    </div>
+              <div class="card-inner-divider"></div>
 
-                    <div class="toggle-item">
-                      <span class="label-with-tooltip">
-                        Resplandor / Aura en jugadores
-                        <span
-                          class="info-tooltip-wrapper"
-                          tabindex="0"
-                          role="button"
-                          aria-label="Info aura"
-                          use:tooltip={"Aura neón distintiva alrededor del disco del jugador"}
-                        >
-                          <svg class="info-help-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <circle cx="12" cy="12" r="10"></circle>
-                            <line x1="12" y1="16" x2="12" y2="12"></line>
-                            <line x1="12" y1="8" x2="12.01" y2="8"></line>
-                          </svg>
-                        </span>
-                      </span>
-                      <label class="switch-toggle" aria-label="Resplandor de jugadores">
-                        <input
-                          type="checkbox"
-                          checked={gameUI.settings.playerGlowEnabled}
-                          onchange={(e) => {
-                            gameUI.settings.playerGlowEnabled = (e.currentTarget as HTMLInputElement).checked;
-                            gameUI.saveSettings();
-                          }}
-                        />
-                        <span class="toggle-slider"></span>
-                      </label>
-                    </div>
-
-                    <div class="toggle-item">
-                      <span class="label-with-tooltip">
-                        Estela de curva Magnus
-                        <span
-                          class="info-tooltip-wrapper"
-                          tabindex="0"
-                          role="button"
-                          aria-label="Info estela"
-                          use:tooltip={"Rastro visual curvado al aplicar efecto de giro al balón"}
-                        >
-                          <svg class="info-help-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <circle cx="12" cy="12" r="10"></circle>
-                            <line x1="12" y1="16" x2="12" y2="12"></line>
-                            <line x1="12" y1="8" x2="12.01" y2="8"></line>
-                          </svg>
-                        </span>
-                      </span>
-                      <label class="switch-toggle" aria-label="Estela de curva Magnus">
-                        <input
-                          type="checkbox"
-                          checked={gameUI.settings.magnusTrailEnabled}
-                          onchange={(e) => {
-                            gameUI.settings.magnusTrailEnabled = (e.currentTarget as HTMLInputElement).checked;
-                            gameUI.settings.ballTrailEnabled = gameUI.settings.magnusTrailEnabled;
-                            gameUI.saveSettings();
-                          }}
-                        />
-                        <span class="toggle-slider"></span>
-                      </label>
-                    </div>
-
-                    <div class="toggle-item">
-                      <span class="label-with-tooltip">
-                        Efecto de fuego en tiros (&gt;950 px/s)
-                        <span
-                          class="info-tooltip-wrapper"
-                          tabindex="0"
-                          role="button"
-                          aria-label="Info fuego"
-                          use:tooltip={"Llamas visuales en lanzamientos de alta potencia"}
-                        >
-                          <svg class="info-help-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <circle cx="12" cy="12" r="10"></circle>
-                            <line x1="12" y1="16" x2="12" y2="12"></line>
-                            <line x1="12" y1="8" x2="12.01" y2="8"></line>
-                          </svg>
-                        </span>
-                      </span>
-                      <label class="switch-toggle" aria-label="Efecto de fuego">
-                        <input
-                          type="checkbox"
-                          checked={gameUI.settings.fireShotEnabled}
-                          onchange={(e) => {
-                            gameUI.settings.fireShotEnabled = (e.currentTarget as HTMLInputElement).checked;
-                            gameUI.saveSettings();
-                          }}
-                        />
-                        <span class="toggle-slider"></span>
-                      </label>
-                    </div>
-
-                    <div class="toggle-item">
-                      <span class="label-with-tooltip">
-                        Textos flotantes de puntos / eventos
-                        <span
-                          class="info-tooltip-wrapper"
-                          tabindex="0"
-                          role="button"
-                          aria-label="Info textos flotantes"
-                          use:tooltip={"Notificaciones dinámicas de puntos y eventos en pantalla (personalizables por categoría)"}
-                        >
-                          <svg class="info-help-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <circle cx="12" cy="12" r="10"></circle>
-                            <line x1="12" y1="16" x2="12" y2="12"></line>
-                            <line x1="12" y1="8" x2="12.01" y2="8"></line>
-                          </svg>
-                        </span>
-                      </span>
-                      <label class="switch-toggle" aria-label="Textos flotantes">
-                        <input
-                          type="checkbox"
-                          checked={gameUI.settings.floatingPointsEnabled}
-                          onchange={(e) => {
-                            gameUI.settings.floatingPointsEnabled = (e.currentTarget as HTMLInputElement).checked;
-                            gameUI.saveSettings();
-                          }}
-                        />
-                        <span class="toggle-slider"></span>
-                      </label>
-                    </div>
-
-                    {#if gameUI.settings.floatingPointsEnabled}
-                      <div class="floating-subtoggles-grid" aria-label="Categorías de textos flotantes">
-                        <label class="floating-subtoggle-chip">
-                          <input
-                            type="checkbox"
-                            checked={gameUI.settings.floatingGoals}
-                            onchange={(e) => {
-                              gameUI.settings.floatingGoals = (e.currentTarget as HTMLInputElement).checked;
-                              gameUI.saveSettings();
-                            }}
-                          />
-                          <span>Goles (+100)</span>
-                        </label>
-                        <label class="floating-subtoggle-chip">
-                          <input
-                            type="checkbox"
-                            checked={gameUI.settings.floatingAssists}
-                            onchange={(e) => {
-                              gameUI.settings.floatingAssists = (e.currentTarget as HTMLInputElement).checked;
-                              gameUI.saveSettings();
-                            }}
-                          />
-                          <span>Asistencias (+50)</span>
-                        </label>
-                        <label class="floating-subtoggle-chip">
-                          <input
-                            type="checkbox"
-                            checked={gameUI.settings.floatingSaves}
-                            onchange={(e) => {
-                              gameUI.settings.floatingSaves = (e.currentTarget as HTMLInputElement).checked;
-                              gameUI.saveSettings();
-                            }}
-                          />
-                          <span>Atajadas (+30)</span>
-                        </label>
-                        <label class="floating-subtoggle-chip">
-                          <input
-                            type="checkbox"
-                            checked={gameUI.settings.floatingShots}
-                            onchange={(e) => {
-                              gameUI.settings.floatingShots = (e.currentTarget as HTMLInputElement).checked;
-                              gameUI.saveSettings();
-                            }}
-                          />
-                          <span>Tiros al arco (+20)</span>
-                        </label>
-                        <label class="floating-subtoggle-chip">
-                          <input
-                            type="checkbox"
-                            checked={gameUI.settings.floatingPasses}
-                            onchange={(e) => {
-                              gameUI.settings.floatingPasses = (e.currentTarget as HTMLInputElement).checked;
-                              gameUI.saveSettings();
-                            }}
-                          />
-                          <span>Pases (+10)</span>
-                        </label>
-                        <label class="floating-subtoggle-chip">
-                          <input
-                            type="checkbox"
-                            checked={gameUI.settings.floatingHattricks}
-                            onchange={(e) => {
-                              gameUI.settings.floatingHattricks = (e.currentTarget as HTMLInputElement).checked;
-                              gameUI.saveSettings();
-                            }}
-                          />
-                          <span>Hat-Tricks</span>
-                        </label>
-                        <label class="floating-subtoggle-chip">
-                          <input
-                            type="checkbox"
-                            checked={gameUI.settings.floatingOwnGoals}
-                            onchange={(e) => {
-                              gameUI.settings.floatingOwnGoals = (e.currentTarget as HTMLInputElement).checked;
-                              gameUI.saveSettings();
-                            }}
-                          />
-                          <span>Autogoles (-50)</span>
-                        </label>
-                      </div>
-                    {/if}
-
-                    <div class="toggle-item">
-                      <span class="label-with-tooltip">
-                        Indicadores perimetrales
-                        <span
-                          class="info-tooltip-wrapper"
-                          tabindex="0"
-                          role="button"
-                          aria-label="Info indicadores"
-                          use:tooltip={"Flechas direccionales para jugadores fuera de pantalla"}
-                        >
-                          <svg class="info-help-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <circle cx="12" cy="12" r="10"></circle>
-                            <line x1="12" y1="16" x2="12" y2="12"></line>
-                            <line x1="12" y1="8" x2="12.01" y2="8"></line>
-                          </svg>
-                        </span>
-                      </span>
-                      <label class="switch-toggle" aria-label="Indicadores perimetrales">
-                        <input
-                          type="checkbox"
-                          checked={gameUI.settings.offscreenIndicatorsEnabled}
-                          onchange={(e) => {
-                            gameUI.settings.offscreenIndicatorsEnabled = (e.currentTarget as HTMLInputElement).checked;
-                            gameUI.settings.offscreenIndicators = gameUI.settings.offscreenIndicatorsEnabled;
-                            gameUI.saveSettings();
-                          }}
-                        />
-                        <span class="toggle-slider"></span>
-                      </label>
-                    </div>
-                  </div>
+              <!-- Indicadores perimetrales / fuera de pantalla -->
+              <div class="video-setting-row">
+                <div class="setting-copy">
+                  <span class="setting-title label-with-tooltip">
+                    Indicadores perimetrales
+                    <span
+                      class="info-tooltip-wrapper"
+                      tabindex="0"
+                      role="button"
+                      aria-label="Info indicadores"
+                      use:tooltip={"Flechas direccionales para jugadores fuera de pantalla"}
+                    >
+                      <svg class="info-help-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="12" cy="12" r="10"></circle>
+                        <line x1="12" y1="16" x2="12" y2="12"></line>
+                        <line x1="12" y1="8" x2="12.01" y2="8"></line>
+                      </svg>
+                    </span>
+                  </span>
+                  <span class="setting-desc">Marcadores en los bordes para ubicar jugadores fuera de pantalla</span>
+                </div>
+                <div class="setting-control">
+                  <label class="switch-toggle" aria-label="Indicadores perimetrales">
+                    <input
+                      type="checkbox"
+                      checked={gameUI.settings.offscreenIndicatorsEnabled}
+                      onchange={(e) => {
+                        soundFX.playUIClick();
+                        gameUI.settings.offscreenIndicatorsEnabled = (e.currentTarget as HTMLInputElement).checked;
+                        gameUI.settings.offscreenIndicators = gameUI.settings.offscreenIndicatorsEnabled;
+                        gameUI.saveSettings();
+                      }}
+                    />
+                    <span class="toggle-slider"></span>
+                  </label>
                 </div>
               </div>
-            </div>
+
+              <!-- Textos flotantes de puntos / eventos -->
+              <div class="video-setting-row">
+                <div class="setting-copy">
+                  <span class="setting-title label-with-tooltip">
+                    Textos flotantes de puntos / eventos
+                    <span
+                      class="info-tooltip-wrapper"
+                      tabindex="0"
+                      role="button"
+                      aria-label="Info textos flotantes"
+                      use:tooltip={"Notificaciones dinámicas de puntos y eventos en pantalla (personalizables por categoría)"}
+                    >
+                      <svg class="info-help-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="12" cy="12" r="10"></circle>
+                        <line x1="12" y1="16" x2="12" y2="12"></line>
+                        <line x1="12" y1="8" x2="12.01" y2="8"></line>
+                      </svg>
+                    </span>
+                  </span>
+                  <span class="setting-desc">Etiquetas emergentes al anotar, asistir o atajar en cancha</span>
+                </div>
+                <div class="setting-control">
+                  <label class="switch-toggle" aria-label="Textos flotantes">
+                    <input
+                      type="checkbox"
+                      checked={gameUI.settings.floatingPointsEnabled}
+                      onchange={(e) => {
+                        soundFX.playUIClick();
+                        gameUI.settings.floatingPointsEnabled = (e.currentTarget as HTMLInputElement).checked;
+                        gameUI.saveSettings();
+                      }}
+                    />
+                    <span class="toggle-slider"></span>
+                  </label>
+                </div>
+              </div>
+
+              {#if gameUI.settings.floatingPointsEnabled}
+                <div class="floating-subtoggles-grid" aria-label="Categorías de textos flotantes">
+                  <label class="floating-subtoggle-chip">
+                    <input
+                      type="checkbox"
+                      checked={gameUI.settings.floatingGoals}
+                      onchange={(e) => {
+                        gameUI.settings.floatingGoals = (e.currentTarget as HTMLInputElement).checked;
+                        gameUI.saveSettings();
+                      }}
+                    />
+                    <span>Goles (+100)</span>
+                  </label>
+                  <label class="floating-subtoggle-chip">
+                    <input
+                      type="checkbox"
+                      checked={gameUI.settings.floatingAssists}
+                      onchange={(e) => {
+                        gameUI.settings.floatingAssists = (e.currentTarget as HTMLInputElement).checked;
+                        gameUI.saveSettings();
+                      }}
+                    />
+                    <span>Asistencias (+50)</span>
+                  </label>
+                  <label class="floating-subtoggle-chip">
+                    <input
+                      type="checkbox"
+                      checked={gameUI.settings.floatingSaves}
+                      onchange={(e) => {
+                        gameUI.settings.floatingSaves = (e.currentTarget as HTMLInputElement).checked;
+                        gameUI.saveSettings();
+                      }}
+                    />
+                    <span>Atajadas (+30)</span>
+                  </label>
+                  <label class="floating-subtoggle-chip">
+                    <input
+                      type="checkbox"
+                      checked={gameUI.settings.floatingShots}
+                      onchange={(e) => {
+                        gameUI.settings.floatingShots = (e.currentTarget as HTMLInputElement).checked;
+                        gameUI.saveSettings();
+                      }}
+                    />
+                    <span>Tiros al arco (+20)</span>
+                  </label>
+                  <label class="floating-subtoggle-chip">
+                    <input
+                      type="checkbox"
+                      checked={gameUI.settings.floatingPasses}
+                      onchange={(e) => {
+                        gameUI.settings.floatingPasses = (e.currentTarget as HTMLInputElement).checked;
+                        gameUI.saveSettings();
+                      }}
+                    />
+                    <span>Pases (+10)</span>
+                  </label>
+                  <label class="floating-subtoggle-chip">
+                    <input
+                      type="checkbox"
+                      checked={gameUI.settings.floatingHattricks}
+                      onchange={(e) => {
+                        gameUI.settings.floatingHattricks = (e.currentTarget as HTMLInputElement).checked;
+                        gameUI.saveSettings();
+                      }}
+                    />
+                    <span>Hat-Tricks</span>
+                  </label>
+                  <label class="floating-subtoggle-chip">
+                    <input
+                      type="checkbox"
+                      checked={gameUI.settings.floatingOwnGoals}
+                      onchange={(e) => {
+                        gameUI.settings.floatingOwnGoals = (e.currentTarget as HTMLInputElement).checked;
+                        gameUI.saveSettings();
+                      }}
+                    />
+                    <span>Autogoles (-50)</span>
+                  </label>
+                </div>
+              {/if}
+            </section>
           </div>
 
           <!-- Footer con botón de reset siempre visible -->
@@ -2535,11 +2760,15 @@
                         />
                         <button
                           type="button"
-                          class="cyber-btn accent"
+                          class="cyber-btn cyber-btn-rename"
                           disabled={isSavingName || !newUsernameInput.trim() || newUsernameInput.trim() === userProfile.username}
                           onclick={handleNameChange}
                         >
-                          {isSavingName ? 'GUARDANDO...' : 'CONFIRMAR CAMBIO'}
+                          <svg class="cyber-btn-icon" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <path d="M12 20h9"></path>
+                            <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path>
+                          </svg>
+                          <span>{isSavingName ? 'Guardando...' : 'Cambiar nombre'}</span>
                         </button>
                       </div>
                     </div>
@@ -3189,42 +3418,152 @@
     color: #cbd5e1;
   }
 
-  /* 2-Column Video Layout */
-  .video-grid-2col {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 1rem;
-  }
-
-  .col-visuals-ball {
+  /* Video & Graphics 3-Card Layout */
+  .video-cards-stack {
     display: flex;
     flex-direction: column;
     gap: 1rem;
   }
 
-  .slider-row {
+  .video-section-card {
     display: flex;
     flex-direction: column;
-    gap: 0.4rem;
+    gap: 0.9rem;
+    padding: 1.2rem 1.25rem;
+    background: linear-gradient(180deg, rgba(22, 30, 44, 0.96) 0%, rgba(15, 22, 34, 0.96) 100%);
+    border: 1px solid rgba(0, 229, 255, 0.22);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  }
+
+  .video-card-head {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding-bottom: 0.75rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+  }
+
+  .video-card-head .card-title {
+    margin: 0;
+    font-size: 1rem;
+    color: #f8fafc;
+    letter-spacing: 0.02em;
+  }
+
+  .video-card-icon {
+    width: 2rem;
+    height: 2rem;
+    border-radius: 0.45rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(0, 229, 255, 0.12);
+    border: 1px solid rgba(0, 229, 255, 0.35);
+    color: #00e5ff;
+    flex-shrink: 0;
+  }
+
+  .video-card-sub {
+    margin: 0.15rem 0 0;
+    font-size: 0.75rem;
+    color: #8fa3bf;
+    line-height: 1.35;
+  }
+
+  .card-inner-divider {
+    height: 1px;
+    background: rgba(255, 255, 255, 0.06);
+    margin: 0.1rem 0;
+  }
+
+  .video-toggles-list {
+    gap: 0.65rem;
+  }
+
+  .video-setting-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 0.7rem 0.9rem;
+    background: rgba(9, 14, 24, 0.72);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 0.5rem;
+    transition: border-color 0.15s ease, background 0.15s ease;
+  }
+
+  .video-setting-row:hover {
+    border-color: rgba(0, 229, 255, 0.22);
+    background: rgba(11, 18, 30, 0.88);
+  }
+
+  .video-setting-row.wrap-on-narrow {
+    flex-wrap: wrap;
+  }
+
+  .setting-copy {
+    display: flex;
+    flex-direction: column;
+    gap: 0.22rem;
+    min-width: 0;
+    flex: 1;
+  }
+
+  .setting-title {
+    font-size: 0.875rem;
+    font-weight: 700;
+    color: #f1f5f9;
+    line-height: 1.3;
+  }
+
+  .setting-desc {
+    font-size: 0.75rem;
+    color: #8fa3bf;
+    line-height: 1.4;
+  }
+
+  .setting-control {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    flex-shrink: 0;
+  }
+
+  .slider-block {
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+    padding: 0.75rem 0.9rem;
+    background: rgba(9, 14, 24, 0.72);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 0.5rem;
+    transition: opacity 0.2s ease;
+  }
+
+  .slider-block.control-dimmed {
+    opacity: 0.58;
   }
 
   .slider-meta {
     display: flex;
     justify-content: space-between;
     align-items: center;
+    gap: 0.85rem;
     font-size: 0.85rem;
   }
 
-  .param-name {
-    color: #cbd5e1;
-    font-weight: 600;
-  }
-
-  .param-val {
+  .param-val-pill {
+    padding: 0.24rem 0.65rem;
+    border-radius: 999px;
+    background: rgba(0, 229, 255, 0.12);
+    border: 1px solid rgba(0, 229, 255, 0.35);
     color: #00e5ff;
     font-family: 'JetBrains Mono', monospace;
     font-variant-numeric: tabular-nums;
-    font-size: 0.875rem;
+    font-size: 0.78rem;
+    font-weight: 800;
+    white-space: nowrap;
+    flex-shrink: 0;
   }
 
   .toggles-column {
@@ -3233,31 +3572,20 @@
     gap: 0.5rem;
   }
 
-  .toggle-item {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 0.55rem 0.75rem;
-    background: rgba(11, 17, 30, 0.6);
-    border: 1px solid rgba(255, 255, 255, 0.05);
-    border-radius: 0.5rem;
-    font-size: 0.825rem;
-    color: #e2e8f0;
-  }
-
-  .segmented-control-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-  }
-
   .segmented-pills {
     display: flex;
+    flex-wrap: wrap;
     background: #0b111e;
     padding: 0.25rem;
     border-radius: 0.5rem;
     border: 1px solid rgba(255, 255, 255, 0.1);
     gap: 0.25rem;
+  }
+
+  .fps-pills .seg-pill {
+    padding: 0.35rem 0.62rem;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.76rem;
   }
 
   .seg-pill {
@@ -3269,12 +3597,19 @@
     font-size: 0.8rem;
     font-weight: 600;
     cursor: pointer;
+    transition: all 0.15s ease;
+  }
+
+  .seg-pill:hover:not(.active) {
+    color: #e2e8f0;
+    background: rgba(255, 255, 255, 0.05);
   }
 
   .seg-pill.active {
     background: #00e5ff;
     color: #0b111e;
-    font-weight: 700;
+    font-weight: 800;
+    box-shadow: 0 0 10px rgba(0, 229, 255, 0.35);
   }
 
   /* Info Tooltip Pattern */
@@ -4142,13 +4477,121 @@
 
   .input-with-btn {
     display: flex;
-    gap: 0.6rem;
+    gap: 0.75rem;
     align-items: center;
+    flex-wrap: wrap;
   }
 
   .name-field {
     flex: 1;
+    min-width: 190px;
     max-width: 280px;
+    font-size: 0.92rem;
+    font-weight: 700;
+    text-align: left;
+    padding: 0.56rem 0.8rem;
+  }
+
+  /* Cyber-Sport CTA Buttons (Auth & Rename) */
+  .cyber-btn {
+    position: relative;
+    overflow: hidden;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    padding: 0.65rem 1.2rem;
+    border-radius: 0.45rem;
+    font-family: 'Chakra Petch', 'Outfit', 'Space Grotesk', system-ui, sans-serif;
+    font-size: 0.82rem;
+    font-weight: 800;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    cursor: pointer;
+    transition: transform 0.18s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.2s ease, filter 0.18s ease, border-color 0.18s ease;
+    user-select: none;
+    white-space: nowrap;
+  }
+
+  .cyber-btn-icon {
+    flex-shrink: 0;
+  }
+
+  .cyber-btn-auth {
+    background: linear-gradient(135deg, #00e5ff 0%, #0ea5e9 52%, #0284c7 100%);
+    border: 1px solid rgba(165, 243, 252, 0.85);
+    color: #04111d;
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.5),
+      inset 0 -2px 0 rgba(3, 105, 161, 0.7),
+      0 4px 16px rgba(0, 229, 255, 0.28);
+  }
+
+  .cyber-btn-auth::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: -120%;
+    width: 65%;
+    height: 100%;
+    background: linear-gradient(110deg, transparent 0%, rgba(255, 255, 255, 0.45) 50%, transparent 100%);
+    transform: skewX(-20deg);
+    transition: left 0.45s ease;
+    pointer-events: none;
+  }
+
+  .cyber-btn-auth:hover {
+    transform: translateY(-2px);
+    filter: brightness(1.06);
+    border-color: #ecfeff;
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.65),
+      inset 0 -2px 0 rgba(3, 105, 161, 0.8),
+      0 0 22px rgba(0, 229, 255, 0.52),
+      0 8px 20px rgba(2, 132, 199, 0.35);
+  }
+
+  .cyber-btn-auth:hover::before {
+    left: 150%;
+  }
+
+  .cyber-btn-auth:active {
+    transform: translateY(0) scale(0.98);
+  }
+
+  .cyber-btn-rename {
+    background: linear-gradient(135deg, #ffd700 0%, #f59e0b 55%, #d97706 100%);
+    border: 1px solid rgba(254, 240, 138, 0.8);
+    color: #1a1002;
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.55),
+      inset 0 -2px 0 rgba(146, 64, 14, 0.72),
+      0 4px 14px rgba(245, 158, 11, 0.24);
+  }
+
+  .cyber-btn-rename:hover:not(:disabled) {
+    transform: translateY(-1.5px);
+    filter: brightness(1.06);
+    border-color: #fef9c3;
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.65),
+      inset 0 -2px 0 rgba(146, 64, 14, 0.8),
+      0 0 20px rgba(251, 191, 36, 0.52),
+      0 6px 16px rgba(217, 119, 6, 0.32);
+  }
+
+  .cyber-btn-rename:active:not(:disabled) {
+    transform: translateY(0) scale(0.98);
+  }
+
+  .cyber-btn-rename:disabled {
+    background: linear-gradient(135deg, #273041 0%, #1e2533 100%);
+    border-color: rgba(148, 163, 184, 0.22);
+    color: #64748b;
+    box-shadow: none;
+    cursor: not-allowed;
+    opacity: 0.75;
+    transform: none;
   }
 
   .warning-alert-text {
@@ -4372,6 +4815,9 @@
   /* Controles numéricos estilizados para Zoom (0.40x - 2.50x) */
   .zoom-stepper-control {
     width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 0.65rem;
   }
 
   .zoom-step-btn {
@@ -4406,6 +4852,9 @@
 
   .zoom-presets-row {
     width: 100%;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.38rem;
   }
 
   .zoom-preset-chip {
@@ -4731,18 +5180,23 @@
     text-transform: uppercase;
   }
 
-  .auto-extrap-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 0.75rem;
-    margin-bottom: 0.45rem;
-  }
-
   .auto-extrap-controls {
     display: flex;
     align-items: center;
     gap: 0.6rem;
+    flex-shrink: 0;
+  }
+
+  .val-badge {
+    padding: 0.2rem 0.55rem;
+    border-radius: 999px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.72rem;
+    font-weight: 700;
+    white-space: nowrap;
+    background: rgba(148, 163, 184, 0.14);
+    border: 1px solid rgba(148, 163, 184, 0.3);
+    color: #cbd5e1;
   }
 
   .auto-extrap-badge {
@@ -4843,9 +5297,12 @@
       border-bottom: 2px solid #00e5ff;
     }
     .sound-grid-2col,
-    .video-grid-2col,
     .kits-layout-grid {
       grid-template-columns: 1fr;
+    }
+    .video-setting-row,
+    .slider-meta {
+      flex-wrap: wrap;
     }
     .ball-cards-grid {
       grid-template-columns: repeat(2, 1fr);

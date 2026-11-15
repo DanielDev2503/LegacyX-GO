@@ -7,13 +7,19 @@ import {
   type LxrReplayV1,
   type LxrReplayV2
 } from '../../src/recorder/MatchRecorder.js';
+import type { LxrReplayV3, LxrScoreboardDesign } from '../../src/recorder/MatchRecorder.svelte.js';
 import {
+  applyReplayRendererConfig,
   computeReplayEffectiveZoom,
+  deriveReplayHudTimelineState,
   exportReplayToWebm,
   getActiveReplayBanner,
+  getActiveReplayEmotes,
+  getActiveReplayModifiersAtTime,
   getVisibleReplayChat,
   renderReplayHudOverlay
 } from '../../src/recorder/ReplayHudCompositor.js';
+import { GameRenderer } from '../../src/renderer/GameRenderer.js';
 import { ScoreboardHUD } from '../../src/controllers/components/ScoreboardHUD.js';
 import { userProfile, validateAccountUsername } from '../../src/ui/state/userProfile.svelte.js';
 import { gameUI } from '../../src/ui/state/gameUI.svelte.js';
@@ -86,12 +92,15 @@ function makeSnapshot(overrides: Partial<GameStateSnapshot> = {}): GameStateSnap
 
 function makeMockCanvas2dContext() {
   const fillTexts: string[] = [];
+  const fillTextRecords: Array<{ text: string; font: string; fillStyle: unknown }> = [];
+  const strokeTexts: string[] = [];
   const fillStyles: unknown[] = [];
   const strokeStyles: unknown[] = [];
   const gradientStops: Array<[number, string]> = [];
   const shadowColors: string[] = [];
   const arcCalls: Array<[number, number, number]> = [];
   const roundRectCalls: Array<[number, number, number, number, number]> = [];
+  const lineToCalls: Array<[number, number]> = [];
   const stateStack: Array<{ shadowColor: string; shadowBlur: number }> = [];
   const ctx: Record<string, unknown> = {
     canvas: { width: 1280, height: 720 },
@@ -114,7 +123,9 @@ function makeMockCanvas2dContext() {
     beginPath: vi.fn(),
     closePath: vi.fn(),
     moveTo: vi.fn(),
-    lineTo: vi.fn(),
+    lineTo: vi.fn((x: number, y: number) => {
+      lineToCalls.push([x, y]);
+    }),
     arc: vi.fn((x: number, y: number, r: number) => {
       arcCalls.push([x, y, r]);
     }),
@@ -131,14 +142,20 @@ function makeMockCanvas2dContext() {
     stroke: vi.fn(() => {
       strokeStyles.push(ctx.strokeStyle);
     }),
-    fillRect: vi.fn(),
+    fillRect: vi.fn(() => {
+      fillStyles.push(ctx.fillStyle);
+    }),
     strokeRect: vi.fn(),
     clip: vi.fn(),
     clearRect: vi.fn(),
     fillText: vi.fn((text: string) => {
-      fillTexts.push(String(text));
+      const s = String(text);
+      fillTexts.push(s);
+      fillTextRecords.push({ text: s, font: String(ctx.font), fillStyle: ctx.fillStyle });
     }),
-    strokeText: vi.fn(),
+    strokeText: vi.fn((text: string) => {
+      strokeTexts.push(String(text));
+    }),
     measureText: vi.fn((text: string) => ({ width: String(text).length * 8 })),
     createLinearGradient: vi.fn(() => ({
       addColorStop: vi.fn((offset: number, color: string) => {
@@ -165,12 +182,15 @@ function makeMockCanvas2dContext() {
   return {
     ctx: ctx as unknown as CanvasRenderingContext2D,
     fillTexts,
+    fillTextRecords,
+    strokeTexts,
     fillStyles,
     strokeStyles,
     gradientStops,
     shadowColors,
     arcCalls,
-    roundRectCalls
+    roundRectCalls,
+    lineToCalls
   };
 }
 
@@ -1041,6 +1061,343 @@ describe('Task 4: Gzip LXR2, JWT Refresh, Cloud Replays & 16:9 HUD Compositor', 
           frames: []
         })
       ).rejects.toThrow();
+    });
+
+    it('halves exported replay chat overlay to max 3 lines (~64px height) with 11px font', () => {
+      const messages = [
+        { t: 1, kind: 'chat' as const, sender: 'P1', senderTeam: 'RED' as const, text: 'Msg 1' },
+        { t: 2, kind: 'chat' as const, sender: 'P2', senderTeam: 'BLUE' as const, text: 'Msg 2' },
+        { t: 3, kind: 'chat' as const, sender: 'P3', senderTeam: 'RED' as const, text: 'Msg 3' },
+        { t: 4, kind: 'chat' as const, sender: 'P4', senderTeam: 'BLUE' as const, text: 'Msg 4' },
+        { t: 5, kind: 'chat' as const, sender: 'P5', senderTeam: 'RED' as const, text: 'Msg 5' }
+      ];
+      expect(getVisibleReplayChat(messages, 10).map((m) => m.text)).toEqual(['Msg 3', 'Msg 4', 'Msg 5']);
+
+      const mock = makeMockCanvas2dContext();
+      renderReplayHudOverlay(
+        mock.ctx,
+        {
+          roomName: 'Half Chat',
+          phase: MatchPhase.PLAYING,
+          matchTimer: 90,
+          redScore: 1,
+          blueScore: 0,
+          isGoldenGoal: false,
+          redAcronym: 'RED',
+          blueAcronym: 'BLU',
+          redColor: '#ef4444',
+          blueColor: '#3b82f6',
+          chatMessages: messages,
+          activeBanner: null,
+          currentTimeSec: 10
+        },
+        1280,
+        720
+      );
+
+      // Chat box uses 390 x 64 (3 * 18 + 5 * 2 = 64px)
+      expect(mock.roundRectCalls.some(([, , w, h]) => w === 390 && h === 64)).toBe(true);
+      expect(mock.fillTexts).not.toContain('Msg 1');
+      expect(mock.fillTexts).not.toContain('Msg 2');
+      expect(mock.fillTexts).toContain('Msg 5');
+      expect(
+        mock.fillTextRecords.some((r) => r.text === 'Msg 5' && r.font.includes('11px'))
+      ).toBe(true);
+    });
+
+    it('derives active replay emotes, real ballRadius/playerRadius modifiers & syncs both into renderSingleExportFrame', async () => {
+      const baseReplay: LxrReplayV3 = {
+        magic: 'LXR3',
+        version: 3,
+        createdAt: '2026-11-15T00:00:00.000Z',
+        roomName: 'Emotes & Modifiers',
+        roomType: 'casual',
+        stadiumId: 'mediano',
+        durationSeconds: 0.6,
+        redScore: 1,
+        blueScore: 0,
+        recordingPlayerId: 1,
+        recordingPlayerName: 'Ace',
+        cameraZoom: 1,
+        viewportWidth: 1280,
+        viewportHeight: 720,
+        timeLimitSeconds: 180,
+        scoreboardDesign: 'original',
+        theme: 'dark',
+        ballMode: 'texture',
+        ballSkin: 'classic',
+        ballCustomColor: '#ffffff',
+        chatOpacity: 0.9,
+        minimapEnabled: false,
+        minimapOpacity: 0.6,
+        minimapSize: 190,
+        minimapCameraFrustum: true,
+        ballRadius: 9.2,
+        playerRadius: 18.5,
+        redKit: { tag: 'ROJ', primaryColor: '#ef4444' },
+        blueKit: { tag: 'AZU', primaryColor: '#3b82f6' },
+        players: [{ id: 1, nickname: 'Ace', team: 'red', avatar: '⚡', number: 10 }],
+        initialChatMessages: [],
+        initialUiOverlay: { overlay: 'NONE', activeSlide: 'GAME', isPaused: false, postMatchStats: null },
+        chatMessages: [],
+        banners: [],
+        hudEvents: [
+          { t: 0.05, type: 'emote', payload: { playerId: 1, emoji: '🔥', durationMs: 200 } },
+          { t: 0.15, type: 'emote', payload: { playerId: 1, emoji: '⚽', durationMs: 300 } },
+          { t: 0.1, type: 'emote', payload: { playerId: 2, emoji: '😎' } },
+          { t: 0.3, type: 'modifiers_updated', payload: { ballRadius: 12.4, playerRadius: 21 } }
+        ],
+        goals: [],
+        frames: [
+          { t: 0, snapshot: makeSnapshot({ tick: 0 }) },
+          { t: 0.3, snapshot: makeSnapshot({ tick: 18 }) },
+          { t: 0.6, snapshot: makeSnapshot({ tick: 36 }) }
+        ]
+      };
+
+      // Emote helper keeps latest active emote per playerId and respects default 2200ms + expiry
+      const emotesAt020 = getActiveReplayEmotes(baseReplay, 0.2);
+      expect(emotesAt020).toHaveLength(2);
+      const p1Emote = emotesAt020.find((e) => e.playerId === 1);
+      expect(p1Emote?.emoji).toBe('⚽');
+      expect(p1Emote?.progress).toBeCloseTo(0.05 / 0.3, 4);
+      const emotesAt050 = getActiveReplayEmotes(baseReplay, 0.5);
+      expect(emotesAt050.map((e) => e.playerId)).toEqual([2]); // player 1 expired after 0.15 + 0.30 = 0.45
+
+      // Modifiers helper + applyReplayRendererConfig + deriveReplayHudTimelineState
+      expect(getActiveReplayModifiersAtTime(baseReplay, 0.1)).toEqual({
+        ballRadius: 9.2,
+        playerRadius: 18.5
+      });
+      expect(getActiveReplayModifiersAtTime(baseReplay, 0.35)).toEqual({
+        ballRadius: 12.4,
+        playerRadius: 21
+      });
+
+      const tlEarly = deriveReplayHudTimelineState(baseReplay, baseReplay.frames[0]!, 0.2);
+      expect(tlEarly.activeEmotes.find((e) => e.playerId === 1)?.emoji).toBe('⚽');
+      expect(tlEarly.ballRadius).toBe(9.2);
+      expect(tlEarly.playerRadius).toBe(18.5);
+
+      const { ctx } = makeMockCanvas2dContext();
+      const fakeCanvas = {
+        width: 1280,
+        height: 720,
+        style: {} as Record<string, string>,
+        getContext: vi.fn(() => ctx)
+      } as unknown as HTMLCanvasElement;
+      const renderer = new GameRenderer(fakeCanvas, {
+        stadium: { width: 840, height: 400, goalWidth: 130, goalDepth: 50, corners: 50 } as never,
+        overrideDpr: 1
+      });
+      applyReplayRendererConfig(renderer, baseReplay, 0);
+      expect(renderer.discRenderer.ballRadius).toBe(9.2);
+      expect(renderer.discRenderer.playerRadius).toBe(18.5);
+      renderer.destroy();
+
+      // Export pipeline syncs replayEmotes & snapshot disc radii across timeline frames
+      const exportCanvas = {
+        width: 0,
+        height: 0,
+        style: {} as Record<string, string>,
+        getContext: vi.fn(() => makeMockCanvas2dContext().ctx),
+        captureStream: vi.fn(() => ({
+          getVideoTracks: () => [{ requestFrame: vi.fn(), stop: vi.fn() }],
+          getTracks: () => [{ stop: vi.fn() }]
+        }))
+      };
+      let created = 0;
+      vi.stubGlobal('document', {
+        createElement: vi.fn((tag: string) => {
+          if (tag === 'canvas') {
+            created++;
+            return (created === 1
+              ? exportCanvas
+              : {
+                  width: 0,
+                  height: 0,
+                  style: {} as Record<string, string>,
+                  getContext: vi.fn(() => makeMockCanvas2dContext().ctx)
+                }) as unknown as HTMLCanvasElement;
+          }
+          return {} as HTMLElement;
+        })
+      });
+      vi.stubGlobal('window', { devicePixelRatio: 1 });
+
+      class FakeMediaRecorder {
+        static isTypeSupported = () => true;
+        public state = 'inactive';
+        public ondataavailable: ((ev: { data: Blob }) => void) | null = null;
+        public onstop: (() => void) | null = null;
+        public onerror: (() => void) | null = null;
+        start() {
+          this.state = 'recording';
+        }
+        stop() {
+          this.state = 'inactive';
+          this.ondataavailable?.({ data: new Blob(['ok'], { type: 'video/webm' }) });
+          this.onstop?.();
+        }
+      }
+      vi.stubGlobal('MediaRecorder', FakeMediaRecorder);
+
+      const observedFrames: Array<{
+        ballRadius: number;
+        playerRadius: number;
+        snapBallRadius: number | undefined;
+        snapPlayerRadius: number | undefined;
+        emoteP1: string | undefined;
+      }> = [];
+      const fixedSpy = vi
+        .spyOn(GameRenderer.prototype, 'renderAtFixedStep')
+        .mockImplementation(function (this: GameRenderer, s0) {
+          const dr = this.discRenderer as unknown as {
+            ballRadius: number;
+            playerRadius: number;
+            replayEmotes?: Map<number, { emoji: string; progress: number }>;
+          };
+          const ball = s0?.discs.find((d) => d.team === 0) as (CompactDiscState & { radius?: number }) | undefined;
+          const p1 = s0?.discs.find((d) => d.team === 1) as (CompactDiscState & { radius?: number }) | undefined;
+          observedFrames.push({
+            ballRadius: dr.ballRadius,
+            playerRadius: dr.playerRadius,
+            snapBallRadius: ball?.radius,
+            snapPlayerRadius: p1?.radius,
+            emoteP1: dr.replayEmotes?.get(1)?.emoji
+          });
+        });
+
+      try {
+        await exportReplayToWebm(baseReplay);
+        expect(fixedSpy.mock.calls.length).toBeGreaterThanOrEqual(30);
+        // Early frame (t=0): initial radii, no emote yet
+        expect(observedFrames[0]).toEqual({
+          ballRadius: 9.2,
+          playerRadius: 18.5,
+          snapBallRadius: 9.2,
+          snapPlayerRadius: 18.5,
+          emoteP1: undefined
+        });
+        // Frame ~12 (t=0.20s): active emote ⚽ synced into replayEmotes
+        expect(observedFrames[12]?.emoteP1).toBe('⚽');
+        // Frame ~24 (t=0.40s): modifiers_updated applied on discRenderer & snapshot clones
+        expect(observedFrames[24]?.ballRadius).toBe(12.4);
+        expect(observedFrames[24]?.playerRadius).toBe(21);
+        expect(observedFrames[24]?.snapBallRadius).toBe(12.4);
+        expect(observedFrames[24]?.snapPlayerRadius).toBe(21);
+        // Original replay snapshots remain unmutated
+        expect((baseReplay.frames[0]!.snapshot.discs[0] as CompactDiscState & { radius?: number }).radius).toBeUndefined();
+      } finally {
+        fixedSpy.mockRestore();
+      }
+    });
+
+    it('renders all 6 World Cup scoreboards matching MatchScoreboard.svelte with external acronyms and flag-only badges', () => {
+      const designs: Array<{
+        design: LxrScoreboardDesign;
+        assertSpecific: (mock: ReturnType<typeof makeMockCanvas2dContext>) => void;
+      }> = [
+        {
+          design: 'wc2006',
+          assertSpecific: (mock) => {
+            expect(mock.gradientStops.map(([, c]) => c.toLowerCase())).toEqual(
+              expect.arrayContaining(['#f3f5f8', '#c8ced6', '#272b33', '#090b0f'])
+            );
+            expect(mock.fillTextRecords.find((r) => r.text === 'ROJ')?.fillStyle).toBe('#111111');
+          }
+        },
+        {
+          design: 'wc2010',
+          assertSpecific: (mock) => {
+            expect(mock.gradientStops.map(([, c]) => c.toLowerCase())).toEqual(
+              expect.arrayContaining(['#ff7b1c', '#f7e6d6', '#ff8524'])
+            );
+            expect(mock.fillTextRecords.find((r) => r.text === 'ROJ')?.fillStyle).toBe('#14110f');
+            expect(mock.fillTexts).not.toContain('-');
+          }
+        },
+        {
+          design: 'wc2014',
+          assertSpecific: (mock) => {
+            expect(mock.gradientStops.map(([, c]) => c.toLowerCase())).toEqual(
+              expect.arrayContaining(['#1fc74e', '#1b8ce8', '#ffffff'])
+            );
+            expect(mock.fillTextRecords.find((r) => r.text === 'ROJ')?.fillStyle).toBe('#0e244d');
+            expect(mock.fillTexts).toContain('-');
+          }
+        },
+        {
+          design: 'wc2018',
+          assertSpecific: (mock) => {
+            expect(mock.gradientStops.map(([, c]) => c.toLowerCase())).toEqual(
+              expect.arrayContaining(['#dc182b', '#0e4da4', '#1976d2', '#fde047'])
+            );
+            const roj = mock.fillTextRecords.find((r) => r.text === 'ROJ');
+            expect(roj?.fillStyle).toBe('#ffffff');
+            expect(roj?.font).toContain('Georgia');
+          }
+        },
+        {
+          design: 'wc2022',
+          assertSpecific: (mock) => {
+            expect(mock.gradientStops.map(([, c]) => c.toLowerCase())).toEqual(
+              expect.arrayContaining(['#8e083f', '#5c0027'])
+            );
+            expect(mock.fillStyles).toEqual(expect.arrayContaining(['#f8f1e5', '#6d0731']));
+            expect(mock.strokeStyles).toContain('#ffffff');
+            // 9-spike zigzag + lattice diamonds produce >= 18 lineTo vertices
+            expect(mock.lineToCalls.length).toBeGreaterThanOrEqual(18);
+          }
+        },
+        {
+          design: 'wc2026',
+          assertSpecific: (mock) => {
+            expect(mock.fillStyles).toEqual(expect.arrayContaining(['#11151d', '#ffffff', '#8b5cf6']));
+            expect(mock.gradientStops.map(([, c]) => c.toLowerCase())).toEqual(
+              expect.arrayContaining(['#27c28a', '#14855d'])
+            );
+            expect(mock.fillTexts).toContain('26');
+          }
+        }
+      ];
+
+      for (const { design, assertSpecific } of designs) {
+        const mock = makeMockCanvas2dContext();
+        renderReplayHudOverlay(
+          mock.ctx,
+          {
+            roomName: 'WC Broadcast',
+            phase: MatchPhase.PLAYING,
+            matchTimer: 82,
+            redScore: 2,
+            blueScore: 1,
+            isGoldenGoal: false,
+            redAcronym: 'ROJ',
+            blueAcronym: 'AZU',
+            redColor: '#e74c3c',
+            blueColor: '#00e5ff',
+            scoreboardDesign: design,
+            redKit: { primaryColor: '#e74c3c', secondaryColor: '#ffffff', pattern: 'vertical', hasOutline: true },
+            blueKit: { primaryColor: '#00e5ff', secondaryColor: '#0f172a', pattern: 'solid', hasOutline: true },
+            chatMessages: [],
+            activeBanner: null,
+            currentTimeSec: 12
+          },
+          1280,
+          720
+        );
+
+        expect(mock.fillTexts).toContain('ROJ');
+        expect(mock.fillTexts).toContain('AZU');
+        expect(mock.fillTexts).toContain('2');
+        expect(mock.fillTexts).toContain('1');
+        expect(mock.fillTexts).toContain('01:22');
+        // Acronyms are drawn on the scoreboard bar itself, never via drawKitLabelText inside the flag badge
+        expect(mock.strokeTexts).not.toContain('ROJ');
+        expect(mock.strokeTexts).not.toContain('AZU');
+        assertSpecific(mock);
+      }
     });
   });
 });

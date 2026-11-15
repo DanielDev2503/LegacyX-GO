@@ -20,6 +20,117 @@
   let isCreating = $state(false);
   let createError = $state<string | null>(null);
 
+  const CAPTCHA_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  const CAPTCHA_NEON_PALETTE = ['#00e5ff', '#67e8f9', '#fbbf24', '#38bdf8', '#5eead4'] as const;
+
+  function generateCaptchaCode(): string {
+    let code = '';
+    for (let i = 0; i < 5; i++) {
+      code += CAPTCHA_ALPHABET[Math.floor(Math.random() * CAPTCHA_ALPHABET.length)];
+    }
+    return code;
+  }
+
+  let captchaCanvas = $state<HTMLCanvasElement | null>(null);
+  let captchaCode = $state(generateCaptchaCode());
+  let captchaInput = $state('');
+  let captchaError = $state<string | null>(null);
+
+  function drawCaptcha(canvas: HTMLCanvasElement, code: string) {
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    const w = canvas.width;
+    const h = canvas.height;
+
+    const bg = ctx.createLinearGradient(0, 0, w, h);
+    bg.addColorStop(0, '#060c17');
+    bg.addColorStop(1, '#0c1a2e');
+    ctx.fillStyle = bg;
+    ctx.fillRect(0, 0, w, h);
+
+    // Subtle cyber grid
+    ctx.strokeStyle = 'rgba(0, 229, 255, 0.12)';
+    ctx.lineWidth = 1;
+    for (let x = 14; x < w; x += 14) {
+      ctx.beginPath();
+      ctx.moveTo(x, 0);
+      ctx.lineTo(x, h);
+      ctx.stroke();
+    }
+    for (let y = 12; y < h; y += 12) {
+      ctx.beginPath();
+      ctx.moveTo(0, y);
+      ctx.lineTo(w, y);
+      ctx.stroke();
+    }
+
+    // Interference waves
+    for (let i = 0; i < 3; i++) {
+      ctx.strokeStyle =
+        i === 0
+          ? 'rgba(0, 229, 255, 0.32)'
+          : i === 1
+            ? 'rgba(255, 215, 0, 0.24)'
+            : 'rgba(167, 139, 250, 0.28)';
+      ctx.lineWidth = 1.25;
+      ctx.beginPath();
+      const yStart = 8 + Math.random() * (h - 16);
+      const yEnd = 8 + Math.random() * (h - 16);
+      ctx.moveTo(0, yStart);
+      ctx.bezierCurveTo(
+        w * 0.33,
+        4 + Math.random() * (h - 8),
+        w * 0.66,
+        4 + Math.random() * (h - 8),
+        w,
+        yEnd
+      );
+      ctx.stroke();
+    }
+
+    // Interference noise dots
+    for (let i = 0; i < 32; i++) {
+      ctx.fillStyle = i % 3 === 0 ? 'rgba(0, 229, 255, 0.45)' : 'rgba(148, 163, 184, 0.35)';
+      ctx.beginPath();
+      ctx.arc(Math.random() * w, Math.random() * h, 0.9 + Math.random() * 0.9, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // 5 distorted neon characters
+    ctx.font = '800 22px "JetBrains Mono", monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+
+    for (let i = 0; i < code.length; i++) {
+      const char = code[i]!;
+      const x = 22 + i * 31 + (Math.random() * 5 - 2.5);
+      const y = h / 2 + (Math.random() * 8 - 4);
+      const angle = (Math.random() - 0.5) * 0.46;
+      const color = CAPTCHA_NEON_PALETTE[Math.floor(Math.random() * CAPTCHA_NEON_PALETTE.length)]!;
+
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(angle);
+      ctx.shadowColor = color;
+      ctx.shadowBlur = 9;
+      ctx.fillStyle = color;
+      ctx.fillText(char, 0, 0);
+      ctx.restore();
+    }
+  }
+
+  function regenerateCaptcha(playClick = true) {
+    if (playClick) soundFX.playUIClick();
+    captchaCode = generateCaptchaCode();
+  }
+
+  $effect(() => {
+    if (captchaCanvas && captchaCode) {
+      drawCaptcha(captchaCanvas, captchaCode);
+    }
+  });
+
   const stadiums = [
     { id: 'mediano', name: 'Mediano', dims: '1200x540', desc: 'Campo Clásico Estándar 3v3' },
     { id: 'AF 3v3', name: 'AF 3v3 Official', dims: '840x400', desc: 'Canónico Haxball 3v3' },
@@ -89,6 +200,16 @@
   }
 
   async function handleCreateRoom() {
+    const enteredCaptcha = captchaInput.trim().toUpperCase();
+    if (!enteredCaptcha || enteredCaptcha !== captchaCode) {
+      soundFX.playUIClick();
+      captchaError = 'Código de seguridad incorrecto. Inténtalo de nuevo.';
+      captchaInput = '';
+      regenerateCaptcha(false);
+      return;
+    }
+    captchaError = null;
+
     isCreating = true;
     createError = null;
     soundFX.playUIClick();
@@ -451,6 +572,69 @@
         </div>
       </div>
     </div>
+
+    <section class="captcha-section" aria-label="Verificación de seguridad">
+      <div class="captcha-header">
+        <span class="captcha-title">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="#00e5ff" stroke-width="2.2" aria-hidden="true">
+            <path d="M12 2l7 4v6c0 5-3.5 8.5-7 10-3.5-1.5-7-5-7-10V6l7-4z"></path>
+            <path d="M9.5 12.5l1.8 1.8 3.5-3.8"></path>
+          </svg>
+          <span>VERIFICACIÓN DE SEGURIDAD</span>
+        </span>
+        <span class="captcha-badge">ANTI-BOT</span>
+      </div>
+
+      <div class="captcha-controls-row">
+        <div class="captcha-visual-group">
+          <canvas
+            bind:this={captchaCanvas}
+            class="captcha-canvas"
+            width="168"
+            height="48"
+            aria-label="Código captcha visual"
+          ></canvas>
+          <button
+            type="button"
+            class="captcha-refresh-btn"
+            aria-label="Regenerar captcha"
+            title="Generar nuevo código"
+            onclick={() => regenerateCaptcha(true)}
+          >
+            ↻
+          </button>
+        </div>
+
+        <div class="captcha-input-group">
+          <input
+            id="room-captcha-input"
+            type="text"
+            class="captcha-input"
+            class:has-error={Boolean(captchaError)}
+            maxlength="5"
+            autocomplete="off"
+            spellcheck={false}
+            placeholder="CÓDIGO"
+            bind:value={captchaInput}
+            oninput={() => {
+              if (captchaError) captchaError = null;
+            }}
+            onkeydown={(e) => {
+              if (e.key === 'Enter' && !isCreating) {
+                e.preventDefault();
+                void handleCreateRoom();
+              }
+            }}
+          />
+        </div>
+      </div>
+
+      {#if captchaError}
+        <p class="captcha-error-text" role="alert">{captchaError}</p>
+      {:else}
+        <p class="captcha-helper-text">Introduce los 5 caracteres mostrados en la imagen para crear la sala.</p>
+      {/if}
+    </section>
 
     <div class="footer-cta">
       <button
@@ -942,6 +1126,146 @@
   .stadium-action-text {
     font-size: 10.5px;
     color: #00e5ff;
+  }
+
+  .captcha-section {
+    background: #101827;
+    border: 1px solid rgba(0, 229, 255, 0.24);
+    border-radius: 8px;
+    padding: 12px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 9px;
+  }
+
+  .captcha-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+
+  .captcha-title {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-family: 'Space Grotesk', sans-serif;
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    color: #00e5ff;
+  }
+
+  .captcha-badge {
+    padding: 2px 7px;
+    border-radius: 999px;
+    background: rgba(0, 229, 255, 0.1);
+    border: 1px solid rgba(0, 229, 255, 0.3);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 9.5px;
+    font-weight: 800;
+    letter-spacing: 0.06em;
+    color: #7dd3fc;
+  }
+
+  .captcha-controls-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+
+  .captcha-visual-group {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .captcha-canvas {
+    width: 168px;
+    height: 48px;
+    border-radius: 6px;
+    border: 1px solid rgba(0, 229, 255, 0.42);
+    box-shadow: inset 0 0 12px rgba(0, 229, 255, 0.12), 0 4px 12px rgba(0, 0, 0, 0.45);
+    display: block;
+    flex-shrink: 0;
+  }
+
+  .captcha-refresh-btn {
+    width: 40px;
+    height: 48px;
+    border-radius: 6px;
+    border: 1px solid rgba(0, 229, 255, 0.35);
+    background: #09111f;
+    color: #00e5ff;
+    font-size: 19px;
+    font-weight: 800;
+    line-height: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: background 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease, transform 0.2s ease;
+  }
+
+  .captcha-refresh-btn:hover {
+    background: rgba(0, 229, 255, 0.16);
+    border-color: #00e5ff;
+    color: #ffffff;
+    box-shadow: 0 0 12px rgba(0, 229, 255, 0.35);
+  }
+
+  .captcha-refresh-btn:active {
+    transform: rotate(90deg) scale(0.95);
+  }
+
+  .captcha-input-group {
+    flex: 1;
+    min-width: 150px;
+  }
+
+  .captcha-input {
+    width: 100%;
+    height: 48px;
+    padding: 0 14px;
+    background: #09101c;
+    border: 1px solid rgba(0, 229, 255, 0.35);
+    border-radius: 6px;
+    color: #ffffff;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 17px;
+    font-weight: 800;
+    letter-spacing: 0.28em;
+    text-transform: uppercase;
+    text-align: center;
+    outline: none;
+    box-sizing: border-box;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  }
+
+  .captcha-input:focus {
+    border-color: #00e5ff;
+    box-shadow: 0 0 12px rgba(0, 229, 255, 0.25);
+  }
+
+  .captcha-input.has-error {
+    border-color: #ff4757;
+    box-shadow: 0 0 12px rgba(255, 71, 87, 0.32);
+  }
+
+  .captcha-helper-text {
+    margin: 0;
+    font-size: 11px;
+    color: #8fa3bf;
+    line-height: 1.35;
+  }
+
+  .captcha-error-text {
+    margin: 0;
+    font-size: 11.5px;
+    font-weight: 700;
+    color: #ff6b7a;
+    line-height: 1.35;
   }
 
   .footer-cta {

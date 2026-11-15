@@ -341,7 +341,7 @@ describe('Core Task 1 Fixes & Anti-Cheat Hardening', () => {
       expect(goalEv.team).toBe('red');
     });
 
-    it('floors low-speed goal speedKmh at 20 km/h', () => {
+    it('reports real low-speed goal speedKmh down to 1 km/h without artificial 20 km/h floor', () => {
       const engine = setupCompetitiveEngine();
       const goals: GoalBannerDetails[] = [];
       engine.on('goal', (g: GoalBannerDetails) => goals.push(g));
@@ -350,12 +350,13 @@ describe('Core Task 1 Fixes & Anti-Cheat Hardening', () => {
       engine.ball.pos.set(hw - 2, 0);
       engine.ball.vel.set(40, 0);
       engine.recordTouch(1, false);
-      // Step until ball crosses hw + ball.radius slowly or force crossing speed
+      // Force crossing at 40 px/s -> Math.round(40 * 0.18) = 7 km/h (< 20)
       engine.ball.pos.set(hw + engine.ball.radius + 1, 0);
       engine.handleGoalScored('red');
 
       expect(goals.length).toBe(1);
-      expect(goals[0].speedKmh).toBe(20);
+      expect(goals[0].speedKmh).toBe(7);
+      expect(goals[0].speedKmh).toBeLessThan(20);
     });
   });
 

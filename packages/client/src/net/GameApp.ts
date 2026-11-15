@@ -100,7 +100,15 @@ export class GameApp {
   public activeGoalScorerId: number | null = null;
   public hostEngine: any = null;
   public lastJoinError: string | null = null;
+  public lastJoinErrorCode: string | null = null;
   public onScoreEventReceived: ((payload: Record<string, unknown>) => void) | null = null;
+  public onRoomClosed?: (
+    reason?: 'kicked' | 'banned' | 'closed',
+    message?: string,
+    roomName?: string
+  ) => void;
+  public onJoinError?: (code: string | null, message: string) => void;
+  public onJoinBanned?: (message: string, roomId?: string) => void;
 
   constructor(signaling: SignalingClient = sharedSignaling) {
     this.signaling = signaling;
@@ -717,6 +725,7 @@ export class GameApp {
     this.teardownNetworkSession();
     gameUI.isPracticeMode = false;
     this.lastJoinError = null;
+    this.lastJoinErrorCode = null;
     gameUI.lobbyError = null;
     this.signaling.setUserId(userProfile.id ?? null);
     await this.signaling.ensureConnected();
@@ -742,27 +751,44 @@ export class GameApp {
       };
 
       const onError = (msg: any) => {
+        const code = typeof msg?.code === 'string' ? msg.code : null;
         if (
           !resolved &&
-          (msg.code === 'ROOM_NOT_FOUND' ||
-            msg.code === 'INVALID_PASSWORD' ||
-            msg.code === 'ROOM_FULL' ||
-            msg.code === 'RANKED_ACCOUNT_REQUIRED')
+          (code === 'ROOM_NOT_FOUND' ||
+            code === 'INVALID_PASSWORD' ||
+            code === 'ROOM_FULL' ||
+            code === 'ROOM_LOCKED' ||
+            code === 'ROOM_BANNED' ||
+            code === 'RANKED_ACCOUNT_REQUIRED')
         ) {
           resolved = true;
           clearTimeout(timeout);
           cleanup();
           const fallbackMsg =
-            msg.code === 'RANKED_ACCOUNT_REQUIRED'
+            code === 'RANKED_ACCOUNT_REQUIRED'
               ? 'Esta sala es Clasificatoria. Debes iniciar sesión con una cuenta verificada para entrar.'
-              : msg.code === 'INVALID_PASSWORD'
+              : code === 'INVALID_PASSWORD'
                 ? 'Contraseña incorrecta.'
-                : msg.code === 'ROOM_FULL'
+                : code === 'ROOM_FULL'
                   ? 'La sala está llena (máximo 30 jugadores).'
-                  : 'No se pudo entrar a la sala.';
+                  : code === 'ROOM_LOCKED'
+                    ? 'La sala está bloqueada por el anfitrión.'
+                    : code === 'ROOM_BANNED'
+                      ? 'Has sido baneado de esta sala y no puedes volver a ingresar.'
+                      : 'No se pudo entrar a la sala.';
           const errMsg = String(msg.message || fallbackMsg);
+          this.lastJoinErrorCode = code;
           this.lastJoinError = errMsg;
           gameUI.lobbyError = errMsg;
+          this.onJoinError?.(code, errMsg);
+          if (code === 'ROOM_BANNED') {
+            this.onJoinBanned?.(errMsg, roomId);
+            gameUI.showRoomDisconnectNotice({
+              kind: 'banned_join',
+              title: 'ACCESO DENEGADO — BANEADO',
+              message: errMsg
+            });
+          }
           resolve(false);
         }
       };
@@ -816,6 +842,8 @@ export class GameApp {
       localKit: profile.localKit,
       visitorKit: profile.visitorKit
     });
+    client.roomId = roomId;
+    client.roomName = String(msg.roomName || msg.name || `Sala ${roomId}`);
     this.networkClient = client;
 
     gameUI.isPracticeMode = false;
@@ -903,7 +931,9 @@ export class GameApp {
       this.setActiveGoalScorerId(scorerId);
     };
 
-    client.onRoomClosed = () => this.handleRemoteRoomClosed();
+    client.onRoomClosed = (reason, message, roomName) => {
+      this.handleRemoteRoomClosed(reason, message, roomName);
+    };
 
     const hostPeerId = msg.hostPeerId || msg.hostId;
     if (hostPeerId) {
@@ -911,12 +941,17 @@ export class GameApp {
     }
   }
 
-  /** Guest: la sala fue destruida por el Host (o fuimos expulsados) → volver al Lobby. */
-  private handleRemoteRoomClosed(): void {
+  /** Guest: la sala fue destruida por el Host (o fuimos expulsados/baneados) → volver al Lobby. */
+  private handleRemoteRoomClosed(
+    reason: 'kicked' | 'banned' | 'closed' = 'closed',
+    message?: string,
+    roomName?: string
+  ): void {
     if (!this.currentRoomId) return;
     const roomId = this.currentRoomId;
+    const activeRoomName = roomName || gameUI.activeRoom?.name || undefined;
     this.currentRoomId = null;
-    this.networkClient = null; // NetworkClient ya se auto-desconecta tras ROOM_CLOSED
+    this.networkClient = null; // NetworkClient ya se auto-desconecta tras ROOM_CLOSED / moderación
     this.signaling.send({ type: 'leave_room', roomId });
     const stayOnGatekeeper = gameUI.currentScreen === 'GATEKEEPER';
     this.resetToLobbyState(!stayOnGatekeeper);
@@ -924,6 +959,23 @@ export class GameApp {
     if (!stayOnGatekeeper) {
       gameUI.navigateTo('LOBBY');
     }
+    this.onRoomClosed?.(reason, message, activeRoomName);
+    const defaultTitles: Record<'kicked' | 'banned' | 'closed', string> = {
+      kicked: 'EXPULSADO DE LA SALA',
+      banned: 'BANEADO DE LA SALA',
+      closed: 'SALA CERRADA'
+    };
+    const defaultMessages: Record<'kicked' | 'banned' | 'closed', string> = {
+      kicked: 'Has sido expulsado de la sala por un administrador o anfitrión.',
+      banned: 'Has sido baneado de esta sala y no podrás volver a ingresar.',
+      closed: 'La sala ha sido cerrada por el anfitrión.'
+    };
+    gameUI.showRoomDisconnectNotice({
+      kind: reason,
+      title: defaultTitles[reason],
+      message: message || defaultMessages[reason],
+      roomName: activeRoomName
+    });
   }
 
   public teardownNetworkSession(): void {

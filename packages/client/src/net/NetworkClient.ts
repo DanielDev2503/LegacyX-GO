@@ -23,13 +23,19 @@ export class NetworkClient {
   private profile: ClientProfileOptions;
   private helloSent: boolean = false;
   private isDisconnecting: boolean = false;
+  private roomClosedNotified: boolean = false;
 
   private boundOnWelcome!: (msg: any) => void;
   private boundOnJoinSuccess!: (msg: any) => void;
   private boundOnSignal!: (msg: any) => void;
   private boundOnPeerLeft!: (msg: any) => void;
   private boundOnRoomClosed!: (msg: any) => void;
+  private boundOnRoomClosedNotice!: (msg: any) => void;
+  private boundOnHostDisconnect!: (msg: any) => void;
+  private boundOnModerationNotice!: (msg: any) => void;
 
+  public roomId: string = '';
+  public roomName: string = '';
   public localPlayerId: number | null = null;
   public players: PlayerInfo[] = [];
   public teamsLocked: boolean = false;
@@ -40,7 +46,11 @@ export class NetworkClient {
 
   public onConnected?: (playerId: number) => void;
   public onDisconnected?: () => void;
-  public onRoomClosed?: (reason?: string) => void;
+  public onRoomClosed?: (
+    reason?: 'kicked' | 'banned' | 'closed',
+    message?: string,
+    roomName?: string
+  ) => void;
   public onPlayerListUpdated?: (players: PlayerInfo[]) => void;
   public onRoomStateSync?: (msg: Record<string, unknown>) => void;
   public onGoalScorerIdChanged?: (id: number | null) => void;
@@ -110,6 +120,12 @@ export class NetworkClient {
     };
 
     this.boundOnJoinSuccess = async (msg) => {
+      if (typeof msg.roomId === 'string' && msg.roomId) {
+        this.roomId = msg.roomId;
+      }
+      if (typeof msg.roomName === 'string' && msg.roomName) {
+        this.roomName = msg.roomName;
+      }
       const hId = (msg.hostPeerId ?? msg.hostId) as string;
       if (hId) {
         await this.connectToHost(hId);
@@ -133,14 +149,53 @@ export class NetworkClient {
 
     this.boundOnPeerLeft = (msg) => {
       if (msg.peerId && msg.peerId === this.hostPeerId) {
-        this.onRoomClosed?.('El anfitrión ha abandonado la sala.');
-        this.disconnect();
+        this.notifyRoomClosed(
+          'closed',
+          'El anfitrión ha abandonado la sala.',
+          typeof msg.roomName === 'string' ? msg.roomName : undefined
+        );
       }
     };
 
     this.boundOnRoomClosed = (msg) => {
-      this.onRoomClosed?.(String(msg?.reason || 'El anfitrión ha cerrado la sala.'));
-      this.disconnect();
+      if (msg?.roomId && this.roomId && msg.roomId !== this.roomId) return;
+      this.notifyRoomClosed(
+        'closed',
+        String(msg?.reason || msg?.message || 'El anfitrión ha cerrado la sala.'),
+        typeof msg?.roomName === 'string' ? msg.roomName : undefined
+      );
+    };
+
+    this.boundOnRoomClosedNotice = (msg) => {
+      if (msg?.roomId && this.roomId && msg.roomId !== this.roomId) return;
+      this.notifyRoomClosed(
+        'closed',
+        String(msg?.message || msg?.reason || 'La sala ha sido cerrada por el anfitrión.'),
+        typeof msg?.roomName === 'string' ? msg.roomName : undefined
+      );
+    };
+
+    this.boundOnHostDisconnect = (msg) => {
+      if (msg?.roomId && this.roomId && msg.roomId !== this.roomId) return;
+      this.notifyRoomClosed(
+        'closed',
+        'El anfitrión ha cerrado la sala o se ha desconectado.',
+        typeof msg?.roomName === 'string' ? msg.roomName : undefined
+      );
+    };
+
+    this.boundOnModerationNotice = (msg) => {
+      if (msg?.roomId && this.roomId && msg.roomId !== this.roomId) return;
+      const reason = msg?.kind === 'banned' ? 'banned' : 'kicked';
+      const defaultMsg =
+        reason === 'banned'
+          ? 'Has sido baneado de la sala por el anfitrión.'
+          : 'Has sido expulsado de la sala por el anfitrión.';
+      this.notifyRoomClosed(
+        reason,
+        typeof msg?.reason === 'string' && msg.reason.trim() ? msg.reason : defaultMsg,
+        typeof msg?.roomName === 'string' ? msg.roomName : undefined
+      );
     };
 
     this.signaling.on('WELCOME', this.boundOnWelcome);
@@ -148,6 +203,10 @@ export class NetworkClient {
     this.signaling.on('SIGNAL', this.boundOnSignal);
     this.signaling.on('PEER_LEFT', this.boundOnPeerLeft);
     this.signaling.on('ROOM_CLOSED', this.boundOnRoomClosed);
+    this.signaling.on('room_closed', this.boundOnRoomClosed);
+    this.signaling.on('ROOM_CLOSED_NOTICE', this.boundOnRoomClosedNotice);
+    this.signaling.on('HOST_DISCONNECT', this.boundOnHostDisconnect);
+    this.signaling.on('ROOM_MODERATION_NOTICE', this.boundOnModerationNotice);
   }
 
   private cleanupSignalingListeners(): void {
@@ -156,6 +215,21 @@ export class NetworkClient {
     this.signaling.off('SIGNAL', this.boundOnSignal);
     this.signaling.off('PEER_LEFT', this.boundOnPeerLeft);
     this.signaling.off('ROOM_CLOSED', this.boundOnRoomClosed);
+    this.signaling.off('room_closed', this.boundOnRoomClosed);
+    this.signaling.off('ROOM_CLOSED_NOTICE', this.boundOnRoomClosedNotice);
+    this.signaling.off('HOST_DISCONNECT', this.boundOnHostDisconnect);
+    this.signaling.off('ROOM_MODERATION_NOTICE', this.boundOnModerationNotice);
+  }
+
+  private notifyRoomClosed(
+    reason: 'kicked' | 'banned' | 'closed',
+    message?: string,
+    roomName?: string
+  ): void {
+    if (this.roomClosedNotified) return;
+    this.roomClosedNotified = true;
+    this.onRoomClosed?.(reason, message, roomName ?? (this.roomName || undefined));
+    this.disconnect();
   }
 
   private initPeerConnection(): void {
@@ -196,6 +270,17 @@ export class NetworkClient {
         this.startPingProbe();
       },
       onDisconnected: () => {
+        if (
+          !this.isDisconnecting &&
+          !this.roomClosedNotified &&
+          (this.localPlayerId !== null || Boolean(this.hostPeerId))
+        ) {
+          this.notifyRoomClosed(
+            'closed',
+            'Se ha perdido la conexión con el anfitrión o la sala ha sido cerrada.'
+          );
+          return;
+        }
         this.onDisconnected?.();
       }
     });
@@ -354,11 +439,22 @@ export class NetworkClient {
     } else if (msg.type === 'MATCH_RESUMED') {
       this.jitterBuffer.setMatchState('PLAYING');
     } else if (msg.type === 'ROOM_CLOSED') {
-      this.onRoomClosed?.(String(msg.reason || 'El anfitrión ha cerrado la sala.'));
-      this.disconnect();
+      this.notifyRoomClosed(
+        'closed',
+        String(msg.reason || 'El anfitrión ha cerrado la sala.'),
+        typeof msg.roomName === 'string' ? msg.roomName : undefined
+      );
     } else if (msg.type === 'PLAYER_KICKED' || msg.type === 'PLAYER_BANNED') {
-      this.onRoomClosed?.(String(msg.reason || 'Has sido expulsado de la sala.'));
-      this.disconnect();
+      const reason = msg.type === 'PLAYER_BANNED' ? 'banned' : 'kicked';
+      const defaultMsg =
+        reason === 'banned'
+          ? 'Has sido baneado de la sala por el anfitrión.'
+          : 'Has sido expulsado de la sala por el anfitrión.';
+      this.notifyRoomClosed(
+        reason,
+        String(msg.reason || defaultMsg),
+        typeof msg.roomName === 'string' ? msg.roomName : undefined
+      );
     }
   }
 

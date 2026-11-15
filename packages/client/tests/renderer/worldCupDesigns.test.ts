@@ -182,30 +182,43 @@ describe('World Cup Ball Designs, Replay Overrides, Kit Patterns & Scoreboards',
 
       const wc2010 = createRecordedCtx();
       drawBallDesign(wc2010.ctx, { x: 50, y: 50, radius: 24, skin: 'wc2010', rotX: 0, rotY: 0 });
+      expect(wc2010.fillStyles).toContain('#141414');
+      expect(wc2010.fillStyles).toContain('#D62828');
       expect(wc2010.fillStyles).toContain('#16A34A');
       expect(wc2010.fillStyles).toContain('#FACC15');
 
       const wc2014 = createRecordedCtx();
       drawBallDesign(wc2014.ctx, { x: 50, y: 50, radius: 24, skin: 'wc2014', rotX: 0, rotY: 0 });
+      expect(wc2014.strokeStyles).toContain('#0B1B34');
       expect(wc2014.strokeStyles).toContain('#0284C7');
       expect(wc2014.strokeStyles).toContain('#F97316');
       expect(wc2014.strokeStyles).toContain('#10B981');
+      expect(wc2014.fillStyles).toContain('#FFFFFF');
 
       const wc2018 = createRecordedCtx();
       drawBallDesign(wc2018.ctx, { x: 50, y: 50, radius: 24, skin: 'wc2018', rotX: 0, rotY: 0 });
+      expect(wc2018.fillStyles).toContain('#64748B');
+      expect(wc2018.fillStyles).toContain('#334155');
+      expect(wc2018.fillStyles).toContain('#1E293B');
       expect(wc2018.fillStyles).toContain('#0F172A');
+      expect(wc2018.fillStyles).toContain('#E85D04');
       expect(wc2018.fillStyles).toContain('#EAB308');
 
       const wc2022 = createRecordedCtx();
       drawBallDesign(wc2022.ctx, { x: 50, y: 50, radius: 24, skin: 'wc2022', rotX: 0.4, rotY: 0.3 });
+      expect(wc2022.fillStyles).toContain('#0077B6');
       expect(wc2022.fillStyles).toContain('#06B6D4');
       expect(wc2022.fillStyles).toContain('#E11D48');
+      expect(wc2022.fillStyles).toContain('#F4A261');
+      expect(wc2022.fillStyles).toContain('#023047');
 
       const wc2026 = createRecordedCtx();
       drawBallDesign(wc2026.ctx, { x: 50, y: 50, radius: 24, skin: 'wc2026', rotX: 0, rotY: 0 });
       expect(wc2026.fillStyles).toContain('#EF4444');
       expect(wc2026.fillStyles).toContain('#10B981');
       expect(wc2026.fillStyles).toContain('#2563EB');
+      expect(wc2026.fillStyles).toContain('#FFFFFF');
+      expect(wc2026.strokeStyles).toContain('#0F172A');
     });
 
     it('restores World Cup ballSkin from localStorage in DiscRenderer', () => {
@@ -342,6 +355,35 @@ describe('World Cup Ball Designs, Replay Overrides, Kit Patterns & Scoreboards',
       expect(res.body).toContain('has-outline');
       expect(res.body).toContain('#facc15');
     });
+
+    it('supports flag mode (showLabel=false) and all 4 broadcast shapes (rect, pill, hex, angled)', () => {
+      const shapes = ['rect', 'pill', 'hex', 'angled'] as const;
+      for (const shape of shapes) {
+        const res = renderSvelte(KitPatternBadge, {
+          props: {
+            kit: {
+              primaryColor: '#16a34a',
+              secondaryColor: '#ffffff',
+              tertiaryColor: '#000000',
+              pattern: 'vertical',
+              hasOutline: true
+            },
+            label: 'MEX',
+            showLabel: false,
+            shape
+          }
+        });
+        expect(res.body).toContain(`data-shape="${shape}"`);
+        expect(res.body).toContain(`shape-${shape}`);
+        expect(res.body).toContain('data-show-label="false"');
+        expect(res.body).toContain('is-flag');
+        expect(res.body).not.toContain('kit-badge-label');
+        expect(res.body).not.toContain('MEX');
+        if (shape === 'hex' || shape === 'angled') {
+          expect(res.body).toContain('shape-rim-svg');
+        }
+      }
+    });
   });
 
   describe('4) MatchScoreboard.svelte (Original + 6 World Cup Broadcast Scoreboards)', () => {
@@ -394,7 +436,43 @@ describe('World Cup Ball Designs, Replay Overrides, Kit Patterns & Scoreboards',
         expect(res.body).toContain('02:45');
         expect(res.body).toContain('>3<');
         expect(res.body).toContain('>2<');
-        if (design === 'wc2026') {
+
+        if (design === 'original') {
+          expect(res.body).toContain('data-show-label="true"');
+          expect(res.body).toContain('kit-badge-label');
+        } else {
+          // World Cup scoreboards render KitPatternBadge strictly as flags and place acronyms outside
+          expect(res.body).toContain('data-show-label="false"');
+          expect(res.body).not.toContain('kit-badge-label');
+          expect(res.body).toContain('sb-team-tag');
+        }
+
+        if (design === 'wc2006') {
+          expect(res.body).toContain('data-shape="pill"');
+          expect(res.body).toContain('wc2006-sep');
+          expect(res.body).toContain('wc2006-clock-tab');
+        } else if (design === 'wc2010') {
+          expect(res.body).toContain('data-shape="angled"');
+          expect(res.body).toContain('wc2010-clock-arch');
+          expect(res.body).toContain('wc2010-score-block');
+        } else if (design === 'wc2014') {
+          expect(res.body).toContain('wc2014-score-block');
+          expect(res.body).toContain('wc2014-sep');
+          expect(res.body).toContain('wc2014-clock-pill');
+        } else if (design === 'wc2018') {
+          expect(res.body).toContain('data-shape="hex"');
+          expect(res.body).toContain('wc2018-wing');
+          expect(res.body).toContain('wc2018-diamond');
+          expect(res.body).toContain('wc2018-clock-block');
+        } else if (design === 'wc2022') {
+          expect(res.body).toContain('wc2022-zigzag');
+          expect(res.body).toContain('wc2022-ornate-sep');
+          expect(res.body).toContain('wc2022-lattice-diamond');
+        } else if (design === 'wc2026') {
+          expect(res.body).toContain('wc2026-team-dot');
+          expect(res.body).toContain('#38bdf8');
+          expect(res.body).toContain('#facc15');
+          expect(res.body).toContain('wc2026-score-pill');
           expect(res.body).toContain('wc2026-emblem');
           expect(res.body).toContain('>26<');
         }

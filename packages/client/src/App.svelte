@@ -77,6 +77,35 @@
   let didAutoRouteAuthenticatedBoot = false;
   let wasAuthenticatedSession = Boolean(userProfile.isAuthenticated && !userProfile.isGuest);
 
+  gameUI.registerUserRoleReader(() =>
+    userProfile?.isAuthenticated && !userProfile?.isGuest ? userProfile.role : 'jugador'
+  );
+
+  let prevTrackedBallRadius = gameUI.physicsModifiers.ballRadius;
+  let prevTrackedPlayerRadius = gameUI.physicsModifiers.playerRadius;
+
+  function syncRecordedModifierRadii(): void {
+    const ballRadius = gameUI.physicsModifiers.ballRadius;
+    const playerRadius = gameUI.physicsModifiers.playerRadius;
+    if (!matchRecorder.isRecording) {
+      prevTrackedBallRadius = ballRadius;
+      prevTrackedPlayerRadius = playerRadius;
+      return;
+    }
+    if (ballRadius !== prevTrackedBallRadius || playerRadius !== prevTrackedPlayerRadius) {
+      prevTrackedBallRadius = ballRadius;
+      prevTrackedPlayerRadius = playerRadius;
+      matchRecorder.recordModifiers(gameUI.physicsModifiers.ballRadius, gameUI.physicsModifiers.playerRadius);
+    }
+  }
+
+  $effect(() => {
+    void matchRecorder.isRecording;
+    void gameUI.physicsModifiers.ballRadius;
+    void gameUI.physicsModifiers.playerRadius;
+    syncRecordedModifierRadii();
+  });
+
   $effect(() => {
     const isLoggedAccount = Boolean(userProfile.isAuthenticated && !userProfile.isGuest);
     gameApp.signaling.setUserId(isLoggedAccount ? (userProfile.id ?? null) : null);
@@ -321,6 +350,7 @@
       if (predEngine) {
         predEngine.applyModifiers(mods);
       }
+      syncRecordedModifierRadii();
     };
 
     gameUI.onTriggerShake = (intensity: number, durationMs: number) => {
@@ -524,6 +554,9 @@
     gameUI.onPlayerEmote = (playerId: number, emoji: string) => {
       if (gameUI.settings.showPitchEmotes !== false) {
         triggerPitchEmote(playerId, emoji);
+      }
+      if (matchRecorder.isRecording) {
+        matchRecorder.recordEmote(playerId, emoji, 2200);
       }
     };
 
@@ -1333,7 +1366,16 @@
     let frameCount = 0;
     let lastFpsCalculation = performance.now();
     let lastRenderFrameTime = performance.now();
+    let lastRenderedFrameTimeMs = 0;
     let wasRecordingPrevFrame = false;
+    let prevVarBallX = 0;
+    let prevVarBallY = 0;
+    let prevVarPlayerX = 0;
+    let prevVarPlayerY = 0;
+    let prevVarSampleTimeMs = 0;
+    let hasPrevVarSample = false;
+    let smoothedFallbackBallSpeedPx = 0;
+    let smoothedFallbackPlayerSpeedPx = 0;
     const scratchRenderSnapshot: GameStateSnapshot = {
       tick: 0,
       phase: 0,
@@ -1344,7 +1386,17 @@
       discs: []
     };
     const scratchDiscs: CompactDiscState[] = [];
+    const scratchDiscPool: CompactDiscState[] = [];
     const sepLocalDisc = { x: 0, y: 0, vx: 0, vy: 0, radius: 15 };
+    const sepOtherPool: Array<{
+      id: number;
+      team: number;
+      x: number;
+      y: number;
+      vx: number;
+      vy: number;
+      radius: number;
+    }> = [];
     const sepOtherDiscs: Array<{
       id: number;
       team: number;
@@ -1354,6 +1406,25 @@
       vy: number;
       radius: number;
     }> = [];
+    const sepOtherIndexByDisc: number[] = [];
+
+    function computeDiscTelemetrySpeed(
+      disc: CompactDiscState | undefined,
+      prevX: number,
+      prevY: number,
+      varDt: number,
+      hasPrev: boolean,
+      prevSmoothed: number
+    ): number {
+      if (!disc) return 0;
+      const vxSpeed = Math.hypot(disc.vx || 0, disc.vy || 0);
+      if (vxSpeed > 0 || !hasPrev || varDt <= 0.001) {
+        return vxSpeed;
+      }
+      const instSpeed = Math.hypot(disc.x - prevX, disc.y - prevY) / varDt;
+      if (instSpeed <= 1e-3) return 0;
+      return prevSmoothed > 0 ? prevSmoothed * 0.6 + instSpeed * 0.4 : instSpeed;
+    }
 
     function syncRecorderMetadata(): void {
       if (!matchRecorder.isRecording) return;
@@ -1392,6 +1463,8 @@
         minimapOpacity: rawMinimapOpacity > 1 ? rawMinimapOpacity / 100 : rawMinimapOpacity,
         minimapSize: gameUI.settings.minimapSize,
         minimapCameraFrustum: gameUI.settings.minimapCameraFrustum !== false,
+        ballRadius: gameUI.physicsModifiers.ballRadius,
+        playerRadius: gameUI.physicsModifiers.playerRadius,
         players: gameUI.rosterPlayers.map((rp) => ({
           id: rp.id,
           nickname: rp.nickname || rp.name || `P${rp.id}`,
@@ -1405,11 +1478,22 @@
 
     function renderLoop(currentTime: number): void {
       const now = currentTime || performance.now();
+      // Frame pacing configurable: SimulationTicker corre en Web Worker independiente a 60 Hz
+      const cap = gameUI.settings.fpsCap ?? 0;
+      if (cap > 0) {
+        const minIntervalMs = 1000 / cap;
+        if (lastRenderedFrameTimeMs > 0 && now - lastRenderedFrameTimeMs < minIntervalMs - 0.5) {
+          animFrameId = requestAnimationFrame(renderLoop);
+          return;
+        }
+      }
+      lastRenderedFrameTimeMs = now;
+
       const frameDt = Math.max(0.001, Math.min(0.1, (now - lastRenderFrameTime) / 1000));
       lastRenderFrameTime = now;
 
       // Interpolación lineal libre en Canvas 2D
-      const alpha = Math.max(0, Math.min(1.0, (currentTime - lastSimTimestamp) / FIXED_DT_MS));
+      const alpha = Math.max(0, Math.min(1.0, (now - lastSimTimestamp) / FIXED_DT_MS));
 
       // Sincronizar cámara, zoom y proyección 2D
       const liveRenderPhase =
@@ -1451,6 +1535,12 @@
       renderer.discRenderer.ballCustomColor = gameUI.effectiveBallCustomColor;
       renderer.discRenderer.playerGlowEnabled = gameUI.settings.playerGlowEnabled !== false;
       renderer.discRenderer.ballTrailEnabled = gameUI.settings.ballTrailEnabled !== false;
+      const discRendererSettings = renderer.discRenderer as typeof renderer.discRenderer & {
+        showTypingIndicator?: boolean;
+        showPlayerAvatars?: boolean;
+      };
+      discRendererSettings.showTypingIndicator = gameUI.settings.showTypingIndicator !== false;
+      discRendererSettings.showPlayerAvatars = gameUI.settings.showPlayerAvatars !== false;
 
       renderer.vfx.magnusTrailEnabled = gameUI.settings.magnusTrailEnabled !== false;
       renderer.vfx.fireTrailEnabled = gameUI.settings.fireShotEnabled !== false;
@@ -1493,7 +1583,7 @@
       if (!gameUI.isHost && gameApp.networkClient) {
         reconciler.updateVisualSmoothing(frameDt);
         const interpSnap =
-          gameApp.networkClient.getInterpolatedState(currentTime) ??
+          gameApp.networkClient.getInterpolatedState(now) ??
           gameApp.networkClient.latestSnapshot;
         if (interpSnap && interpSnap.discs) {
           let renderSnap = interpSnap;
@@ -1511,6 +1601,7 @@
             scratchDiscs.length = 0;
             sepOtherDiscs.length = 0;
             const inDiscs = interpSnap.discs;
+            sepOtherIndexByDisc.length = inDiscs.length;
             const ballRad = renderer.discRenderer.ballRadius || 5.8;
             const playerRad = renderer.discRenderer.playerRadius || 15.0;
             sepLocalDisc.x = predX;
@@ -1519,18 +1610,27 @@
             sepLocalDisc.vy = predDisc.vel.y;
             sepLocalDisc.radius = playerRad;
 
+            let nonLocalCount = 0;
             for (let i = 0; i < inDiscs.length; i++) {
               const d = inDiscs[i]!;
               if (d.id !== localId) {
-                sepOtherDiscs.push({
-                  id: d.id,
-                  team: d.team,
-                  x: d.x,
-                  y: d.y,
-                  vx: d.vx,
-                  vy: d.vy,
-                  radius: d.id === 0 || d.team === 0 ? ballRad : playerRad
-                });
+                let slot = sepOtherPool[nonLocalCount];
+                if (!slot) {
+                  slot = { id: 0, team: 0, x: 0, y: 0, vx: 0, vy: 0, radius: playerRad };
+                  sepOtherPool.push(slot);
+                }
+                slot.id = d.id;
+                slot.team = d.team;
+                slot.x = d.x;
+                slot.y = d.y;
+                slot.vx = d.vx;
+                slot.vy = d.vy;
+                slot.radius = d.id === 0 || d.team === 0 ? ballRad : playerRad;
+                sepOtherDiscs.push(slot);
+                sepOtherIndexByDisc[i] = nonLocalCount;
+                nonLocalCount++;
+              } else {
+                sepOtherIndexByDisc[i] = -1;
               }
             }
 
@@ -1538,30 +1638,61 @@
               sepLocalDisc,
               sepOtherDiscs,
               renderer.stadium.halfWidth,
-              renderer.stadium.halfHeight
+              renderer.stadium.halfHeight,
+              renderer.stadium.goalHalfHeight,
+              renderer.stadium.goalDepth
             );
 
             for (let i = 0; i < inDiscs.length; i++) {
               const d = inDiscs[i]!;
+              let outDisc = scratchDiscPool[i];
+              if (!outDisc) {
+                outDisc = {
+                  id: 0,
+                  team: 0,
+                  x: 0,
+                  y: 0,
+                  vx: 0,
+                  vy: 0,
+                  flags: 0,
+                  spin: 0,
+                  stamina: 100,
+                  dashTimer: 0,
+                  dashCooldown: 0,
+                  lastAckedInputSeq: 0
+                };
+                scratchDiscPool.push(outDisc);
+              }
               if (d.id === localId) {
                 const predRt = (predEngine as any).getRuntime?.(localId);
-                scratchDiscs.push({
-                  id: d.id,
-                  team: d.team,
-                  x: sepLocalDisc.x,
-                  y: sepLocalDisc.y,
-                  vx: sepLocalDisc.vx,
-                  vy: sepLocalDisc.vy,
-                  flags: predFlags || d.flags,
-                  stamina: predDisc.stamina,
-                  spin: d.spin,
-                  dashTimer: predRt?.ticksRemaining ?? 0,
-                  dashCooldown: predRt?.cooldownTimer ?? 0,
-                  lastAckedInputSeq: d.lastAckedInputSeq
-                });
+                outDisc.id = d.id;
+                outDisc.team = d.team;
+                outDisc.x = sepLocalDisc.x;
+                outDisc.y = sepLocalDisc.y;
+                outDisc.vx = sepLocalDisc.vx;
+                outDisc.vy = sepLocalDisc.vy;
+                outDisc.flags = predFlags || d.flags;
+                outDisc.stamina = predDisc.stamina;
+                outDisc.spin = d.spin;
+                outDisc.dashTimer = predRt?.ticksRemaining ?? 0;
+                outDisc.dashCooldown = predRt?.cooldownTimer ?? 0;
+                outDisc.lastAckedInputSeq = d.lastAckedInputSeq;
               } else {
-                scratchDiscs.push(d);
+                const sep = sepOtherDiscs[sepOtherIndexByDisc[i]!]!;
+                outDisc.id = d.id;
+                outDisc.team = d.team;
+                outDisc.x = sep.x;
+                outDisc.y = sep.y;
+                outDisc.vx = d.vx;
+                outDisc.vy = d.vy;
+                outDisc.flags = d.flags;
+                outDisc.stamina = d.stamina;
+                outDisc.spin = d.spin;
+                outDisc.dashTimer = d.dashTimer;
+                outDisc.dashCooldown = d.dashCooldown;
+                outDisc.lastAckedInputSeq = d.lastAckedInputSeq;
               }
+              scratchDiscs.push(outDisc);
             }
 
             scratchRenderSnapshot.tick = interpSnap.tick;
@@ -1610,13 +1741,79 @@
       }
       wasRecordingPrevFrame = matchRecorder.isRecording;
 
+      // Actualizar telemetría en vivo /var (Superadmin)
+      if (gameUI.showVarMonitor && currSnapshot && Array.isArray(currSnapshot.discs)) {
+        const discs = currSnapshot.discs;
+        const localId = gameUI.localPlayerId;
+        let ballDisc: CompactDiscState | undefined;
+        let localDisc: CompactDiscState | undefined;
+        for (let i = 0; i < discs.length; i++) {
+          const d = discs[i]!;
+          if (!ballDisc && (d.team === 0 || d.id === 0)) {
+            ballDisc = d;
+          }
+          if (!localDisc && localId > 0 && d.id === localId) {
+            localDisc = d;
+          }
+        }
+
+        const varDt = hasPrevVarSample ? (now - prevVarSampleTimeMs) / 1000 : 0;
+        const ballX = ballDisc ? ballDisc.x : 0;
+        const ballY = ballDisc ? ballDisc.y : 0;
+        const ballSpeedPx = computeDiscTelemetrySpeed(
+          ballDisc,
+          prevVarBallX,
+          prevVarBallY,
+          varDt,
+          hasPrevVarSample,
+          smoothedFallbackBallSpeedPx
+        );
+        smoothedFallbackBallSpeedPx = ballSpeedPx;
+        const ballSpeedKmh = Math.round(ballSpeedPx * 0.18 * 10) / 10;
+
+        const playerX = localDisc ? localDisc.x : 0;
+        const playerY = localDisc ? localDisc.y : 0;
+        const playerSpeedPx = computeDiscTelemetrySpeed(
+          localDisc,
+          prevVarPlayerX,
+          prevVarPlayerY,
+          varDt,
+          hasPrevVarSample,
+          smoothedFallbackPlayerSpeedPx
+        );
+        smoothedFallbackPlayerSpeedPx = playerSpeedPx;
+        const playerSpeedKmh = Math.round(playerSpeedPx * 0.18 * 10) / 10;
+
+        prevVarBallX = ballX;
+        prevVarBallY = ballY;
+        prevVarPlayerX = playerX;
+        prevVarPlayerY = playerY;
+        prevVarSampleTimeMs = now;
+        hasPrevVarSample = true;
+
+        gameUI.varTelemetry.ballSpeedPx = ballSpeedPx;
+        gameUI.varTelemetry.ballSpeedKmh = ballSpeedKmh;
+        gameUI.varTelemetry.ballX = ballX;
+        gameUI.varTelemetry.ballY = ballY;
+        gameUI.varTelemetry.playerSpeedPx = playerSpeedPx;
+        gameUI.varTelemetry.playerSpeedKmh = playerSpeedKmh;
+        gameUI.varTelemetry.playerX = playerX;
+        gameUI.varTelemetry.playerY = playerY;
+        gameUI.varTelemetry.tick = currSnapshot.tick ?? 0;
+        gameUI.varTelemetry.ping = gameUI.isHost ? 0 : gameUI.pingMs;
+      } else if (hasPrevVarSample) {
+        hasPrevVarSample = false;
+        smoothedFallbackBallSpeedPx = 0;
+        smoothedFallbackPlayerSpeedPx = 0;
+      }
+
       // Actualizar telemetría reactiva en UI
       frameCount++;
-      if (currentTime - lastFpsCalculation >= 500) {
-        const currentFps = Math.round((frameCount * 1000) / (currentTime - lastFpsCalculation));
+      if (now - lastFpsCalculation >= 500) {
+        const currentFps = Math.round((frameCount * 1000) / (now - lastFpsCalculation));
         gameUI.recordTelemetrySample(gameUI.isHost ? 0 : gameUI.pingMs, currentFps);
         frameCount = 0;
-        lastFpsCalculation = currentTime;
+        lastFpsCalculation = now;
         syncChatBounds();
 
         if (matchRecorder.isRecording) {

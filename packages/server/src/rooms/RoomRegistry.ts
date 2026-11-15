@@ -23,6 +23,8 @@ export interface Room {
   activeMatchToken?: string | null;
   createdAt: number;
   guests: Set<string>;
+  bannedPeerIds: Set<string>;
+  bannedUserIds: Set<string>;
 }
 
 export type JoinResult =
@@ -33,6 +35,7 @@ export type JoinResult =
         | 'ROOM_NOT_FOUND'
         | 'ROOM_FULL'
         | 'ROOM_LOCKED'
+        | 'ROOM_BANNED'
         | 'INVALID_PASSWORD'
         | 'ALREADY_IN_ROOM'
         | 'RANKED_ACCOUNT_REQUIRED';
@@ -95,7 +98,9 @@ export class RoomRegistry {
       hostPingMs: Math.max(1, Math.round(opts.hostPingMs ?? 28)),
       activeMatchToken: null,
       createdAt: Date.now(),
-      guests: new Set()
+      guests: new Set(),
+      bannedPeerIds: new Set(),
+      bannedUserIds: new Set()
     };
     this.rooms.set(room.id, room);
     this.peerToRoom.set(hostPeerId, room.id);
@@ -106,10 +111,18 @@ export class RoomRegistry {
     peerId: string,
     roomId: string,
     password?: string,
-    joinerAuth?: { isGuest?: boolean; isVerified?: boolean; nickname?: string | null }
+    joinerAuth?: { isGuest?: boolean; isVerified?: boolean; nickname?: string | null; userId?: string | null }
   ): JoinResult {
     const room = this.rooms.get(roomId);
     if (!room) return { ok: false, code: 'ROOM_NOT_FOUND' };
+
+    if (this.isBannedFromRoom(roomId, peerId, joinerAuth?.userId)) {
+      return {
+        ok: false,
+        code: 'ROOM_BANNED',
+        message: 'Has sido baneado de esta sala y no puedes volver a ingresar.'
+      };
+    }
 
     if (room.roomType === 'ranked') {
       const check = canJoinRankedRoom({
@@ -256,6 +269,29 @@ export class RoomRegistry {
   public getRoomOfPeer(peerId: string): Room | undefined {
     const id = this.peerToRoom.get(peerId);
     return id ? this.rooms.get(id) : undefined;
+  }
+
+  public banPeerInRoom(roomId: string, peerId: string, userId?: string | null): boolean {
+    const room = this.rooms.get(roomId);
+    if (!room) return false;
+    if (peerId && peerId !== room.hostPeerId) {
+      room.bannedPeerIds.add(peerId);
+    }
+    const cleanUserId = typeof userId === 'string' ? userId.trim() : '';
+    if (cleanUserId) {
+      room.bannedUserIds.add(cleanUserId);
+    }
+    return true;
+  }
+
+  public isBannedFromRoom(roomId: string, peerId: string, userId?: string | null): boolean {
+    const room = this.rooms.get(roomId);
+    if (!room) return false;
+    if (peerId && room.bannedPeerIds.has(peerId)) {
+      return true;
+    }
+    const cleanUserId = typeof userId === 'string' ? userId.trim() : '';
+    return Boolean(cleanUserId && room.bannedUserIds.has(cleanUserId));
   }
 
   public getPublicRooms(activePeerIds?: Set<string>): any[] {

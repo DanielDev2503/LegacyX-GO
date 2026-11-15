@@ -197,6 +197,13 @@ export interface MatchBannerPayload {
   isCurve?: boolean;
 }
 
+export interface RoomDisconnectNotice {
+  kind: 'kicked' | 'banned' | 'banned_join' | 'closed';
+  title: string;
+  message: string;
+  roomName?: string;
+}
+
 export interface SettingsConfig {
   theme: 'dark' | 'light';
 
@@ -266,6 +273,8 @@ export interface SettingsConfig {
 
   // Compatibility fields
   fpsCap: number;
+  showTypingIndicator: boolean;
+  showPlayerAvatars: boolean;
   extrapolationMs: number;
   autoExtrapolation: boolean;
   netDeformationEnabled: boolean;
@@ -282,11 +291,11 @@ export interface SettingsConfig {
 
 export const DEFAULT_SETTINGS: SettingsConfig = {
   theme: 'dark',
-  masterVolume: 0.5,
-  chatVolume: 0.7,
-  sfxVolume: 0.7,
-  envVolume: 0.5,
-  crowdVolume: 0.4,
+  masterVolume: 1.0,
+  chatVolume: 1.0,
+  sfxVolume: 1.0,
+  envVolume: 1.0,
+  crowdVolume: 1.0,
   isMuted: false,
 
   chatNormalSoundEnabled: true,
@@ -337,7 +346,9 @@ export const DEFAULT_SETTINGS: SettingsConfig = {
   ballCustomColor: '#ffffff',
   scoreboardDesign: 'original',
 
-  fpsCap: 60,
+  fpsCap: 0,
+  showTypingIndicator: true,
+  showPlayerAvatars: true,
   extrapolationMs: 0,
   autoExtrapolation: true,
   netDeformationEnabled: true,
@@ -1095,7 +1106,69 @@ class GameUIStore {
 
   // Audio convenience getters/state
   public isAudioMuted = $state(false);
-  public masterVolume = $state(0.5);
+  public masterVolume = $state(1.0);
+
+  // Superadmin /var telemetry monitor state
+  public showVarMonitor = $state<boolean>(false);
+  public varTelemetry = $state({
+    ballSpeedPx: 0,
+    ballSpeedKmh: 0,
+    ballX: 0,
+    ballY: 0,
+    playerSpeedPx: 0,
+    playerSpeedKmh: 0,
+    playerX: 0,
+    playerY: 0,
+    tick: 0,
+    ping: 0
+  });
+  private userRoleReader: (() => string | null | undefined) | null = null;
+
+  public registerUserRoleReader(reader: () => string | null | undefined): void {
+    this.userRoleReader = reader;
+  }
+
+  // Chat anti-spam cooldown (500ms)
+  private lastChatSentAtMs = -500;
+  private chatCooldownTimer: ReturnType<typeof setTimeout> | null = null;
+  public chatCooldownActive = $state<boolean>(false);
+
+  private clearChatCooldownTimer(): void {
+    if (this.chatCooldownTimer !== null) {
+      clearTimeout(this.chatCooldownTimer);
+      this.chatCooldownTimer = null;
+    }
+  }
+
+  public canSendChatNow(now: number = typeof performance !== 'undefined' ? performance.now() : Date.now()): boolean {
+    return now - this.lastChatSentAtMs >= 500;
+  }
+
+  public markChatSent(now: number = typeof performance !== 'undefined' ? performance.now() : Date.now()): void {
+    this.lastChatSentAtMs = now;
+    this.clearChatCooldownTimer();
+    this.chatCooldownActive = false;
+  }
+
+  public triggerChatCooldownNotice(): void {
+    this.clearChatCooldownTimer();
+    this.chatCooldownActive = true;
+    this.chatCooldownTimer = setTimeout(() => {
+      this.chatCooldownActive = false;
+      this.chatCooldownTimer = null;
+    }, 450);
+  }
+
+  // Stylized Room Disconnect Notice Modal State
+  public roomDisconnectNotice = $state<RoomDisconnectNotice | null>(null);
+
+  public showRoomDisconnectNotice(notice: RoomDisconnectNotice): void {
+    this.roomDisconnectNotice = { ...notice };
+  }
+
+  public clearRoomDisconnectNotice(): void {
+    this.roomDisconnectNotice = null;
+  }
 
   // Diapositiva activa del carrusel ('MENU' | 'STATS')
   private _activeSlide = $state<'MENU' | 'STATS'>('MENU');
@@ -1179,6 +1252,21 @@ class GameUIStore {
 
   public handleChatCommand(rawText: string): boolean {
     const trimmed = rawText.trim();
+    if (/^\/var$/i.test(trimmed)) {
+      const role = this.userRoleReader?.();
+      if (typeof role === 'string' && role.trim().toLowerCase() === 'superadmin') {
+        this.showVarMonitor = !this.showVarMonitor;
+        this.pushLocalSystemNotice(
+          '[VAR] Monitor de telemetría en tiempo real ' +
+            (this.showVarMonitor ? 'ACTIVADO' : 'DESACTIVADO') +
+            '.'
+        );
+      } else {
+        this.pushLocalSystemNotice('Comando /var exclusivo para Superadmin.');
+      }
+      return true;
+    }
+
     const match = /^\/(?:extrapolation|extra)(?:\s+(.*))?$/i.exec(trimmed);
     if (!match) return false;
 
@@ -1439,6 +1527,18 @@ class GameUIStore {
           ballSkin: normalizedBall.ballSkin,
           ballCustomColor: normalizedBall.ballCustomColor,
           scoreboardDesign,
+          fpsCap:
+            typeof parsed.fpsCap === 'number' && Number.isFinite(parsed.fpsCap) && parsed.fpsCap >= 0
+              ? parsed.fpsCap
+              : DEFAULT_SETTINGS.fpsCap,
+          showTypingIndicator:
+            typeof parsed.showTypingIndicator === 'boolean'
+              ? parsed.showTypingIndicator
+              : DEFAULT_SETTINGS.showTypingIndicator,
+          showPlayerAvatars:
+            typeof parsed.showPlayerAvatars === 'boolean'
+              ? parsed.showPlayerAvatars
+              : DEFAULT_SETTINGS.showPlayerAvatars,
           autoExtrapolation:
             typeof parsed.autoExtrapolation === 'boolean'
               ? parsed.autoExtrapolation
@@ -1482,6 +1582,18 @@ class GameUIStore {
         const clampedExtrap = Math.max(0, Math.min(250, Math.round(this.settings.extrapolationMs || 0)));
         this.extrapolationMs = clampedExtrap;
         this.settings.extrapolationMs = clampedExtrap;
+      }
+      if (!localStorage.getItem('lxg_audio_max_default_v1')) {
+        this.settings = {
+          ...this.settings,
+          masterVolume: 1.0,
+          chatVolume: 1.0,
+          sfxVolume: 1.0,
+          envVolume: 1.0,
+          crowdVolume: 1.0
+        };
+        localStorage.setItem('lxg_audio_max_default_v1', '1');
+        this.saveSettings();
       }
       const hostEntry = this.rosterPlayers.find((p) => p.id === this.localPlayerId);
       if (hostEntry) {
@@ -1687,6 +1799,9 @@ class GameUIStore {
     this.settings.ballSkin = DEFAULT_SETTINGS.ballSkin;
     this.settings.ballCustomColor = DEFAULT_SETTINGS.ballCustomColor;
     this.settings.scoreboardDesign = DEFAULT_SETTINGS.scoreboardDesign;
+    this.settings.fpsCap = DEFAULT_SETTINGS.fpsCap;
+    this.settings.showTypingIndicator = DEFAULT_SETTINGS.showTypingIndicator;
+    this.settings.showPlayerAvatars = DEFAULT_SETTINGS.showPlayerAvatars;
     this.settings.extrapolationMs = DEFAULT_SETTINGS.extrapolationMs;
     this.settings.autoExtrapolation = DEFAULT_SETTINGS.autoExtrapolation;
     this.extrapolationMs = DEFAULT_SETTINGS.extrapolationMs;
@@ -2591,6 +2706,22 @@ class GameUIStore {
 
   public resetRoomSession(): void {
     this.clearAllSlidingEventTimers();
+    this.clearChatCooldownTimer();
+    this.chatCooldownActive = false;
+    this.lastChatSentAtMs = -500;
+    this.showVarMonitor = false;
+    this.varTelemetry = {
+      ballSpeedPx: 0,
+      ballSpeedKmh: 0,
+      ballX: 0,
+      ballY: 0,
+      playerSpeedPx: 0,
+      playerSpeedKmh: 0,
+      playerX: 0,
+      playerY: 0,
+      tick: 0,
+      ping: 0
+    };
     this.resetTelemetry();
     this.isPracticeMode = false;
     this.chatMessages = [];
@@ -2624,6 +2755,12 @@ class GameUIStore {
     const trimmed = rawText.trim().slice(0, 140);
     if (!trimmed) return;
     if (this.handleChatCommand(trimmed)) return;
+    const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    if (!this.canSendChatNow(now)) {
+      this.triggerChatCooldownNotice();
+      return;
+    }
+    this.markChatSent(now);
     this.onChatSent?.(trimmed);
   }
 

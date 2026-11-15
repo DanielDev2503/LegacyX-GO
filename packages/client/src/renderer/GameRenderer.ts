@@ -86,6 +86,9 @@ export class GameRenderer {
 
   private lastRenderTimestamp: number = 0;
   private lastPhase: number = -1;
+  private lastReplayTick: number = -1;
+  private prevReplayBallX: number | null = null;
+  private prevReplayBallY: number | null = null;
   private lastProcessedSoundMask: number = 0;
   private isDestroyed: boolean = false;
 
@@ -462,6 +465,10 @@ export class GameRenderer {
     const s0 = prevSnapshot ?? currSnapshot;
     const s1 = currSnapshot ?? prevSnapshot;
     const clampedAlpha = Math.max(0, Math.min(1.0, alpha));
+    const skipReplayBoundaryLerp =
+      s0.phase !== s1.phase &&
+      (s1.phase === MatchPhase.GOAL_REPLAY || s0.phase === MatchPhase.GOAL_REPLAY);
+    const effectiveAlpha = skipReplayBoundaryLerp ? 1 : clampedAlpha;
 
     let ballX = 0;
     let ballY = 0;
@@ -500,10 +507,10 @@ export class GameRenderer {
         }
       }
 
-      const ix = lerp(d0.x, d1.x, clampedAlpha);
-      const iy = lerp(d0.y, d1.y, clampedAlpha);
-      const ivx = lerp(d0.vx, d1.vx, clampedAlpha);
-      const ivy = lerp(d0.vy, d1.vy, clampedAlpha);
+      const ix = lerp(d0.x, d1.x, effectiveAlpha);
+      const iy = lerp(d0.y, d1.y, effectiveAlpha);
+      const ivx = lerp(d0.vx, d1.vx, effectiveAlpha);
+      const ivy = lerp(d0.vy, d1.vy, effectiveAlpha);
 
       const isLocal = localPlayerId !== undefined && d1.id === localPlayerId;
       const flags = d1.flags ?? 0;
@@ -583,17 +590,63 @@ export class GameRenderer {
       this.lastProcessedSoundMask = s1.soundMask;
     }
 
+    const enteredGoalReplay = s1.phase === MatchPhase.GOAL_REPLAY && this.lastPhase !== MatchPhase.GOAL_REPLAY;
+    const replayBallTeleported =
+      s1.phase === MatchPhase.GOAL_REPLAY &&
+      hasBall &&
+      this.prevReplayBallX !== null &&
+      this.prevReplayBallY !== null &&
+      Math.hypot(ballX - this.prevReplayBallX, ballY - this.prevReplayBallY) > 120;
+    const replayRestarted =
+      s1.phase === MatchPhase.GOAL_REPLAY &&
+      ((this.lastReplayTick >= 0 && s1.tick < this.lastReplayTick) || replayBallTeleported);
+
+    if (enteredGoalReplay || replayRestarted) {
+      for (let i = 0; i < this.localGoalNets.length; i++) {
+        this.localGoalNets[i]!.reset();
+      }
+      this.prevReplayBallX = hasBall ? ballX : null;
+      this.prevReplayBallY = hasBall ? ballY : null;
+    }
+
+    if (s1.phase !== MatchPhase.GOAL_REPLAY) {
+      this.lastReplayTick = -1;
+      this.prevReplayBallX = null;
+      this.prevReplayBallY = null;
+    }
+
     this.lastPhase = s1.phase;
 
     if (!this.goalNets && hasBall && this.netDeformationEnabled && !isFrozenPhase) {
+      let netBallVx = ballVx;
+      let netBallVy = ballVy;
+      if (
+        s1.phase === MatchPhase.GOAL_REPLAY &&
+        Math.hypot(netBallVx, netBallVy) < 1e-3 &&
+        this.prevReplayBallX !== null &&
+        this.prevReplayBallY !== null &&
+        dt > 1e-5
+      ) {
+        netBallVx = (ballX - this.prevReplayBallX) / dt;
+        netBallVy = (ballY - this.prevReplayBallY) / dt;
+      }
+
       this.scratchBall.pos.x = ballX;
       this.scratchBall.pos.y = ballY;
-      this.scratchBall.vel.x = ballVx;
-      this.scratchBall.vel.y = ballVy;
+      this.scratchBall.vel.x = netBallVx;
+      this.scratchBall.vel.y = netBallVy;
       this.scratchBall.radius = this.discRenderer.ballRadius;
       for (let i = 0; i < this.localGoalNets.length; i++) {
         this.localGoalNets[i]!.step(dt);
         this.localGoalNets[i]!.checkBallCollision(this.scratchBall);
+      }
+    }
+
+    if (s1.phase === MatchPhase.GOAL_REPLAY) {
+      this.lastReplayTick = s1.tick;
+      if (hasBall) {
+        this.prevReplayBallX = ballX;
+        this.prevReplayBallY = ballY;
       }
     }
 

@@ -233,19 +233,26 @@ describe('Goal Replay (4s = 3s pre-goal + 1s post-goal), Skip Auth, Predictive S
     expect(engine.fsm.state).toBe(MatchPhase.CELEBRATION);
   });
 
-  it('applyPredictiveRenderSeparation separates local disc from ball and players without mutating otherDiscs and clamps to arena', () => {
+  it('applyPredictiveRenderSeparation resolves 100% of ball/player overlap cleanly and clamps to arena bounds', () => {
     const localDisc = { x: 10, y: 0, vx: 80, vy: 0, radius: 15 };
     const otherDiscs = [
       { id: 0, team: 0, x: 25, y: 0, vx: 0, vy: 0, radius: 10 }, // overlaps by 10 px
-      { id: 2, team: 2, x: -5, y: 0, vx: 0, vy: 0, radius: 15 }  // overlaps after or near
+      { id: 2, team: 2, x: -5, y: 0, vx: 0, vy: 0, radius: 15 }  // remote player stays immutable
     ];
-    const origBall = { ...otherDiscs[0]! };
     const origRemote = { ...otherDiscs[1]! };
 
     applyPredictiveRenderSeparation(localDisc, otherDiscs, 600, 270);
 
-    // Authoritative discs must remain completely untouched
-    expect(otherDiscs[0]).toEqual(origBall);
+    // Ball + local player resolved 100% of overlap
+    const ball = otherDiscs[0]!;
+    const distBallLocal = Math.hypot(ball.x - localDisc.x, ball.y - localDisc.y);
+    expect(distBallLocal).toBeGreaterThanOrEqual(ball.radius + localDisc.radius - 1e-6);
+    expect(Math.abs(ball.x)).toBeLessThanOrEqual(600 - ball.radius + 1e-6);
+    expect(Math.abs(ball.y)).toBeLessThanOrEqual(270 - ball.radius + 1e-6);
+    expect(Math.abs(localDisc.x)).toBeLessThanOrEqual(600 - localDisc.radius + 1e-6);
+    expect(Math.abs(localDisc.y)).toBeLessThanOrEqual(270 - localDisc.radius + 1e-6);
+
+    // Remote player was not moved relative to other players when not overlapped by ball
     expect(otherDiscs[1]).toEqual(origRemote);
     // Local disc was displaced away from overlaps
     expect(localDisc.x).not.toBe(10);

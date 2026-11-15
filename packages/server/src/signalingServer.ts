@@ -363,6 +363,12 @@ export function setupSignalingServer(wss: WebSocketServer, options?: SignalingSe
                 type: 'HOST_DISCONNECT',
                 roomId: left.room.id
               });
+              send(targetSock, {
+                type: 'ROOM_CLOSED_NOTICE',
+                roomId: left.room.id,
+                roomName: left.room.name,
+                message: 'La sala ha sido cerrada por el anfitrión.'
+              });
             } else {
               send(targetSock, { type: 'PEER_DISCONNECT', peerId: pid });
               send(targetSock, { type: 'PEER_LEFT', peerId: pid });
@@ -392,6 +398,12 @@ export function setupSignalingServer(wss: WebSocketServer, options?: SignalingSe
                 send(targetSock, {
                   type: 'HOST_DISCONNECT',
                   roomId: removed.id
+                });
+                send(targetSock, {
+                  type: 'ROOM_CLOSED_NOTICE',
+                  roomId: removed.id,
+                  roomName: removed.name,
+                  message: 'La sala ha sido cerrada por el anfitrión.'
                 });
               }
             }
@@ -840,10 +852,16 @@ export function setupSignalingServer(wss: WebSocketServer, options?: SignalingSe
               }
             }
 
+            const effectiveJoinerUserId =
+              joinerUserId ??
+              socketIdentity.get(socket)?.userId ??
+              (typeof msg.userId === 'string' && msg.userId.trim() ? msg.userId.trim() : undefined);
+
             const result = registry.joinRoom(effectivePeerId, roomId, password, {
               isGuest: joinerIsGuest,
               isVerified: joinerIsVerified,
-              nickname: effectiveNickname
+              nickname: effectiveNickname,
+              userId: effectiveJoinerUserId
             });
 
             if (!result.ok) {
@@ -1095,6 +1113,62 @@ export function setupSignalingServer(wss: WebSocketServer, options?: SignalingSe
                 data: msg.data
               });
             }
+            break;
+          }
+
+          case 'ROOM_MODERATION_ACTION': {
+            const action = msg.action === 'ban' ? 'ban' : msg.action === 'kick' ? 'kick' : null;
+            const targetPeerId = typeof msg.targetPeerId === 'string' ? msg.targetPeerId.trim() : '';
+            const requestedRoomId = typeof msg.roomId === 'string' ? msg.roomId.trim() : '';
+            const room =
+              (requestedRoomId ? registry.getRoomById(requestedRoomId) : undefined) ??
+              registry.getRoomOfPeer(effectivePeerId);
+
+            if (!action || !targetPeerId || !room) {
+              break;
+            }
+            const isHostSender =
+              room.hostPeerId === effectivePeerId ||
+              Boolean(ws.peerIds?.has(room.hostPeerId));
+            if (!isHostSender || targetPeerId === room.hostPeerId) {
+              break;
+            }
+
+            const targetSocket = peerSockets.get(targetPeerId);
+            const targetUserId =
+              typeof msg.targetUserId === 'string' && msg.targetUserId.trim()
+                ? msg.targetUserId.trim()
+                : targetSocket
+                  ? socketIdentity.get(targetSocket)?.userId
+                  : undefined;
+
+            if (action === 'ban') {
+              registry.banPeerInRoom(room.id, targetPeerId, targetUserId);
+            }
+
+            const reason =
+              typeof msg.reason === 'string' && msg.reason.trim()
+                ? msg.reason.trim()
+                : action === 'ban'
+                  ? 'Has sido baneado de la sala por el anfitrión.'
+                  : 'Has sido expulsado de la sala por el anfitrión.';
+
+            if (targetSocket && targetSocket.readyState === WebSocket.OPEN) {
+              send(targetSocket, {
+                type: 'ROOM_MODERATION_NOTICE',
+                kind: action === 'ban' ? 'banned' : 'kicked',
+                roomId: room.id,
+                roomName: room.name,
+                reason
+              });
+            }
+
+            const targetLeft = registry.leaveRoom(targetPeerId);
+            if (!targetLeft && room.guests.has(targetPeerId)) {
+              room.guests.delete(targetPeerId);
+              room.currentPlayers = room.guests.size + 1;
+            }
+            broadcastRoomList();
             break;
           }
 

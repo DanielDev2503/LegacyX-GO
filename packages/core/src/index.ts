@@ -25,6 +25,7 @@ import {
   resolvePredictivePlayerCollision,
   resolvePredictiveBallCollision,
   applyPredictiveRenderSeparation,
+  clampDiscToGoalAwareBounds,
   sweptCircleCircle,
   CollisionEvent,
   KickoffPhysicsContext,
@@ -260,6 +261,13 @@ export class EngineInstance {
   private goalReplayClip: GameStateSnapshot[] = [];
   private goalReplayCursor: number = 0;
   private goalReplayPostTicksRemaining: number = 0;
+  private replayPrevBallX: number | null = null;
+  private replayPrevBallY: number | null = null;
+  private replayNetBall: NetBall = {
+    pos: { x: 0, y: 0 },
+    vel: { x: 0, y: 0 },
+    radius: 5.8
+  };
   private frozenVictoryStats: PlayerMatchStats[] | null = null;
   private frozenVictoryMvp: PlayerMatchStats | null = null;
   private lastWallSoundTick: number = -10;
@@ -356,7 +364,7 @@ export class EngineInstance {
         scorerName: details?.scorerName ?? (team === 'red' ? 'Equipo Rojo' : 'Equipo Azul'),
         assisterName: details?.assisterName ?? null,
         isOwnGoal: details?.isOwnGoal ?? false,
-        speedKmh: details?.speedKmh ?? 20,
+        speedKmh: details?.speedKmh ?? 1,
         isPower: details?.isPower ?? false,
         isCurve: details?.isCurve ?? false
       });
@@ -386,9 +394,11 @@ export class EngineInstance {
     this.fsm.onStateChange = (newState, prevState) => {
       if (newState === MatchPhase.GOAL_REPLAY) {
         this.goalReplayCursor = 0;
+        this.replayPrevBallX = null;
+        this.replayPrevBallY = null;
         this.world.resetNets(false);
         if (this.goalReplayClip.length > 0) {
-          this.applyReplayFrame(this.goalReplayClip[0]!);
+          this.applyReplayFrame(this.goalReplayClip[0]!, true);
         }
       } else if (
         newState === MatchPhase.KICKOFF &&
@@ -631,6 +641,8 @@ export class EngineInstance {
     this.goalReplayClip = [];
     this.goalReplayCursor = 0;
     this.goalReplayPostTicksRemaining = 0;
+    this.replayPrevBallX = null;
+    this.replayPrevBallY = null;
     this.world.resetNets(false);
   }
 
@@ -999,7 +1011,7 @@ export class EngineInstance {
     if (this.fsm.state === MatchPhase.GOAL_REPLAY && !isReplay && this.goalReplayClip.length > 0) {
       this.goalReplayCursor++;
       const frameIdx = Math.min(this.goalReplayCursor, this.goalReplayClip.length - 1);
-      this.applyReplayFrame(this.goalReplayClip[frameIdx]!);
+      this.applyReplayFrame(this.goalReplayClip[frameIdx]!, true);
     }
 
     this.fsm.updateTick();
@@ -1245,7 +1257,7 @@ export class EngineInstance {
     const canAward = this.canAwardMatchPoints();
     const currentSpeed = Math.hypot(this.ball.vel.x, this.ball.vel.y);
     const ballSpeedPxSec = this.preNetCrossingSpeed > 0 ? this.preNetCrossingSpeed : currentSpeed;
-    const speedKmh = Math.max(20, Math.round(ballSpeedPxSec * 0.18));
+    const speedKmh = Math.max(1, Math.round(ballSpeedPxSec * 0.18));
 
     let scorerId: number | null = null;
     let assisterId: number | null = null;
@@ -1467,7 +1479,10 @@ export class EngineInstance {
     }
   }
 
-  private applyReplayFrame(frame: GameStateSnapshot): void {
+  private applyReplayFrame(frame: GameStateSnapshot, stepGoalNets: boolean = false): void {
+    const prevX = this.replayPrevBallX;
+    const prevY = this.replayPrevBallY;
+
     for (let i = 0; i < frame.discs.length; i++) {
       const d = frame.discs[i]!;
       if (d.id === 0 || d.team === 0) {
@@ -1478,6 +1493,32 @@ export class EngineInstance {
           this.applyDiscSnapshot(d, p, true);
         }
       }
+    }
+
+    if (stepGoalNets) {
+      // Derive instantaneous replay ball velocity when recorded snapshot velocity is near zero,
+      // and collide against a scratch NetBall so engine.ball stays bit-exact during replay.
+      let vx = this.ball.vel.x;
+      let vy = this.ball.vel.y;
+      if (Math.hypot(vx, vy) < 1e-3 && prevX !== null && prevY !== null) {
+        vx = (this.ball.pos.x - prevX) / CORE_DT;
+        vy = (this.ball.pos.y - prevY) / CORE_DT;
+      }
+
+      this.replayNetBall.pos.x = this.ball.pos.x;
+      this.replayNetBall.pos.y = this.ball.pos.y;
+      this.replayNetBall.vel.x = vx;
+      this.replayNetBall.vel.y = vy;
+      this.replayNetBall.radius = this.ball.radius;
+
+      for (let i = 0; i < this.world.goalNets.length; i++) {
+        const net = this.world.goalNets[i]!;
+        net.step(CORE_DT);
+        net.checkBallCollision(this.replayNetBall);
+      }
+
+      this.replayPrevBallX = this.ball.pos.x;
+      this.replayPrevBallY = this.ball.pos.y;
     }
   }
 
@@ -1655,6 +1696,7 @@ export {
   resolvePredictivePlayerCollision,
   resolvePredictiveBallCollision,
   applyPredictiveRenderSeparation,
+  clampDiscToGoalAwareBounds,
   sweptCircleCircle,
   GoalNet,
   Stadium,

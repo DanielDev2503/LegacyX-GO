@@ -1186,7 +1186,7 @@ export class GameEngine {
         let isCurveGoal = false;
 
         const ballSpeedPxSec = Math.hypot(this.ball.vel.x, this.ball.vel.y);
-        const speedKmh = Math.max(20, Math.round(ballSpeedPxSec * 0.18));
+        const speedKmh = Math.max(1, Math.round(ballSpeedPxSec * 0.18));
 
         const concedingTeam = goalScored === 'red' ? 'blue' : 'red';
         const lastTouch = this.touchHistory.length > 0 ? this.touchHistory[this.touchHistory.length - 1] : null;

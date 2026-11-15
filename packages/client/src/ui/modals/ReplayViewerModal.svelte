@@ -122,7 +122,7 @@
   );
 
   const visibleChat = $derived<LxrChatEntry[]>(
-    getVisibleReplayChat(timelineHud?.chatMessages, currentTimeSec)
+    getVisibleReplayChat(timelineHud?.chatMessages, currentTimeSec).slice(-3)
   );
   const activeBanner = $derived(timelineHud?.activeBanner ?? null);
 
@@ -219,7 +219,9 @@
       matchRecorder.loadReplayData(replay);
       currentTimeSec = 0;
       currentFrameSnapshot = replay.frames[0]?.snapshot ?? null;
-      followRecorder = replay.magic === 'LXR2' && (replay as LxrReplayV2).recordingPlayerId != null;
+      followRecorder =
+        (replay.magic === 'LXR2' || replay.magic === 'LXR3') &&
+        (replay as LxrReplayV2 | LxrReplayV3).recordingPlayerId != null;
       isPlaying = true;
       statusMessage = null;
       viewMode = 'player';
@@ -379,6 +381,140 @@
 
       let lastFrameTime = performance.now();
       let rafId = 0;
+      const replayEmotesMap = new Map<number, { emoji: string; progress: number }>();
+      const replayEmoteLatestT = new Map<number, number>();
+      const initialDiscRenderer = (renderer as unknown as { discRenderer?: Record<string, unknown> }).discRenderer;
+      const fallbackBallRadius =
+        typeof initialDiscRenderer?.ballRadius === 'number' && initialDiscRenderer.ballRadius > 0
+          ? initialDiscRenderer.ballRadius
+          : undefined;
+      const fallbackPlayerRadius =
+        typeof initialDiscRenderer?.playerRadius === 'number' && initialDiscRenderer.playerRadius > 0
+          ? initialDiscRenderer.playerRadius
+          : undefined;
+
+      const applyDiscRadii = (
+        snap: GameStateSnapshot,
+        ballR: number | undefined,
+        playerR: number | undefined
+      ): GameStateSnapshot => {
+        if (ballR === undefined && playerR === undefined) {
+          return snap.phase === undefined ? { ...snap, phase: 2 } : snap;
+        }
+        return {
+          ...snap,
+          phase: snap.phase ?? 2,
+          discs: snap.discs.map((d) => {
+            const isBall = d.team === 0 || (d.id === 0 && d.team !== 1 && d.team !== 2);
+            const r = isBall ? ballR : playerR;
+            return r !== undefined ? { ...d, radius: r } : d;
+          })
+        };
+      };
+
+      const syncReplayEmotesAndModifiers = (f0Snapshot: GameStateSnapshot, tSec: number) => {
+        const timelineState = deriveReplayHudTimelineState(
+          replay,
+          { t: tSec, snapshot: f0Snapshot },
+          tSec
+        ) as unknown as Record<string, unknown> | undefined;
+
+        // 1. Sync active emotes for pitch bubble rendering during replay playback
+        replayEmotesMap.clear();
+        replayEmoteLatestT.clear();
+        const tlEmotes = timelineState?.activeEmotes;
+        if (tlEmotes instanceof Map && tlEmotes.size > 0) {
+          for (const [pid, info] of tlEmotes.entries()) {
+            if (info && typeof info.emoji === 'string') {
+              replayEmotesMap.set(Number(pid), {
+                emoji: info.emoji,
+                progress: typeof info.progress === 'number' ? info.progress : 0
+              });
+            }
+          }
+        } else if (Array.isArray(tlEmotes) && tlEmotes.length > 0) {
+          for (const item of tlEmotes) {
+            if (item && typeof item.playerId === 'number' && typeof item.emoji === 'string') {
+              replayEmotesMap.set(item.playerId, {
+                emoji: item.emoji,
+                progress: typeof item.progress === 'number' ? item.progress : 0
+              });
+            }
+          }
+        } else if (v3?.hudEvents?.length) {
+          for (const ev of v3.hudEvents) {
+            if (ev.type !== 'emote' || ev.t > tSec) continue;
+            const durSec = Math.max(0.1, (ev.payload.durationMs ?? 2200) / 1000);
+            const elapsed = tSec - ev.t;
+            if (elapsed >= 0 && elapsed <= durSec && ev.t >= (replayEmoteLatestT.get(ev.payload.playerId) ?? -1)) {
+              replayEmoteLatestT.set(ev.payload.playerId, ev.t);
+              replayEmotesMap.set(ev.payload.playerId, {
+                emoji: ev.payload.emoji,
+                progress: Math.max(0, Math.min(1, elapsed / durSec))
+              });
+            }
+          }
+        }
+
+        // 2. Resolve ballRadius & playerRadius (initial metadata + modifiers_updated timeline events)
+        let ballRadius: number | undefined =
+          v3?.meta?.ballRadius ?? v3?.modifiers?.ballRadius ?? v3?.ballRadius;
+        let playerRadius: number | undefined =
+          v3?.meta?.playerRadius ?? v3?.modifiers?.playerRadius ?? v3?.playerRadius;
+
+        if (v3?.hudEvents?.length) {
+          let latestModT = -1;
+          for (const ev of v3.hudEvents) {
+            if (ev.type !== 'modifiers_updated' || ev.t > tSec || ev.t < latestModT) continue;
+            latestModT = ev.t;
+            if (typeof ev.payload.ballRadius === 'number' && ev.payload.ballRadius > 0) {
+              ballRadius = ev.payload.ballRadius;
+            }
+            if (typeof ev.payload.playerRadius === 'number' && ev.payload.playerRadius > 0) {
+              playerRadius = ev.payload.playerRadius;
+            }
+          }
+        }
+
+        if (
+          typeof timelineState?.ballRadius === 'number' &&
+          Number.isFinite(timelineState.ballRadius) &&
+          timelineState.ballRadius > 0
+        ) {
+          ballRadius = timelineState.ballRadius;
+        }
+        if (
+          typeof timelineState?.playerRadius === 'number' &&
+          Number.isFinite(timelineState.playerRadius) &&
+          timelineState.playerRadius > 0
+        ) {
+          playerRadius = timelineState.playerRadius;
+        }
+
+        const discRenderer = (renderer as unknown as { discRenderer?: Record<string, unknown> }).discRenderer;
+        if (discRenderer) {
+          if (discRenderer.replayEmotes instanceof Map) {
+            discRenderer.replayEmotes.clear();
+            for (const [pid, info] of replayEmotesMap.entries()) {
+              discRenderer.replayEmotes.set(pid, info);
+            }
+          } else {
+            discRenderer.replayEmotes = replayEmotesMap;
+          }
+          if (ballRadius !== undefined) {
+            discRenderer.ballRadius = ballRadius;
+          } else if (fallbackBallRadius !== undefined) {
+            discRenderer.ballRadius = fallbackBallRadius;
+          }
+          if (playerRadius !== undefined) {
+            discRenderer.playerRadius = playerRadius;
+          } else if (fallbackPlayerRadius !== undefined) {
+            discRenderer.playerRadius = fallbackPlayerRadius;
+          }
+        }
+
+        return { ballRadius, playerRadius };
+      };
 
       const tickLoop = (now: number) => {
         const dt = Math.min(0.1, (now - lastFrameTime) / 1000);
@@ -404,11 +540,15 @@
         const { f0, f1, alpha } = sampleReplayFrame(replay.frames, currentTimeSec);
         currentFrameSnapshot = f0.snapshot;
 
+        const { ballRadius, playerRadius } = syncReplayEmotesAndModifiers(f0.snapshot, currentTimeSec);
+        const renderF0 = applyDiscRadii(f0.snapshot, ballRadius, playerRadius);
+        const renderF1 = applyDiscRadii(f1.snapshot, ballRadius, playerRadius);
+
         const useRecorderCam = followRecorder && followId != null;
         renderer.focusBallOnly = !useRecorderCam;
         renderer.camera.setZoom(effectiveZoom);
         renderer.scale = effectiveZoom;
-        renderer.render(f0.snapshot, f1.snapshot, alpha, useRecorderCam ? followId! : undefined);
+        renderer.render(renderF0, renderF1, alpha, useRecorderCam ? followId! : undefined);
 
         rafId = requestAnimationFrame(tickLoop);
       };
@@ -432,8 +572,11 @@
     <header class="replay-header">
       <div class="header-left">
         {#if viewMode === 'player'}
-          <button type="button" class="cyber-btn ghost" onclick={handleBackToList}>
-            <span>← Volver</span>
+          <button type="button" class="cyber-btn ghost" onclick={handleBackToList} title="Volver a la lista" aria-label="Volver a la lista">
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="15 18 9 12 15 6"></polyline>
+            </svg>
+            <span>Volver</span>
           </button>
         {/if}
         <div class="header-title">
@@ -447,8 +590,8 @@
                 Grabaciones guardadas automáticamente en tu cuenta (GZIP Lossless)
               {:else if activeReplay}
                 Estadio {activeReplay.stadiumId.toUpperCase()} · {activeReplay.redScore} - {activeReplay.blueScore}
-                {#if activeReplayV2?.recordingPlayerName}
-                  · Cámara: {activeReplayV2.recordingPlayerName}
+                {#if activeCamMeta?.recordingPlayerName}
+                  · Cámara: {activeCamMeta.recordingPlayerName}
                 {/if}
               {/if}
             </p>
@@ -463,12 +606,17 @@
               type="button"
               class="cyber-btn"
               class:active-cam={followRecorder}
+              title={followRecorder ? `Siguiendo a ${activeCamMeta?.recordingPlayerName || 'Jugador'}` : 'Siguiendo al Balón'}
               onclick={() => {
                 soundFX.playUIClick();
                 followRecorder = !followRecorder;
               }}
             >
-              <span>{followRecorder ? `Siguiendo: ${activeReplayV2?.recordingPlayerName || 'Jugador'}` : 'Siguiendo: Balón'}</span>
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M23 7l-7 5 7 5V7z"></path>
+                <rect x="1" y="5" width="15" height="14" rx="2" ry="2"></rect>
+              </svg>
+              <span>{followRecorder ? activeCamMeta?.recordingPlayerName || 'Jugador' : 'Balón'}</span>
             </button>
           {/if}
 
@@ -476,25 +624,38 @@
             type="button"
             class="cyber-btn accent"
             disabled={Boolean(exportingReplayId)}
+            title="Exportar video .webm"
             onclick={() => runWebmExport(activeReplay, 'player-export')}
           >
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+              <polyline points="7 10 12 15 17 10"></polyline>
+              <line x1="12" y1="15" x2="12" y2="3"></line>
+            </svg>
             <span>
               {exportingReplayId === 'player-export'
-                ? `Exportando ${exportProgress}%`
-                : 'Descargar Video (.webm)'}
+                ? `${exportProgress}%`
+                : 'Video .webm'}
             </span>
           </button>
         {:else if viewMode === 'list' && userProfile.isAuthenticated}
           <button
             type="button"
-            class="cyber-btn ghost"
+            class="icon-action refresh"
+            class:spinning={userProfile.isLoadingReplays}
             disabled={userProfile.isLoadingReplays}
+            title="Actualizar lista"
+            aria-label="Actualizar lista"
             onclick={() => {
               soundFX.playUIClick();
               void userProfile.fetchUserReplays();
             }}
           >
-            <span>{userProfile.isLoadingReplays ? 'Actualizando...' : 'Actualizar'}</span>
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="23 4 23 10 17 10"></polyline>
+              <polyline points="1 20 1 14 7 14"></polyline>
+              <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+            </svg>
           </button>
         {/if}
 
@@ -599,14 +760,27 @@
                             />
                             <button
                               type="button"
-                              class="btn-sm accent"
+                              class="icon-action confirm-save"
+                              title="Guardar nombre"
+                              aria-label="Guardar nombre"
                               disabled={isActionLoading}
                               onclick={() => confirmRename(replay.id)}
                             >
-                              Guardar
+                              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+                                <polyline points="20 6 9 17 4 12"></polyline>
+                              </svg>
                             </button>
-                            <button type="button" class="btn-sm ghost" onclick={cancelRename}>
-                              Cancelar
+                            <button
+                              type="button"
+                              class="icon-action ghost"
+                              title="Cancelar"
+                              aria-label="Cancelar"
+                              onclick={cancelRename}
+                            >
+                              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+                                <line x1="18" y1="6" x2="6" y2="18"></line>
+                                <line x1="6" y1="6" x2="18" y2="18"></line>
+                              </svg>
                             </button>
                           </div>
                         {:else}
@@ -614,12 +788,16 @@
                             <span class="bold text-light">{replay.name}</span>
                             <button
                               type="button"
-                              class="btn-rename-icon"
+                              class="icon-action rename"
                               title="Renombrar"
+                              aria-label="Renombrar"
                               disabled={isActionLoading || Boolean(exportingReplayId)}
                               onclick={() => startRenaming(replay)}
                             >
-                              Renombrar
+                              <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M12 20h9"></path>
+                                <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"></path>
+                              </svg>
                             </button>
                           </div>
                         {/if}
@@ -641,50 +819,81 @@
                             <span class="confirm-label">¿Eliminar?</span>
                             <button
                               type="button"
-                              class="btn-sm danger"
+                              class="icon-action danger"
+                              title="Confirmar eliminación"
+                              aria-label="Confirmar eliminación"
                               disabled={isActionLoading}
                               onclick={() => confirmDelete(replay)}
                             >
-                              Sí
+                              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                                <polyline points="20 6 9 17 4 12"></polyline>
+                              </svg>
                             </button>
                             <button
                               type="button"
-                              class="btn-sm ghost"
+                              class="icon-action ghost"
+                              title="Cancelar eliminación"
+                              aria-label="Cancelar eliminación"
                               disabled={isActionLoading}
                               onclick={() => {
                                 confirmDeleteId = null;
                               }}
                             >
-                              No
+                              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                                <line x1="18" y1="6" x2="6" y2="18"></line>
+                                <line x1="6" y1="6" x2="18" y2="18"></line>
+                              </svg>
                             </button>
                           </div>
                         {:else}
-                          <button
-                            type="button"
-                            class="action-pill play"
-                            disabled={isActionLoading || Boolean(exportingReplayId)}
-                            onclick={() => handleWatchCloudReplay(replay)}
-                          >
-                            Ver
-                          </button>
-                          <button
-                            type="button"
-                            class="action-pill video"
-                            disabled={isActionLoading || Boolean(exportingReplayId)}
-                            onclick={() => handleExportCloudVideo(replay)}
-                          >
-                            {exportingReplayId === replay.id
-                              ? `${exportProgress}%`
-                              : 'Video .webm'}
-                          </button>
-                          <button
-                            type="button"
-                            class="action-pill danger"
-                            disabled={isActionLoading || Boolean(exportingReplayId)}
-                            onclick={() => requestDelete(replay.id)}
-                          >
-                            Eliminar
-                          </button>
+                          <div class="action-icon-group">
+                            <button
+                              type="button"
+                              class="icon-action play"
+                              title="Reproducir repetición"
+                              aria-label="Reproducir repetición"
+                              disabled={isActionLoading || Boolean(exportingReplayId)}
+                              onclick={() => handleWatchCloudReplay(replay)}
+                            >
+                              <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor">
+                                <polygon points="6 4 20 12 6 20 6 4"></polygon>
+                              </svg>
+                            </button>
+                            <button
+                              type="button"
+                              class="icon-action video"
+                              class:exporting={exportingReplayId === replay.id}
+                              title={exportingReplayId === replay.id ? `Exportando ${exportProgress}%` : 'Exportar video .webm'}
+                              aria-label={exportingReplayId === replay.id ? `Exportando ${exportProgress}%` : 'Exportar video .webm'}
+                              disabled={isActionLoading || Boolean(exportingReplayId)}
+                              onclick={() => handleExportCloudVideo(replay)}
+                            >
+                              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <rect x="2" y="4" width="20" height="16" rx="2.5"></rect>
+                                <path d="M12 8v6"></path>
+                                <polyline points="9.5 11.5 12 14 14.5 11.5"></polyline>
+                              </svg>
+                              {#if exportingReplayId === replay.id}
+                                <span class="export-pct-pill">{exportProgress}%</span>
+                              {/if}
+                            </button>
+                            <button
+                              type="button"
+                              class="icon-action danger"
+                              title="Eliminar repetición"
+                              aria-label="Eliminar repetición"
+                              disabled={isActionLoading || Boolean(exportingReplayId)}
+                              onclick={() => requestDelete(replay.id)}
+                            >
+                              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <polyline points="3 6 5 6 21 6"></polyline>
+                                <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path>
+                                <path d="M10 11v6"></path>
+                                <path d="M14 11v6"></path>
+                                <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"></path>
+                              </svg>
+                            </button>
+                          </div>
                         {/if}
                       </td>
                     </tr>
@@ -1354,21 +1563,6 @@
     width: 180px;
   }
 
-  .btn-rename-icon {
-    border: 1px solid rgba(148, 163, 184, 0.25);
-    background: rgba(15, 23, 42, 0.8);
-    color: #94a3b8;
-    border-radius: 6px;
-    padding: 2px 7px;
-    font-size: 0.7rem;
-    cursor: pointer;
-  }
-
-  .btn-rename-icon:hover:not(:disabled) {
-    color: #e2e8f0;
-    border-color: #38bdf8;
-  }
-
   .tag-red-mini,
   .tag-blue-mini {
     display: inline-block;
@@ -1398,47 +1592,141 @@
     color: #64748b;
   }
 
-  .action-pill,
-  .btn-sm {
-    border: 1px solid rgba(148, 163, 184, 0.25);
-    background: rgba(15, 23, 42, 0.9);
-    color: #e2e8f0;
-    font-size: 0.74rem;
-    font-weight: 700;
-    padding: 5px 10px;
-    border-radius: 7px;
-    cursor: pointer;
-    margin-left: 4px;
+  .action-icon-group {
+    display: inline-flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 6px;
   }
 
-  .action-pill.play,
-  .btn-sm.accent {
-    background: rgba(14, 165, 233, 0.22);
-    border-color: rgba(56, 189, 248, 0.65);
+  .icon-action {
+    width: 31px;
+    height: 31px;
+    border: 1px solid rgba(148, 163, 184, 0.25);
+    background: rgba(15, 23, 42, 0.88);
+    color: #cbd5e1;
+    border-radius: 8px;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 5px;
+    padding: 0;
+    transition: transform 0.14s ease, border-color 0.14s ease, box-shadow 0.14s ease, background 0.14s ease, color 0.14s ease;
+  }
+
+  .icon-action:hover:not(:disabled) {
+    transform: translateY(-1px);
+  }
+
+  .icon-action.play {
+    background: rgba(14, 165, 233, 0.16);
+    border-color: rgba(56, 189, 248, 0.5);
     color: #7dd3fc;
   }
 
-  .action-pill.video {
-    background: rgba(16, 185, 129, 0.18);
-    border-color: rgba(52, 211, 153, 0.55);
+  .icon-action.play:hover:not(:disabled) {
+    background: rgba(14, 165, 233, 0.28);
+    border-color: #38bdf8;
+    box-shadow: 0 0 12px rgba(56, 189, 248, 0.38);
+    color: #e0f2fe;
+  }
+
+  .icon-action.video {
+    background: rgba(16, 185, 129, 0.14);
+    border-color: rgba(52, 211, 153, 0.45);
     color: #6ee7b7;
   }
 
-  .action-pill.danger,
-  .btn-sm.danger {
-    background: rgba(239, 68, 68, 0.18);
-    border-color: rgba(248, 113, 113, 0.55);
-    color: #fca5a5;
+  .icon-action.video.exporting {
+    width: auto;
+    padding: 0 9px;
+  }
+
+  .icon-action.video:hover:not(:disabled) {
+    background: rgba(16, 185, 129, 0.26);
+    border-color: #34d399;
+    box-shadow: 0 0 12px rgba(52, 211, 153, 0.35);
+    color: #d1fae5;
+  }
+
+  .export-pct-pill {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.68rem;
+    font-weight: 800;
+    color: #a7f3d0;
+  }
+
+  .icon-action.rename,
+  .icon-action.refresh {
+    width: 28px;
+    height: 28px;
+    color: #94a3b8;
+    border-color: rgba(148, 163, 184, 0.26);
+    background: rgba(15, 23, 42, 0.72);
+  }
+
+  .icon-action.refresh {
+    width: 34px;
+    height: 34px;
+    border-radius: 9px;
+  }
+
+  .icon-action.refresh.spinning svg {
+    animation: spin 0.8s linear infinite;
+  }
+
+  .icon-action.rename:hover:not(:disabled),
+  .icon-action.refresh:hover:not(:disabled) {
+    color: #7dd3fc;
+    border-color: rgba(56, 189, 248, 0.65);
+    box-shadow: 0 0 10px rgba(56, 189, 248, 0.24);
+  }
+
+  .icon-action.confirm-save {
+    width: 28px;
+    height: 28px;
+    background: rgba(14, 165, 233, 0.2);
+    border-color: rgba(56, 189, 248, 0.6);
+    color: #7dd3fc;
+  }
+
+  .icon-action.confirm-save:hover:not(:disabled) {
+    border-color: #38bdf8;
+    box-shadow: 0 0 10px rgba(56, 189, 248, 0.35);
+  }
+
+  .icon-action.ghost {
+    width: 28px;
+    height: 28px;
+    color: #94a3b8;
+  }
+
+  .icon-action.ghost:hover:not(:disabled) {
+    color: #f8fafc;
+    border-color: rgba(148, 163, 184, 0.6);
+  }
+
+  .icon-action.danger {
+    background: rgba(244, 63, 94, 0.14);
+    border-color: rgba(251, 113, 133, 0.45);
+    color: #fda4af;
+  }
+
+  .icon-action.danger:hover:not(:disabled) {
+    background: rgba(244, 63, 94, 0.26);
+    border-color: #fb7185;
+    box-shadow: 0 0 12px rgba(244, 63, 94, 0.38);
+    color: #ffe4e6;
   }
 
   .confirm-label {
-    font-size: 0.74rem;
-    color: #fca5a5;
+    font-size: 0.72rem;
+    color: #fda4af;
     font-weight: 700;
   }
 
-  .action-pill:disabled,
-  .btn-sm:disabled {
+  .icon-action:disabled {
     opacity: 0.45;
     cursor: not-allowed;
   }
@@ -1931,18 +2219,22 @@
     left: 16px;
     bottom: 16px;
     width: 390px;
-    padding: 8px 12px;
-    border-radius: 10px;
+    max-height: 68px;
+    padding: 5px 10px;
+    border-radius: 9px;
     background: rgba(9, 13, 22, 0.72);
     border: 1px solid rgba(148, 163, 184, 0.2);
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 2px;
+    font-size: 11px;
+    line-height: 1.25;
+    overflow: hidden;
   }
 
   .hud-chat-line {
-    font-size: 12px;
-    line-height: 1.35;
+    font-size: 11px;
+    line-height: 1.25;
     color: #f1f5f9;
   }
 

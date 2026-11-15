@@ -389,27 +389,227 @@ const _sepLocalVel = { x: 0, y: 0 };
 const _sepOtherVel = { x: 0, y: 0 };
 
 /**
- * Applies smooth client-side predictive render separation between the local predicted disc
- * and remote/authoritative discs (ball & other players) without mutating `otherDiscs`.
+ * Clamps a disc to stadium boundaries while allowing entry into the goal pocket
+ * (`|y| <= goalHalfHeight` up to `±(arenaHalfW + goalDepth - r)`) and keeping
+ * discs clear of the four goalposts. Zero-GC in-place mutation.
+ */
+export function clampDiscToGoalAwareBounds(
+  disc: { x: number; y: number; vx?: number; vy?: number; radius: number },
+  arenaHalfW: number,
+  arenaHalfH: number,
+  goalHalfHeight: number = 0,
+  goalDepth: number = 0
+): void {
+  const r = disc.radius;
+
+  if (arenaHalfH > 0) {
+    const maxY = Math.max(0, arenaHalfH - r);
+    if (disc.y < -maxY) {
+      disc.y = -maxY;
+      if (disc.vy !== undefined && disc.vy < 0) disc.vy = 0;
+    } else if (disc.y > maxY) {
+      disc.y = maxY;
+      if (disc.vy !== undefined && disc.vy > 0) disc.vy = 0;
+    }
+  }
+
+  if (arenaHalfW > 0) {
+    const pitchMaxX = Math.max(0, arenaHalfW - r);
+    const hasGoalPocket = goalHalfHeight > 0 && goalDepth > 0;
+
+    if (hasGoalPocket) {
+      const clampedGoalHalfH = arenaHalfH > 0 ? Math.min(goalHalfHeight, arenaHalfH) : goalHalfHeight;
+      const goalMaxY = Math.max(0, clampedGoalHalfH - r);
+      const goalMaxX = Math.max(0, arenaHalfW + goalDepth - r);
+
+      if (Math.abs(disc.y) <= clampedGoalHalfH) {
+        if (Math.abs(disc.x) > arenaHalfW) {
+          if (disc.y < -goalMaxY) {
+            disc.y = -goalMaxY;
+            if (disc.vy !== undefined && disc.vy < 0) disc.vy = 0;
+          } else if (disc.y > goalMaxY) {
+            disc.y = goalMaxY;
+            if (disc.vy !== undefined && disc.vy > 0) disc.vy = 0;
+          }
+        }
+        if (disc.x < -goalMaxX) {
+          disc.x = -goalMaxX;
+          if (disc.vx !== undefined && disc.vx < 0) disc.vx = 0;
+        } else if (disc.x > goalMaxX) {
+          disc.x = goalMaxX;
+          if (disc.vx !== undefined && disc.vx > 0) disc.vx = 0;
+        }
+      } else {
+        if (disc.x < -pitchMaxX) {
+          disc.x = -pitchMaxX;
+          if (disc.vx !== undefined && disc.vx < 0) disc.vx = 0;
+        } else if (disc.x > pitchMaxX) {
+          disc.x = pitchMaxX;
+          if (disc.vx !== undefined && disc.vx > 0) disc.vx = 0;
+        }
+      }
+
+      const minPostDist = r + 8;
+      const minPostDistSq = minPostDist * minPostDist;
+      for (let p = 0; p < 4; p++) {
+        const px = p < 2 ? -arenaHalfW : arenaHalfW;
+        const py = (p & 1) === 0 ? -clampedGoalHalfH : clampedGoalHalfH;
+        const dx = disc.x - px;
+        const dy = disc.y - py;
+        const dSq = dx * dx + dy * dy;
+        if (dSq < minPostDistSq && dSq > 1e-9) {
+          const dist = Math.sqrt(dSq);
+          const nx = dx / dist;
+          const ny = dy / dist;
+          disc.x = px + nx * minPostDist;
+          disc.y = py + ny * minPostDist;
+          if (disc.vx !== undefined && disc.vy !== undefined) {
+            const vDotN = disc.vx * nx + disc.vy * ny;
+            if (vDotN < 0) {
+              disc.vx -= vDotN * nx;
+              disc.vy -= vDotN * ny;
+            }
+          }
+        }
+      }
+
+      if (arenaHalfH > 0) {
+        const maxY = Math.max(0, arenaHalfH - r);
+        if (disc.y < -maxY) disc.y = -maxY;
+        else if (disc.y > maxY) disc.y = maxY;
+      }
+      if (disc.x < -goalMaxX) disc.x = -goalMaxX;
+      else if (disc.x > goalMaxX) disc.x = goalMaxX;
+    } else {
+      if (disc.x < -pitchMaxX) {
+        disc.x = -pitchMaxX;
+        if (disc.vx !== undefined && disc.vx < 0) disc.vx = 0;
+      } else if (disc.x > pitchMaxX) {
+        disc.x = pitchMaxX;
+        if (disc.vx !== undefined && disc.vx > 0) disc.vx = 0;
+      }
+    }
+  }
+}
+
+function separateBallAndDisc(
+  disc: { x: number; y: number; radius: number; vx?: number; vy?: number },
+  ball: { x: number; y: number; radius: number; vx?: number; vy?: number },
+  arenaHalfW: number,
+  arenaHalfH: number,
+  goalHalfHeight: number,
+  goalDepth: number,
+  localVelForImpulse: { x: number; y: number } | null
+): void {
+  const dx = ball.x - disc.x;
+  const dy = ball.y - disc.y;
+  const distSq = dx * dx + dy * dy;
+  const minDist = disc.radius + ball.radius;
+
+  if (distSq >= minDist * minDist) return;
+
+  const dist = Math.sqrt(distSq);
+  const nx = dist > 1e-9 ? dx / dist : 1;
+  const ny = dist > 1e-9 ? dy / dist : 0;
+  const overlap = minDist - dist;
+
+  const prevBallX = ball.x;
+  const prevBallY = ball.y;
+  const ballShare = overlap * 0.75;
+  ball.x += nx * ballShare;
+  ball.y += ny * ballShare;
+  clampDiscToGoalAwareBounds(ball, arenaHalfW, arenaHalfH, goalHalfHeight, goalDepth);
+
+  const actualBallShift = Math.max(0, (ball.x - prevBallX) * nx + (ball.y - prevBallY) * ny);
+  const discShare = Math.max(0, overlap - actualBallShift);
+  disc.x -= nx * discShare;
+  disc.y -= ny * discShare;
+  clampDiscToGoalAwareBounds(disc, arenaHalfW, arenaHalfH, goalHalfHeight, goalDepth);
+
+  // If clamping either disc left residual overlap, push the unconstrained side out to ensure 100% separation
+  const remDx = ball.x - disc.x;
+  const remDy = ball.y - disc.y;
+  const remDistSq = remDx * remDx + remDy * remDy;
+  if (remDistSq < (minDist - 1e-6) * (minDist - 1e-6)) {
+    const remDist = Math.sqrt(remDistSq);
+    const rNx = remDist > 1e-9 ? remDx / remDist : nx;
+    const rNy = remDist > 1e-9 ? remDy / remDist : ny;
+    const remOverlap = minDist - remDist;
+    const prevBX2 = ball.x;
+    const prevBY2 = ball.y;
+    ball.x += rNx * remOverlap;
+    ball.y += rNy * remOverlap;
+    clampDiscToGoalAwareBounds(ball, arenaHalfW, arenaHalfH, goalHalfHeight, goalDepth);
+    const ballMoved2 = Math.max(0, (ball.x - prevBX2) * rNx + (ball.y - prevBY2) * rNy);
+    const discRem = Math.max(0, remOverlap - ballMoved2);
+    if (discRem > 1e-6) {
+      disc.x -= rNx * discRem;
+      disc.y -= rNy * discRem;
+      clampDiscToGoalAwareBounds(disc, arenaHalfW, arenaHalfH, goalHalfHeight, goalDepth);
+    }
+  }
+
+  if (localVelForImpulse) {
+    const vn = localVelForImpulse.x * nx + localVelForImpulse.y * ny;
+    if (vn > 0) {
+      const impulse = (1 + 0.2) * vn * 0.25;
+      localVelForImpulse.x -= impulse * nx;
+      localVelForImpulse.y -= impulse * ny;
+    }
+  }
+}
+
+/**
+ * Applies full (100%) client-side predictive render separation between the local predicted disc
+ * and remote render discs (ball & other players). Callers must pass cloned/scratch render objects
+ * in `otherDiscs` when snapshot immutability is required across frames.
  */
 export function applyPredictiveRenderSeparation(
   localDisc: { x: number; y: number; vx: number; vy: number; radius: number },
   otherDiscs: Array<{ id: number; team: number; x: number; y: number; vx: number; vy: number; radius: number }>,
   arenaHalfW: number,
-  arenaHalfH: number
+  arenaHalfH: number,
+  goalHalfHeight?: number,
+  goalDepth?: number
 ): void {
+  const effectiveGoalHalfH =
+    goalHalfHeight !== undefined ? goalHalfHeight : (arenaHalfH > 0 ? Math.min(85, arenaHalfH * 0.4) : 0);
+  const effectiveGoalDepth =
+    goalDepth !== undefined ? goalDepth : (arenaHalfW > 0 ? 36 : 0);
+
   _sepLocalVel.x = localDisc.vx;
   _sepLocalVel.y = localDisc.vy;
 
+  let ballDisc: { id: number; team: number; x: number; y: number; vx: number; vy: number; radius: number } | null = null;
+  for (let i = 0; i < otherDiscs.length; i++) {
+    const d = otherDiscs[i]!;
+    if (d.id === 0 || d.team === 0) {
+      ballDisc = d;
+      break;
+    }
+  }
+
+  // Pass 1: Separate ball vs remote players so remote players never visually clip the ball
+  if (ballDisc) {
+    for (let i = 0; i < otherDiscs.length; i++) {
+      const other = otherDiscs[i]!;
+      if (other === ballDisc || other.id === 0 || other.team === 0) continue;
+      separateBallAndDisc(other, ballDisc, arenaHalfW, arenaHalfH, effectiveGoalHalfH, effectiveGoalDepth, null);
+    }
+  }
+
+  // Pass 2: Separate localDisc vs ball (75/25 clamped 100%) and localDisc vs remote players
   for (let i = 0; i < otherDiscs.length; i++) {
     const other = otherDiscs[i]!;
     if (other.id === 0 || other.team === 0) {
-      resolvePredictiveBallCollision(
+      separateBallAndDisc(
         localDisc,
-        _sepLocalVel,
-        localDisc.radius,
         other,
-        other.radius
+        arenaHalfW,
+        arenaHalfH,
+        effectiveGoalHalfH,
+        effectiveGoalDepth,
+        _sepLocalVel
       );
     } else {
       _sepOtherVel.x = other.vx;
@@ -427,26 +627,29 @@ export function applyPredictiveRenderSeparation(
 
   localDisc.vx = _sepLocalVel.x;
   localDisc.vy = _sepLocalVel.y;
+  clampDiscToGoalAwareBounds(localDisc, arenaHalfW, arenaHalfH, effectiveGoalHalfH, effectiveGoalDepth);
 
-  if (arenaHalfW > 0) {
-    const maxX = Math.max(0, arenaHalfW - localDisc.radius);
-    if (localDisc.x < -maxX) {
-      localDisc.x = -maxX;
-      if (localDisc.vx < 0) localDisc.vx = 0;
-    } else if (localDisc.x > maxX) {
-      localDisc.x = maxX;
-      if (localDisc.vx > 0) localDisc.vx = 0;
+  // Pass 3: Reconcile any residual overlap with ball induced by player-player separation or wall clamping
+  if (ballDisc) {
+    for (let i = 0; i < otherDiscs.length; i++) {
+      const other = otherDiscs[i]!;
+      if (other === ballDisc || other.id === 0 || other.team === 0) continue;
+      separateBallAndDisc(other, ballDisc, arenaHalfW, arenaHalfH, effectiveGoalHalfH, effectiveGoalDepth, null);
     }
-  }
 
-  if (arenaHalfH > 0) {
-    const maxY = Math.max(0, arenaHalfH - localDisc.radius);
-    if (localDisc.y < -maxY) {
-      localDisc.y = -maxY;
-      if (localDisc.vy < 0) localDisc.vy = 0;
-    } else if (localDisc.y > maxY) {
-      localDisc.y = maxY;
-      if (localDisc.vy > 0) localDisc.vy = 0;
+    const dx = ballDisc.x - localDisc.x;
+    const dy = ballDisc.y - localDisc.y;
+    const minDist = localDisc.radius + ballDisc.radius;
+    if (dx * dx + dy * dy < (minDist - 1e-6) * (minDist - 1e-6)) {
+      separateBallAndDisc(
+        localDisc,
+        ballDisc,
+        arenaHalfW,
+        arenaHalfH,
+        effectiveGoalHalfH,
+        effectiveGoalDepth,
+        null
+      );
     }
   }
 }

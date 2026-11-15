@@ -64,6 +64,9 @@ export interface ReplayHudOverlayState {
   telemetry?: LxrTelemetryPayload | null;
   slidingEvents?: ReplaySlidingScoreEventView[];
   uiOverlay?: LxrUiOverlayState | null;
+  activeEmotes?: Array<{ playerId: number; emoji: string; progress: number }>;
+  ballRadius?: number;
+  playerRadius?: number;
   isGoalReplay?: boolean;
   showExtendedHud?: boolean;
 }
@@ -85,6 +88,7 @@ export interface ReplayTimelineHudState extends ReplayHudOverlayState {
   telemetry: LxrTelemetryPayload;
   slidingEvents: ReplaySlidingScoreEventView[];
   uiOverlay: LxrUiOverlayState;
+  activeEmotes: Array<{ playerId: number; emoji: string; progress: number }>;
   isWarning30s: boolean;
   isGoalReplay: boolean;
   showExtendedHud: boolean;
@@ -261,6 +265,52 @@ export function applyReplayRendererKits(
   }
 }
 
+function normalizePositiveRadius(raw: unknown): number | undefined {
+  return typeof raw === 'number' && Number.isFinite(raw) && raw > 0 ? raw : undefined;
+}
+
+/**
+ * Resolves active ballRadius and playerRadius at `currentTimeSec`, checking top-level/meta/modifiers
+ * replay properties and applying any `modifiers_updated` HUD timeline events up to `currentTimeSec`.
+ */
+export function getActiveReplayModifiersAtTime(
+  replay: LxrReplayFile,
+  currentTimeSec: number
+): { ballRadius?: number; playerRadius?: number } {
+  const anyReplay = replay as unknown as {
+    ballRadius?: unknown;
+    playerRadius?: unknown;
+    meta?: { ballRadius?: unknown; playerRadius?: unknown };
+    modifiers?: { ballRadius?: unknown; playerRadius?: unknown };
+  };
+
+  let ballRadius =
+    normalizePositiveRadius(anyReplay?.ballRadius) ??
+    normalizePositiveRadius(anyReplay?.meta?.ballRadius) ??
+    normalizePositiveRadius(anyReplay?.modifiers?.ballRadius);
+  let playerRadius =
+    normalizePositiveRadius(anyReplay?.playerRadius) ??
+    normalizePositiveRadius(anyReplay?.meta?.playerRadius) ??
+    normalizePositiveRadius(anyReplay?.modifiers?.playerRadius);
+
+  if (replay.magic === 'LXR3' && Array.isArray((replay as LxrReplayV3).hudEvents)) {
+    let latestModT = -Infinity;
+    for (const ev of (replay as LxrReplayV3).hudEvents) {
+      if (ev.type !== 'modifiers_updated' || ev.t > currentTimeSec || ev.t < latestModT) continue;
+      latestModT = ev.t;
+      const nextBall = normalizePositiveRadius(ev.payload?.ballRadius);
+      const nextPlayer = normalizePositiveRadius(ev.payload?.playerRadius);
+      if (nextBall !== undefined) ballRadius = nextBall;
+      if (nextPlayer !== undefined) playerRadius = nextPlayer;
+    }
+  }
+
+  return {
+    ...(ballRadius !== undefined ? { ballRadius } : {}),
+    ...(playerRadius !== undefined ? { playerRadius } : {})
+  };
+}
+
 export function applyReplayRendererConfig(
   renderer: GameRenderer,
   replay: LxrReplayFile,
@@ -275,6 +325,7 @@ export function applyReplayRendererConfig(
   const minimapOpacity = normalizeReplayOpacity(v3?.minimapOpacity, 0.65);
   const minimapSize = normalizeReplayMinimapSize(v3?.minimapSize, 190);
   const minimapCameraFrustum = v3 ? v3.minimapCameraFrustum !== false : true;
+  const modifiers = getActiveReplayModifiersAtTime(replay, currentTimeSec);
 
   const rendererAny = renderer as unknown as {
     setTheme?: (t: LxrTheme) => void;
@@ -296,6 +347,8 @@ export function applyReplayRendererConfig(
       ballMode?: 'texture' | 'color';
       ballSkin?: string;
       ballCustomColor?: string;
+      ballRadius?: number;
+      playerRadius?: number;
       redKit?: unknown;
       blueKit?: unknown;
     };
@@ -318,6 +371,12 @@ export function applyReplayRendererConfig(
     rendererAny.discRenderer.ballMode = ballMode;
     rendererAny.discRenderer.ballSkin = ballSkin;
     rendererAny.discRenderer.ballCustomColor = ballCustomColor;
+    if (modifiers.ballRadius !== undefined) {
+      rendererAny.discRenderer.ballRadius = modifiers.ballRadius;
+    }
+    if (modifiers.playerRadius !== undefined) {
+      rendererAny.discRenderer.playerRadius = modifiers.playerRadius;
+    }
   }
 
   renderer.safeAreaBottom = 0;
@@ -423,12 +482,53 @@ export function getVisibleReplayChat(
   chatMessages: LxrChatEntry[] | undefined,
   currentTimeSec: number,
   maxAgeSec: number = Infinity,
-  maxLines: number = 6
+  maxLines: number = 3
 ): LxrChatEntry[] {
-  if (!Array.isArray(chatMessages) || chatMessages.length === 0) return [];
+  if (!Array.isArray(chatMessages) || chatMessages.length === 0 || maxLines <= 0) return [];
   const minTime = Number.isFinite(maxAgeSec) ? currentTimeSec - maxAgeSec : -Infinity;
   const visible = chatMessages.filter((entry) => entry.t <= currentTimeSec && entry.t >= minTime);
   return visible.slice(-maxLines);
+}
+
+/**
+ * Resolves currently active pitch emotes at `currentTimeSec` from LXR3 `hudEvents`,
+ * keeping only the latest active emote per `playerId` with normalized progress in [0, 1].
+ */
+export function getActiveReplayEmotes(
+  replay: LxrReplayFile,
+  currentTimeSec: number
+): Array<{ playerId: number; emoji: string; progress: number }> {
+  if (replay.magic !== 'LXR3' || !Array.isArray((replay as LxrReplayV3).hudEvents)) {
+    return [];
+  }
+  const latestByPlayer = new Map<number, { t: number; emoji: string; progress: number }>();
+  for (const ev of (replay as LxrReplayV3).hudEvents) {
+    if (ev.type !== 'emote') continue;
+    if (typeof ev.payload?.playerId !== 'number' || typeof ev.payload?.emoji !== 'string' || !ev.payload.emoji) {
+      continue;
+    }
+    const rawDurationMs = ev.payload.durationMs ?? 2200;
+    const durationSec =
+      typeof rawDurationMs === 'number' && Number.isFinite(rawDurationMs) && rawDurationMs > 0
+        ? rawDurationMs / 1000
+        : 2.2;
+    if (ev.t <= currentTimeSec && currentTimeSec <= ev.t + durationSec) {
+      const progress = Math.max(0, Math.min(1, (currentTimeSec - ev.t) / durationSec));
+      const prev = latestByPlayer.get(ev.payload.playerId);
+      if (!prev || ev.t >= prev.t) {
+        latestByPlayer.set(ev.payload.playerId, {
+          t: ev.t,
+          emoji: ev.payload.emoji,
+          progress
+        });
+      }
+    }
+  }
+  return Array.from(latestByPlayer.entries()).map(([playerId, info]) => ({
+    playerId,
+    emoji: info.emoji,
+    progress: info.progress
+  }));
 }
 
 function defaultBannerDurationSec(payload: LxrBannerPayload): number {
@@ -575,6 +675,8 @@ export function deriveReplayHudTimelineState(
   const v2 = replay.magic === 'LXR2' ? (replay as LxrReplayV2) : null;
 
   const { redKit, blueKit } = getActiveReplayKitsAtTime(replay, currentTimeSec);
+  const activeModifiers = getActiveReplayModifiersAtTime(replay, currentTimeSec);
+  const activeEmotes = getActiveReplayEmotes(replay, currentTimeSec);
   const phase = f0.snapshot.phase;
   const matchTimer = f0.snapshot.matchTimer ?? 0;
   const isGoldenGoal = Boolean(f0.snapshot.isGoldenGoal);
@@ -619,6 +721,9 @@ export function deriveReplayHudTimelineState(
     telemetry: getActiveTelemetryAtTime(replay, currentTimeSec),
     slidingEvents: getActiveSlidingScoreEvents(replay, currentTimeSec),
     uiOverlay: getActiveUiOverlayAtTime(replay, currentTimeSec),
+    activeEmotes,
+    ...(activeModifiers.ballRadius !== undefined ? { ballRadius: activeModifiers.ballRadius } : {}),
+    ...(activeModifiers.playerRadius !== undefined ? { playerRadius: activeModifiers.playerRadius } : {}),
     isWarning30s: isReplayTimerWarning(matchTimer, phase, isGoldenGoal),
     isGoalReplay,
     showExtendedHud: isV3
@@ -810,6 +915,955 @@ function drawGoldenGoalEmblem(ctx: CanvasRenderingContext2D, ballX: number, ball
   });
 }
 
+function makeVerticalLinearGradient(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  h: number,
+  stops: Array<[number, string]>
+): CanvasGradient | string {
+  if (typeof ctx.createLinearGradient !== 'function') {
+    return stops[0]?.[1] ?? '#ffffff';
+  }
+  const grad = ctx.createLinearGradient(x, y, x, y + h);
+  for (const [offset, color] of stops) {
+    grad.addColorStop(offset, color);
+  }
+  return grad;
+}
+
+function drawCornerRoundedRect(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  tl: number,
+  tr: number,
+  br: number,
+  bl: number
+): void {
+  const maxR = Math.min(w / 2, h / 2);
+  const rTL = Math.max(0, Math.min(maxR, tl));
+  const rTR = Math.max(0, Math.min(maxR, tr));
+  const rBR = Math.max(0, Math.min(maxR, br));
+  const rBL = Math.max(0, Math.min(maxR, bl));
+  ctx.beginPath();
+  ctx.moveTo(x + rTL, y);
+  ctx.lineTo(x + w - rTR, y);
+  if (rTR > 0) ctx.arc(x + w - rTR, y + rTR, rTR, -Math.PI / 2, 0);
+  ctx.lineTo(x + w, y + h - rBR);
+  if (rBR > 0) ctx.arc(x + w - rBR, y + h - rBR, rBR, 0, Math.PI / 2);
+  ctx.lineTo(x + rBL, y + h);
+  if (rBL > 0) ctx.arc(x + rBL, y + h - rBL, rBL, Math.PI / 2, Math.PI);
+  ctx.lineTo(x, y + rTL);
+  if (rTL > 0) ctx.arc(x + rTL, y + rTL, rTL, Math.PI, Math.PI * 1.5);
+  ctx.closePath();
+}
+
+function drawDiamondPath(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  halfDiag: number
+): void {
+  ctx.beginPath();
+  ctx.moveTo(cx, cy - halfDiag);
+  ctx.lineTo(cx + halfDiag, cy);
+  ctx.lineTo(cx, cy + halfDiag);
+  ctx.lineTo(cx - halfDiag, cy);
+  ctx.closePath();
+}
+
+function traceFlagPolygon(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  shape: 'angled' | 'hex'
+): void {
+  ctx.beginPath();
+  if (shape === 'angled') {
+    ctx.moveTo(x + w * 0.12, y);
+    ctx.lineTo(x + w, y);
+    ctx.lineTo(x + w * 0.88, y + h);
+    ctx.lineTo(x, y + h);
+  } else {
+    ctx.moveTo(x + w * 0.16, y);
+    ctx.lineTo(x + w * 0.84, y);
+    ctx.lineTo(x + w, y + h * 0.5);
+    ctx.lineTo(x + w * 0.84, y + h);
+    ctx.lineTo(x + w * 0.16, y + h);
+    ctx.lineTo(x, y + h * 0.5);
+  }
+  ctx.closePath();
+}
+
+function drawWcFlagBadge(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  shape: 'rect' | 'pill' | 'angled' | 'hex',
+  kit: Record<string, unknown> | undefined,
+  fallbackColor: string,
+  borderOverride?: string
+): void {
+  const resolved = resolveKitPatternInput(kit, fallbackColor);
+  if (shape === 'rect' || shape === 'pill') {
+    const radius = shape === 'pill' ? Math.min(w, h) / 2 : borderOverride ? 7 : 3;
+    drawPatternFilledRoundedRect(ctx, x, y, w, h, radius, kit, fallbackColor);
+    ctx.save();
+    drawRoundedRect(ctx, x, y, w, h, radius);
+    ctx.clip();
+    ctx.fillStyle = makeVerticalLinearGradient(ctx, x, y, h, [
+      [0, 'rgba(255, 255, 255, 0.28)'],
+      [0.48, 'rgba(255, 255, 255, 0)'],
+      [1, 'rgba(0, 0, 0, 0.2)']
+    ]);
+    ctx.fillRect(x, y, w, h);
+    ctx.restore();
+
+    if (borderOverride || !resolved.hasOutline) {
+      ctx.save();
+      drawRoundedRect(ctx, x, y, w, h, radius);
+      ctx.lineWidth = borderOverride ? 1.5 : 1;
+      ctx.strokeStyle = borderOverride ?? 'rgba(255, 255, 255, 0.22)';
+      ctx.stroke();
+      ctx.restore();
+    }
+    return;
+  }
+
+  ctx.save();
+  traceFlagPolygon(ctx, x, y, w, h, shape);
+  ctx.clip();
+  drawKitPatternCanvas(
+    ctx,
+    x,
+    y,
+    w,
+    h,
+    resolved as Parameters<typeof drawKitPatternCanvas>[5]
+  );
+  ctx.fillStyle = makeVerticalLinearGradient(ctx, x, y, h, [
+    [0, 'rgba(255, 255, 255, 0.28)'],
+    [0.48, 'rgba(255, 255, 255, 0)'],
+    [1, 'rgba(0, 0, 0, 0.2)']
+  ]);
+  ctx.fillRect(x, y, w, h);
+  ctx.restore();
+
+  ctx.save();
+  traceFlagPolygon(ctx, x, y, w, h, shape);
+  ctx.lineWidth = resolved.hasOutline ? 1.5 : 1;
+  ctx.strokeStyle = resolved.hasOutline ? '#000000' : 'rgba(255, 255, 255, 0.45)';
+  ctx.stroke();
+  ctx.restore();
+}
+
+function drawWc2006Scoreboard(
+  ctx: CanvasRenderingContext2D,
+  state: ReplayHudOverlayState,
+  centerX: number,
+  top: number,
+  clockStr: string,
+  isWarning: boolean
+): void {
+  const redTag = state.redAcronym.slice(0, 6).toUpperCase();
+  const blueTag = state.blueAcronym.slice(0, 6).toUpperCase();
+  const tagFont = '800 14.5px "Arial Narrow", Inter, system-ui, sans-serif';
+  const scoreFont = '900 20px "JetBrains Mono", monospace';
+  const clockFont = '800 13px "JetBrains Mono", monospace';
+
+  ctx.font = tagFont;
+  const tagSlotW = Math.max(
+    40,
+    Math.ceil(Math.max(ctx.measureText(redTag).width, ctx.measureText(blueTag).width)) + 4
+  );
+  ctx.font = scoreFont;
+  const scoreW = Math.max(
+    76,
+    Math.ceil(ctx.measureText(String(state.redScore)).width + ctx.measureText(String(state.blueScore)).width + 38)
+  );
+  ctx.font = clockFont;
+  const tabW = Math.max(70, Math.ceil(ctx.measureText(clockStr).width + 24));
+
+  const flagW = 27;
+  const flagH = 25;
+  const padX = 8;
+  const gap = 7;
+  const wingW = padX + flagW + gap + tagSlotW + gap;
+  const barW = wingW * 2 + scoreW;
+  const barH = 40;
+  const barY = top + 2;
+  const left = centerX - barW / 2;
+
+  // Hanging bottom clock tab drawn first so pill edge cleanly caps its top seam
+  const tabH = 20;
+  const tabX = centerX - tabW / 2;
+  const tabY = barY + barH - 2;
+  ctx.save();
+  ctx.shadowBlur = 0;
+  drawCornerRoundedRect(ctx, tabX, tabY, tabW, tabH, 0, 0, 8, 8);
+  ctx.fillStyle = makeVerticalLinearGradient(ctx, tabX, tabY, tabH, [
+    [0, '#20242c'],
+    [1, '#07090d']
+  ]);
+  ctx.fill();
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = '#7b8492';
+  ctx.stroke();
+  ctx.font = clockFont;
+  ctx.fillStyle = '#ffffff';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(clockStr, centerX, tabY + tabH / 2 + 1);
+  ctx.restore();
+
+  // Metallic silver rounded pill bar
+  drawRoundedRect(ctx, left, barY, barW, barH, barH / 2);
+  ctx.fillStyle = makeVerticalLinearGradient(ctx, left, barY, barH, [
+    [0, '#f3f5f8'],
+    [0.52, '#c8ced6'],
+    [1, '#dce1e8']
+  ]);
+  ctx.fill();
+  ctx.shadowBlur = 0;
+  ctx.lineWidth = isWarning ? 1.8 : 1.5;
+  ctx.strokeStyle = isWarning ? '#ef4444' : '#8c96a5';
+  ctx.stroke();
+
+  const cy = barY + barH / 2;
+  drawWcFlagBadge(ctx, left + padX, cy - flagH / 2, flagW, flagH, 'pill', state.redKit, state.redColor || '#e74c3c');
+  drawWcFlagBadge(
+    ctx,
+    left + barW - padX - flagW,
+    cy - flagH / 2,
+    flagW,
+    flagH,
+    'pill',
+    state.blueKit,
+    state.blueColor || '#00e5ff'
+  );
+
+  // Bold black uppercase acronyms on silver wings (outside flags)
+  ctx.font = tagFont;
+  ctx.fillStyle = '#111111';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(redTag, left + padX + flagW + gap + tagSlotW / 2, cy + 0.5);
+  ctx.fillText(blueTag, left + barW - padX - flagW - gap - tagSlotW / 2, cy + 0.5);
+
+  // Glossy black center score box
+  const scoreX = centerX - scoreW / 2;
+  const scoreY = barY + 4;
+  const scoreH = barH - 8;
+  drawRoundedRect(ctx, scoreX, scoreY, scoreW, scoreH, 5);
+  ctx.fillStyle = makeVerticalLinearGradient(ctx, scoreX, scoreY, scoreH, [
+    [0, '#272b33'],
+    [0.55, '#090b0f'],
+    [1, '#161920']
+  ]);
+  ctx.fill();
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = '#8e97a4';
+  ctx.stroke();
+
+  // Vertical silver hairline between scores
+  ctx.fillStyle = makeVerticalLinearGradient(ctx, centerX, barY + 11, 18, [
+    [0, 'rgba(226, 232, 240, 0.3)'],
+    [0.5, '#e2e8f0'],
+    [1, 'rgba(226, 232, 240, 0.3)']
+  ]);
+  ctx.fillRect(centerX - 0.75, barY + 11, 1.5, 18);
+
+  ctx.font = scoreFont;
+  ctx.fillStyle = '#ffffff';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(String(state.redScore), centerX - scoreW / 4, cy + 0.5);
+  ctx.fillText(String(state.blueScore), centerX + scoreW / 4, cy + 0.5);
+
+  if (state.isGoldenGoal) drawGoldenGoalEmblem(ctx, left + barW + 24, cy);
+}
+
+function drawWc2010Scoreboard(
+  ctx: CanvasRenderingContext2D,
+  state: ReplayHudOverlayState,
+  centerX: number,
+  top: number,
+  clockStr: string,
+  isWarning: boolean
+): void {
+  const redTag = state.redAcronym.slice(0, 6).toUpperCase();
+  const blueTag = state.blueAcronym.slice(0, 6).toUpperCase();
+  const tagFont = '900 14.5px "Space Grotesk", Inter, system-ui, sans-serif';
+  const scoreFont = '900 20px "JetBrains Mono", monospace';
+  const clockFont = '800 13px "JetBrains Mono", monospace';
+
+  ctx.font = tagFont;
+  const tagSlotW = Math.max(
+    40,
+    Math.ceil(Math.max(ctx.measureText(redTag).width, ctx.measureText(blueTag).width)) + 4
+  );
+  ctx.font = scoreFont;
+  const trapW = Math.max(
+    84,
+    Math.ceil(ctx.measureText(String(state.redScore)).width + ctx.measureText(String(state.blueScore)).width + 46)
+  );
+  ctx.font = clockFont;
+  const archW = Math.max(76, Math.ceil(ctx.measureText(clockStr).width + 28));
+
+  const flagW = 32;
+  const flagH = 22;
+  const padX = 8;
+  const gap = 8;
+  const wingW = padX + flagW + gap + tagSlotW + gap;
+  const barW = wingW * 2 + trapW;
+  const barH = 38;
+  const barY = top + 18;
+  const left = centerX - barW / 2;
+
+  // Champagne/warm-silver winged bar
+  drawCornerRoundedRect(ctx, left, barY, barW, barH, 6, 6, 18, 18);
+  ctx.fillStyle = makeVerticalLinearGradient(ctx, left, barY, barH, [
+    [0, '#f7e6d6'],
+    [0.55, '#d8bda9'],
+    [1, '#b89882']
+  ]);
+  ctx.fill();
+  ctx.shadowBlur = 0;
+
+  // Central burnt-orange downward trapezoid clipped cleanly to bar
+  const trapInset = Math.round(trapW * 0.12);
+  ctx.save();
+  drawCornerRoundedRect(ctx, left, barY, barW, barH, 6, 6, 18, 18);
+  ctx.clip();
+  ctx.beginPath();
+  ctx.moveTo(centerX - trapW / 2, barY);
+  ctx.lineTo(centerX + trapW / 2, barY);
+  ctx.lineTo(centerX + trapW / 2 - trapInset, barY + barH);
+  ctx.lineTo(centerX - trapW / 2 + trapInset, barY + barH);
+  ctx.closePath();
+  ctx.fillStyle = makeVerticalLinearGradient(ctx, centerX, barY, barH, [
+    [0, '#ff8524'],
+    [0.58, '#d94a00'],
+    [1, '#9e2d00']
+  ]);
+  ctx.fill();
+  ctx.restore();
+
+  drawCornerRoundedRect(ctx, left, barY, barW, barH, 6, 6, 18, 18);
+  ctx.lineWidth = isWarning ? 1.8 : 1.5;
+  ctx.strokeStyle = isWarning ? '#ef4444' : '#9d7f6a';
+  ctx.stroke();
+
+  const cy = barY + barH / 2;
+  drawWcFlagBadge(ctx, left + padX, cy - flagH / 2, flagW, flagH, 'angled', state.redKit, state.redColor || '#e74c3c');
+  drawWcFlagBadge(
+    ctx,
+    left + barW - padX - flagW,
+    cy - flagH / 2,
+    flagW,
+    flagH,
+    'angled',
+    state.blueKit,
+    state.blueColor || '#00e5ff'
+  );
+
+  // Bold black acronyms on champagne wings
+  ctx.font = tagFont;
+  ctx.fillStyle = '#14110f';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(redTag, left + padX + flagW + gap + tagSlotW / 2, cy + 0.5);
+  ctx.fillText(blueTag, left + barW - padX - flagW - gap - tagSlotW / 2, cy + 0.5);
+
+  // White scores inside burnt-orange trapezoid (no dash)
+  ctx.font = scoreFont;
+  ctx.fillStyle = '#ffffff';
+  ctx.fillText(String(state.redScore), centerX - trapW * 0.21, cy + 1);
+  ctx.fillText(String(state.blueScore), centerX + trapW * 0.21, cy + 1);
+
+  // Arched glossy burnt-orange top timer tab overlapping bar top by 2px
+  const archH = 20;
+  const archX = centerX - archW / 2;
+  drawCornerRoundedRect(ctx, archX, top, archW, archH, 14, 14, 0, 0);
+  ctx.fillStyle = makeVerticalLinearGradient(ctx, archX, top, archH, [
+    [0, '#ff7b1c'],
+    [0.55, '#c74100'],
+    [1, '#8f2a00']
+  ]);
+  ctx.fill();
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = '#fb923c';
+  ctx.stroke();
+
+  ctx.font = clockFont;
+  ctx.fillStyle = '#ffffff';
+  ctx.fillText(clockStr, centerX, top + archH / 2);
+
+  if (state.isGoldenGoal) drawGoldenGoalEmblem(ctx, left + barW + 24, cy);
+}
+
+function drawWc2014Scoreboard(
+  ctx: CanvasRenderingContext2D,
+  state: ReplayHudOverlayState,
+  centerX: number,
+  top: number,
+  clockStr: string,
+  isWarning: boolean
+): void {
+  const redTag = state.redAcronym.slice(0, 6).toUpperCase();
+  const blueTag = state.blueAcronym.slice(0, 6).toUpperCase();
+  const tagFont = '900 14.5px "Space Grotesk", Inter, system-ui, sans-serif';
+  const scoreFont = '900 20px "JetBrains Mono", monospace';
+  const clockFont = '800 13px "JetBrains Mono", monospace';
+
+  ctx.font = tagFont;
+  const tagSlotW = Math.max(
+    40,
+    Math.ceil(Math.max(ctx.measureText(redTag).width, ctx.measureText(blueTag).width)) + 4
+  );
+  ctx.font = scoreFont;
+  const scoreW = Math.max(
+    82,
+    Math.ceil(ctx.measureText(String(state.redScore)).width + ctx.measureText(String(state.blueScore)).width + 44)
+  );
+  ctx.font = clockFont;
+  const tabW = Math.max(74, Math.ceil(ctx.measureText(clockStr).width + 28));
+
+  const flagW = 32;
+  const flagH = 26;
+  const padX = 8;
+  const gap = 8;
+  const wingW = padX + flagW + gap + tagSlotW + gap;
+  const barW = wingW * 2 + scoreW;
+  const barH = 40;
+  const barY = top + 2;
+  const left = centerX - barW / 2;
+
+  // Emerald-green rounded bottom timer pill drawn first for flush seam
+  const tabH = 20;
+  const tabX = centerX - tabW / 2;
+  const tabY = barY + barH - 2;
+  ctx.save();
+  ctx.shadowBlur = 0;
+  drawCornerRoundedRect(ctx, tabX, tabY, tabW, tabH, 0, 0, 10, 10);
+  ctx.fillStyle = makeVerticalLinearGradient(ctx, tabX, tabY, tabH, [
+    [0, '#1fc74e'],
+    [1, '#0e7a2b']
+  ]);
+  ctx.fill();
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = '#86efac';
+  ctx.stroke();
+  ctx.font = clockFont;
+  ctx.fillStyle = '#ffffff';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(clockStr, centerX, tabY + tabH / 2 + 1);
+  ctx.restore();
+
+  // Bright white-silver 3D beveled bar
+  drawRoundedRect(ctx, left, barY, barW, barH, 11);
+  ctx.fillStyle = makeVerticalLinearGradient(ctx, left, barY, barH, [
+    [0, '#ffffff'],
+    [0.6, '#e1e6ed'],
+    [1, '#c4ccd6']
+  ]);
+  ctx.fill();
+  ctx.shadowBlur = 0;
+  ctx.lineWidth = isWarning ? 1.8 : 1.5;
+  ctx.strokeStyle = isWarning ? '#ef4444' : '#9aa5b4';
+  ctx.stroke();
+
+  const cy = barY + barH / 2;
+  drawWcFlagBadge(ctx, left + padX, cy - flagH / 2, flagW, flagH, 'rect', state.redKit, state.redColor || '#e74c3c', '#cbd5e1');
+  drawWcFlagBadge(
+    ctx,
+    left + barW - padX - flagW,
+    cy - flagH / 2,
+    flagW,
+    flagH,
+    'rect',
+    state.blueKit,
+    state.blueColor || '#00e5ff',
+    '#cbd5e1'
+  );
+
+  // Dark navy bold acronyms outside flags
+  ctx.font = tagFont;
+  ctx.fillStyle = '#0e244d';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(redTag, left + padX + flagW + gap + tagSlotW / 2, cy + 0.5);
+  ctx.fillText(blueTag, left + barW - padX - flagW - gap - tagSlotW / 2, cy + 0.5);
+
+  // Royal-blue central capsule
+  const scoreX = centerX - scoreW / 2;
+  const scoreY = barY + 4;
+  const scoreH = barH - 8;
+  drawRoundedRect(ctx, scoreX, scoreY, scoreW, scoreH, 7);
+  ctx.fillStyle = makeVerticalLinearGradient(ctx, scoreX, scoreY, scoreH, [
+    [0, '#1b8ce8'],
+    [1, '#0952a5']
+  ]);
+  ctx.fill();
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = '#60a5fa';
+  ctx.stroke();
+
+  ctx.font = scoreFont;
+  ctx.fillStyle = '#ffffff';
+  ctx.fillText(String(state.redScore), centerX - scoreW * 0.24, cy + 0.5);
+  ctx.fillText(String(state.blueScore), centerX + scoreW * 0.24, cy + 0.5);
+  ctx.fillStyle = '#dbeafe';
+  ctx.font = '900 18px Inter, system-ui, sans-serif';
+  ctx.fillText('-', centerX, cy);
+
+  if (state.isGoldenGoal) drawGoldenGoalEmblem(ctx, left + barW + 24, cy);
+}
+
+function drawWc2018Scoreboard(
+  ctx: CanvasRenderingContext2D,
+  state: ReplayHudOverlayState,
+  centerX: number,
+  top: number,
+  clockStr: string,
+  isWarning: boolean
+): void {
+  const redTag = state.redAcronym.slice(0, 6).toUpperCase();
+  const blueTag = state.blueAcronym.slice(0, 6).toUpperCase();
+  const tagFont = '800 14.5px Georgia, "Times New Roman", serif';
+  const scoreFont = '900 20px Georgia, "Times New Roman", serif';
+  const clockFont = '800 13.5px "JetBrains Mono", monospace';
+
+  ctx.font = tagFont;
+  const tagSlotW = Math.max(
+    38,
+    Math.ceil(Math.max(ctx.measureText(redTag).width, ctx.measureText(blueTag).width)) + 4
+  );
+  ctx.font = scoreFont;
+  const scoreW = Math.max(
+    78,
+    Math.ceil(ctx.measureText(String(state.redScore)).width + ctx.measureText(String(state.blueScore)).width + 42)
+  );
+  ctx.font = clockFont;
+  const clockBlockW = Math.max(66, Math.ceil(ctx.measureText(clockStr).width + 24));
+
+  const flagW = 34;
+  const flagH = 23;
+  const wingPadX = 10;
+  const gap = 7;
+  const wingW = wingPadX + flagW + gap + tagSlotW + wingPadX;
+  const barW = wingW * 2 + scoreW + clockBlockW;
+  const barH = 40;
+  const barY = top + 4;
+  const left = centerX - barW / 2;
+
+  drawRoundedRect(ctx, left, barY, barW, barH, 3);
+  ctx.fillStyle = '#980917';
+  ctx.fill();
+  ctx.shadowBlur = 0;
+
+  const scoreX = left + wingW;
+  const rightWingX = scoreX + scoreW;
+  const clockX = rightWingX + wingW;
+  const cy = barY + barH / 2;
+
+  ctx.save();
+  drawRoundedRect(ctx, left, barY, barW, barH, 3);
+  ctx.clip();
+
+  // Crimson-red left & right wings
+  const wingGrad = makeVerticalLinearGradient(ctx, left, barY, barH, [
+    [0, '#dc182b'],
+    [1, '#980917']
+  ]);
+  ctx.fillStyle = wingGrad;
+  ctx.fillRect(left, barY, wingW, barH);
+  ctx.fillRect(rightWingX, barY, wingW, barH);
+
+  // Deep royal-blue center score block
+  ctx.fillStyle = makeVerticalLinearGradient(ctx, scoreX, barY, barH, [
+    [0, '#0e4da4'],
+    [1, '#072963']
+  ]);
+  ctx.fillRect(scoreX, barY, scoreW, barH);
+
+  // Attached cobalt-blue right timer box
+  ctx.fillStyle = makeVerticalLinearGradient(ctx, clockX, barY, barH, [
+    [0, '#1976d2'],
+    [1, '#0b479c']
+  ]);
+  ctx.fillRect(clockX, barY, clockBlockW, barH);
+
+  // Thin vertical ice-blue dividers between blocks
+  ctx.fillStyle = 'rgba(186, 230, 253, 0.65)';
+  ctx.fillRect(scoreX, barY, 1, barH);
+  ctx.fillRect(rightWingX - 1, barY, 1, barH);
+  ctx.fillRect(clockX, barY, 1, barH);
+
+  // Hexagonal outer flags
+  drawWcFlagBadge(ctx, left + wingPadX, cy - flagH / 2, flagW, flagH, 'hex', state.redKit, state.redColor || '#e74c3c');
+  drawWcFlagBadge(
+    ctx,
+    rightWingX + wingW - wingPadX - flagW,
+    cy - flagH / 2,
+    flagW,
+    flagH,
+    'hex',
+    state.blueKit,
+    state.blueColor || '#00e5ff'
+  );
+
+  // White Georgia serif acronyms on crimson wings
+  ctx.font = tagFont;
+  ctx.fillStyle = '#ffffff';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(redTag, left + wingPadX + flagW + gap + tagSlotW / 2, cy + 0.5);
+  ctx.fillText(blueTag, rightWingX + wingPadX + tagSlotW / 2, cy + 0.5);
+
+  // White serif scores + gold diamond between scores
+  const scoreMidX = scoreX + scoreW / 2;
+  ctx.font = scoreFont;
+  ctx.fillStyle = '#ffffff';
+  ctx.fillText(String(state.redScore), scoreX + scoreW * 0.25, cy + 0.5);
+  ctx.fillText(String(state.blueScore), scoreX + scoreW * 0.75, cy + 0.5);
+
+  drawDiamondPath(ctx, scoreMidX, cy, 6.2);
+  ctx.fillStyle = makeVerticalLinearGradient(ctx, scoreMidX, cy - 6.2, 12.4, [
+    [0, '#fde047'],
+    [0.55, '#f4c430'],
+    [1, '#ca8a04']
+  ]);
+  ctx.fill();
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = '#713f12';
+  ctx.stroke();
+
+  // Timer text
+  ctx.font = clockFont;
+  ctx.fillStyle = '#ffffff';
+  ctx.fillText(clockStr, clockX + clockBlockW / 2, cy + 0.5);
+  ctx.restore();
+
+  drawRoundedRect(ctx, left, barY, barW, barH, 3);
+  ctx.lineWidth = isWarning ? 1.8 : 1.5;
+  ctx.strokeStyle = isWarning ? '#ef4444' : '#e2e8f0';
+  ctx.stroke();
+
+  if (state.isGoldenGoal) drawGoldenGoalEmblem(ctx, left + barW + 24, cy);
+}
+
+function drawWc2022Scoreboard(
+  ctx: CanvasRenderingContext2D,
+  state: ReplayHudOverlayState,
+  centerX: number,
+  top: number,
+  clockStr: string,
+  isWarning: boolean
+): void {
+  const redTag = state.redAcronym.slice(0, 6).toUpperCase();
+  const blueTag = state.blueAcronym.slice(0, 6).toUpperCase();
+  const tagFont = '800 14.5px "Space Grotesk", Inter, system-ui, sans-serif';
+  const scoreFont = '900 20px "JetBrains Mono", monospace';
+  const clockFont = '800 13.5px "JetBrains Mono", monospace';
+
+  ctx.font = tagFont;
+  const tagSlotW = Math.max(
+    38,
+    Math.ceil(Math.max(ctx.measureText(redTag).width, ctx.measureText(blueTag).width)) + 4
+  );
+  ctx.font = scoreFont;
+  const scoreSlotW = Math.max(
+    22,
+    Math.ceil(Math.max(ctx.measureText(String(state.redScore)).width, ctx.measureText(String(state.blueScore)).width)) + 6
+  );
+  ctx.font = clockFont;
+  const clockBlockW = Math.max(66, Math.ceil(ctx.measureText(clockStr).width + 22));
+
+  const zigzagW = 9;
+  const flagW = 30;
+  const flagH = 21;
+  const gap = 7.5;
+  const padLeft = 7.5;
+  const padRight = 10.5;
+  const sepW = 24;
+  const bodyW =
+    padLeft +
+    flagW +
+    gap +
+    tagSlotW +
+    gap +
+    scoreSlotW +
+    gap +
+    sepW +
+    gap +
+    scoreSlotW +
+    gap +
+    tagSlotW +
+    gap +
+    flagW +
+    padRight;
+  const barW = clockBlockW + zigzagW + bodyW;
+  const barH = 42;
+  const barY = top + 4;
+  const left = centerX - barW / 2;
+  const cy = barY + barH / 2;
+
+  drawRoundedRect(ctx, left, barY, barW, barH, 6);
+  ctx.fillStyle = makeVerticalLinearGradient(ctx, left, barY, barH, [
+    [0, '#8e083f'],
+    [1, '#5c0027']
+  ]);
+  ctx.fill();
+  ctx.shadowBlur = 0;
+
+  ctx.save();
+  drawRoundedRect(ctx, left, barY, barW, barH, 6);
+  ctx.clip();
+
+  // Left maroon clock text
+  ctx.font = clockFont;
+  ctx.fillStyle = '#ffffff';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(clockStr, left + clockBlockW / 2 + 1, cy + 0.5);
+
+  // Crisp white 9-spike serrated zigzag divider
+  const zx = left + clockBlockW;
+  ctx.beginPath();
+  for (let i = 0; i <= 18; i++) {
+    const py = barY + 1 + (i / 18) * (barH - 2);
+    const px = i % 2 === 0 ? zx + 1 : zx + 7;
+    if (i === 0) ctx.moveTo(px, py);
+    else ctx.lineTo(px, py);
+  }
+  ctx.strokeStyle = '#ffffff';
+  ctx.lineWidth = 1.6;
+  ctx.lineJoin = 'miter';
+  ctx.stroke();
+
+  let curX = zx + zigzagW + padLeft;
+  drawWcFlagBadge(ctx, curX, cy - flagH / 2, flagW, flagH, 'rect', state.redKit, state.redColor || '#e74c3c');
+  curX += flagW + gap;
+
+  ctx.font = tagFont;
+  ctx.fillStyle = '#ffffff';
+  ctx.fillText(redTag, curX + tagSlotW / 2, cy + 0.5);
+  curX += tagSlotW + gap;
+
+  ctx.font = scoreFont;
+  ctx.fillText(String(state.redScore), curX + scoreSlotW / 2, cy + 0.5);
+  curX += scoreSlotW + gap;
+
+  // Cream-and-burgundy lattice diamond emblem
+  const sepCx = curX + sepW / 2;
+  drawDiamondPath(ctx, sepCx, cy, 11.5);
+  ctx.fillStyle = '#f8f1e5';
+  ctx.fill();
+  ctx.lineWidth = 1.5;
+  ctx.strokeStyle = '#d4b078';
+  ctx.stroke();
+
+  drawDiamondPath(ctx, sepCx, cy, 5.5);
+  ctx.fillStyle = '#6d0731';
+  ctx.fill();
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = '#b45309';
+  ctx.stroke();
+  curX += sepW + gap;
+
+  ctx.font = scoreFont;
+  ctx.fillStyle = '#ffffff';
+  ctx.fillText(String(state.blueScore), curX + scoreSlotW / 2, cy + 0.5);
+  curX += scoreSlotW + gap;
+
+  ctx.font = tagFont;
+  ctx.fillText(blueTag, curX + tagSlotW / 2, cy + 0.5);
+  curX += tagSlotW + gap;
+
+  drawWcFlagBadge(ctx, curX, cy - flagH / 2, flagW, flagH, 'rect', state.blueKit, state.blueColor || '#00e5ff');
+  ctx.restore();
+
+  drawRoundedRect(ctx, left, barY, barW, barH, 6);
+  ctx.lineWidth = isWarning ? 1.8 : 1.5;
+  ctx.strokeStyle = isWarning ? '#ef4444' : '#e5c158';
+  ctx.stroke();
+
+  if (state.isGoldenGoal) drawGoldenGoalEmblem(ctx, left + barW + 24, cy);
+}
+
+function drawWc2026Scoreboard(
+  ctx: CanvasRenderingContext2D,
+  state: ReplayHudOverlayState,
+  centerX: number,
+  top: number,
+  clockStr: string,
+  isWarning: boolean
+): void {
+  const redTag = state.redAcronym.slice(0, 6).toUpperCase();
+  const blueTag = state.blueAcronym.slice(0, 6).toUpperCase();
+  const tagFont = '900 14.5px "Arial Narrow", Impact, Outfit, sans-serif';
+  const scoreFont = '900 20px "JetBrains Mono", monospace';
+  const clockFont = '900 13.5px "JetBrains Mono", monospace';
+
+  ctx.font = tagFont;
+  const tagSlotW = Math.max(
+    38,
+    Math.ceil(Math.max(ctx.measureText(redTag).width, ctx.measureText(blueTag).width)) + 4
+  );
+  ctx.font = scoreFont;
+  const scorePillW = Math.max(
+    26,
+    Math.ceil(Math.max(ctx.measureText(String(state.redScore)).width, ctx.measureText(String(state.blueScore)).width) + 12)
+  );
+  ctx.font = clockFont;
+  const clockBlockW = Math.max(70, Math.ceil(ctx.measureText(clockStr).width + 28));
+
+  const flagW = 30;
+  const flagH = 21;
+  const dotR = 4;
+  const dotDiam = dotR * 2;
+  const gap = 6.5;
+  const wingGap = 8;
+  const padRight = 12;
+  const emblemW = 22;
+  const emblemH = 30;
+  const scorePillH = 28;
+  const wingLeftW = wingGap + flagW + gap + dotDiam + gap + tagSlotW + gap + scorePillW;
+  const wingRightW = scorePillW + gap + tagSlotW + gap + dotDiam + gap + flagW + padRight;
+  const barW = clockBlockW + wingLeftW + gap + emblemW + gap + wingRightW;
+  const barH = 42;
+  const barY = top + 4;
+  const left = centerX - barW / 2;
+  const cy = barY + barH / 2;
+
+  // Dark obsidian main pill bar
+  drawRoundedRect(ctx, left, barY, barW, barH, barH / 2);
+  ctx.fillStyle = '#11151d';
+  ctx.fill();
+  ctx.shadowBlur = 0;
+
+  ctx.save();
+  drawRoundedRect(ctx, left, barY, barW, barH, barH / 2);
+  ctx.clip();
+
+  // Left solid white rounded timer pill block + violet divider
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(left, barY, clockBlockW, barH);
+  ctx.fillStyle = '#8b5cf6';
+  ctx.fillRect(left + clockBlockW - 3, barY, 3, barH);
+
+  ctx.font = clockFont;
+  ctx.fillStyle = '#0b0e14';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(clockStr, left + (clockBlockW - 3) / 2 + 2, cy + 0.5);
+
+  const redDotColor = String(state.redKit?.primaryColor || state.redColor || '#e74c3c');
+  const blueDotColor = String(state.blueKit?.primaryColor || state.blueColor || '#00e5ff');
+
+  const drawTeamDot = (cx: number, color: string) => {
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(cx, cy, dotR, 0, Math.PI * 2);
+    ctx.shadowColor = color;
+    ctx.shadowBlur = 6;
+    ctx.fillStyle = color;
+    ctx.fill();
+    ctx.shadowBlur = 0;
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.6)';
+    ctx.stroke();
+    ctx.restore();
+  };
+
+  const drawScorePill = (x: number, score: number) => {
+    const py = cy - scorePillH / 2;
+    drawRoundedRect(ctx, x, py, scorePillW, scorePillH, 7);
+    ctx.fillStyle = makeVerticalLinearGradient(ctx, x, py, scorePillH, [
+      [0, '#27c28a'],
+      [1, '#14855d']
+    ]);
+    ctx.fill();
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = 'rgba(167, 243, 208, 0.45)';
+    ctx.stroke();
+    ctx.font = scoreFont;
+    ctx.fillStyle = '#ffffff';
+    ctx.fillText(String(score), x + scorePillW / 2, cy + 0.5);
+  };
+
+  let curX = left + clockBlockW + wingGap;
+  drawWcFlagBadge(ctx, curX, cy - flagH / 2, flagW, flagH, 'rect', state.redKit, redDotColor);
+  curX += flagW + gap;
+
+  drawTeamDot(curX + dotR, redDotColor);
+  curX += dotDiam + gap;
+
+  ctx.font = tagFont;
+  ctx.fillStyle = '#ffffff';
+  ctx.fillText(redTag, curX + tagSlotW / 2, cy + 0.5);
+  curX += tagSlotW + gap;
+
+  drawScorePill(curX, state.redScore);
+  curX += scorePillW + gap;
+
+  // High-contrast white/black central '26' emblem with red top & blue bottom accents
+  const emY = cy - emblemH / 2;
+  ctx.save();
+  drawRoundedRect(ctx, curX, emY, emblemW, emblemH, 6);
+  ctx.clip();
+  ctx.fillStyle = makeVerticalLinearGradient(ctx, curX, emY, emblemH, [
+    [0, '#ffffff'],
+    [1, '#e2e8f0']
+  ]);
+  ctx.fillRect(curX, emY, emblemW, emblemH);
+  ctx.fillStyle = '#ef4444';
+  ctx.fillRect(curX, emY, emblemW, 3);
+  ctx.fillStyle = '#2563eb';
+  ctx.fillRect(curX, emY + emblemH - 3, emblemW, 3);
+  ctx.restore();
+
+  drawRoundedRect(ctx, curX, emY, emblemW, emblemH, 6);
+  ctx.lineWidth = 1.2;
+  ctx.strokeStyle = '#cbd5e1';
+  ctx.stroke();
+
+  ctx.font = '900 11.5px "Space Grotesk", system-ui, sans-serif';
+  ctx.fillStyle = '#0b0e14';
+  ctx.fillText('26', curX + emblemW / 2, cy + 0.5);
+  curX += emblemW + gap;
+
+  drawScorePill(curX, state.blueScore);
+  curX += scorePillW + gap;
+
+  ctx.font = tagFont;
+  ctx.fillStyle = '#ffffff';
+  ctx.fillText(blueTag, curX + tagSlotW / 2, cy + 0.5);
+  curX += tagSlotW + gap;
+
+  drawTeamDot(curX + dotR, blueDotColor);
+  curX += dotDiam + gap;
+
+  drawWcFlagBadge(ctx, curX, cy - flagH / 2, flagW, flagH, 'rect', state.blueKit, blueDotColor);
+  ctx.restore();
+
+  drawRoundedRect(ctx, left, barY, barW, barH, barH / 2);
+  ctx.lineWidth = isWarning ? 1.8 : 1.5;
+  ctx.strokeStyle = isWarning ? '#ef4444' : '#334155';
+  ctx.stroke();
+
+  if (state.isGoldenGoal) drawGoldenGoalEmblem(ctx, left + barW + 24, cy);
+}
+
 function drawScoreboard(ctx: CanvasRenderingContext2D, state: ReplayHudOverlayState): void {
   const design: LxrScoreboardDesign = state.scoreboardDesign || 'original';
   const centerX = REPLAY_STAGE_WIDTH / 2;
@@ -870,247 +1924,19 @@ function drawScoreboard(ctx: CanvasRenderingContext2D, state: ReplayHudOverlaySt
     return;
   }
 
-  // World Cup Broadcast Scoreboards (wc2006..wc2026)
+  // World Cup Broadcast Scoreboards (wc2006..wc2026) matching MatchScoreboard.svelte
   if (design === 'wc2006') {
-    const barW = 356;
-    const barH = 36;
-    const left = centerX - barW / 2;
-    drawRoundedRect(ctx, left, top + 2, barW, barH, 18);
-    ctx.fillStyle = isWarning ? '#3b0d14' : '#e2e8f0';
-    ctx.fill();
-    ctx.lineWidth = isWarning ? 1.8 : 1.2;
-    ctx.strokeStyle = isWarning ? '#f87171' : '#94a3b8';
-    ctx.stroke();
-    ctx.shadowBlur = 0;
-
-    drawPatternFilledRoundedRect(ctx, left + 6, top + 6, 118, 28, 12, state.redKit, state.redColor);
-    drawKitLabelText(ctx, state.redAcronym.slice(0, 6), left + 18, top + 20, state.redKit, 'left');
-
-    drawPatternFilledRoundedRect(ctx, left + barW - 124, top + 6, 118, 28, 12, state.blueKit, state.blueColor);
-    drawKitLabelText(ctx, state.blueAcronym.slice(0, 6), left + barW - 18, top + 20, state.blueKit, 'right');
-
-    drawRoundedRect(ctx, centerX - 48, top + 5, 96, 30, 8);
-    ctx.fillStyle = '#0f172a';
-    ctx.fill();
-    ctx.font = '900 18px Inter, system-ui, sans-serif';
-    ctx.fillStyle = '#f8fafc';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(`${state.redScore} - ${state.blueScore}`, centerX, top + 20);
-
-    // Hanging bottom clock tab
-    drawRoundedRect(ctx, centerX - 38, top + 36, 76, 18, 6);
-    ctx.fillStyle = '#1e293b';
-    ctx.fill();
-    ctx.font = '800 11px "JetBrains Mono", monospace';
-    ctx.fillStyle = state.isGoldenGoal ? '#fbbf24' : isWarning ? '#fca5a5' : '#e2e8f0';
-    ctx.fillText(clockStr, centerX, top + 45);
-
-    if (state.isGoldenGoal) drawGoldenGoalEmblem(ctx, left + barW + 24, top + 20);
+    drawWc2006Scoreboard(ctx, state, centerX, top, clockStr, isWarning);
   } else if (design === 'wc2010') {
-    const barW = 360;
-    const barH = 34;
-    const left = centerX - barW / 2;
-
-    // Top arched amber clock tab
-    drawRoundedRect(ctx, centerX - 42, top, 84, 18, 8);
-    ctx.fillStyle = '#f59e0b';
-    ctx.fill();
-    ctx.shadowBlur = 0;
-    ctx.font = '900 11px "JetBrains Mono", monospace';
-    ctx.fillStyle = '#451a03';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(clockStr, centerX, top + 9);
-
-    drawRoundedRect(ctx, left, top + 16, barW, barH, 10);
-    ctx.fillStyle = isWarning ? '#450a0a' : '#fef3c7';
-    ctx.fill();
-    ctx.lineWidth = isWarning ? 1.8 : 1.2;
-    ctx.strokeStyle = isWarning ? '#f87171' : '#d97706';
-    ctx.stroke();
-
-    drawPatternFilledRoundedRect(ctx, left + 6, top + 20, 120, 26, 6, state.redKit, state.redColor);
-    drawKitLabelText(ctx, state.redAcronym.slice(0, 6), left + 16, top + 33, state.redKit, 'left');
-
-    drawPatternFilledRoundedRect(ctx, left + barW - 126, top + 20, 120, 26, 6, state.blueKit, state.blueColor);
-    drawKitLabelText(ctx, state.blueAcronym.slice(0, 6), left + barW - 16, top + 33, state.blueKit, 'right');
-
-    drawRoundedRect(ctx, centerX - 46, top + 19, 92, 28, 6);
-    ctx.fillStyle = '#ea580c';
-    ctx.fill();
-    ctx.font = '900 18px Inter, system-ui, sans-serif';
-    ctx.fillStyle = '#ffffff';
-    ctx.textAlign = 'center';
-    ctx.fillText(`${state.redScore} - ${state.blueScore}`, centerX, top + 33);
-
-    if (state.isGoldenGoal) drawGoldenGoalEmblem(ctx, left + barW + 24, top + 33);
+    drawWc2010Scoreboard(ctx, state, centerX, top, clockStr, isWarning);
   } else if (design === 'wc2014') {
-    const barW = 360;
-    const barH = 36;
-    const left = centerX - barW / 2;
-
-    drawRoundedRect(ctx, left, top + 2, barW, barH, 12);
-    ctx.fillStyle = isWarning ? '#3b0d14' : '#f1f5f9';
-    ctx.fill();
-    ctx.lineWidth = isWarning ? 1.8 : 1.2;
-    ctx.strokeStyle = isWarning ? '#f87171' : '#94a3b8';
-    ctx.stroke();
-    ctx.shadowBlur = 0;
-
-    drawPatternFilledRoundedRect(ctx, left + 6, top + 6, 122, 28, 8, state.redKit, state.redColor);
-    drawKitLabelText(ctx, state.redAcronym.slice(0, 6), left + 18, top + 20, state.redKit, 'left');
-
-    drawPatternFilledRoundedRect(ctx, left + barW - 128, top + 6, 122, 28, 8, state.blueKit, state.blueColor);
-    drawKitLabelText(ctx, state.blueAcronym.slice(0, 6), left + barW - 18, top + 20, state.blueKit, 'right');
-
-    drawRoundedRect(ctx, centerX - 46, top + 4, 92, 32, 6);
-    ctx.fillStyle = '#1d4ed8';
-    ctx.fill();
-    ctx.font = '900 18px Inter, system-ui, sans-serif';
-    ctx.fillStyle = '#ffffff';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(`${state.redScore} - ${state.blueScore}`, centerX, top + 20);
-
-    // Emerald green bottom clock pill
-    drawRoundedRect(ctx, centerX - 38, top + 36, 76, 18, 9);
-    ctx.fillStyle = '#16a34a';
-    ctx.fill();
-    ctx.font = '800 11px "JetBrains Mono", monospace';
-    ctx.fillStyle = '#ffffff';
-    ctx.fillText(clockStr, centerX, top + 45);
-
-    if (state.isGoldenGoal) drawGoldenGoalEmblem(ctx, left + barW + 24, top + 20);
+    drawWc2014Scoreboard(ctx, state, centerX, top, clockStr, isWarning);
   } else if (design === 'wc2018') {
-    const barW = 392;
-    const barH = 38;
-    const left = centerX - barW / 2;
-
-    drawRoundedRect(ctx, left, top + 4, barW, barH, 6);
-    ctx.fillStyle = isWarning ? '#3b0d14' : '#0f172a';
-    ctx.fill();
-    ctx.lineWidth = isWarning ? 1.8 : 1.2;
-    ctx.strokeStyle = isWarning ? '#f87171' : '#facc15';
-    ctx.stroke();
-    ctx.shadowBlur = 0;
-
-    drawPatternFilledRoundedRect(ctx, left + 6, top + 8, 96, 30, 4, state.redKit, state.redColor);
-    drawKitLabelText(ctx, state.redAcronym.slice(0, 6), left + 16, top + 23, state.redKit, 'left');
-
-    const blueX = left + 202;
-    drawPatternFilledRoundedRect(ctx, blueX, top + 8, 96, 30, 4, state.blueKit, state.blueColor);
-    drawKitLabelText(ctx, state.blueAcronym.slice(0, 6), blueX + 86, top + 23, state.blueKit, 'right');
-
-    // Center score + gold diamond
-    ctx.font = '900 18px Inter, system-ui, sans-serif';
-    ctx.fillStyle = '#f8fafc';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(String(state.redScore), left + 122, top + 23);
-    ctx.fillText(String(state.blueScore), left + 180, top + 23);
-    ctx.fillStyle = '#facc15';
-    ctx.beginPath();
-    ctx.moveTo(left + 151, top + 16);
-    ctx.lineTo(left + 157, top + 23);
-    ctx.lineTo(left + 151, top + 30);
-    ctx.lineTo(left + 145, top + 23);
-    ctx.closePath();
-    ctx.fill();
-
-    // Right clock block
-    drawRoundedRect(ctx, left + barW - 84, top + 8, 78, 30, 4);
-    ctx.fillStyle = '#1d4ed8';
-    ctx.fill();
-    ctx.font = '800 13px "JetBrains Mono", monospace';
-    ctx.fillStyle = state.isGoldenGoal ? '#fde047' : '#ffffff';
-    ctx.fillText(clockStr, left + barW - 45, top + 23);
-
-    if (state.isGoldenGoal) drawGoldenGoalEmblem(ctx, left + barW + 24, top + 23);
+    drawWc2018Scoreboard(ctx, state, centerX, top, clockStr, isWarning);
   } else if (design === 'wc2022') {
-    const barW = 404;
-    const barH = 38;
-    const left = centerX - barW / 2;
-
-    drawRoundedRect(ctx, left, top + 4, barW, barH, 10);
-    ctx.fillStyle = isWarning ? '#450a0a' : '#580a26';
-    ctx.fill();
-    ctx.lineWidth = isWarning ? 1.8 : 1.2;
-    ctx.strokeStyle = isWarning ? '#f87171' : '#f8fafc';
-    ctx.stroke();
-    ctx.shadowBlur = 0;
-
-    // Left timer block
-    drawRoundedRect(ctx, left + 6, top + 8, 74, 30, 6);
-    ctx.fillStyle = '#3b0719';
-    ctx.fill();
-    ctx.font = '800 13px "JetBrains Mono", monospace';
-    ctx.fillStyle = state.isGoldenGoal ? '#fde047' : '#f8fafc';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(clockStr, left + 43, top + 23);
-
-    drawPatternFilledRoundedRect(ctx, left + 88, top + 8, 96, 30, 6, state.redKit, state.redColor);
-    drawKitLabelText(ctx, state.redAcronym.slice(0, 6), left + 98, top + 23, state.redKit, 'left');
-
-    drawPatternFilledRoundedRect(ctx, left + barW - 102, top + 8, 96, 30, 6, state.blueKit, state.blueColor);
-    drawKitLabelText(ctx, state.blueAcronym.slice(0, 6), left + barW - 16, top + 23, state.blueKit, 'right');
-
-    ctx.font = '900 18px Inter, system-ui, sans-serif';
-    ctx.fillStyle = '#ffffff';
-    ctx.fillText(String(state.redScore), left + 206, top + 23);
-    ctx.fillText(String(state.blueScore), left + 278, top + 23);
-
-    // Ornate white separator
-    ctx.fillStyle = '#f8fafc';
-    drawRoundedRect(ctx, left + 237, top + 14, 10, 18, 3);
-    ctx.fill();
-
-    if (state.isGoldenGoal) drawGoldenGoalEmblem(ctx, left + barW + 24, top + 23);
+    drawWc2022Scoreboard(ctx, state, centerX, top, clockStr, isWarning);
   } else {
-    // wc2026
-    const barW = 408;
-    const barH = 38;
-    const left = centerX - barW / 2;
-
-    drawRoundedRect(ctx, left, top + 4, barW, barH, 12);
-    ctx.fillStyle = isWarning ? '#3b0d14' : '#0f172a';
-    ctx.fill();
-    ctx.lineWidth = isWarning ? 1.8 : 1.2;
-    ctx.strokeStyle = isWarning ? '#f87171' : '#38bdf8';
-    ctx.stroke();
-    ctx.shadowBlur = 0;
-
-    // White left clock block
-    drawRoundedRect(ctx, left + 6, top + 8, 72, 30, 8);
-    ctx.fillStyle = '#f8fafc';
-    ctx.fill();
-    ctx.font = '900 13px "JetBrains Mono", monospace';
-    ctx.fillStyle = '#0f172a';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(clockStr, left + 42, top + 23);
-
-    drawPatternFilledRoundedRect(ctx, left + 86, top + 8, 96, 30, 7, state.redKit, state.redColor);
-    drawKitLabelText(ctx, state.redAcronym.slice(0, 6), left + 96, top + 23, state.redKit, 'left');
-
-    drawPatternFilledRoundedRect(ctx, left + barW - 102, top + 8, 96, 30, 7, state.blueKit, state.blueColor);
-    drawKitLabelText(ctx, state.blueAcronym.slice(0, 6), left + barW - 16, top + 23, state.blueKit, 'right');
-
-    ctx.font = '900 18px Inter, system-ui, sans-serif';
-    ctx.fillStyle = '#f8fafc';
-    ctx.fillText(String(state.redScore), left + 204, top + 23);
-    ctx.fillText(String(state.blueScore), left + 282, top + 23);
-
-    // Vertical "26" badge
-    drawRoundedRect(ctx, left + 231, top + 9, 24, 28, 5);
-    ctx.fillStyle = '#0ea5e9';
-    ctx.fill();
-    ctx.font = '900 11px Inter, system-ui, sans-serif';
-    ctx.fillStyle = '#ffffff';
-    ctx.fillText('26', left + 243, top + 23);
-
-    if (state.isGoldenGoal) drawGoldenGoalEmblem(ctx, left + barW + 24, top + 23);
+    drawWc2026Scoreboard(ctx, state, centerX, top, clockStr, isWarning);
   }
 
   ctx.restore();
@@ -1286,20 +2112,20 @@ function drawSlidingScoreEvents(
 }
 
 function drawChatOverlay(ctx: CanvasRenderingContext2D, state: ReplayHudOverlayState): void {
-  const lines = getVisibleReplayChat(state.chatMessages, state.currentTimeSec);
+  const lines = getVisibleReplayChat(state.chatMessages, state.currentTimeSec, Infinity, 3);
   if (lines.length === 0) return;
 
   ctx.save();
   const opacity = normalizeReplayOpacity(state.chatOpacity, 0.95);
   ctx.globalAlpha = opacity;
   const x = 16;
-  const lineHeight = 25;
-  const padY = 8;
+  const lineHeight = 18;
+  const padY = 5;
   const totalH = lines.length * lineHeight + padY * 2;
   const bottomMargin = state.showExtendedHud ? 46 : 16;
   const top = REPLAY_STAGE_HEIGHT - bottomMargin - totalH;
 
-  drawRoundedRect(ctx, x, top, 390, totalH, 10);
+  drawRoundedRect(ctx, x, top, 390, totalH, 8);
   ctx.fillStyle = 'rgba(9, 13, 22, 0.72)';
   ctx.fill();
   ctx.lineWidth = 1;
@@ -1310,7 +2136,7 @@ function drawChatOverlay(ctx: CanvasRenderingContext2D, state: ReplayHudOverlayS
   ctx.textAlign = 'left';
   lines.forEach((msg, idx) => {
     const y = top + padY + idx * lineHeight + lineHeight / 2;
-    ctx.font = '700 12px Inter, system-ui, sans-serif';
+    ctx.font = '700 11px Inter, system-ui, sans-serif';
     ctx.fillStyle =
       msg.kind === 'goal'
         ? '#fbbf24'
@@ -1326,7 +2152,7 @@ function drawChatOverlay(ctx: CanvasRenderingContext2D, state: ReplayHudOverlayS
     ctx.fillText(prefix, x + 12, y);
     const prefixW = ctx.measureText(prefix).width;
 
-    ctx.font = '500 12px Inter, system-ui, sans-serif';
+    ctx.font = '500 11px Inter, system-ui, sans-serif';
     ctx.fillStyle = msg.kind === 'goal' ? '#fef08a' : '#f1f5f9';
     ctx.fillText(msg.text.slice(0, 52), x + 12 + prefixW, y);
   });
@@ -1674,6 +2500,24 @@ function yieldCooperativeTick(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
+function applyReplayDiscRadii(
+  snapshot: GameStateSnapshot,
+  ballRadius?: number,
+  playerRadius?: number
+): GameStateSnapshot {
+  if (ballRadius === undefined && playerRadius === undefined) {
+    return snapshot;
+  }
+  return {
+    ...snapshot,
+    discs: snapshot.discs.map((d) => {
+      const isBall = d.team === 0 || (d.id === 0 && d.team !== 1 && d.team !== 2);
+      const radius = isBall ? ballRadius : playerRadius;
+      return radius !== undefined ? ({ ...d, radius } as GameStateSnapshot['discs'][number]) : d;
+    })
+  };
+}
+
 function renderSingleExportFrame(
   renderer: GameRenderer,
   ctx: CanvasRenderingContext2D,
@@ -1693,6 +2537,39 @@ function renderSingleExportFrame(
     applyReplayRendererKits(renderer, replay, activeKits);
   }
 
+  const hudState = deriveReplayHudTimelineState(replay, f0, currentTimeSec);
+  const modifiers = getActiveReplayModifiersAtTime(replay, currentTimeSec);
+
+  const discRendererAny = renderer.discRenderer as unknown as
+    | {
+        replayEmotes?: Map<number, { emoji: string; progress: number }>;
+        ballRadius?: number;
+        playerRadius?: number;
+      }
+    | undefined;
+  if (discRendererAny) {
+    if (modifiers.ballRadius !== undefined) {
+      discRendererAny.ballRadius = modifiers.ballRadius;
+    }
+    if (modifiers.playerRadius !== undefined) {
+      discRendererAny.playerRadius = modifiers.playerRadius;
+    }
+    if (!(discRendererAny.replayEmotes instanceof Map)) {
+      discRendererAny.replayEmotes = new Map<number, { emoji: string; progress: number }>();
+    } else {
+      discRendererAny.replayEmotes.clear();
+    }
+    for (const emote of hudState.activeEmotes) {
+      discRendererAny.replayEmotes.set(emote.playerId, {
+        emoji: emote.emoji,
+        progress: emote.progress
+      });
+    }
+  }
+
+  const renderSnap0 = applyReplayDiscRadii(f0.snapshot, modifiers.ballRadius, modifiers.playerRadius);
+  const renderSnap1 = applyReplayDiscRadii(f1.snapshot, modifiers.ballRadius, modifiers.playerRadius);
+
   renderer.camera.setZoom(effZoom);
   renderer.scale = effZoom;
 
@@ -1709,14 +2586,14 @@ function renderSingleExportFrame(
   if (typeof fixedStepFn === 'function') {
     fixedStepFn.call(
       renderer,
-      f0.snapshot,
-      f1.snapshot,
+      renderSnap0,
+      renderSnap1,
       alpha,
       followPlayerId ?? undefined,
       EXPORT_FIXED_DT_SEC
     );
   } else {
-    renderer.render(f0.snapshot, f1.snapshot, alpha, followPlayerId ?? undefined);
+    renderer.render(renderSnap0, renderSnap1, alpha, followPlayerId ?? undefined);
   }
 
   const dprScaleX = ctx.canvas.width / REPLAY_STAGE_WIDTH;
@@ -1725,7 +2602,7 @@ function renderSingleExportFrame(
   ctx.setTransform(dprScaleX, 0, 0, dprScaleY, 0, 0);
   renderReplayHudOverlay(
     ctx,
-    deriveReplayHudTimelineState(replay, f0, currentTimeSec),
+    hudState,
     REPLAY_STAGE_WIDTH,
     REPLAY_STAGE_HEIGHT
   );

@@ -900,15 +900,42 @@ describe('Task 6: Strict Host & Non-Host Parity Integration', () => {
     });
 
     it('wires applyPredictiveRenderSeparation, effectiveExtrapolationMs, and effectiveBall visuals in App.svelte', () => {
+      const snapshotDiscs = [
+        { id: 0, team: 0, x: 18, y: 0, vx: 0, vy: 0, radius: 5.8 },
+        { id: 2, team: 2, x: 120, y: 0, vx: 0, vy: 0, radius: 15 }
+      ];
       const localDisc = { x: 10, y: 0, vx: 120, vy: 0, radius: 15 };
-      const remoteOther = [
+      const remoteOther = snapshotDiscs.map((d) => ({ ...d }));
+      applyPredictiveRenderSeparation(localDisc, remoteOther, 420, 200, 85, 35);
+      expect(localDisc.x).toBeLessThan(10);
+      expect(remoteOther[0]!.x).toBeGreaterThan(18);
+      expect(
+        Math.hypot(remoteOther[0]!.x - localDisc.x, remoteOther[0]!.y - localDisc.y)
+      ).toBeGreaterThanOrEqual(localDisc.radius + remoteOther[0]!.radius - 1e-6);
+      expect(remoteOther[1]!.x).toBe(120);
+      // Cloned inputs preserve original snapshot objects without mutating them across frames
+      expect(snapshotDiscs[0]!.x).toBe(18);
+      expect(snapshotDiscs[1]!.x).toBe(120);
+
+      // 3-body overlap (local + ball + overlapping remote player) enforces 100% separation for all pairs
+      const squeezedSnapshot = [
         { id: 0, team: 0, x: 18, y: 0, vx: 0, vy: 0, radius: 5.8 },
         { id: 2, team: 2, x: 25, y: 0, vx: 0, vy: 0, radius: 15 }
       ];
-      applyPredictiveRenderSeparation(localDisc, remoteOther, 420, 200);
-      expect(localDisc.x).toBeLessThan(10);
-      expect(remoteOther[0]!.x).toBe(18);
-      expect(remoteOther[1]!.x).toBe(25);
+      const squeezedLocal = { x: 10, y: 0, vx: 120, vy: 0, radius: 15 };
+      const squeezedOther = squeezedSnapshot.map((d) => ({ ...d }));
+      applyPredictiveRenderSeparation(squeezedLocal, squeezedOther, 420, 200, 85, 35);
+      expect(
+        Math.hypot(squeezedOther[0]!.x - squeezedLocal.x, squeezedOther[0]!.y - squeezedLocal.y)
+      ).toBeGreaterThanOrEqual(squeezedLocal.radius + squeezedOther[0]!.radius - 1e-6);
+      expect(
+        Math.hypot(squeezedOther[0]!.x - squeezedOther[1]!.x, squeezedOther[0]!.y - squeezedOther[1]!.y)
+      ).toBeGreaterThanOrEqual(squeezedOther[0]!.radius + squeezedOther[1]!.radius - 1e-6);
+      expect(
+        Math.hypot(squeezedOther[1]!.x - squeezedLocal.x, squeezedOther[1]!.y - squeezedLocal.y)
+      ).toBeGreaterThan(15);
+      expect(squeezedSnapshot[0]!.x).toBe(18);
+      expect(squeezedSnapshot[1]!.x).toBe(25);
 
       const signaling = new SignalingClient('ws://localhost:8080', false);
       const netClient = new NetworkClient(signaling, 'GuestExtrapolation', 2);
@@ -919,6 +946,10 @@ describe('Task 6: Strict Host & Non-Host Parity Integration', () => {
 
       const appSrc = readClientFile('App.svelte');
       expect(appSrc).toContain('applyPredictiveRenderSeparation(');
+      expect(appSrc).toContain('sepOtherPool');
+      expect(appSrc).toContain('scratchDiscPool');
+      expect(appSrc).toContain('renderer.stadium.goalHalfHeight');
+      expect(appSrc).toContain('renderer.stadium.goalDepth');
       expect(appSrc).toContain('gameApp.networkClient.setAutoExtrapolationMs(effExtrapMs)');
       expect(appSrc).toContain('gameUI.effectiveBallSkin');
       expect(appSrc).toContain('gameUI.effectiveBallMode');
@@ -997,6 +1028,80 @@ describe('Task 6: Strict Host & Non-Host Parity Integration', () => {
       expect(appSrc).toContain('matchRecorder.recordScoreEvent(');
       expect(appSrc).toContain('matchRecorder.recordUiOverlay(');
       expect(appSrc).toContain('scoreboardDesign: gameUI.effectiveScoreboardDesign');
+    });
+
+    it('wires Wave-4 LXR3 emotes/modifiers, superadmin /var telemetry, and fpsCap/avatar/typing settings in App.svelte', () => {
+      const prevRole = userProfile.role;
+      const prevAuth = userProfile.isAuthenticated;
+      const prevGuest = userProfile.isGuest;
+      const prevShowVar = gameUI.showVarMonitor;
+
+      try {
+        userProfile.isAuthenticated = true;
+        userProfile.isGuest = false;
+        userProfile.role = 'jugador';
+        gameUI.registerUserRoleReader(() =>
+          userProfile?.isAuthenticated && !userProfile?.isGuest ? userProfile.role : 'jugador'
+        );
+        expect(gameUI.handleChatCommand('/var')).toBe(true);
+        expect(gameUI.showVarMonitor).toBe(false);
+
+        userProfile.role = 'superadmin';
+        expect(gameUI.handleChatCommand('/var')).toBe(true);
+        expect(gameUI.showVarMonitor).toBe(true);
+        expect(gameUI.handleChatCommand('/var')).toBe(true);
+        expect(gameUI.showVarMonitor).toBe(false);
+
+        matchRecorder.start(null, {
+          roomName: 'Wave4 Recorder',
+          stadiumId: 'mediano',
+          ballRadius: 7.2,
+          playerRadius: 16.5,
+          players: []
+        });
+        matchRecorder.recordFrame({
+          tick: 1,
+          phase: MatchPhase.PLAYING,
+          matchTimer: 1,
+          redScore: 0,
+          blueScore: 0,
+          soundMask: 0,
+          discs: [{ id: 0, team: 0, x: 0, y: 0, vx: 0, vy: 0, flags: 0 }]
+        });
+        matchRecorder.recordEmote(1, '🔥', 2200);
+        matchRecorder.recordModifiers(8.4, 17.5);
+        const clip = matchRecorder.stop();
+        expect(clip?.magic).toBe('LXR3');
+        if (clip?.magic !== 'LXR3') throw new Error('Expected LXR3');
+        expect(clip.ballRadius).toBe(7.2);
+        expect(clip.playerRadius).toBe(16.5);
+        expect(clip.hudEvents.some((e) => e.type === 'emote' && e.payload.emoji === '🔥')).toBe(true);
+        expect(
+          clip.hudEvents.some(
+            (e) =>
+              e.type === 'modifiers_updated' &&
+              e.payload.ballRadius === 8.4 &&
+              e.payload.playerRadius === 17.5
+          )
+        ).toBe(true);
+
+        const appSrc = readClientFile('App.svelte');
+        expect(appSrc).toContain('matchRecorder.recordEmote(playerId, emoji, 2200)');
+        expect(appSrc).toContain('ballRadius: gameUI.physicsModifiers.ballRadius');
+        expect(appSrc).toContain('playerRadius: gameUI.physicsModifiers.playerRadius');
+        expect(appSrc).toContain('matchRecorder.recordModifiers(');
+        expect(appSrc).toContain('gameUI.registerUserRoleReader(');
+        expect(appSrc).toContain('gameUI.varTelemetry');
+        expect(appSrc).toContain('lastRenderedFrameTimeMs');
+        expect(appSrc).toContain('gameUI.settings.fpsCap');
+        expect(appSrc).toContain('showTypingIndicator');
+        expect(appSrc).toContain('showPlayerAvatars');
+      } finally {
+        userProfile.role = prevRole;
+        userProfile.isAuthenticated = prevAuth;
+        userProfile.isGuest = prevGuest;
+        gameUI.showVarMonitor = prevShowVar;
+      }
     });
   });
 });

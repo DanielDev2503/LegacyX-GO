@@ -35,6 +35,8 @@ export class NetworkHost {
   private pendingNicknames = new Map<string, string>();
   private players = new Map<number, PlayerInfo>();
   private bannedPeerIds = new Set<string>();
+  private lastChatAtByPlayerId = new Map<number, number>();
+  private pendingClosePeers = new Map<ReturnType<typeof setTimeout>, PeerConnection>();
   private nextPlayerId = 2; // 1 is reserved for Host local player
   private iceServers: RTCIceServer[] = [];
   public teamsLocked = false;
@@ -514,9 +516,15 @@ export class NetworkHost {
         this.onPlayersUpdated?.(this.getPlayers());
         this.broadcastRoomStateSync();
       }
-    } else if (msg.type === 'CHAT') {
+    } else if (msg.type === 'CHAT' || msg.type === 'CHAT_MSG') {
+      const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+      const lastChatAt = this.lastChatAtByPlayerId.get(playerId) ?? -Infinity;
+      if (now - lastChatAt < 450) {
+        return;
+      }
       const text = String(msg.text || '').trim().slice(0, 140);
       if (text) {
+        this.lastChatAtByPlayerId.set(playerId, now);
         const msgId = typeof msg.id === 'string'
           ? msg.id
           : `${playerId}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
@@ -711,24 +719,52 @@ export class NetworkHost {
       this.bannedPeerIds.add(target.peerId);
     }
 
+    const reason = ban
+      ? 'Has sido baneado de la sala por el anfitrión.'
+      : 'Has sido expulsado de la sala por el anfitrión.';
+
     const peer = this.peers.get(target.peerId);
     if (peer) {
       peer.sendReliable({
         type: ban ? 'PLAYER_BANNED' : 'PLAYER_KICKED',
-        reason: ban ? 'Banned by admin' : 'Kicked by admin'
+        roomId: this.roomId,
+        roomName: this.roomName,
+        reason
       });
     }
+
+    this.signaling?.send?.({
+      type: 'ROOM_MODERATION_ACTION',
+      action: ban ? 'ban' : 'kick',
+      roomId: this.roomId,
+      targetPeerId: target.peerId,
+      reason
+    });
+
     const targetName = target.name || target.nickname;
+    this.handlePeerDisconnect(target.peerId, true, true);
     this.broadcastSystemNotice(ban ? `${targetName} ha sido baneado de la sala` : `${targetName} ha sido expulsado de la sala`);
-    this.handlePeerDisconnect(target.peerId, true);
     return true;
   }
 
-  private handlePeerDisconnect(peerId: string, wasKickedOrBanned: boolean = false): void {
+  private handlePeerDisconnect(
+    peerId: string,
+    wasKickedOrBanned: boolean = false,
+    deferClose: boolean = false
+  ): void {
     const peer = this.peers.get(peerId);
     if (peer) {
-      peer.close();
       this.peers.delete(peerId);
+      if (deferClose) {
+        // Defer closing the RTCPeerConnection slightly so the reliable moderation packet flushes first.
+        const timer = setTimeout(() => {
+          this.pendingClosePeers.delete(timer);
+          peer.close();
+        }, 120);
+        this.pendingClosePeers.set(timer, peer);
+      } else {
+        peer.close();
+      }
     }
     this.pendingNicknames.delete(peerId);
 
@@ -738,6 +774,7 @@ export class NetworkHost {
       const pName = p ? (p.name || p.nickname) : `Player ${playerId}`;
       this.peerToPlayerId.delete(peerId);
       this.players.delete(playerId);
+      this.lastChatAtByPlayerId.delete(playerId);
       if (!wasKickedOrBanned) {
         this.broadcastSystemNotice(`${pName} ha abandonado la sala`);
       }
@@ -855,6 +892,7 @@ export class NetworkHost {
     this.broadcastReliable({
       type: 'ROOM_CLOSED',
       roomId: this.roomId,
+      roomName: this.roomName,
       reason: 'El anfitrión ha abandonado la sala.'
     });
     this.destroy();
@@ -863,6 +901,11 @@ export class NetworkHost {
   public destroy(): void {
     this.cleanupSignalingListeners();
     this.activeGoalScorerId = null;
+    for (const [timer, deferredPeer] of this.pendingClosePeers.entries()) {
+      clearTimeout(timer);
+      deferredPeer.close();
+    }
+    this.pendingClosePeers.clear();
     for (const probeKey of [...this.probePeers.keys()]) {
       this.cleanupProbePeer(probeKey);
     }
@@ -870,5 +913,6 @@ export class NetworkHost {
     this.peers.clear();
     this.peerToPlayerId.clear();
     this.pendingNicknames.clear();
+    this.lastChatAtByPlayerId.clear();
   }
 }

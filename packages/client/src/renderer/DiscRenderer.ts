@@ -136,6 +136,13 @@ export class DiscRenderer {
   public stadiumBounds: { halfWidth: number; halfHeight: number; goalDepth: number; goalHalfHeight: number } | null = null;
   public dampingBall: number = 0.99;
   public dampingPlayer: number = 0.96;
+  public showTypingIndicator: boolean = true;
+  public showPlayerAvatars: boolean = true;
+  public replayEmotes = new Map<number, { emoji: string; progress: number }>();
+
+  // Reusable per-frame scratch buffers to avoid GC allocations during render()
+  private frameRenderDiscs: DiscSnapshot[] = [];
+  private activeTurboIds = new Set<number>();
 
   private scratchDisc: DiscSnapshot = {
     id: 0,
@@ -243,11 +250,97 @@ export class DiscRenderer {
     s.spin = disc.spin;
     s.isSpinActive = disc.isSpinActive;
     s.curveFactor = disc.curveFactor;
+    s.isPowerShot = disc.isPowerShot;
     return s;
   }
 
   public draw(ctx: CanvasRenderingContext2D, discs: DiscSnapshot[], localDiscId?: number | null): void {
     this.render(ctx, discs, localDiscId);
+  }
+
+  private populateFrameRenderDiscs(discs: DiscSnapshot[], localDiscId?: number | null): void {
+    for (let i = 0; i < discs.length; i++) {
+      const disc = discs[i]!;
+      const isRemote = disc.team === 0 ? true : disc.id !== localDiscId;
+      const renderD = this.getRenderDisc(disc, isRemote);
+      let slot = this.frameRenderDiscs[i];
+      if (!slot) {
+        slot = {
+          id: 0,
+          x: 0,
+          y: 0,
+          vx: 0,
+          vy: 0,
+          radius: 0,
+          team: 0,
+          avatar: '',
+          kicking: false,
+          stamina: 100,
+          isDashing: false,
+          isTurbo: false,
+          isTyping: false
+        };
+        this.frameRenderDiscs[i] = slot;
+      }
+      slot.id = renderD.id;
+      slot.x = renderD.x;
+      slot.y = renderD.y;
+      slot.vx = renderD.vx;
+      slot.vy = renderD.vy;
+      slot.radius = renderD.radius;
+      slot.team = renderD.team;
+      slot.avatar = renderD.avatar;
+      slot.kicking = renderD.kicking;
+      slot.stamina = renderD.stamina;
+      slot.isDashing = renderD.isDashing;
+      slot.isTurbo = renderD.isTurbo;
+      slot.isTyping = renderD.isTyping;
+      slot.spin = renderD.spin;
+      slot.isSpinActive = renderD.isSpinActive;
+      slot.curveFactor = renderD.curveFactor;
+      slot.isPowerShot = renderD.isPowerShot ?? disc.isPowerShot;
+      if ((disc as any).isKicking !== undefined || 'isKicking' in slot) {
+        (slot as any).isKicking = (disc as any).isKicking;
+      }
+    }
+    this.frameRenderDiscs.length = discs.length;
+  }
+
+  /**
+   * Render-only circle-circle separation guard preventing extrapolated balls and players
+   * from visually overlapping on screen without mutating the authoritative input snapshots.
+   */
+  private separateFrameDiscs(): void {
+    const count = this.frameRenderDiscs.length;
+    for (let i = 0; i < count; i++) {
+      const ball = this.frameRenderDiscs[i]!;
+      if (ball.team !== 0) continue;
+      const ballR = ball.radius || this.ballRadius;
+
+      for (let j = 0; j < count; j++) {
+        const p = this.frameRenderDiscs[j]!;
+        if (p.team === 0) continue;
+
+        const dx = ball.x - p.x;
+        const dy = ball.y - p.y;
+        const dist = Math.hypot(dx, dy);
+        const minDist = ballR + (p.radius || this.playerRadius);
+
+        if (dist < minDist - 0.001) {
+          let nx = 1;
+          let ny = 0;
+          if (dist >= 1e-4) {
+            nx = dx / dist;
+            ny = dy / dist;
+          }
+          const overlap = minDist - dist;
+          ball.x += nx * overlap * 0.72;
+          ball.y += ny * overlap * 0.72;
+          p.x -= nx * overlap * 0.28;
+          p.y -= ny * overlap * 0.28;
+        }
+      }
+    }
   }
 
   public render(
@@ -257,33 +350,38 @@ export class DiscRenderer {
   ): void {
     ctx.save();
 
-    const activeTurboIds = new Set<number>();
-    for (const disc of discs) {
-      if (disc.team !== 0) {
-        const isRemote = disc.id !== localDiscId;
-        const renderD = this.getRenderDisc(disc, isRemote);
-        if (disc.isDashing) {
-          this.recordDashGhost(renderD);
-        }
-        if (disc.isTurbo) {
-          activeTurboIds.add(disc.id);
-          this.recordRibbonPoint(renderD);
-          this.emitTurboParticle(renderD);
-        }
+    this.populateFrameRenderDiscs(discs, localDiscId);
+    this.separateFrameDiscs();
+
+    const renderCount = this.frameRenderDiscs.length;
+    this.activeTurboIds.clear();
+    let ballDisc: DiscSnapshot | undefined;
+
+    for (let i = 0; i < renderCount; i++) {
+      const renderD = this.frameRenderDiscs[i]!;
+      if (renderD.team === 0) {
+        if (!ballDisc) ballDisc = renderD;
+        continue;
+      }
+      if (renderD.isDashing) {
+        this.recordDashGhost(renderD);
+      }
+      if (renderD.isTurbo) {
+        this.activeTurboIds.add(renderD.id);
+        this.recordRibbonPoint(renderD);
+        this.emitTurboParticle(renderD);
       }
     }
 
     for (const [id, buf] of this.ribbonMap.entries()) {
-      if (!activeTurboIds.has(id) && buf.count > 0) {
+      if (!this.activeTurboIds.has(id) && buf.count > 0) {
         buf.count--;
       }
     }
 
-    const ballDisc = discs.find((d) => d.team === 0);
     if (ballDisc) {
-      const renderBall = this.getRenderDisc(ballDisc, true);
-      const bx = renderBall.x;
-      const by = renderBall.y;
+      const bx = ballDisc.x;
+      const by = ballDisc.y;
       const spinVal = ballDisc.spin ?? (ballDisc.curveFactor ? ballDisc.curveFactor / 10 : 0);
       const isSpinning = Math.abs(spinVal) > 0.001;
       if (isSpinning) {
@@ -303,30 +401,29 @@ export class DiscRenderer {
     this.renderTurboParticles(ctx);
     this.renderDashGhosts(ctx);
     if (ballDisc) {
-      this.renderBallMagnusTrail(ctx, ballDisc.radius || 5.8);
-      this.renderBallPowerTrail(ctx, ballDisc.radius || 5.8);
+      const ballRadius = ballDisc.radius || this.ballRadius;
+      this.renderBallMagnusTrail(ctx, ballRadius);
+      this.renderBallPowerTrail(ctx, ballRadius);
     }
 
-    for (const disc of discs) {
-      if (disc.team !== 0) {
-        const isRemote = disc.id !== localDiscId;
-        const renderD = this.getRenderDisc(disc, isRemote);
+    for (let i = 0; i < renderCount; i++) {
+      const renderD = this.frameRenderDiscs[i]!;
+      if (renderD.team !== 0) {
         this.renderStaminaBar(ctx, renderD);
       }
     }
 
-    for (const disc of discs) {
-      if (disc.team !== 0) {
-        const isRemote = disc.id !== localDiscId;
-        const renderD = this.getRenderDisc(disc, isRemote);
-        const info = this.playerInfos.get(disc.id);
-        this.renderPlayerDisc(ctx, renderD, disc.id === localDiscId, false, info?.nickname, info);
+    for (let i = 0; i < renderCount; i++) {
+      const renderD = this.frameRenderDiscs[i]!;
+      if (renderD.team !== 0) {
+        const info = this.playerInfos.get(renderD.id);
+        this.renderPlayerDisc(ctx, renderD, renderD.id === localDiscId, false, info?.nickname, info);
       }
     }
 
-    for (const disc of discs) {
-      if (disc.team === 0) {
-        const renderD = this.getRenderDisc(disc, true);
+    for (let i = 0; i < renderCount; i++) {
+      const renderD = this.frameRenderDiscs[i]!;
+      if (renderD.team === 0) {
         this.renderBallDisc(ctx, renderD);
       }
     }
@@ -823,43 +920,45 @@ export class DiscRenderer {
     ctx.restore();
 
     // 2. Avatar centrado (máximo 2 caracteres en Space Grotesk / Chivo bold o emoji nítido)
-    const rawAv = (visualInfo?.avatar || avatar || '').trim();
-    if (rawAv && typeof ctx.fillText === 'function') {
-      ctx.save();
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
+    if (this.showPlayerAvatars !== false) {
+      const rawAv = (visualInfo?.avatar || avatar || '').trim();
+      if (rawAv && typeof ctx.fillText === 'function') {
+        ctx.save();
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
 
-      const isEmoji =
-        visualInfo?.avatarType === 'emoji' ||
-        /[\p{Emoji_Presentation}\p{Extended_Pictographic}]/u.test(rawAv);
+        const isEmoji =
+          visualInfo?.avatarType === 'emoji' ||
+          /[\p{Emoji_Presentation}\p{Extended_Pictographic}]/u.test(rawAv);
 
-      if (isEmoji) {
-        const glyphs = Array.from(rawAv);
-        const emojiChar = glyphs[0] || rawAv;
-        ctx.font = `${Math.round(radius * 1.05)}px "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif`;
-        ctx.fillText(emojiChar, x, y);
-      } else {
-        const textAv = Array.from(rawAv).slice(0, 2).join('');
-        ctx.font = `bold ${Math.round(radius * 0.85)}px "Space Grotesk", "Chivo", sans-serif`;
+        if (isEmoji) {
+          const glyphs = Array.from(rawAv);
+          const emojiChar = glyphs[0] || rawAv;
+          ctx.font = `${Math.round(radius * 1.05)}px "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif`;
+          ctx.fillText(emojiChar, x, y);
+        } else {
+          const textAv = Array.from(rawAv).slice(0, 2).join('');
+          ctx.font = `bold ${Math.round(radius * 0.85)}px "Space Grotesk", "Chivo", sans-serif`;
 
-        const hasOutline =
-          visualInfo?.hasOutline ??
-          (kit?.hasOutline !== undefined
-            ? Boolean(kit.hasOutline)
-            : visualInfo?.outlineColor !== 'none' &&
-              visualInfo?.outlineColor !== 'transparent' &&
-              visualInfo?.outlineColor !== '');
+          const hasOutline =
+            visualInfo?.hasOutline ??
+            (kit?.hasOutline !== undefined
+              ? Boolean(kit.hasOutline)
+              : visualInfo?.outlineColor !== 'none' &&
+                visualInfo?.outlineColor !== 'transparent' &&
+                visualInfo?.outlineColor !== '');
 
-        if (hasOutline && typeof ctx.strokeText === 'function') {
-          ctx.strokeStyle = '#000000';
-          ctx.lineWidth = 2.2;
-          ctx.lineJoin = 'round';
-          ctx.strokeText(textAv, x, y);
+          if (hasOutline && typeof ctx.strokeText === 'function') {
+            ctx.strokeStyle = '#000000';
+            ctx.lineWidth = 2.2;
+            ctx.lineJoin = 'round';
+            ctx.strokeText(textAv, x, y);
+          }
+          ctx.fillStyle = tertiaryColor || '#FFFFFF';
+          ctx.fillText(textAv, x, y);
         }
-        ctx.fillStyle = tertiaryColor || '#FFFFFF';
-        ctx.fillText(textAv, x, y);
+        ctx.restore();
       }
-      ctx.restore();
     }
 
     // 3. Única barra circular de estamina
@@ -868,54 +967,100 @@ export class DiscRenderer {
     }
 
     // Indicadores flotantes discretos de chat / emote
-    if (disc.isTyping) {
+    if (disc.isTyping && this.showTypingIndicator !== false) {
       this.renderTypingBubble(ctx, disc);
     }
 
     const pitchEmote = activePitchEmotes.get(disc.id);
     const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    let renderedLiveEmote = false;
     if (pitchEmote) {
       if (pitchEmote.expiresAt > now) {
         const remaining = pitchEmote.expiresAt - now;
         const bounce = Math.sin((remaining / 200) * Math.PI) * 2;
-        const bubbleW = 34;
-        const bubbleH = 26;
-        const bx = x - bubbleW / 2;
-        const by = y - radius - 24 + bounce;
-
-        ctx.save();
-        ctx.fillStyle = 'rgba(10, 16, 26, 0.95)';
-        ctx.strokeStyle = 'rgba(0, 229, 255, 0.5)';
-        ctx.lineWidth = 1.0;
-
-        const br = 5;
-        ctx.beginPath();
-        ctx.moveTo(bx + br, by);
-        ctx.lineTo(bx + bubbleW - br, by);
-        ctx.quadraticCurveTo(bx + bubbleW, by, bx + bubbleW, by + br);
-        ctx.lineTo(bx + bubbleW, by + bubbleH - br);
-        ctx.quadraticCurveTo(bx + bubbleW, by + bubbleH, bx + bubbleW - br, by + bubbleH);
-        ctx.lineTo(x + 4, by + bubbleH);
-        ctx.lineTo(x, by + bubbleH + 4);
-        ctx.lineTo(x - 4, by + bubbleH);
-        ctx.lineTo(bx + br, by + bubbleH);
-        ctx.quadraticCurveTo(bx, by + bubbleH, bx, by + bubbleH - br);
-        ctx.lineTo(bx, by + br);
-        ctx.quadraticCurveTo(bx, by, bx + br, by);
-        ctx.closePath();
-        ctx.fill();
-        ctx.stroke();
-
-        ctx.font = '18px "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillText(pitchEmote.emoji, x, by + bubbleH / 2);
-        ctx.restore();
+        this.renderEmoteBubble(ctx, x, y, radius, pitchEmote.emoji, bounce, 1, 1);
+        renderedLiveEmote = true;
       } else {
         activePitchEmotes.delete(disc.id);
       }
     }
 
+    if (!renderedLiveEmote) {
+      const replayEmote = this.replayEmotes.get(disc.id);
+      if (replayEmote) {
+        const p = Math.max(0, Math.min(1, replayEmote.progress));
+        const alpha = p > 0.78 ? Math.max(0, (1 - p) / 0.22) : 1;
+        if (alpha > 0.01) {
+          let bounce = 0;
+          let scale = 1;
+          if (p < 0.18) {
+            const t = p / 0.18;
+            bounce = -Math.sin(t * Math.PI) * 4;
+            scale = 0.65 + 0.35 * (1 - Math.pow(1 - t, 3)) + Math.sin(t * Math.PI) * 0.14;
+          } else {
+            bounce = Math.sin(p * Math.PI * 6) * 1.5;
+          }
+          this.renderEmoteBubble(ctx, x, y, radius, replayEmote.emoji, bounce, alpha, scale);
+        }
+      }
+    }
+
+    ctx.restore();
+  }
+
+  private renderEmoteBubble(
+    ctx: CanvasRenderingContext2D,
+    x: number,
+    y: number,
+    radius: number,
+    emoji: string,
+    bounce: number,
+    alpha: number,
+    scale: number
+  ): void {
+    const bubbleW = 34;
+    const bubbleH = 26;
+    const bx = x - bubbleW / 2;
+    const by = y - radius - 24 + bounce;
+
+    ctx.save();
+    if (alpha < 1) {
+      ctx.globalAlpha = (ctx.globalAlpha ?? 1) * alpha;
+    }
+    if (scale !== 1 && typeof ctx.translate === 'function' && typeof ctx.scale === 'function') {
+      const cx = x;
+      const cy = by + bubbleH / 2;
+      ctx.translate(cx, cy);
+      ctx.scale(scale, scale);
+      ctx.translate(-cx, -cy);
+    }
+
+    ctx.fillStyle = 'rgba(10, 16, 26, 0.95)';
+    ctx.strokeStyle = 'rgba(0, 229, 255, 0.5)';
+    ctx.lineWidth = 1.0;
+
+    const br = 5;
+    ctx.beginPath();
+    ctx.moveTo(bx + br, by);
+    ctx.lineTo(bx + bubbleW - br, by);
+    ctx.quadraticCurveTo(bx + bubbleW, by, bx + bubbleW, by + br);
+    ctx.lineTo(bx + bubbleW, by + bubbleH - br);
+    ctx.quadraticCurveTo(bx + bubbleW, by + bubbleH, bx + bubbleW - br, by + bubbleH);
+    ctx.lineTo(x + 4, by + bubbleH);
+    ctx.lineTo(x, by + bubbleH + 4);
+    ctx.lineTo(x - 4, by + bubbleH);
+    ctx.lineTo(bx + br, by + bubbleH);
+    ctx.quadraticCurveTo(bx, by + bubbleH, bx, by + bubbleH - br);
+    ctx.lineTo(bx, by + br);
+    ctx.quadraticCurveTo(bx, by, bx + br, by);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.font = '18px "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(emoji, x, by + bubbleH / 2);
     ctx.restore();
   }
 

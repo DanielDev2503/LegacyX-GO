@@ -15,10 +15,10 @@ export class SoundFX {
   private keepAliveGain: GainNode | null = null;
 
   private _isMuted: boolean = false;
-  private _volume: number = 0.5;
-  private _chatVolume: number = 0.7;
-  private _sfxVolume: number = 0.7;
-  private _envVolume: number = 0.5;
+  private _volume: number = 1.0;
+  private _chatVolume: number = 1.0;
+  private _sfxVolume: number = 1.0;
+  private _envVolume: number = 1.0;
 
   // Canal 2: Chat y Social
   public chatNormalSoundEnabled: boolean = true;

@@ -246,11 +246,31 @@
     });
   }
 
-  function handleSendChat() {
+  function blurHudControl(event?: Event) {
+    (event?.currentTarget as HTMLElement | null)?.blur?.();
+    if (typeof document !== 'undefined') {
+      (document.activeElement as HTMLElement | null)?.blur?.();
+    }
+  }
+
+  function preventHudButtonKeyActivation(e: KeyboardEvent) {
+    if (e.code === 'Space' || e.key === ' ' || e.key === 'Enter') {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+  }
+
+  function handleSendChat(event?: Event) {
+    const triggerEl = event?.currentTarget as HTMLElement | null;
+    if (triggerEl && triggerEl !== chatInputEl) {
+      triggerEl.blur?.();
+    }
+
     const text = chatMessage.trim();
     if (text) {
-      soundFX.playUIClick();
+      // Local slash commands (/var, /extrapolation) bypass chat spam cooldown
       if (gameUI.handleChatCommand(text)) {
+        soundFX.playUIClick();
         chatMessage = '';
         chatCursor = 0;
         isChatInputActive = false;
@@ -258,6 +278,12 @@
         chatInputEl?.blur();
         return;
       }
+      if (!gameUI.canSendChatNow()) {
+        gameUI.triggerChatCooldownNotice();
+        return;
+      }
+      soundFX.playUIClick();
+      gameUI.markChatSent();
       if (gameUI.onChatSent) {
         gameUI.onChatSent(text);
       }
@@ -360,17 +386,20 @@
     };
   });
 
-  function toggleAudio() {
+  function toggleAudio(event?: Event) {
+    blurHudControl(event);
     soundFX.playUIClick();
     gameUI.toggleMute();
   }
 
-  function toggleRoomMenu() {
+  function toggleRoomMenu(event?: Event) {
+    blurHudControl(event);
     soundFX.playUIClick();
     gameUI.toggleRoomMenu();
   }
 
-  function openSettings() {
+  function openSettings(event?: Event) {
+    blurHudControl(event);
     soundFX.playUIClick();
     gameUI.openOverlay('SETTINGS');
   }
@@ -384,7 +413,8 @@
     }, 3800);
   }
 
-  function openReplayViewer() {
+  function openReplayViewer(event?: Event) {
+    blurHudControl(event);
     soundFX.playUIClick();
     if (userProfile.isGuest || !userProfile.isAuthenticated) {
       showRecAuthWarning();
@@ -393,7 +423,8 @@
     gameUI.openOverlay('REPLAY_VIEWER');
   }
 
-  function toggleMatchRecording() {
+  function toggleMatchRecording(event?: Event) {
+    blurHudControl(event);
     soundFX.playUIClick();
     if (!matchRecorder.isRecording && (userProfile.isGuest || !userProfile.isAuthenticated)) {
       showRecAuthWarning();
@@ -416,6 +447,8 @@
       ballMode: gameUI.effectiveBallMode,
       ballSkin: gameUI.effectiveBallSkin as any,
       ballCustomColor: gameUI.effectiveBallCustomColor,
+      ballRadius: gameUI.physicsModifiers.ballRadius,
+      playerRadius: gameUI.physicsModifiers.playerRadius,
       chatOpacity: rawChatOpacity > 1 ? rawChatOpacity / 100 : rawChatOpacity,
       minimapEnabled: gameUI.settings.minimapEnabled !== false,
       minimapOpacity: rawMinimapOpacity > 1 ? rawMinimapOpacity / 100 : rawMinimapOpacity,
@@ -545,6 +578,7 @@
         title="Ver Repeticiones guardadas"
         aria-label="Ver Repeticiones"
         onmouseenter={() => soundFX.playUIHover()}
+        onkeydown={preventHudButtonKeyActivation}
         onclick={openReplayViewer}
       >
         <svg class="replay-btn-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
@@ -558,9 +592,11 @@
         id="btn-hud-record"
         class="hud-rec-btn"
         class:is-recording={matchRecorder.isRecording}
+        tabindex="-1"
         title={matchRecorder.isRecording ? 'Detener grabación' : 'Grabar partida en vivo'}
         aria-label={matchRecorder.isRecording ? 'Detener grabación' : 'Iniciar grabación'}
         onmouseenter={() => soundFX.playUIHover()}
+        onkeydown={preventHudButtonKeyActivation}
         onclick={toggleMatchRecording}
       >
         {#if matchRecorder.isRecording}
@@ -587,6 +623,7 @@
         title={gameUI.isAudioMuted ? 'Activar Sonido' : 'Silenciar Todo'}
         aria-label="Audio / Silenciar"
         onmouseenter={() => soundFX.playUIHover()}
+        onkeydown={preventHudButtonKeyActivation}
         onclick={toggleAudio}
       >
         {#if gameUI.isAudioMuted}
@@ -611,6 +648,7 @@
         title="Menú de Sala [Esc]"
         aria-label="Menú de Sala"
         onmouseenter={() => soundFX.playUIHover()}
+        onkeydown={preventHudButtonKeyActivation}
         onclick={toggleRoomMenu}
       >
         <svg class="hud-btn-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -627,6 +665,7 @@
         title="Ajustes Generales"
         aria-label="Ajustes"
         onmouseenter={() => soundFX.playUIHover()}
+        onkeydown={preventHudButtonKeyActivation}
         onclick={openSettings}
       >
         <svg class="hud-btn-svg text-cyan" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -845,6 +884,66 @@
   </div>
 
   <!-- ========================================== -->
+  <!-- 2.5 MONITOR TELEMETRÍA /var (SUPERADMIN)   -->
+  <!-- ========================================== -->
+  {#if gameUI.showVarMonitor}
+    <aside id="hud-var-monitor" class="var-monitor-panel" aria-label="Monitor de telemetría VAR en vivo">
+      <div class="var-monitor-header">
+        <span class="var-live-badge">
+          <span class="var-pulse-dot" aria-hidden="true"></span>
+          <span>LIVE VAR</span>
+        </span>
+        <button
+          type="button"
+          class="var-close-btn"
+          title="Cerrar monitor VAR"
+          aria-label="Cerrar monitor VAR"
+          tabindex="-1"
+          onkeydown={preventHudButtonKeyActivation}
+          onclick={(event) => {
+            gameUI.showVarMonitor = false;
+            blurHudControl(event);
+          }}
+        >✕</button>
+      </div>
+
+      <div class="var-monitor-body">
+        <div class="var-entity-block">
+          <div class="var-entity-head">
+            <span class="var-entity-label">Balón</span>
+            <span class="var-coords">
+              ({Math.round(gameUI.varTelemetry.ballX)}, {Math.round(gameUI.varTelemetry.ballY)})
+            </span>
+          </div>
+          <div class="var-metrics-row">
+            <span class="var-metric-primary">{gameUI.varTelemetry.ballSpeedKmh.toFixed(1)} km/h</span>
+            <span class="var-metric-secondary">{Math.round(gameUI.varTelemetry.ballSpeedPx)} px/s</span>
+          </div>
+        </div>
+
+        <div class="var-entity-block">
+          <div class="var-entity-head">
+            <span class="var-entity-label">Jugador</span>
+            <span class="var-coords">
+              ({Math.round(gameUI.varTelemetry.playerX)}, {Math.round(gameUI.varTelemetry.playerY)})
+            </span>
+          </div>
+          <div class="var-metrics-row">
+            <span class="var-metric-primary var-emerald">{gameUI.varTelemetry.playerSpeedKmh.toFixed(1)} km/h</span>
+            <span class="var-metric-secondary">{Math.round(gameUI.varTelemetry.playerSpeedPx)} px/s</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="var-monitor-footer">
+        <span class="var-footer-item">Tick: <strong>{gameUI.varTelemetry.tick}</strong></span>
+        <span class="var-footer-sep">|</span>
+        <span class="var-footer-item">Ping: <strong>{gameUI.varTelemetry.ping} ms</strong></span>
+      </div>
+    </aside>
+  {/if}
+
+  <!-- ========================================== -->
   <!-- 3. CHAT TÁCTICO FLOTANTE (ADAPTATIVO)      -->
   <!-- ========================================== -->
   <div
@@ -930,7 +1029,7 @@
       </div>
     {/if}
 
-    <div class="chat-input-bar">
+    <div class="chat-input-bar" class:is-cooldown={gameUI.chatCooldownActive}>
       <input
         bind:this={chatInputEl}
         type="text"
@@ -951,10 +1050,16 @@
           gameUI.isChatFocused = false;
         }}
       />
+      {#if gameUI.chatCooldownActive}
+        <span class="chat-cooldown-pill" role="status" aria-live="polite">0.5s</span>
+      {/if}
       <button
         type="button"
         class="chat-send-trigger"
+        class:is-cooldown={gameUI.chatCooldownActive}
+        tabindex="-1"
         aria-label="Enviar Mensaje"
+        onkeydown={preventHudButtonKeyActivation}
         onclick={handleSendChat}
       >
         <span>ENVIAR</span>
@@ -1601,6 +1706,160 @@
     margin: 0 0.1rem;
   }
 
+  /* ========================================== */
+  /* MONITOR TELEMETRÍA /var (SUPERADMIN)       */
+  /* ========================================== */
+  .var-monitor-panel {
+    pointer-events: auto;
+    position: fixed;
+    top: 56px;
+    right: 16px;
+    z-index: 42;
+    width: 268px;
+    background: rgba(8, 13, 24, 0.92);
+    border: 1px solid rgba(0, 229, 255, 0.45);
+    border-radius: 0.5rem;
+    box-shadow: 0 10px 28px rgba(0, 0, 0, 0.78), 0 0 16px rgba(0, 229, 255, 0.14);
+    font-family: 'JetBrains Mono', monospace;
+    box-sizing: border-box;
+    overflow: hidden;
+  }
+
+  .var-monitor-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.38rem 0.65rem;
+    background: rgba(0, 229, 255, 0.08);
+    border-bottom: 1px solid rgba(0, 229, 255, 0.28);
+  }
+
+  .var-live-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    color: #2ecc71;
+    font-size: 0.68rem;
+    font-weight: 800;
+    letter-spacing: 0.09em;
+  }
+
+  .var-pulse-dot {
+    width: 0.42rem;
+    height: 0.42rem;
+    border-radius: 9999px;
+    background: #2ecc71;
+    box-shadow: 0 0 8px #2ecc71;
+    animation: pulseGlow 1.3s ease-in-out infinite;
+  }
+
+  .var-close-btn {
+    width: 1.3rem;
+    height: 1.3rem;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid rgba(148, 163, 184, 0.25);
+    border-radius: 0.28rem;
+    background: #0d1626;
+    color: #94a3b8;
+    font-size: 0.68rem;
+    font-weight: 700;
+    line-height: 1;
+    cursor: pointer;
+    transition: border-color 0.15s ease, color 0.15s ease;
+  }
+
+  .var-close-btn:hover {
+    border-color: #ff3366;
+    color: #ffffff;
+  }
+
+  .var-monitor-body {
+    padding: 0.5rem 0.65rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+  }
+
+  .var-entity-block {
+    padding: 0.38rem 0.5rem;
+    background: rgba(13, 21, 36, 0.85);
+    border: 1px solid rgba(0, 229, 255, 0.18);
+    border-radius: 0.35rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.18rem;
+  }
+
+  .var-entity-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.4rem;
+  }
+
+  .var-entity-label {
+    font-size: 0.66rem;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #94a3b8;
+  }
+
+  .var-coords {
+    font-size: 0.68rem;
+    font-weight: 600;
+    color: #cbd5e1;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .var-metrics-row {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 0.5rem;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .var-metric-primary {
+    font-size: 0.86rem;
+    font-weight: 800;
+    color: #00e5ff;
+  }
+
+  .var-metric-primary.var-emerald {
+    color: #2ecc71;
+  }
+
+  .var-metric-secondary {
+    font-size: 0.72rem;
+    font-weight: 700;
+    color: #34d399;
+  }
+
+  .var-monitor-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.35rem 0.65rem;
+    background: rgba(5, 9, 17, 0.9);
+    border-top: 1px solid rgba(0, 229, 255, 0.2);
+    font-size: 0.68rem;
+    color: #94a3b8;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .var-footer-item strong {
+    color: #00e5ff;
+    font-weight: 800;
+  }
+
+  .var-footer-sep {
+    color: #334155;
+  }
+
   .hud-chat-container {
     pointer-events: auto;
     position: fixed;
@@ -2219,6 +2478,30 @@
     border-top: 1px solid rgba(0, 229, 255, 0.2);
     border-radius: 0 0 0.75rem 0.75rem;
     flex-shrink: 0;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  }
+
+  .chat-input-bar.is-cooldown {
+    border-top-color: rgba(255, 183, 3, 0.65);
+    box-shadow: inset 0 1px 0 rgba(255, 183, 3, 0.24);
+  }
+
+  .chat-cooldown-pill {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0.14rem 0.38rem;
+    border-radius: 0.25rem;
+    background: rgba(255, 183, 3, 0.14);
+    border: 1px solid rgba(255, 183, 3, 0.55);
+    color: #ffb703;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.64rem;
+    font-weight: 800;
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    flex-shrink: 0;
   }
 
   .chat-text-input {
@@ -2250,6 +2533,11 @@
     gap: 0.3rem;
     cursor: pointer;
     transition: all 0.15s ease;
+  }
+
+  .chat-send-trigger.is-cooldown {
+    opacity: 0.65;
+    border-color: rgba(255, 183, 3, 0.45);
   }
 
   .chat-send-trigger:hover {

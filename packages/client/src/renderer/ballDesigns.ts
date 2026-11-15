@@ -151,14 +151,16 @@ function drawSphericalPatch(
   fillStyle: string,
   strokeStyle?: string,
   lineWidth: number = 1,
-  subdivisions: number = 3
+  subdivisions: number = 3,
+  minCenterZ: number = -0.22
 ): void {
   const n = normalize3(normal[0], normal[1], normal[2]);
   const centerRot = rotatePoint(n[0], n[1], n[2], cosX, sinX, cosY, sinY);
-  if (centerRot[2] < -0.18) return;
+  if (centerRot[2] < minCenterZ) return;
 
   const { u, v } = buildTangentBasis(n);
   const pts: Array<[number, number]> = [];
+  let hasFrontVertex = false;
 
   for (let i = 0; i < localPoly.length; i++) {
     const [u0, v0] = localPoly[i]!;
@@ -175,7 +177,9 @@ function drawSphericalPatch(
       const rp = rotatePoint(sp[0], sp[1], sp[2], cosX, sinX, cosY, sinY);
       let sx = rp[0];
       let sy = rp[1];
-      if (rp[2] < 0) {
+      if (rp[2] > 0.01) {
+        hasFrontVertex = true;
+      } else if (rp[2] < 0) {
         const xyLen = Math.hypot(sx, sy) || 1;
         sx /= xyLen;
         sy /= xyLen;
@@ -184,7 +188,7 @@ function drawSphericalPatch(
     }
   }
 
-  if (pts.length < 3) return;
+  if (pts.length < 3 || !hasFrontVertex) return;
   ctx.beginPath();
   ctx.moveTo(pts[0]![0], pts[0]![1]);
   for (let i = 1; i < pts.length; i++) {
@@ -205,7 +209,7 @@ function drawSphericalPatch(
 }
 
 /**
- * Strokes a 3D curve sampled parametrically on the unit sphere (front hemisphere only).
+ * Strokes a 3D curve sampled parametrically on the unit sphere (front hemisphere with clean horizon crossing).
  */
 function strokeSphericalCurve(
   ctx: CanvasRenderingContext2D,
@@ -227,12 +231,21 @@ function strokeSphericalCurve(
   ctx.lineJoin = 'round';
   ctx.beginPath();
   let started = false;
+  let prevRp: Vec3 | null = null;
   for (let i = 0; i <= steps; i++) {
     const t = i / steps;
     const raw = sampleFn(t);
     const sp = normalize3(raw[0], raw[1], raw[2]);
     const rp = rotatePoint(sp[0], sp[1], sp[2], cosX, sinX, cosY, sinY);
-    if (rp[2] >= -0.06) {
+    if (rp[2] >= 0) {
+      if (!started && prevRp && prevRp[2] < 0) {
+        // Interpolate the exact horizon crossing so curves run smoothly to the sphere silhouette
+        const frac = -prevRp[2] / (rp[2] - prevRp[2]);
+        const hx = prevRp[0] + (rp[0] - prevRp[0]) * frac;
+        const hy = prevRp[1] + (rp[1] - prevRp[1]) * frac;
+        ctx.moveTo(cx + hx * radius, cy + hy * radius);
+        started = true;
+      }
       const sx = cx + rp[0] * radius;
       const sy = cy + rp[1] * radius;
       if (!started) {
@@ -242,8 +255,15 @@ function strokeSphericalCurve(
         ctx.lineTo(sx, sy);
       }
     } else {
+      if (started && prevRp && prevRp[2] >= 0) {
+        const frac = prevRp[2] / (prevRp[2] - rp[2]);
+        const hx = prevRp[0] + (rp[0] - prevRp[0]) * frac;
+        const hy = prevRp[1] + (rp[1] - prevRp[1]) * frac;
+        ctx.lineTo(cx + hx * radius, cy + hy * radius);
+      }
       started = false;
     }
+    prevRp = rp;
   }
   ctx.stroke();
 }
@@ -356,6 +376,274 @@ const OCTANT_NORMALS: ReadonlyArray<Vec3> = [
   [-1, -1, -1]
 ];
 
+const TETRA_NORMALS: ReadonlyArray<Vec3> = [
+  [0, 0, 1],
+  [0.942809, 0, -0.333333],
+  [-0.471405, 0.816497, -0.333333],
+  [-0.471405, -0.816497, -0.333333]
+];
+
+function rotatePoly2D(poly: ReadonlyArray<[number, number]>, rad: number): Array<[number, number]> {
+  const c = Math.cos(rad);
+  const s = Math.sin(rad);
+  return poly.map(([u, v]) => [u * c - v * s, u * s + v * c]);
+}
+
+function scalePoly2D(poly: ReadonlyArray<[number, number]>, scale: number): Array<[number, number]> {
+  return poly.map(([u, v]) => [u * scale, v * scale]);
+}
+
+function rectPoly(u0: number, v0: number, u1: number, v1: number): ReadonlyArray<[number, number]> {
+  return [
+    [u0, v0],
+    [u1, v0],
+    [u1, v1],
+    [u0, v1]
+  ];
+}
+
+function buildReuleauxRing(baseR: number, lobiness: number, steps: number): Array<[number, number]> {
+  const pts: Array<[number, number]> = [];
+  for (let i = 0; i < steps; i++) {
+    const theta = (i / steps) * Math.PI * 2;
+    const r = baseR * (1 + lobiness * Math.cos(3 * (theta + Math.PI / 6)));
+    pts.push([Math.cos(theta) * r, Math.sin(theta) * r]);
+  }
+  return pts;
+}
+
+// --- Precomputed World Cup Panel Geometry (zero per-frame allocation) ---
+
+const TEAMGEIST_PROPELLER: ReadonlyArray<[number, number]> = [
+  [0, -0.56],
+  [0.16, -0.52],
+  [0.29, -0.39],
+  [0.27, -0.24],
+  [0.14, -0.11],
+  [0.105, 0],
+  [0.14, 0.11],
+  [0.27, 0.24],
+  [0.29, 0.39],
+  [0.16, 0.52],
+  [0, 0.56],
+  [-0.16, 0.52],
+  [-0.29, 0.39],
+  [-0.27, 0.24],
+  [-0.14, 0.11],
+  [-0.105, 0],
+  [-0.14, -0.11],
+  [-0.27, -0.24],
+  [-0.29, -0.39],
+  [-0.16, -0.52]
+];
+const TEAMGEIST_PROPELLER_90 = rotatePoly2D(TEAMGEIST_PROPELLER, Math.PI / 2);
+const TEAMGEIST_INNER_GOLD = scalePoly2D(TEAMGEIST_PROPELLER, 0.72);
+const TEAMGEIST_INNER_GOLD_90 = scalePoly2D(TEAMGEIST_PROPELLER_90, 0.72);
+const TEAMGEIST_CREST: ReadonlyArray<[number, number]> = [
+  [0, -0.43],
+  [0.09, -0.35],
+  [0.06, -0.25],
+  [-0.06, -0.25],
+  [-0.09, -0.35]
+];
+
+const JABULANI_RING_BLACK = buildReuleauxRing(0.57, 0.22, 24);
+const JABULANI_RING_RED = buildReuleauxRing(0.47, 0.22, 24);
+const JABULANI_RING_GREEN = buildReuleauxRing(0.37, 0.22, 24);
+const JABULANI_RING_YELLOW = buildReuleauxRing(0.27, 0.22, 24);
+const JABULANI_CORE_WHITE = buildReuleauxRing(0.18, 0.2, 18);
+const JABULANI_CREST: ReadonlyArray<[number, number]> = [
+  [0, -0.075],
+  [0.065, 0.05],
+  [-0.065, 0.05]
+];
+
+const BRAZUCA_STAR: ReadonlyArray<[number, number]> = [
+  [0, -0.15],
+  [0.036, -0.036],
+  [0.15, 0],
+  [0.036, 0.036],
+  [0, 0.15],
+  [-0.036, 0.036],
+  [-0.15, 0],
+  [-0.036, -0.036]
+];
+
+const TELSTAR_TRAP_CORE: ReadonlyArray<[number, number]> = [
+  [-0.18, -0.28],
+  [0.18, -0.28],
+  [0.28, 0.2],
+  [-0.28, 0.2]
+];
+const TELSTAR_PIXELS_MID_DARK: ReadonlyArray<ReadonlyArray<[number, number]>> = [
+  rectPoly(-0.27, -0.28, -0.18, -0.02),
+  rectPoly(0.18, -0.28, 0.27, -0.02),
+  rectPoly(-0.34, 0.02, -0.24, 0.22),
+  rectPoly(0.24, 0.02, 0.34, 0.22),
+  rectPoly(-0.14, -0.37, 0.14, -0.28)
+];
+const TELSTAR_PIXELS_SLATE: ReadonlyArray<ReadonlyArray<[number, number]>> = [
+  rectPoly(-0.36, -0.18, -0.27, -0.06),
+  rectPoly(0.27, -0.18, 0.36, -0.06),
+  rectPoly(-0.42, 0.06, -0.34, 0.18),
+  rectPoly(0.34, 0.06, 0.42, 0.18),
+  rectPoly(-0.24, 0.2, -0.08, 0.29),
+  rectPoly(0.08, 0.2, 0.24, 0.29)
+];
+const TELSTAR_PIXELS_LIGHT: ReadonlyArray<ReadonlyArray<[number, number]>> = [
+  rectPoly(-0.44, -0.08, -0.36, 0.02),
+  rectPoly(0.36, -0.08, 0.44, 0.02),
+  rectPoly(-0.24, -0.37, -0.15, -0.29),
+  rectPoly(0.15, -0.37, 0.24, -0.29)
+];
+const TELSTAR_TRAP_CORE_90 = rotatePoly2D(TELSTAR_TRAP_CORE, Math.PI / 2);
+const TELSTAR_PIXELS_MID_DARK_90 = TELSTAR_PIXELS_MID_DARK.map((p) => rotatePoly2D(p, Math.PI / 2));
+const TELSTAR_PIXELS_SLATE_90 = TELSTAR_PIXELS_SLATE.map((p) => rotatePoly2D(p, Math.PI / 2));
+const TELSTAR_PIXELS_LIGHT_90 = TELSTAR_PIXELS_LIGHT.map((p) => rotatePoly2D(p, Math.PI / 2));
+const TELSTAR_COPPER_BARS: ReadonlyArray<ReadonlyArray<[number, number]>> = [
+  rectPoly(-0.08, 0.1, -0.035, 0.17),
+  rectPoly(-0.02, 0.06, 0.025, 0.17),
+  rectPoly(0.04, 0.02, 0.085, 0.17)
+];
+const TELSTAR_GOLD_TRIM: ReadonlyArray<[number, number]> = rectPoly(-0.085, 0.18, 0.085, 0.225);
+
+const AL_RIHLA_FACET_A: ReadonlyArray<[number, number]> = [
+  [0, 0],
+  [0.52, -0.28],
+  [0.14, -0.56]
+];
+const AL_RIHLA_FACET_B: ReadonlyArray<[number, number]> = [
+  [0, 0],
+  [-0.48, -0.32],
+  [-0.24, 0.46]
+];
+const AL_RIHLA_SAIL_A: ReadonlyArray<[number, number]> = [
+  [-0.46, -0.36],
+  [-0.14, -0.44],
+  [0.24, -0.22],
+  [0.06, -0.08],
+  [-0.16, 0.06],
+  [-0.26, 0.36],
+  [-0.38, 0.08]
+];
+const AL_RIHLA_STRIPE_A: ReadonlyArray<[number, number]> = [
+  [-0.36, -0.28],
+  [-0.12, -0.34],
+  [0.14, -0.18],
+  [-0.08, -0.08],
+  [-0.24, 0.22]
+];
+const AL_RIHLA_SAIL_B: ReadonlyArray<[number, number]> = [
+  [0.04, -0.46],
+  [0.42, -0.14],
+  [0.5, 0.14],
+  [0.24, 0.12],
+  [0.02, 0.28],
+  [-0.12, 0.12],
+  [0.12, -0.06]
+];
+const AL_RIHLA_STRIPE_B: ReadonlyArray<[number, number]> = [
+  [0.1, -0.34],
+  [0.36, -0.08],
+  [0.4, 0.08],
+  [0.16, 0.08],
+  [0.02, 0.18]
+];
+const AL_RIHLA_SAIL_C: ReadonlyArray<[number, number]> = [
+  [-0.24, 0.14],
+  [0.08, 0.16],
+  [0.42, 0.22],
+  [0.14, 0.46],
+  [-0.1, 0.48],
+  [-0.16, 0.28]
+];
+const AL_RIHLA_CENTER_MARK: ReadonlyArray<[number, number]> = [
+  [0, -0.1],
+  [0.09, 0.07],
+  [-0.09, 0.07]
+];
+
+const TRIONDA_LOBE_RED: ReadonlyArray<[number, number]> = [
+  [-0.04, -0.05],
+  [-0.04, -0.32],
+  [-0.14, -0.58],
+  [-0.38, -0.64],
+  [-0.62, -0.44],
+  [-0.68, -0.16],
+  [-0.48, 0.06],
+  [-0.22, 0.05]
+];
+const TRIONDA_WAVE_RED: ReadonlyArray<[number, number]> = [
+  [-0.14, -0.12],
+  [-0.22, -0.42],
+  [-0.44, -0.48],
+  [-0.52, -0.24],
+  [-0.34, -0.08]
+];
+const TRIONDA_MAPLE_HIGHLIGHT: ReadonlyArray<[number, number]> = [
+  [-0.34, -0.36],
+  [-0.28, -0.28],
+  [-0.34, -0.2],
+  [-0.4, -0.28]
+];
+
+const TRIONDA_LOBE_BLUE: ReadonlyArray<[number, number]> = [
+  [0.04, -0.05],
+  [0.22, 0.05],
+  [0.48, 0.06],
+  [0.68, -0.16],
+  [0.62, -0.44],
+  [0.38, -0.64],
+  [0.14, -0.58],
+  [0.04, -0.32]
+];
+const TRIONDA_WAVE_BLUE: ReadonlyArray<[number, number]> = [
+  [0.14, -0.12],
+  [0.34, -0.08],
+  [0.52, -0.24],
+  [0.44, -0.48],
+  [0.22, -0.42]
+];
+const TRIONDA_STAR_HIGHLIGHT: ReadonlyArray<[number, number]> = [
+  [0.34, -0.37],
+  [0.39, -0.28],
+  [0.34, -0.2],
+  [0.29, -0.28]
+];
+
+const TRIONDA_LOBE_GREEN: ReadonlyArray<[number, number]> = [
+  [0, 0.05],
+  [0.22, 0.14],
+  [0.36, 0.36],
+  [0.24, 0.62],
+  [0, 0.7],
+  [-0.24, 0.62],
+  [-0.36, 0.36],
+  [-0.22, 0.14]
+];
+const TRIONDA_WAVE_GREEN: ReadonlyArray<[number, number]> = [
+  [0, 0.16],
+  [0.18, 0.28],
+  [0.14, 0.5],
+  [-0.14, 0.5],
+  [-0.18, 0.28]
+];
+const TRIONDA_EAGLE_HIGHLIGHT: ReadonlyArray<[number, number]> = [
+  [0, 0.28],
+  [0.08, 0.37],
+  [0, 0.43],
+  [-0.08, 0.37]
+];
+
+const TRIONDA_CENTER_HUB: ReadonlyArray<[number, number]> = [
+  [0, -0.16],
+  [0.06, -0.04],
+  [0.17, 0.06],
+  [0, 0.08],
+  [-0.17, 0.06],
+  [-0.06, -0.04]
+];
+
 function drawWc2006Teamgeist(
   ctx: CanvasRenderingContext2D,
   x: number,
@@ -366,21 +654,20 @@ function drawWc2006Teamgeist(
   cosY: number,
   sinY: number
 ): void {
-  // Teamgeist (Alemania 2006): pearl white with curved black propeller/figure-8 panels + gold metallic edge trim
+  // Teamgeist (Alemania 2006): pearl white with curved black propeller panels + metallic gold borders & crest
   fillPearlWhiteBase(ctx, x, y, radius, '#CBD5E1');
 
-  const seamW = Math.max(0.8, radius * 0.06);
-  // Subtle silver figure-8 panel seams
+  const seamW = Math.max(0.75, radius * 0.052);
   for (let axis = 0; axis < 3; axis++) {
     strokeSphericalCurve(
       ctx,
       x,
       y,
       radius,
-      40,
+      44,
       (t) => {
         const a = t * Math.PI * 2;
-        const wave = 0.24 * Math.sin(a * 2);
+        const wave = 0.28 * Math.sin(a * 2);
         if (axis === 0) return [Math.cos(a), Math.sin(a), wave];
         if (axis === 1) return [wave, Math.cos(a), Math.sin(a)];
         return [Math.sin(a), wave, Math.cos(a)];
@@ -394,35 +681,32 @@ function drawWc2006Teamgeist(
     );
   }
 
-  // Curved black propeller / hourglass panels with metallic gold trim
-  const propellerPoly: ReadonlyArray<[number, number]> = [
-    [0, -0.52],
-    [0.24, -0.34],
-    [0.14, 0],
-    [0.24, 0.34],
-    [0, 0.52],
-    [-0.24, 0.34],
-    [-0.14, 0],
-    [-0.24, -0.34]
-  ];
-  const goldW = Math.max(1.0, radius * 0.08);
+  const goldW = Math.max(1.05, radius * 0.085);
+  const innerGoldW = Math.max(0.55, radius * 0.032);
   for (let i = 0; i < CUBE_NORMALS.length; i++) {
-    drawSphericalPatch(
-      ctx,
-      x,
-      y,
-      radius,
-      CUBE_NORMALS[i]!,
-      propellerPoly,
-      cosX,
-      sinX,
-      cosY,
-      sinY,
-      '#111827',
-      '#D4AF37',
-      goldW,
-      3
-    );
+    const n = CUBE_NORMALS[i]!;
+    const prop = i % 2 === 0 ? TEAMGEIST_PROPELLER : TEAMGEIST_PROPELLER_90;
+    const innerProp = i % 2 === 0 ? TEAMGEIST_INNER_GOLD : TEAMGEIST_INNER_GOLD_90;
+    drawSphericalPatch(ctx, x, y, radius, n, prop, cosX, sinX, cosY, sinY, '#111827', '#D4AF37', goldW, 2);
+    drawSphericalPatch(ctx, x, y, radius, n, innerProp, cosX, sinX, cosY, sinY, '', '#D4AF37', innerGoldW, 2);
+    if (i < 2) {
+      drawSphericalPatch(
+        ctx,
+        x,
+        y,
+        radius,
+        n,
+        TEAMGEIST_CREST,
+        cosX,
+        sinX,
+        cosY,
+        sinY,
+        '#111827',
+        '#D4AF37',
+        innerGoldW,
+        1
+      );
+    }
   }
 }
 
@@ -436,67 +720,40 @@ function drawWc2010Jabulani(
   cosY: number,
   sinY: number
 ): void {
-  // Jabulani (Sudáfrica 2010): crisp white with multi-color curved triangular bands in green, yellow, black, red
+  // Jabulani (Sudáfrica 2010): crisp white sphere with 4 sweeping multi-color South African triangular ring loops
   fillPearlWhiteBase(ctx, x, y, radius, '#CBD5E1');
 
-  const bands: ReadonlyArray<{ normal: Vec3; colors: [string, string] }> = [
-    { normal: [0.45, -0.35, 0.82], colors: ['#16A34A', '#FACC15'] },
-    { normal: [-0.6, 0.3, 0.74], colors: ['#111827', '#DC2626'] },
-    { normal: [0.25, 0.78, -0.57], colors: ['#DC2626', '#FACC15'] },
-    { normal: [-0.72, -0.45, -0.52], colors: ['#16A34A', '#111827'] },
-    { normal: [0.85, 0.25, -0.46], colors: ['#FACC15', '#2563EB'] },
-    { normal: [-0.25, -0.82, 0.51], colors: ['#DC2626', '#16A34A'] }
-  ];
-
-  const outerArc: ReadonlyArray<[number, number]> = [
-    [0.0, -0.62],
-    [0.54, 0.32],
-    [0.32, 0.48],
-    [0.0, -0.22],
-    [-0.32, 0.48],
-    [-0.54, 0.32]
-  ];
-  const innerTriangle: ReadonlyArray<[number, number]> = [
-    [0.0, -0.28],
-    [0.32, 0.34],
-    [-0.32, 0.34]
-  ];
-  const seamW = Math.max(0.8, radius * 0.055);
-
-  for (let i = 0; i < bands.length; i++) {
-    const b = bands[i]!;
-    drawSphericalPatch(
+  const seamW = Math.max(0.7, radius * 0.048);
+  for (let axis = 0; axis < 3; axis++) {
+    strokeSphericalCurve(
       ctx,
       x,
       y,
       radius,
-      b.normal,
-      outerArc,
+      36,
+      (t) => {
+        const a = t * Math.PI * 2;
+        if (axis === 0) return [Math.cos(a), Math.sin(a), 0.18 * Math.cos(a * 3)];
+        if (axis === 1) return [0.18 * Math.cos(a * 3), Math.cos(a), Math.sin(a)];
+        return [Math.sin(a), 0.18 * Math.cos(a * 3), Math.cos(a)];
+      },
       cosX,
       sinX,
       cosY,
       sinY,
-      b.colors[0],
-      '#94A3B8',
-      seamW,
-      2
+      '#CBD5E1',
+      seamW
     );
-    drawSphericalPatch(
-      ctx,
-      x,
-      y,
-      radius,
-      b.normal,
-      innerTriangle,
-      cosX,
-      sinX,
-      cosY,
-      sinY,
-      b.colors[1],
-      '#E2E8F0',
-      seamW * 0.8,
-      2
-    );
+  }
+
+  for (let i = 0; i < TETRA_NORMALS.length; i++) {
+    const n = TETRA_NORMALS[i]!;
+    drawSphericalPatch(ctx, x, y, radius, n, JABULANI_RING_BLACK, cosX, sinX, cosY, sinY, '#141414', '#94A3B8', seamW * 0.7, 1, -0.45);
+    drawSphericalPatch(ctx, x, y, radius, n, JABULANI_RING_RED, cosX, sinX, cosY, sinY, '#D62828', undefined, 0, 1, -0.45);
+    drawSphericalPatch(ctx, x, y, radius, n, JABULANI_RING_GREEN, cosX, sinX, cosY, sinY, '#16A34A', undefined, 0, 1, -0.45);
+    drawSphericalPatch(ctx, x, y, radius, n, JABULANI_RING_YELLOW, cosX, sinX, cosY, sinY, '#FACC15', undefined, 0, 1, -0.45);
+    drawSphericalPatch(ctx, x, y, radius, n, JABULANI_CORE_WHITE, cosX, sinX, cosY, sinY, '#FFFFFF', '#CBD5E1', seamW * 0.6, 1, -0.45);
+    drawSphericalPatch(ctx, x, y, radius, n, JABULANI_CREST, cosX, sinX, cosY, sinY, '#141414', '#FACC15', seamW * 0.6, 1, -0.45);
   }
 }
 
@@ -510,69 +767,69 @@ function drawWc2014Brazuca(
   cosY: number,
   sinY: number
 ): void {
-  // Brazuca (Brasil 2014): white with interlocking ribbon swirls in azure blue, orange, emerald green, navy
+  // Brazuca (Brasil 2014): white with dark-navy meandering S-ribbons enclosing multi-track colored cores + 4-point stars
   fillPearlWhiteBase(ctx, x, y, radius, '#CBD5E1');
 
-  const outerRibbonW = Math.max(2.2, radius * 0.22);
-  const innerRibbonW = Math.max(1.2, radius * 0.12);
+  const seamW = Math.max(0.65, radius * 0.045);
+  strokeSphericalCurve(
+    ctx,
+    x,
+    y,
+    radius,
+    36,
+    (t) => {
+      const a = t * Math.PI * 2;
+      return [Math.cos(a), 0.25 * Math.cos(a * 2), Math.sin(a)];
+    },
+    cosX,
+    sinX,
+    cosY,
+    sinY,
+    '#CBD5E1',
+    seamW
+  );
 
-  const ribbons: ReadonlyArray<{ outer: string; inner: string; fn: (t: number) => Vec3 }> = [
+  const navyW = Math.max(2.6, radius * 0.27);
+  const coreW = Math.max(1.6, radius * 0.16);
+  const glowW = Math.max(0.7, radius * 0.065);
+
+  const ribbons: ReadonlyArray<{ core: string; glow: string; fn: (t: number) => Vec3 }> = [
     {
-      outer: '#1E3A8A',
-      inner: '#0284C7',
+      core: '#0284C7',
+      glow: '#38BDF8',
       fn: (t) => {
         const a = t * Math.PI * 2;
-        return [Math.cos(a), 0.55 * Math.sin(a * 2), Math.sin(a)];
+        return [Math.cos(a), 0.62 * Math.sin(a * 2), Math.sin(a)];
       }
     },
     {
-      outer: '#0284C7',
-      inner: '#F97316',
+      core: '#F97316',
+      glow: '#FACC15',
       fn: (t) => {
         const a = t * Math.PI * 2;
-        return [0.55 * Math.sin(a * 2), Math.cos(a), Math.sin(a)];
+        return [0.62 * Math.sin(a * 2 + 0.7), Math.cos(a), Math.sin(a)];
       }
     },
     {
-      outer: '#1E3A8A',
-      inner: '#10B981',
+      core: '#10B981',
+      glow: '#6EE7B7',
       fn: (t) => {
         const a = t * Math.PI * 2;
-        return [Math.sin(a), Math.cos(a), 0.55 * Math.sin(a * 2)];
+        return [Math.sin(a), Math.cos(a), 0.62 * Math.sin(a * 2 - 0.7)];
       }
     }
   ];
 
   for (let i = 0; i < ribbons.length; i++) {
     const r = ribbons[i]!;
-    strokeSphericalCurve(ctx, x, y, radius, 44, r.fn, cosX, sinX, cosY, sinY, r.outer, outerRibbonW);
-    strokeSphericalCurve(ctx, x, y, radius, 44, r.fn, cosX, sinX, cosY, sinY, r.inner, innerRibbonW);
+    strokeSphericalCurve(ctx, x, y, radius, 48, r.fn, cosX, sinX, cosY, sinY, '#0B1B34', navyW);
+    strokeSphericalCurve(ctx, x, y, radius, 48, r.fn, cosX, sinX, cosY, sinY, r.core, coreW);
+    strokeSphericalCurve(ctx, x, y, radius, 48, r.fn, cosX, sinX, cosY, sinY, r.glow, glowW);
   }
 
-  // White star accents at interlocking intersections
-  const starDiamond: ReadonlyArray<[number, number]> = [
-    [0, -0.14],
-    [0.14, 0],
-    [0, 0.14],
-    [-0.14, 0]
-  ];
+  const starBorderW = Math.max(0.55, radius * 0.036);
   for (let i = 0; i < CUBE_NORMALS.length; i++) {
-    drawSphericalPatch(
-      ctx,
-      x,
-      y,
-      radius,
-      CUBE_NORMALS[i]!,
-      starDiamond,
-      cosX,
-      sinX,
-      cosY,
-      sinY,
-      '#FFFFFF',
-      '#1E3A8A',
-      Math.max(0.6, radius * 0.04),
-      1
-    );
+    drawSphericalPatch(ctx, x, y, radius, CUBE_NORMALS[i]!, BRAZUCA_STAR, cosX, sinX, cosY, sinY, '#FFFFFF', '#0B1B34', starBorderW, 1);
   }
 }
 
@@ -586,56 +843,54 @@ function drawWc2018Telstar(
   cosY: number,
   sinY: number
 ): void {
-  // Telstar 18 (Rusia 2018): white with pixelated dark charcoal/black trapezoidal block panels + subtle gold accent
+  // Telstar 18 (Rusia 2018): crisp white with stepped halftone metallic black-to-slate pixel blocks + copper-gold accent
   fillPearlWhiteBase(ctx, x, y, radius, '#94A3B8');
 
-  const trapPanel: ReadonlyArray<[number, number]> = [
-    [-0.24, -0.34],
-    [0.24, -0.34],
-    [0.36, 0.28],
-    [-0.36, 0.28]
-  ];
-  const pixelStepA: ReadonlyArray<[number, number]> = [
-    [-0.44, -0.12],
-    [-0.22, -0.12],
-    [-0.22, 0.14],
-    [-0.44, 0.14]
-  ];
-  const pixelStepB: ReadonlyArray<[number, number]> = [
-    [0.22, -0.22],
-    [0.44, -0.22],
-    [0.44, 0.08],
-    [0.22, 0.08]
-  ];
-  const goldAccent: ReadonlyArray<[number, number]> = [
-    [-0.1, 0.14],
-    [0.1, 0.14],
-    [0.1, 0.24],
-    [-0.1, 0.24]
-  ];
-
-  for (let i = 0; i < CUBE_NORMALS.length; i++) {
-    const n = CUBE_NORMALS[i]!;
-    drawSphericalPatch(ctx, x, y, radius, n, pixelStepA, cosX, sinX, cosY, sinY, '#475569', undefined, 0, 1);
-    drawSphericalPatch(ctx, x, y, radius, n, pixelStepB, cosX, sinX, cosY, sinY, '#334155', undefined, 0, 1);
-    drawSphericalPatch(
+  const seamW = Math.max(0.65, radius * 0.042);
+  for (let axis = 0; axis < 2; axis++) {
+    strokeSphericalCurve(
       ctx,
       x,
       y,
       radius,
-      n,
-      trapPanel,
+      32,
+      (t) => {
+        const a = t * Math.PI * 2;
+        return axis === 0 ? [Math.cos(a), Math.sin(a), 0] : [0, Math.cos(a), Math.sin(a)];
+      },
       cosX,
       sinX,
       cosY,
       sinY,
-      '#0F172A',
-      '#64748B',
-      Math.max(0.7, radius * 0.05),
-      2
+      '#CBD5E1',
+      seamW
     );
+  }
+
+  for (let i = 0; i < CUBE_NORMALS.length; i++) {
+    const n = CUBE_NORMALS[i]!;
+    const rotated = i % 2 === 1;
+    const lightPixels = rotated ? TELSTAR_PIXELS_LIGHT_90 : TELSTAR_PIXELS_LIGHT;
+    const slatePixels = rotated ? TELSTAR_PIXELS_SLATE_90 : TELSTAR_PIXELS_SLATE;
+    const midDarkPixels = rotated ? TELSTAR_PIXELS_MID_DARK_90 : TELSTAR_PIXELS_MID_DARK;
+    const corePoly = rotated ? TELSTAR_TRAP_CORE_90 : TELSTAR_TRAP_CORE;
+
+    for (let p = 0; p < lightPixels.length; p++) {
+      drawSphericalPatch(ctx, x, y, radius, n, lightPixels[p]!, cosX, sinX, cosY, sinY, '#64748B', undefined, 0, 1);
+    }
+    for (let p = 0; p < slatePixels.length; p++) {
+      drawSphericalPatch(ctx, x, y, radius, n, slatePixels[p]!, cosX, sinX, cosY, sinY, '#334155', undefined, 0, 1);
+    }
+    for (let p = 0; p < midDarkPixels.length; p++) {
+      drawSphericalPatch(ctx, x, y, radius, n, midDarkPixels[p]!, cosX, sinX, cosY, sinY, '#1E293B', undefined, 0, 1);
+    }
+    drawSphericalPatch(ctx, x, y, radius, n, corePoly, cosX, sinX, cosY, sinY, '#0F172A', '#475569', seamW, 1);
+
     if (i % 2 === 0) {
-      drawSphericalPatch(ctx, x, y, radius, n, goldAccent, cosX, sinX, cosY, sinY, '#EAB308', undefined, 0, 1);
+      for (let b = 0; b < TELSTAR_COPPER_BARS.length; b++) {
+        drawSphericalPatch(ctx, x, y, radius, n, TELSTAR_COPPER_BARS[b]!, cosX, sinX, cosY, sinY, '#E85D04', undefined, 0, 1);
+      }
+      drawSphericalPatch(ctx, x, y, radius, n, TELSTAR_GOLD_TRIM, cosX, sinX, cosY, sinY, '#EAB308', undefined, 0, 1);
     }
   }
 }
@@ -650,39 +905,31 @@ function drawWc2022AlRihla(
   cosY: number,
   sinY: number
 ): void {
-  // Al Rihla (Qatar 2022): pearl white with vibrant angled geometric speed triangles in cyan, crimson/orange, magenta/gold
+  // Al Rihla (Qatar 2022): pearl white Speedshell facets with swept dhow-sail boomerang panels in azure, cyan, magenta, amber
   fillPearlWhiteBase(ctx, x, y, radius, '#CBD5E1');
 
-  const shardA: ReadonlyArray<[number, number]> = [
-    [-0.42, -0.34],
-    [0.18, -0.18],
-    [-0.16, 0.36]
-  ];
-  const shardB: ReadonlyArray<[number, number]> = [
-    [0.12, -0.4],
-    [0.46, 0.08],
-    [-0.08, 0.16]
-  ];
-  const shardC: ReadonlyArray<[number, number]> = [
-    [-0.22, 0.12],
-    [0.36, 0.18],
-    [0.06, 0.46]
-  ];
+  const creaseW = Math.max(0.55, radius * 0.032);
+  const trimW = Math.max(0.65, radius * 0.044);
 
-  const palettes: ReadonlyArray<[string, string, string]> = [
-    ['#06B6D4', '#E11D48', '#F59E0B'],
-    ['#9D174D', '#06B6D4', '#F97316'],
-    ['#E11D48', '#F59E0B', '#06B6D4'],
-    ['#F97316', '#9D174D', '#06B6D4']
+  const palettes: ReadonlyArray<[string, string, string, string, string]> = [
+    ['#0077B6', '#06B6D4', '#E11D48', '#F4A261', '#06B6D4'],
+    ['#E11D48', '#F4A261', '#0077B6', '#06B6D4', '#E11D48'],
+    ['#06B6D4', '#0077B6', '#F4A261', '#E11D48', '#0077B6'],
+    ['#0077B6', '#F4A261', '#E11D48', '#06B6D4', '#F4A261']
   ];
-  const trimW = Math.max(0.7, radius * 0.05);
 
   for (let i = 0; i < OCTANT_NORMALS.length; i++) {
     const n = OCTANT_NORMALS[i]!;
     const p = palettes[i % palettes.length]!;
-    drawSphericalPatch(ctx, x, y, radius, n, shardA, cosX, sinX, cosY, sinY, p[0], '#FFFFFF', trimW, 2);
-    drawSphericalPatch(ctx, x, y, radius, n, shardB, cosX, sinX, cosY, sinY, p[1], '#FFFFFF', trimW, 2);
-    drawSphericalPatch(ctx, x, y, radius, n, shardC, cosX, sinX, cosY, sinY, p[2], '#FFFFFF', trimW, 2);
+    drawSphericalPatch(ctx, x, y, radius, n, AL_RIHLA_FACET_A, cosX, sinX, cosY, sinY, '', '#CBD5E1', creaseW, 1, -0.25);
+    drawSphericalPatch(ctx, x, y, radius, n, AL_RIHLA_FACET_B, cosX, sinX, cosY, sinY, '', '#CBD5E1', creaseW, 1, -0.25);
+
+    drawSphericalPatch(ctx, x, y, radius, n, AL_RIHLA_SAIL_A, cosX, sinX, cosY, sinY, p[0], '#023047', trimW, 1, -0.28);
+    drawSphericalPatch(ctx, x, y, radius, n, AL_RIHLA_STRIPE_A, cosX, sinX, cosY, sinY, p[1], undefined, 0, 1, -0.28);
+    drawSphericalPatch(ctx, x, y, radius, n, AL_RIHLA_SAIL_B, cosX, sinX, cosY, sinY, p[2], '#023047', trimW, 1, -0.28);
+    drawSphericalPatch(ctx, x, y, radius, n, AL_RIHLA_STRIPE_B, cosX, sinX, cosY, sinY, p[3], undefined, 0, 1, -0.28);
+    drawSphericalPatch(ctx, x, y, radius, n, AL_RIHLA_SAIL_C, cosX, sinX, cosY, sinY, p[4], '#FFFFFF', trimW * 0.85, 1, -0.28);
+    drawSphericalPatch(ctx, x, y, radius, n, AL_RIHLA_CENTER_MARK, cosX, sinX, cosY, sinY, '#023047', undefined, 0, 1, -0.28);
   }
 }
 
@@ -696,40 +943,29 @@ function drawWc2026Trionda(
   cosY: number,
   sinY: number
 ): void {
-  // Trionda (Copa 2026): white with bold sweeping tri-color wave-blade panels in red, emerald green, royal blue
+  // Trionda (Copa 2026): crisp white sphere with 3 bold sweeping wave lobes (red, blue, green) & clean white Y-star hub
   fillPearlWhiteBase(ctx, x, y, radius, '#CBD5E1');
 
-  const bladeRed: ReadonlyArray<[number, number]> = [
-    [0.0, 0.0],
-    [0.14, -0.48],
-    [0.52, -0.32],
-    [0.26, -0.06]
-  ];
-  const bladeGreen: ReadonlyArray<[number, number]> = [
-    [0.0, 0.0],
-    [-0.5, -0.18],
-    [-0.32, -0.52],
-    [-0.08, -0.22]
-  ];
-  const bladeBlue: ReadonlyArray<[number, number]> = [
-    [0.0, 0.0],
-    [0.34, 0.42],
-    [-0.12, 0.54],
-    [-0.16, 0.16]
-  ];
-  const centerHub: ReadonlyArray<[number, number]> = [
-    [0, -0.12],
-    [0.11, 0.07],
-    [-0.11, 0.07]
-  ];
+  const seamW = Math.max(0.85, radius * 0.052);
+  for (let i = 0; i < TETRA_NORMALS.length; i++) {
+    const n = TETRA_NORMALS[i]!;
+    // Scarlet red upper-left wave lobe + internal white wave & maple-diamond accent
+    drawSphericalPatch(ctx, x, y, radius, n, TRIONDA_LOBE_RED, cosX, sinX, cosY, sinY, '#EF4444', '#0F172A', seamW, 2, -0.45);
+    drawSphericalPatch(ctx, x, y, radius, n, TRIONDA_WAVE_RED, cosX, sinX, cosY, sinY, '#FFFFFF', undefined, 0, 1, -0.45);
+    drawSphericalPatch(ctx, x, y, radius, n, TRIONDA_MAPLE_HIGHLIGHT, cosX, sinX, cosY, sinY, '#EF4444', undefined, 0, 1, -0.45);
 
-  const trimW = Math.max(0.8, radius * 0.055);
-  for (let i = 0; i < CUBE_NORMALS.length; i++) {
-    const n = CUBE_NORMALS[i]!;
-    drawSphericalPatch(ctx, x, y, radius, n, bladeRed, cosX, sinX, cosY, sinY, '#EF4444', '#F8FAFC', trimW, 2);
-    drawSphericalPatch(ctx, x, y, radius, n, bladeGreen, cosX, sinX, cosY, sinY, '#10B981', '#F8FAFC', trimW, 2);
-    drawSphericalPatch(ctx, x, y, radius, n, bladeBlue, cosX, sinX, cosY, sinY, '#2563EB', '#F8FAFC', trimW, 2);
-    drawSphericalPatch(ctx, x, y, radius, n, centerHub, cosX, sinX, cosY, sinY, '#FACC15', '#0F172A', trimW * 0.7, 1);
+    // Royal blue upper-right wave lobe + internal white wave & star-diamond accent
+    drawSphericalPatch(ctx, x, y, radius, n, TRIONDA_LOBE_BLUE, cosX, sinX, cosY, sinY, '#2563EB', '#0F172A', seamW, 2, -0.45);
+    drawSphericalPatch(ctx, x, y, radius, n, TRIONDA_WAVE_BLUE, cosX, sinX, cosY, sinY, '#FFFFFF', undefined, 0, 1, -0.45);
+    drawSphericalPatch(ctx, x, y, radius, n, TRIONDA_STAR_HIGHLIGHT, cosX, sinX, cosY, sinY, '#2563EB', undefined, 0, 1, -0.45);
+
+    // Emerald green lower-center wave lobe + internal white wave & eagle-chevron accent
+    drawSphericalPatch(ctx, x, y, radius, n, TRIONDA_LOBE_GREEN, cosX, sinX, cosY, sinY, '#10B981', '#0F172A', seamW, 2, -0.45);
+    drawSphericalPatch(ctx, x, y, radius, n, TRIONDA_WAVE_GREEN, cosX, sinX, cosY, sinY, '#FFFFFF', undefined, 0, 1, -0.45);
+    drawSphericalPatch(ctx, x, y, radius, n, TRIONDA_EAGLE_HIGHLIGHT, cosX, sinX, cosY, sinY, '#10B981', undefined, 0, 1, -0.45);
+
+    // Clean white central Y-junction star hub
+    drawSphericalPatch(ctx, x, y, radius, n, TRIONDA_CENTER_HUB, cosX, sinX, cosY, sinY, '#FFFFFF', '#0F172A', seamW * 0.75, 1, -0.45);
   }
 }
 

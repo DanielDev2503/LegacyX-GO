@@ -97,13 +97,26 @@ export interface LxrKitsUpdatedPayload {
   blueKit?: Record<string, unknown>;
 }
 
+export interface LxrEmotePayload {
+  playerId: number;
+  emoji: string;
+  durationMs?: number;
+}
+
+export interface LxrModifiersUpdatedPayload {
+  ballRadius: number;
+  playerRadius: number;
+}
+
 export type LxrHudEvent =
   | { t: number; type: 'telemetry'; payload: LxrTelemetryPayload }
   | { t: number; type: 'score_event'; payload: LxrScoreEventPayload }
   | { t: number; type: 'chat'; payload: LxrChatPayload }
   | { t: number; type: 'banner'; payload: LxrBannerPayload }
   | { t: number; type: 'ui_overlay'; payload: LxrUiOverlayState }
-  | { t: number; type: 'kits_updated'; payload: LxrKitsUpdatedPayload };
+  | { t: number; type: 'kits_updated'; payload: LxrKitsUpdatedPayload }
+  | { t: number; type: 'emote'; payload: LxrEmotePayload }
+  | { t: number; type: 'modifiers_updated'; payload: LxrModifiersUpdatedPayload };
 
 export interface LxrFrame {
   t: number;
@@ -176,6 +189,16 @@ export interface LxrReplayV3 {
   minimapOpacity: number;
   minimapSize: 'small' | 'medium' | 'large' | number;
   minimapCameraFrustum: boolean;
+  ballRadius?: number;
+  playerRadius?: number;
+  meta?: {
+    ballRadius?: number;
+    playerRadius?: number;
+  };
+  modifiers?: {
+    ballRadius?: number;
+    playerRadius?: number;
+  };
   redKit?: Record<string, unknown>;
   blueKit?: Record<string, unknown>;
   players: LxrPlayerMeta[];
@@ -213,6 +236,8 @@ export interface MatchRecorderMetadata {
   minimapOpacity?: number;
   minimapSize?: 'small' | 'medium' | 'large' | number;
   minimapCameraFrustum?: boolean;
+  ballRadius?: number;
+  playerRadius?: number;
   initialChatMessages?: LxrChatEntry[];
   initialUiOverlay?: Partial<LxrUiOverlayState>;
 }
@@ -293,6 +318,11 @@ function normalizeMinimapSize(raw: unknown): 'small' | 'medium' | 'large' | numb
   return 'medium';
 }
 
+function normalizePositiveRadius(raw: unknown): number | undefined {
+  if (typeof raw !== 'number' || !Number.isFinite(raw) || raw <= 0) return undefined;
+  return raw;
+}
+
 function concatChunks(chunks: Uint8Array[]): Uint8Array {
   const totalLength = chunks.reduce((acc, c) => acc + c.length, 0);
   const result = new Uint8Array(totalLength);
@@ -366,6 +396,15 @@ export function normalizeParsedReplay(parsed: Partial<LxrReplayFile>): LxrReplay
           .filter((ev): ev is Extract<LxrHudEvent, { type: 'banner' }> => ev.type === 'banner')
           .map((ev) => ({ t: ev.t, payload: { ...ev.payload } }));
 
+    const ballRadius =
+      normalizePositiveRadius(v3.ballRadius) ??
+      normalizePositiveRadius(v3.meta?.ballRadius) ??
+      normalizePositiveRadius(v3.modifiers?.ballRadius);
+    const playerRadius =
+      normalizePositiveRadius(v3.playerRadius) ??
+      normalizePositiveRadius(v3.meta?.playerRadius) ??
+      normalizePositiveRadius(v3.modifiers?.playerRadius);
+
     return {
       magic: 'LXR3',
       version: 3,
@@ -411,6 +450,20 @@ export function normalizeParsedReplay(parsed: Partial<LxrReplayFile>): LxrReplay
       minimapOpacity: normalizeFiniteOpacity(v3.minimapOpacity, 0.6),
       minimapSize: normalizeMinimapSize(v3.minimapSize),
       minimapCameraFrustum: v3.minimapCameraFrustum !== false,
+      ...(ballRadius !== undefined ? { ballRadius } : {}),
+      ...(playerRadius !== undefined ? { playerRadius } : {}),
+      ...(ballRadius !== undefined || playerRadius !== undefined
+        ? {
+            meta: {
+              ...(ballRadius !== undefined ? { ballRadius } : {}),
+              ...(playerRadius !== undefined ? { playerRadius } : {})
+            },
+            modifiers: {
+              ...(ballRadius !== undefined ? { ballRadius } : {}),
+              ...(playerRadius !== undefined ? { playerRadius } : {})
+            }
+          }
+        : {}),
       redKit: cloneKit(v3.redKit),
       blueKit: cloneKit(v3.blueKit),
       players: Array.isArray(v3.players) ? v3.players : [],
@@ -651,6 +704,8 @@ class MatchRecorderStore {
 
     const redKit = cloneKit(meta?.redKit);
     const blueKit = cloneKit(meta?.blueKit);
+    const ballRadius = normalizePositiveRadius(meta?.ballRadius);
+    const playerRadius = normalizePositiveRadius(meta?.playerRadius);
     this.lastKitsSignature =
       redKit || blueKit ? JSON.stringify({ redKit: redKit ?? null, blueKit: blueKit ?? null }) : '';
 
@@ -687,7 +742,9 @@ class MatchRecorderStore {
       minimapEnabled: meta?.minimapEnabled !== false,
       minimapOpacity: normalizeFiniteOpacity(meta?.minimapOpacity, 0.6),
       minimapSize: normalizeMinimapSize(meta?.minimapSize),
-      minimapCameraFrustum: meta?.minimapCameraFrustum !== false
+      minimapCameraFrustum: meta?.minimapCameraFrustum !== false,
+      ...(ballRadius !== undefined ? { ballRadius } : {}),
+      ...(playerRadius !== undefined ? { playerRadius } : {})
     };
 
     this.isRecording = true;
@@ -779,6 +836,14 @@ class MatchRecorderStore {
     }
     if (meta.minimapCameraFrustum !== undefined) {
       this.currentMeta.minimapCameraFrustum = Boolean(meta.minimapCameraFrustum);
+    }
+    const nextBallRadius = normalizePositiveRadius(meta.ballRadius);
+    if (nextBallRadius !== undefined && this.currentMeta.ballRadius === undefined) {
+      this.currentMeta.ballRadius = nextBallRadius;
+    }
+    const nextPlayerRadius = normalizePositiveRadius(meta.playerRadius);
+    if (nextPlayerRadius !== undefined && this.currentMeta.playerRadius === undefined) {
+      this.currentMeta.playerRadius = nextPlayerRadius;
     }
   }
 
@@ -913,6 +978,43 @@ class MatchRecorderStore {
     });
   }
 
+  public recordEmote(playerId: number, emoji: string, durationMs: number = 2200, t?: number): void {
+    if (!this.isRecording) return;
+    if (!Number.isFinite(playerId) || typeof emoji !== 'string' || !emoji.trim()) return;
+    const time = typeof t === 'number' && Number.isFinite(t) ? t : this.elapsedSec();
+    const cleanDuration =
+      typeof durationMs === 'number' && Number.isFinite(durationMs) && durationMs > 0
+        ? Math.round(durationMs)
+        : 2200;
+    this.hudEventsBuffer.push({
+      t: time,
+      type: 'emote',
+      payload: {
+        playerId,
+        emoji,
+        durationMs: cleanDuration
+      }
+    });
+  }
+
+  public recordModifiers(ballRadius: number, playerRadius: number, t?: number): void {
+    if (!this.isRecording) return;
+    const validBall = normalizePositiveRadius(ballRadius);
+    const validPlayer = normalizePositiveRadius(playerRadius);
+    if (validBall === undefined && validPlayer === undefined) return;
+    const resolvedBall = validBall ?? this.currentMeta.ballRadius ?? 5.8;
+    const resolvedPlayer = validPlayer ?? this.currentMeta.playerRadius ?? 15;
+    const time = typeof t === 'number' && Number.isFinite(t) ? t : this.elapsedSec();
+    this.hudEventsBuffer.push({
+      t: time,
+      type: 'modifiers_updated',
+      payload: {
+        ballRadius: resolvedBall,
+        playerRadius: resolvedPlayer
+      }
+    });
+  }
+
   private async uploadReplayToCloud(replayFile: LxrReplayV3): Promise<void> {
     this.isUploadingToCloud = true;
     this.cloudSaveError = null;
@@ -960,6 +1062,9 @@ class MatchRecorderStore {
       .slice()
       .sort((a, b) => a.t - b.t);
 
+    const ballRadius = normalizePositiveRadius(this.currentMeta.ballRadius);
+    const playerRadius = normalizePositiveRadius(this.currentMeta.playerRadius);
+
     const replayFile: LxrReplayV3 = {
       magic: 'LXR3',
       version: 3,
@@ -986,6 +1091,20 @@ class MatchRecorderStore {
       minimapOpacity: this.currentMeta.minimapOpacity ?? 0.6,
       minimapSize: this.currentMeta.minimapSize ?? 'medium',
       minimapCameraFrustum: this.currentMeta.minimapCameraFrustum !== false,
+      ...(ballRadius !== undefined ? { ballRadius } : {}),
+      ...(playerRadius !== undefined ? { playerRadius } : {}),
+      ...(ballRadius !== undefined || playerRadius !== undefined
+        ? {
+            meta: {
+              ...(ballRadius !== undefined ? { ballRadius } : {}),
+              ...(playerRadius !== undefined ? { playerRadius } : {})
+            },
+            modifiers: {
+              ...(ballRadius !== undefined ? { ballRadius } : {}),
+              ...(playerRadius !== undefined ? { playerRadius } : {})
+            }
+          }
+        : {}),
       redKit: cloneKit(this.currentMeta.redKit),
       blueKit: cloneKit(this.currentMeta.blueKit),
       players: this.currentMeta.players,
