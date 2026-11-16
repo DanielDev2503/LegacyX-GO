@@ -1,12 +1,12 @@
 import {
   EngineInstance,
   INPUT_FLAG_MOUSE_AIM,
+  MatchPhase,
   type GameStateSnapshot,
   stepPlayerKinematics,
   type PlayerKinematicsState,
   type KinematicsConfig,
   type KickoffPhysicsContext,
-  type MatchPhase,
   type Stadium,
   Vec2
 } from '@legacyx/core';
@@ -43,8 +43,10 @@ export class ClientPredictionReconciler {
   public inputSeq: number = 0;
   public lastRecordedSeq: number = 0;
   public didHardSnapLastReconcile: boolean = false;
+  public didBallHardSnapLastReconcile: boolean = false;
   public inputBuffer: BufferedClientInput[] = [];
   public visualOffset: { x: number; y: number } = { x: 0, y: 0 };
+  public ballVisualOffset: { x: number; y: number } = { x: 0, y: 0 };
 
   public predictedState: PlayerKinematicsState = {
     pos: new Vec2(0, 0),
@@ -129,9 +131,12 @@ export class ClientPredictionReconciler {
     this.inputBuffer.length = 0;
     this.visualOffset.x = 0;
     this.visualOffset.y = 0;
+    this.ballVisualOffset.x = 0;
+    this.ballVisualOffset.y = 0;
     this.inputSeq = 0;
     this.lastRecordedSeq = 0;
     this.didHardSnapLastReconcile = false;
+    this.didBallHardSnapLastReconcile = false;
   }
 
   private isSnapshotDrivenPhase(phase: number | undefined): boolean {
@@ -153,8 +158,12 @@ export class ClientPredictionReconciler {
     const decay = Math.exp(-16 * frameDt);
     this.visualOffset.x *= decay;
     this.visualOffset.y *= decay;
+    this.ballVisualOffset.x *= decay;
+    this.ballVisualOffset.y *= decay;
     if (Math.abs(this.visualOffset.x) < 0.05) this.visualOffset.x = 0;
     if (Math.abs(this.visualOffset.y) < 0.05) this.visualOffset.y = 0;
+    if (Math.abs(this.ballVisualOffset.x) < 0.05) this.ballVisualOffset.x = 0;
+    if (Math.abs(this.ballVisualOffset.y) < 0.05) this.ballVisualOffset.y = 0;
   }
 
   /**
@@ -163,8 +172,12 @@ export class ClientPredictionReconciler {
   public decayVisualOffset(decayFactor: number = ClientPredictionReconciler.VISUAL_DECAY): void {
     this.visualOffset.x *= decayFactor;
     this.visualOffset.y *= decayFactor;
+    this.ballVisualOffset.x *= decayFactor;
+    this.ballVisualOffset.y *= decayFactor;
     if (Math.abs(this.visualOffset.x) < 0.01) this.visualOffset.x = 0;
     if (Math.abs(this.visualOffset.y) < 0.01) this.visualOffset.y = 0;
+    if (Math.abs(this.ballVisualOffset.x) < 0.01) this.ballVisualOffset.x = 0;
+    if (Math.abs(this.ballVisualOffset.y) < 0.01) this.ballVisualOffset.y = 0;
   }
 
   public predictStep(
@@ -214,6 +227,7 @@ export class ClientPredictionReconciler {
     config?: KinematicsConfig
   ): { replayed: boolean; hardSnapped: boolean } {
     this.didHardSnapLastReconcile = false;
+    this.didBallHardSnapLastReconcile = false;
 
     if (typeof (engineOrSnapshot as any).step === 'function') {
       const engine = engineOrSnapshot as EngineInstance;
@@ -228,8 +242,11 @@ export class ClientPredictionReconciler {
         }
         this.visualOffset.x = 0;
         this.visualOffset.y = 0;
+        this.ballVisualOffset.x = 0;
+        this.ballVisualOffset.y = 0;
         this.inputBuffer.length = 0;
         this.didHardSnapLastReconcile = true;
+        this.didBallHardSnapLastReconcile = true;
         return { replayed: false, hardSnapped: true };
       }
 
@@ -240,7 +257,10 @@ export class ClientPredictionReconciler {
         engine.setState(authSnapshot);
         this.visualOffset.x = 0;
         this.visualOffset.y = 0;
+        this.ballVisualOffset.x = 0;
+        this.ballVisualOffset.y = 0;
         this.didHardSnapLastReconcile = false;
+        this.didBallHardSnapLastReconcile = true;
         return { replayed: false, hardSnapped: false };
       }
 
@@ -265,6 +285,8 @@ export class ClientPredictionReconciler {
       // Visual position on screen before reconciliation
       const xVisualBefore = localDisc.pos.x + this.visualOffset.x;
       const yVisualBefore = localDisc.pos.y + this.visualOffset.y;
+      const ballXVisualBefore = engine.ball.pos.x + this.ballVisualOffset.x;
+      const ballYVisualBefore = engine.ball.pos.y + this.ballVisualOffset.y;
 
       // Cap pending inputs to MAX_REPLAY_TICKS (45 ticks)
       if (this.inputBuffer.length > ClientPredictionReconciler.MAX_REPLAY_TICKS) {
@@ -308,7 +330,10 @@ export class ClientPredictionReconciler {
           sequence: pending.seq ?? pending.tick
         });
         engine.step(this.replayMap, true);
-        if (authSnapshot.phase !== undefined) {
+        if (
+          authSnapshot.phase !== undefined &&
+          !(authSnapshot.phase === MatchPhase.KICKOFF && engine.fsm.currentState === MatchPhase.PLAYING)
+        ) {
           engine.fsm.currentState = authSnapshot.phase as MatchPhase;
         }
         if (authSnapshot.isNeutralKickoff !== undefined) {
@@ -321,6 +346,19 @@ export class ClientPredictionReconciler {
 
       if (engine.currentTick < this.lastRecordedSeq) {
         engine.currentTick = this.lastRecordedSeq;
+      }
+
+      const ballErrX = ballXVisualBefore - engine.ball.pos.x;
+      const ballErrY = ballYVisualBefore - engine.ball.pos.y;
+      const ballDistSq = ballErrX * ballErrX + ballErrY * ballErrY;
+      if (ballDistSq > ClientPredictionReconciler.CATASTROPHIC_ERROR_SQ) {
+        this.ballVisualOffset.x = 0;
+        this.ballVisualOffset.y = 0;
+        this.didBallHardSnapLastReconcile = true;
+      } else {
+        this.ballVisualOffset.x = ballErrX;
+        this.ballVisualOffset.y = ballErrY;
+        this.didBallHardSnapLastReconcile = false;
       }
 
       // Compute residual error against pre-reconciliation visual position

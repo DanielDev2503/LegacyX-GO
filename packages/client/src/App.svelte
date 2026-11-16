@@ -185,6 +185,9 @@
     let prevPredLocalPos = { x: 0, y: 0 };
     let currPredLocalPos = { x: 0, y: 0 };
     let hasPredLocalPos = false;
+    let prevPredBallPos = { x: 0, y: 0 };
+    let currPredBallPos = { x: 0, y: 0 };
+    let hasPredBallPos = false;
     let frozenMatchSnapshot: any = null;
     let goBannerTimer: ReturnType<typeof setTimeout> | null = null;
     let lastObservedGuestRedScore = 0;
@@ -1046,10 +1049,7 @@
       const phase = predEngine ? predEngine.fsm.state : gameUI.matchPhase;
       if (!isMovablePhase(phase)) return;
       const pkt = computeLocalPlayerInput(false);
-      const tick = Math.max(
-        reconciler.lastRecordedSeq + 1,
-        predEngine ? predEngine.currentTick + 1 : clientTick
-      ) >>> 0;
+      const tick = (reconciler.lastRecordedSeq + 1) >>> 0;
       gameApp.networkClient.sendInput(pkt.inputMask ?? 0, tick, pkt.aimAngle, pkt.aimThrottle);
     }
 
@@ -1338,6 +1338,8 @@
         const beforeSnapX = predDiscBefore?.pos.x ?? 0;
         const beforeSnapY = predDiscBefore?.pos.y ?? 0;
         const hadLocalBefore = Boolean(predDiscBefore);
+        const beforeBallX = predEngine.ball.pos.x;
+        const beforeBallY = predEngine.ball.pos.y;
         reconciler.reconcile(predEngine, snap, gameUI.localPlayerId);
         const localDisc = predEngine.players.get(gameUI.localPlayerId);
         if (localDisc) {
@@ -1355,6 +1357,25 @@
           hasPredLocalPos = true;
         } else {
           hasPredLocalPos = false;
+        }
+        const predBall = predEngine.ball;
+        if (predBall) {
+          if (
+            hasPredBallPos &&
+            !reconciler.didBallHardSnapLastReconcile &&
+            !reconciler.didHardSnapLastReconcile
+          ) {
+            const bdx = predBall.pos.x - beforeBallX;
+            const bdy = predBall.pos.y - beforeBallY;
+            prevPredBallPos.x += bdx;
+            prevPredBallPos.y += bdy;
+          } else {
+            prevPredBallPos.x = predBall.pos.x;
+            prevPredBallPos.y = predBall.pos.y;
+          }
+          currPredBallPos.x = predBall.pos.x;
+          currPredBallPos.y = predBall.pos.y;
+          hasPredBallPos = true;
         }
       }
     };
@@ -1397,10 +1418,12 @@
             const localDiscBefore = predEngine.players.get(gameUI.localPlayerId)!;
             prevPredLocalPos.x = localDiscBefore.pos.x;
             prevPredLocalPos.y = localDiscBefore.pos.y;
+            prevPredBallPos.x = predEngine.ball.pos.x;
+            prevPredBallPos.y = predEngine.ball.pos.y;
 
-            const nextTick = (predEngine.currentTick + 1) >>> 0;
+            const nextSeq = (reconciler.lastRecordedSeq + 1) >>> 0;
             const localMask = localPkt.inputMask ?? 0;
-            const seq = reconciler.recordInput(nextTick, localMask, localPkt.aimAngle, localPkt.aimThrottle);
+            const seq = reconciler.recordInput(nextSeq, localMask, localPkt.aimAngle, localPkt.aimThrottle);
             gameApp.networkClient.sendInput(
               localMask,
               seq,
@@ -1411,7 +1434,7 @@
             (localPkt as any).sequence = seq;
             guestLocalInputMap.clear();
             guestLocalInputMap.set(gameUI.localPlayerId, localPkt);
-            predEngine.step(guestLocalInputMap);
+            predEngine.step(guestLocalInputMap, true);
 
             const localDiscAfter = predEngine.players.get(gameUI.localPlayerId);
             if (localDiscAfter) {
@@ -1419,6 +1442,9 @@
               currPredLocalPos.y = localDiscAfter.pos.y;
               hasPredLocalPos = true;
             }
+            currPredBallPos.x = predEngine.ball.pos.x;
+            currPredBallPos.y = predEngine.ball.pos.y;
+            hasPredBallPos = true;
             clientTick = seq;
           } else {
             const seq = Math.max(reconciler.lastRecordedSeq + 1, ++clientTick) >>> 0;
@@ -1438,6 +1464,11 @@
                 currPredLocalPos.y = localDisc.pos.y;
                 hasPredLocalPos = true;
               }
+              prevPredBallPos.x = predEngine.ball.pos.x;
+              prevPredBallPos.y = predEngine.ball.pos.y;
+              currPredBallPos.x = predEngine.ball.pos.x;
+              currPredBallPos.y = predEngine.ball.pos.y;
+              hasPredBallPos = true;
             }
           }
         }
@@ -1725,6 +1756,13 @@
 
             let nonLocalCount = 0;
             renderer.discRenderer.isPaused = false;
+            const usePredictedBall = Boolean(predEngine && hasPredBallPos);
+            const predBallX = usePredictedBall
+              ? lerp(prevPredBallPos.x, currPredBallPos.x, alpha) + reconciler.ballVisualOffset.x
+              : 0;
+            const predBallY = usePredictedBall
+              ? lerp(prevPredBallPos.y, currPredBallPos.y, alpha) + reconciler.ballVisualOffset.y
+              : 0;
             for (let i = 0; i < inDiscs.length; i++) {
               const d = inDiscs[i]!;
               if (d.id !== localId) {
@@ -1733,24 +1771,35 @@
                   slot = { id: 0, team: 0, x: 0, y: 0, vx: 0, vy: 0, radius: playerRad };
                   sepOtherPool.push(slot);
                 }
-                const discRadius = d.id === 0 || d.team === 0 ? ballRad : playerRad;
-                scratchExtrapInput.id = d.id;
-                scratchExtrapInput.team = (d.team === 1 || d.team === 2 ? d.team : 0) as 0 | 1 | 2;
-                scratchExtrapInput.x = d.x;
-                scratchExtrapInput.y = d.y;
-                scratchExtrapInput.vx = d.vx;
-                scratchExtrapInput.vy = d.vy;
-                scratchExtrapInput.radius = discRadius;
-                scratchExtrapInput.isDashing = Boolean((d.flags ?? 0) & (1 << 1));
-                const extrapD = renderer.discRenderer.getRenderDisc(scratchExtrapInput, true);
+                const isBallDisc = d.id === 0 || d.team === 0;
+                const discRadius = isBallDisc ? ballRad : playerRad;
+                if (isBallDisc && usePredictedBall && predEngine) {
+                  slot.id = d.id;
+                  slot.team = d.team;
+                  slot.x = predBallX;
+                  slot.y = predBallY;
+                  slot.vx = predEngine.ball.vel.x;
+                  slot.vy = predEngine.ball.vel.y;
+                  slot.radius = discRadius;
+                } else {
+                  scratchExtrapInput.id = d.id;
+                  scratchExtrapInput.team = (d.team === 1 || d.team === 2 ? d.team : 0) as 0 | 1 | 2;
+                  scratchExtrapInput.x = d.x;
+                  scratchExtrapInput.y = d.y;
+                  scratchExtrapInput.vx = d.vx;
+                  scratchExtrapInput.vy = d.vy;
+                  scratchExtrapInput.radius = discRadius;
+                  scratchExtrapInput.isDashing = Boolean((d.flags ?? 0) & (1 << 1));
+                  const extrapD = renderer.discRenderer.getRenderDisc(scratchExtrapInput, true);
 
-                slot.id = d.id;
-                slot.team = d.team;
-                slot.x = extrapD.x;
-                slot.y = extrapD.y;
-                slot.vx = d.vx;
-                slot.vy = d.vy;
-                slot.radius = discRadius;
+                  slot.id = d.id;
+                  slot.team = d.team;
+                  slot.x = extrapD.x;
+                  slot.y = extrapD.y;
+                  slot.vx = d.vx;
+                  slot.vy = d.vy;
+                  slot.radius = discRadius;
+                }
                 sepOtherDiscs.push(slot);
                 sepOtherIndexByDisc[i] = nonLocalCount;
                 nonLocalCount++;
@@ -1805,15 +1854,24 @@
                 outDisc.lastAckedInputSeq = d.lastAckedInputSeq;
               } else {
                 const sep = sepOtherDiscs[sepOtherIndexByDisc[i]!]!;
+                const isBallDisc = d.id === 0 || d.team === 0;
                 outDisc.id = d.id;
                 outDisc.team = d.team;
                 outDisc.x = sep.x;
                 outDisc.y = sep.y;
-                outDisc.vx = d.vx;
-                outDisc.vy = d.vy;
-                outDisc.flags = d.flags;
+                outDisc.vx = isBallDisc && usePredictedBall && predEngine ? predEngine.ball.vel.x : d.vx;
+                outDisc.vy = isBallDisc && usePredictedBall && predEngine ? predEngine.ball.vel.y : d.vy;
+                if (isBallDisc && usePredictedBall && predEngine) {
+                  let bFlags = d.flags ?? 0;
+                  if (predEngine.ball.isCurving || Math.abs(predEngine.ball.spin) > 0.01) bFlags |= 1 << 2;
+                  if (predEngine.ball.isPowerShot) bFlags |= 1 << 3;
+                  outDisc.flags = bFlags;
+                  outDisc.spin = predEngine.ball.spin || d.spin;
+                } else {
+                  outDisc.flags = d.flags;
+                  outDisc.spin = d.spin;
+                }
                 outDisc.stamina = d.stamina;
-                outDisc.spin = d.spin;
                 outDisc.dashTimer = d.dashTimer;
                 outDisc.dashCooldown = d.dashCooldown;
                 outDisc.lastAckedInputSeq = d.lastAckedInputSeq;

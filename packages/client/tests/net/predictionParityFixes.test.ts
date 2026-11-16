@@ -245,5 +245,77 @@ describe('Goal 4 Client Prediction & Netcode Parity Fixes', () => {
       const extrapolatedSlot = renderer['frameRenderDiscs'][0]!;
       expect(extrapolatedSlot.x).toBeGreaterThan(100);
     });
+
+    it('keeps predicted ball in front of Non-Host player with 0.00px snapshot jump across 200ms RTT dribbling contact', () => {
+      const hostEngine = new EngineInstance('mediano');
+      const predEngine = new EngineInstance('mediano');
+      const reconciler = new ClientPredictionReconciler();
+
+      hostEngine.addPlayer(2, 'red');
+      predEngine.addPlayer(2, 'red');
+      hostEngine.startMatch(false);
+      hostEngine.fsm.startPlaying();
+      predEngine.startMatch(false);
+      predEngine.fsm.startPlaying();
+
+      // Place player 2 just left of the stationary ball at (0, 0)
+      const hostPlayer = hostEngine.players.get(2)!;
+      hostPlayer.pos.set(-35, 0);
+      hostPlayer.vel.set(0, 0);
+      hostEngine.ball.pos.set(0, 0);
+      hostEngine.ball.vel.set(0, 0);
+
+      predEngine.setState(hostEngine.getState());
+
+      const rttTicks = 12; // 200ms RTT at 60Hz
+      const inFlightInputs: Array<{ seq: number; mask: number }> = [];
+      const snapshotsInFlight: Array<{ deliverAtTick: number; snap: any }> = [];
+      const INPUT_RIGHT = 1 << 3;
+
+      for (let tick = 1; tick <= 60; tick++) {
+        const seq = reconciler.recordInput(tick, INPUT_RIGHT, null, 0);
+        predEngine.step(
+          new Map([[2, { inputMask: INPUT_RIGHT, sequence: seq } as any]]),
+          true
+        );
+        inFlightInputs.push({ seq, mask: INPUT_RIGHT });
+
+        // Host receives inputs after RTT/2 (6 ticks)
+        if (tick > 6) {
+          const arrived = inFlightInputs.shift()!;
+          hostEngine.step(
+            new Map([[2, { inputMask: arrived.mask, sequence: arrived.seq } as any]])
+          );
+          snapshotsInFlight.push({
+            deliverAtTick: tick + 6,
+            snap: hostEngine.getState()
+          });
+        }
+
+        // Client receives authoritative snapshot after another RTT/2 (6 ticks)
+        while (snapshotsInFlight.length > 0 && snapshotsInFlight[0]!.deliverAtTick <= tick) {
+          const { snap } = snapshotsInFlight.shift()!;
+          const ballBeforeX = predEngine.ball.pos.x + reconciler.ballVisualOffset.x;
+          const ballBeforeY = predEngine.ball.pos.y + reconciler.ballVisualOffset.y;
+
+          reconciler.reconcile(predEngine, snap, 2);
+
+          const ballAfterX = predEngine.ball.pos.x + reconciler.ballVisualOffset.x;
+          const ballAfterY = predEngine.ball.pos.y + reconciler.ballVisualOffset.y;
+
+          // Zero instantaneous visual jump on snapshot arrival
+          expect(Math.hypot(ballAfterX - ballBeforeX, ballAfterY - ballBeforeY)).toBeLessThan(1e-4);
+        }
+
+        reconciler.updateVisualSmoothing(1 / 60);
+
+        const predP = predEngine.players.get(2)!;
+        const renderPlayerX = predP.pos.x + reconciler.visualOffset.x;
+        const renderBallX = predEngine.ball.pos.x + reconciler.ballVisualOffset.x;
+
+        // Throughout approach and contact, ball must ALWAYS stay to the right (in front) of the player
+        expect(renderBallX).toBeGreaterThan(renderPlayerX + predP.radius + predEngine.ball.radius - 0.5);
+      }
+    });
   });
 });

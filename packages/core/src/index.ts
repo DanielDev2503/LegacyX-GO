@@ -711,6 +711,16 @@ export class EngineInstance {
       this.fsm.state === MatchPhase.KICKOFF ||
       isCelebration;
 
+    for (const [id] of this.players.entries()) {
+      const input = inputs.get(id);
+      if (input) {
+        const seq = (input as any).sequence ?? (input as any).seq ?? (input as any).tick;
+        if (typeof seq === 'number') {
+          this.getRuntime(id).lastProcessedInputSeq = seq >>> 0;
+        }
+      }
+    }
+
     if (isGameActive) {
       const baseKickCfg = (this.modifiers as any).kickStrength !== undefined
         ? ((this.modifiers as any).kickStrength / 4.545) * 450.0
@@ -719,13 +729,6 @@ export class EngineInstance {
       for (const [id, player] of this.players.entries()) {
         const rt = this.getRuntime(id);
         const input = inputs.get(id);
-
-        if (input) {
-          const seq = (input as any).sequence ?? (input as any).seq ?? (input as any).tick;
-          if (typeof seq === 'number') {
-            rt.lastProcessedInputSeq = seq >>> 0;
-          }
-        }
 
         const mask = input ? (input.inputMask ?? 0) : 0;
         player.isTyping = Boolean(mask & INPUT_FLAG_TYPING);
@@ -992,7 +995,7 @@ export class EngineInstance {
         }
       }
 
-      if (!isCelebration) {
+      if (!isCelebration && !isReplay) {
         const hw = this.stadium.halfWidth;
         const gh = this.stadium.goalHalfHeight;
         const bx = this.ball.pos.x;
@@ -1014,7 +1017,9 @@ export class EngineInstance {
       this.applyReplayFrame(this.goalReplayClip[frameIdx]!, true);
     }
 
-    this.fsm.updateTick();
+    if (!isReplay) {
+      this.fsm.updateTick();
+    }
     this.currentTick++;
 
     if (!isReplay) {
