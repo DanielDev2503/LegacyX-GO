@@ -398,9 +398,88 @@ export function clampDiscToGoalAwareBounds(
   arenaHalfW: number,
   arenaHalfH: number,
   goalHalfHeight: number = 0,
-  goalDepth: number = 0
+  goalDepth: number = 0,
+  runOff: number = 0
 ): void {
   const r = disc.radius;
+
+  if (runOff > 0) {
+    if (arenaHalfH > 0) {
+      const maxY = Math.max(0, arenaHalfH + runOff - r);
+      if (disc.y < -maxY) {
+        disc.y = -maxY;
+        if (disc.vy !== undefined && disc.vy < 0) disc.vy = 0;
+      } else if (disc.y > maxY) {
+        disc.y = maxY;
+        if (disc.vy !== undefined && disc.vy > 0) disc.vy = 0;
+      }
+    }
+
+    if (arenaHalfW > 0) {
+      let maxX = Math.max(0, arenaHalfW + runOff - r);
+      if (
+        goalHalfHeight > 0 &&
+        Math.abs(disc.y) <= Math.max(0, goalHalfHeight - r * 0.25) &&
+        goalDepth > runOff
+      ) {
+        maxX = Math.max(0, arenaHalfW + Math.max(runOff, goalDepth) - r);
+      }
+
+      if (disc.x < -maxX) {
+        disc.x = -maxX;
+        if (disc.vx !== undefined && disc.vx < 0) disc.vx = 0;
+      } else if (disc.x > maxX) {
+        disc.x = maxX;
+        if (disc.vx !== undefined && disc.vx > 0) disc.vx = 0;
+      }
+
+      if (goalHalfHeight > 0) {
+        const postHalfH = arenaHalfH > 0 ? Math.min(goalHalfHeight, arenaHalfH) : goalHalfHeight;
+        const minPostDist = r + 8;
+        const minPostDistSq = minPostDist * minPostDist;
+        for (let p = 0; p < 4; p++) {
+          const px = p < 2 ? -arenaHalfW : arenaHalfW;
+          const py = (p & 1) === 0 ? -postHalfH : postHalfH;
+          const dx = disc.x - px;
+          const dy = disc.y - py;
+          const dSq = dx * dx + dy * dy;
+          if (dSq < minPostDistSq) {
+            const dist = Math.sqrt(dSq);
+            const nx = dist > 1e-9 ? dx / dist : (px <= 0 ? 1 : -1);
+            const ny = dist > 1e-9 ? dy / dist : 0;
+            disc.x = px + nx * minPostDist;
+            disc.y = py + ny * minPostDist;
+            if (disc.vx !== undefined && disc.vy !== undefined) {
+              const vDotN = disc.vx * nx + disc.vy * ny;
+              if (vDotN < 0) {
+                disc.vx -= vDotN * nx;
+                disc.vy -= vDotN * ny;
+              }
+            }
+          }
+        }
+
+        if (arenaHalfH > 0) {
+          const maxY = Math.max(0, arenaHalfH + runOff - r);
+          if (disc.y < -maxY) {
+            disc.y = -maxY;
+            if (disc.vy !== undefined && disc.vy < 0) disc.vy = 0;
+          } else if (disc.y > maxY) {
+            disc.y = maxY;
+            if (disc.vy !== undefined && disc.vy > 0) disc.vy = 0;
+          }
+        }
+        if (disc.x < -maxX) {
+          disc.x = -maxX;
+          if (disc.vx !== undefined && disc.vx < 0) disc.vx = 0;
+        } else if (disc.x > maxX) {
+          disc.x = maxX;
+          if (disc.vx !== undefined && disc.vx > 0) disc.vx = 0;
+        }
+      }
+    }
+    return;
+  }
 
   if (arenaHalfH > 0) {
     const maxY = Math.max(0, arenaHalfH - r);
@@ -499,7 +578,8 @@ function separateBallAndDisc(
   arenaHalfH: number,
   goalHalfHeight: number,
   goalDepth: number,
-  localVelForImpulse: { x: number; y: number } | null
+  localVelForImpulse: { x: number; y: number } | null,
+  discRunOff: number = 0
 ): void {
   const dx = ball.x - disc.x;
   const dy = ball.y - disc.y;
@@ -518,13 +598,13 @@ function separateBallAndDisc(
   const ballShare = overlap * 0.75;
   ball.x += nx * ballShare;
   ball.y += ny * ballShare;
-  clampDiscToGoalAwareBounds(ball, arenaHalfW, arenaHalfH, goalHalfHeight, goalDepth);
+  clampDiscToGoalAwareBounds(ball, arenaHalfW, arenaHalfH, goalHalfHeight, goalDepth, 0);
 
   const actualBallShift = Math.max(0, (ball.x - prevBallX) * nx + (ball.y - prevBallY) * ny);
   const discShare = Math.max(0, overlap - actualBallShift);
   disc.x -= nx * discShare;
   disc.y -= ny * discShare;
-  clampDiscToGoalAwareBounds(disc, arenaHalfW, arenaHalfH, goalHalfHeight, goalDepth);
+  clampDiscToGoalAwareBounds(disc, arenaHalfW, arenaHalfH, goalHalfHeight, goalDepth, discRunOff);
 
   // If clamping either disc left residual overlap, push the unconstrained side out to ensure 100% separation
   const remDx = ball.x - disc.x;
@@ -539,13 +619,13 @@ function separateBallAndDisc(
     const prevBY2 = ball.y;
     ball.x += rNx * remOverlap;
     ball.y += rNy * remOverlap;
-    clampDiscToGoalAwareBounds(ball, arenaHalfW, arenaHalfH, goalHalfHeight, goalDepth);
+    clampDiscToGoalAwareBounds(ball, arenaHalfW, arenaHalfH, goalHalfHeight, goalDepth, 0);
     const ballMoved2 = Math.max(0, (ball.x - prevBX2) * rNx + (ball.y - prevBY2) * rNy);
     const discRem = Math.max(0, remOverlap - ballMoved2);
     if (discRem > 1e-6) {
       disc.x -= rNx * discRem;
       disc.y -= rNy * discRem;
-      clampDiscToGoalAwareBounds(disc, arenaHalfW, arenaHalfH, goalHalfHeight, goalDepth);
+      clampDiscToGoalAwareBounds(disc, arenaHalfW, arenaHalfH, goalHalfHeight, goalDepth, discRunOff);
     }
   }
 
@@ -570,7 +650,8 @@ export function applyPredictiveRenderSeparation(
   arenaHalfW: number,
   arenaHalfH: number,
   goalHalfHeight?: number,
-  goalDepth?: number
+  goalDepth?: number,
+  runOff: number = 0
 ): void {
   const effectiveGoalHalfH =
     goalHalfHeight !== undefined ? goalHalfHeight : (arenaHalfH > 0 ? Math.min(85, arenaHalfH * 0.4) : 0);
@@ -594,7 +675,7 @@ export function applyPredictiveRenderSeparation(
     for (let i = 0; i < otherDiscs.length; i++) {
       const other = otherDiscs[i]!;
       if (other === ballDisc || other.id === 0 || other.team === 0) continue;
-      separateBallAndDisc(other, ballDisc, arenaHalfW, arenaHalfH, effectiveGoalHalfH, effectiveGoalDepth, null);
+      separateBallAndDisc(other, ballDisc, arenaHalfW, arenaHalfH, effectiveGoalHalfH, effectiveGoalDepth, null, runOff);
     }
   }
 
@@ -609,7 +690,8 @@ export function applyPredictiveRenderSeparation(
         arenaHalfH,
         effectiveGoalHalfH,
         effectiveGoalDepth,
-        _sepLocalVel
+        _sepLocalVel,
+        runOff
       );
     } else {
       _sepOtherVel.x = other.vx;
@@ -622,19 +704,20 @@ export function applyPredictiveRenderSeparation(
         _sepOtherVel,
         other.radius
       );
+      clampDiscToGoalAwareBounds(other, arenaHalfW, arenaHalfH, effectiveGoalHalfH, effectiveGoalDepth, runOff);
     }
   }
 
   localDisc.vx = _sepLocalVel.x;
   localDisc.vy = _sepLocalVel.y;
-  clampDiscToGoalAwareBounds(localDisc, arenaHalfW, arenaHalfH, effectiveGoalHalfH, effectiveGoalDepth);
+  clampDiscToGoalAwareBounds(localDisc, arenaHalfW, arenaHalfH, effectiveGoalHalfH, effectiveGoalDepth, runOff);
 
   // Pass 3: Reconcile any residual overlap with ball induced by player-player separation or wall clamping
   if (ballDisc) {
     for (let i = 0; i < otherDiscs.length; i++) {
       const other = otherDiscs[i]!;
       if (other === ballDisc || other.id === 0 || other.team === 0) continue;
-      separateBallAndDisc(other, ballDisc, arenaHalfW, arenaHalfH, effectiveGoalHalfH, effectiveGoalDepth, null);
+      separateBallAndDisc(other, ballDisc, arenaHalfW, arenaHalfH, effectiveGoalHalfH, effectiveGoalDepth, null, runOff);
     }
 
     const dx = ballDisc.x - localDisc.x;
@@ -648,7 +731,8 @@ export function applyPredictiveRenderSeparation(
         arenaHalfH,
         effectiveGoalHalfH,
         effectiveGoalDepth,
-        null
+        null,
+        runOff
       );
     }
   }

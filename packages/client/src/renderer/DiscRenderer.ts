@@ -1,4 +1,4 @@
-import type { DiscSnapshot, CompactDiscState } from '@legacyx/core';
+import { clampDiscToGoalAwareBounds, type DiscSnapshot, type CompactDiscState } from '@legacyx/core';
 import {
   drawBallDesign,
   isBallSkin,
@@ -133,7 +133,8 @@ export class DiscRenderer {
 
   public extrapolationMs: number = 0;
   public isPaused: boolean = false;
-  public stadiumBounds: { halfWidth: number; halfHeight: number; goalDepth: number; goalHalfHeight: number } | null = null;
+  public skipNextFrameExtrapolation: boolean = false;
+  public stadiumBounds: { halfWidth: number; halfHeight: number; goalDepth: number; goalHalfHeight: number; runOff?: number } | null = null;
   public dampingBall: number = 0.99;
   public dampingPlayer: number = 0.96;
   public showTypingIndicator: boolean = true;
@@ -186,7 +187,7 @@ export class DiscRenderer {
     this.extrapolationMs = Math.max(0, Math.min(250, ms));
   }
 
-  public setStadiumBounds(bounds: { halfWidth: number; halfHeight: number; goalDepth: number; goalHalfHeight: number } | null): void {
+  public setStadiumBounds(bounds: { halfWidth: number; halfHeight: number; goalDepth: number; goalHalfHeight: number; runOff?: number } | null): void {
     this.stadiumBounds = bounds;
   }
 
@@ -225,14 +226,13 @@ export class DiscRenderer {
       const gh = this.stadiumBounds.goalHalfHeight;
       const gd = this.stadiumBounds.goalDepth;
       const r = disc.radius || (disc.team === 0 ? 5.8 : 15);
+      const isPlayer = disc.team !== 0;
+      const runOff = isPlayer ? (this.stadiumBounds.runOff ?? 0) : 0;
 
-      py = Math.max(-hh + r, Math.min(hh - r, py));
-
-      if (Math.abs(py) <= gh - r) {
-        px = Math.max(-(hw + gd - r), Math.min(hw + gd - r, px));
-      } else {
-        px = Math.max(-hw + r, Math.min(hw - r, px));
-      }
+      const proxy = { x: px, y: py, vx: disc.vx, vy: disc.vy, radius: r };
+      clampDiscToGoalAwareBounds(proxy, hw, hh, gh, gd, runOff);
+      px = proxy.x;
+      py = proxy.y;
     }
 
     s.x = px;
@@ -259,10 +259,11 @@ export class DiscRenderer {
   }
 
   private populateFrameRenderDiscs(discs: DiscSnapshot[], localDiscId?: number | null): void {
+    const skip = this.skipNextFrameExtrapolation;
     for (let i = 0; i < discs.length; i++) {
       const disc = discs[i]!;
       const isRemote = disc.team === 0 ? true : disc.id !== localDiscId;
-      const renderD = this.getRenderDisc(disc, isRemote);
+      const renderD = skip ? disc : this.getRenderDisc(disc, isRemote);
       let slot = this.frameRenderDiscs[i];
       if (!slot) {
         slot = {
@@ -348,87 +349,94 @@ export class DiscRenderer {
     discs: DiscSnapshot[],
     localDiscId?: number | null
   ): void {
-    ctx.save();
+    const skip = this.skipNextFrameExtrapolation;
+    try {
+      ctx.save();
 
-    this.populateFrameRenderDiscs(discs, localDiscId);
-    this.separateFrameDiscs();
+      this.populateFrameRenderDiscs(discs, localDiscId);
+      if (!skip) {
+        this.separateFrameDiscs();
+      }
 
-    const renderCount = this.frameRenderDiscs.length;
-    this.activeTurboIds.clear();
-    let ballDisc: DiscSnapshot | undefined;
+      const renderCount = this.frameRenderDiscs.length;
+      this.activeTurboIds.clear();
+      let ballDisc: DiscSnapshot | undefined;
 
-    for (let i = 0; i < renderCount; i++) {
-      const renderD = this.frameRenderDiscs[i]!;
-      if (renderD.team === 0) {
-        if (!ballDisc) ballDisc = renderD;
-        continue;
+      for (let i = 0; i < renderCount; i++) {
+        const renderD = this.frameRenderDiscs[i]!;
+        if (renderD.team === 0) {
+          if (!ballDisc) ballDisc = renderD;
+          continue;
+        }
+        if (renderD.isDashing) {
+          this.recordDashGhost(renderD);
+        }
+        if (renderD.isTurbo) {
+          this.activeTurboIds.add(renderD.id);
+          this.recordRibbonPoint(renderD);
+          this.emitTurboParticle(renderD);
+        }
       }
-      if (renderD.isDashing) {
-        this.recordDashGhost(renderD);
+
+      for (const [id, buf] of this.ribbonMap.entries()) {
+        if (!this.activeTurboIds.has(id) && buf.count > 0) {
+          buf.count--;
+        }
       }
-      if (renderD.isTurbo) {
-        this.activeTurboIds.add(renderD.id);
-        this.recordRibbonPoint(renderD);
-        this.emitTurboParticle(renderD);
+
+      if (ballDisc) {
+        const bx = ballDisc.x;
+        const by = ballDisc.y;
+        const spinVal = ballDisc.spin ?? (ballDisc.curveFactor ? ballDisc.curveFactor / 10 : 0);
+        const isSpinning = Math.abs(spinVal) > 0.001;
+        if (isSpinning) {
+          this.recordBallTrailPoint(bx, by, spinVal);
+        } else {
+          this.ballTrailCount = 0;
+        }
+
+        if (ballDisc.isPowerShot) {
+          this.recordPowerTrailPoint(bx, by);
+        } else if (this.powerTrailCount > 0) {
+          this.powerTrailCount--;
+        }
       }
+
+      this.renderRibbonTrails(ctx);
+      this.renderTurboParticles(ctx);
+      this.renderDashGhosts(ctx);
+      if (ballDisc) {
+        const ballRadius = ballDisc.radius || this.ballRadius;
+        this.renderBallMagnusTrail(ctx, ballRadius);
+        this.renderBallPowerTrail(ctx, ballRadius);
+      }
+
+      for (let i = 0; i < renderCount; i++) {
+        const renderD = this.frameRenderDiscs[i]!;
+        if (renderD.team !== 0) {
+          this.renderStaminaBar(ctx, renderD);
+        }
+      }
+
+      for (let i = 0; i < renderCount; i++) {
+        const renderD = this.frameRenderDiscs[i]!;
+        if (renderD.team !== 0) {
+          const info = this.playerInfos.get(renderD.id);
+          this.renderPlayerDisc(ctx, renderD, renderD.id === localDiscId, false, info?.nickname, info);
+        }
+      }
+
+      for (let i = 0; i < renderCount; i++) {
+        const renderD = this.frameRenderDiscs[i]!;
+        if (renderD.team === 0) {
+          this.renderBallDisc(ctx, renderD);
+        }
+      }
+
+      ctx.restore();
+    } finally {
+      this.skipNextFrameExtrapolation = false;
     }
-
-    for (const [id, buf] of this.ribbonMap.entries()) {
-      if (!this.activeTurboIds.has(id) && buf.count > 0) {
-        buf.count--;
-      }
-    }
-
-    if (ballDisc) {
-      const bx = ballDisc.x;
-      const by = ballDisc.y;
-      const spinVal = ballDisc.spin ?? (ballDisc.curveFactor ? ballDisc.curveFactor / 10 : 0);
-      const isSpinning = Math.abs(spinVal) > 0.001;
-      if (isSpinning) {
-        this.recordBallTrailPoint(bx, by, spinVal);
-      } else {
-        this.ballTrailCount = 0;
-      }
-
-      if (ballDisc.isPowerShot) {
-        this.recordPowerTrailPoint(bx, by);
-      } else if (this.powerTrailCount > 0) {
-        this.powerTrailCount--;
-      }
-    }
-
-    this.renderRibbonTrails(ctx);
-    this.renderTurboParticles(ctx);
-    this.renderDashGhosts(ctx);
-    if (ballDisc) {
-      const ballRadius = ballDisc.radius || this.ballRadius;
-      this.renderBallMagnusTrail(ctx, ballRadius);
-      this.renderBallPowerTrail(ctx, ballRadius);
-    }
-
-    for (let i = 0; i < renderCount; i++) {
-      const renderD = this.frameRenderDiscs[i]!;
-      if (renderD.team !== 0) {
-        this.renderStaminaBar(ctx, renderD);
-      }
-    }
-
-    for (let i = 0; i < renderCount; i++) {
-      const renderD = this.frameRenderDiscs[i]!;
-      if (renderD.team !== 0) {
-        const info = this.playerInfos.get(renderD.id);
-        this.renderPlayerDisc(ctx, renderD, renderD.id === localDiscId, false, info?.nickname, info);
-      }
-    }
-
-    for (let i = 0; i < renderCount; i++) {
-      const renderD = this.frameRenderDiscs[i]!;
-      if (renderD.team === 0) {
-        this.renderBallDisc(ctx, renderD);
-      }
-    }
-
-    ctx.restore();
   }
 
   // Overloaded renderBall supporting both DiscSnapshot and GameRenderer's positional call
@@ -514,6 +522,13 @@ export class DiscRenderer {
         count: 0
       };
       this.ribbonMap.set(disc.id, buf);
+    } else if (buf.count > 0) {
+      const lastX = buf.posX[buf.head]!;
+      const lastY = buf.posY[buf.head]!;
+      if (Math.hypot(disc.x - lastX, disc.y - lastY) > 55) {
+        buf.count = 0;
+        buf.head = 0;
+      }
     }
 
     buf.head = (buf.head + 1) & (TURBO_TRAIL_CAPACITY - 1);
@@ -642,6 +657,20 @@ export class DiscRenderer {
         radius: disc.radius
       }));
       this.ghostMap.set(disc.id, slots);
+    } else {
+      let lastActive: { x: number; y: number } | null = null;
+      for (let i = slots.length - 1; i >= 0; i--) {
+        if (slots[i]!.active) {
+          lastActive = slots[i]!;
+          break;
+        }
+      }
+      if (lastActive && Math.hypot(disc.x - lastActive.x, disc.y - lastActive.y) > 70) {
+        for (let i = 0; i < slots.length; i++) {
+          slots[i]!.active = false;
+          slots[i]!.alpha = 0;
+        }
+      }
     }
 
     const newest = slots[slots.length - 1]!;

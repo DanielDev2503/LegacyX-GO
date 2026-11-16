@@ -5,7 +5,7 @@ import { compile } from 'svelte/compiler';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { DEFAULT_SETTINGS, gameUI } from '../../src/ui/state/gameUI.svelte.js';
 import { SoundFX } from '../../src/audio/SoundFX.js';
-import { DiscRenderer } from '../../src/renderer/DiscRenderer.js';
+import { DiscRenderer, activePitchEmotes, clearPitchEmotes } from '../../src/renderer/DiscRenderer.js';
 
 function makeMemoryStorage() {
   const store = new Map<string, string>();
@@ -29,6 +29,8 @@ describe('Wave-4 UI & Client Features', () => {
 
   beforeEach(() => {
     vi.stubGlobal('localStorage', makeMemoryStorage());
+    clearPitchEmotes();
+    gameUI.onPlayerEmote = null;
     gameUI.resetRoomSession();
     gameUI.saveSettings({
       ...DEFAULT_SETTINGS,
@@ -39,6 +41,8 @@ describe('Wave-4 UI & Client Features', () => {
   });
 
   afterEach(() => {
+    clearPitchEmotes();
+    gameUI.onPlayerEmote = null;
     vi.unstubAllGlobals();
     vi.useRealTimers();
   });
@@ -54,14 +58,38 @@ describe('Wave-4 UI & Client Features', () => {
     expect(sfx.volume).toBe(1.0);
   });
 
-  it('enforces 500ms chat cooldown to prevent spam and recovers after >= 500ms', () => {
+  it('enforces 1500ms chat cooldown to prevent spam and recovers after >= 1500ms', () => {
     vi.useFakeTimers();
     vi.setSystemTime(10_000);
     expect(gameUI.canSendChatNow(10_000)).toBe(true);
     gameUI.markChatSent(10_000);
     expect(gameUI.canSendChatNow(10_200)).toBe(false);
-    expect(gameUI.canSendChatNow(10_499)).toBe(false);
-    expect(gameUI.canSendChatNow(10_500)).toBe(true);
+    expect(gameUI.canSendChatNow(11_499)).toBe(false);
+    expect(gameUI.canSendChatNow(11_500)).toBe(true);
+  });
+
+  it('triggers pitch emote and forwards recording callback via gameUI.triggerPlayerEmote / onPlayerEmote', () => {
+    const recordedEmotes: Array<{ playerId: number; emoji: string }> = [];
+    gameUI.onPlayerEmote = (playerId, emoji) => {
+      recordedEmotes.push({ playerId, emoji });
+    };
+
+    gameUI.triggerPlayerEmote(7, '🔥');
+
+    const active = activePitchEmotes.get(7);
+    expect(active).toBeDefined();
+    expect(active?.emoji).toBe('🔥');
+    expect(recordedEmotes).toEqual([{ playerId: 7, emoji: '🔥' }]);
+
+    clearPitchEmotes();
+    gameUI.settings.showPitchEmotes = false;
+    gameUI.triggerPlayerEmote(7, '⚽');
+
+    expect(activePitchEmotes.has(7)).toBe(false);
+    expect(recordedEmotes).toEqual([
+      { playerId: 7, emoji: '🔥' },
+      { playerId: 7, emoji: '⚽' }
+    ]);
   });
 
   it('omits avatar text/emoji when DiscRenderer.showPlayerAvatars is false and typing bubble when showTypingIndicator is false', () => {

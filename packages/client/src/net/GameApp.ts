@@ -5,7 +5,16 @@ import { gameUI, type RosterPlayer, type ChatEntry } from '../ui/state/gameUI.sv
 import { userProfile } from '../ui/state/userProfile.svelte.js';
 import { soundFX } from '../audio/SoundFX.js';
 import { triggerPitchEmote } from '../renderer/DiscRenderer.js';
-import type { PlayerInput } from '@legacyx/core';
+import {
+  INPUT_FLAG_DASH,
+  INPUT_FLAG_KICK,
+  INPUT_FLAG_MAGNUS_LEFT,
+  INPUT_FLAG_MAGNUS_RIGHT,
+  type PlayerInput
+} from '@legacyx/core';
+
+const REMOTE_IMPULSE_FLAGS =
+  INPUT_FLAG_DASH | INPUT_FLAG_KICK | INPUT_FLAG_MAGNUS_LEFT | INPUT_FLAG_MAGNUS_RIGHT;
 
 export interface CreateRoomParams {
   name: string;
@@ -79,6 +88,7 @@ export function mapPlayersToRoster(players: PlayerInfo[]): RosterPlayer[] {
       team: p.team,
       isAdmin: Boolean(p.isHost || p.isAdmin),
       isHost: Boolean(p.isHost),
+      isGuest: Boolean(p.isGuest),
       ping: p.isHost ? 0 : (p.ping ?? 20),
       kit: p.kit ?? p.localKit,
       localKit: p.localKit ?? p.kit,
@@ -96,6 +106,10 @@ export class GameApp {
   public currentRoomConfig: CreateRoomParams | null = null;
   /** Inputs de jugadores remotos recibidos por el Host (playerId → máscara). */
   public remoteInputs = new Map<number, PlayerInput>();
+  private pendingImpulseMasks = new Map<number, number>();
+  private rawRemoteMasks = new Map<number, number>();
+  private lastRemoteInputSeq = new Map<number, number>();
+  private recentLocalEmotes = new Map<string, number>();
   public activeMatchToken: string | null = null;
   public activeGoalScorerId: number | null = null;
   public hostEngine: any = null;
@@ -191,18 +205,25 @@ export class GameApp {
       return;
     }
 
-    // Comprobar si el emisor es espectador: si lo es, jamás activa emote y siempre se muestra en chat
-    const player = gameUI.rosterPlayers.find((p) => p.nickname === sender || p.name === sender);
+    // Comprobar si el emisor es espectador o invitado: jamás activan emotes y siempre se muestran en chat
+    const cleanSender = (sender || '').trim();
+    const player =
+      gameUI.rosterPlayers.find((p) => p.nickname === sender || p.name === sender) ??
+      gameUI.rosterPlayers.find(
+        (p) =>
+          p.nickname.trim().toLowerCase() === cleanSender.toLowerCase() ||
+          (p.name || '').trim().toLowerCase() === cleanSender.toLowerCase()
+      );
     const playerTeam = team || player?.team;
     const isSpectator = playerTeam === 'spectator' || playerTeam === 'spectators' || playerTeam === 'spec' || playerTeam === 'SPEC';
-    const emoteEmoji = isSpectator ? null : gameUI.matchEmoteTrigger(text);
+    const isGuestSender = Boolean(player?.isGuest) || /^inv_/i.test(cleanSender);
+    const emoteEmoji = isSpectator || isGuestSender ? null : gameUI.matchEmoteTrigger(text);
     const playerId = player ? player.id : (isHost ? 1 : null);
 
     if (emoteEmoji && gameUI.settings.showPitchEmotes !== false) {
       if (playerId !== null) {
-        triggerPitchEmote(playerId, emoteEmoji);
-      }
-      if (gameUI.settings.chatEmotesSoundEnabled !== false) {
+        this.dispatchEmoteWithRecord(playerId, emoteEmoji);
+      } else if (gameUI.settings.chatEmotesSoundEnabled !== false) {
         soundFX.playPitchEmoteSound();
       }
       return; // Ocultar comando del feed de chat cuando los emotes en cancha están activados
@@ -225,13 +246,54 @@ export class GameApp {
     });
   }
 
-  private showEmote(playerId: number, emoji: string): void {
-    if (gameUI.settings.showPitchEmotes !== false) {
+  public markLocalEmoteDispatched(playerId: number, emoji: string): void {
+    const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    this.recentLocalEmotes.set(`${playerId}:${emoji}`, now);
+  }
+
+  private consumeRecentLocalEmote(playerId: number, emoji: string): boolean {
+    const key = `${playerId}:${emoji}`;
+    const prev = this.recentLocalEmotes.get(key);
+    const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    if (prev !== undefined && now - prev < 350) {
+      this.recentLocalEmotes.delete(key);
+      return true;
+    }
+    return false;
+  }
+
+  private dispatchEmoteWithRecord(playerId: number, emoji: string): void {
+    if (this.consumeRecentLocalEmote(playerId, emoji)) {
+      return;
+    }
+    if (gameUI.settings.showPitchEmotes !== false && gameUI.settings.chatEmotesSoundEnabled !== false) {
+      soundFX.playPitchEmoteSound();
+    }
+    if (gameUI.onPlayerEmote) {
+      gameUI.onPlayerEmote(playerId, emoji);
+    } else if (gameUI.settings.showPitchEmotes !== false) {
       triggerPitchEmote(playerId, emoji);
-      if (gameUI.settings.chatEmotesSoundEnabled !== false) {
-        soundFX.playPitchEmoteSound();
+    }
+  }
+
+  public consumeRemoteImpulses(): void {
+    this.pendingImpulseMasks.clear();
+    for (const [playerId, entry] of this.remoteInputs.entries()) {
+      const rawMask = this.rawRemoteMasks.get(playerId);
+      if (rawMask !== undefined) {
+        entry.inputMask = rawMask & ~INPUT_FLAG_DASH;
+      } else {
+        entry.inputMask = (entry.inputMask ?? 0) & ~INPUT_FLAG_DASH;
       }
     }
+  }
+
+  private clearRemoteInputTracking(): void {
+    this.remoteInputs.clear();
+    this.pendingImpulseMasks.clear();
+    this.rawRemoteMasks.clear();
+    this.lastRemoteInputSeq.clear();
+    this.recentLocalEmotes.clear();
   }
 
   public playAndApplyGameFx(fx: string, intensity?: number, countdownValue?: number): void {
@@ -530,7 +592,7 @@ export class GameApp {
     this.currentRoomId = roomId;
     this.activeMatchToken = null;
     this.currentRoomConfig = params || { name, stadium, maxPlayers, isPublic };
-    this.remoteInputs.clear();
+    this.clearRemoteInputTracking();
 
     this.networkClient?.disconnect();
     this.networkClient = null;
@@ -611,7 +673,12 @@ export class GameApp {
       this.syncLocalRole();
       const activeIds = new Set(players.map((p) => p.id));
       for (const id of this.remoteInputs.keys()) {
-        if (!activeIds.has(id)) this.remoteInputs.delete(id);
+        if (!activeIds.has(id)) {
+          this.remoteInputs.delete(id);
+          this.pendingImpulseMasks.delete(id);
+          this.rawRemoteMasks.delete(id);
+          this.lastRemoteInputSeq.delete(id);
+        }
       }
       if (this.currentRoomId) {
         this.signaling.send({ type: 'update_room', roomId: this.currentRoomId, playerCount: players.length });
@@ -619,14 +686,42 @@ export class GameApp {
     };
 
     host.onPlayerInput = (playerId, inputMask, tick, aimAngle, aimThrottle) => {
-      this.remoteInputs.set(playerId, { inputMask, aimAngle, aimThrottle, tick, sequence: tick, seq: tick } as any);
+      const seq = tick >>> 0;
+      const lastSeq = this.lastRemoteInputSeq.get(playerId);
+      const isStale =
+        lastSeq !== undefined &&
+        seq < lastSeq &&
+        lastSeq - seq < 500;
+      const impulseBits = inputMask & REMOTE_IMPULSE_FLAGS;
+      const latched = (this.pendingImpulseMasks.get(playerId) ?? 0) | impulseBits;
+      this.pendingImpulseMasks.set(playerId, latched);
+      if (isStale) {
+        const existing = this.remoteInputs.get(playerId);
+        if (existing) {
+          existing.inputMask = (existing.inputMask ?? 0) | latched;
+        }
+        return;
+      }
+      this.lastRemoteInputSeq.set(playerId, seq);
+      this.rawRemoteMasks.set(playerId, inputMask);
+      this.remoteInputs.set(playerId, {
+        inputMask: inputMask | latched,
+        aimAngle,
+        aimThrottle,
+        tick: seq,
+        sequence: seq,
+        seq
+      } as any);
     };
 
-    host.onChatMessage = (sender, text, team, id) => this.pushChat(sender, text, team, false, id);
+    host.onChatMessage = (sender, text, team, id) => {
+      const hostPlayer = host.getPlayers().find((p) => p.id === 1);
+      const isHostSender = Boolean(hostPlayer && hostPlayer.nickname === sender);
+      this.pushChat(sender, text, team, isHostSender, id);
+    };
 
     host.onPlayerEmote = (playerId, emoji) => {
-      this.showEmote(playerId, emoji);
-      gameUI.onPlayerEmote?.(playerId, emoji);
+      this.dispatchEmoteWithRecord(playerId, emoji);
     };
 
     host.onAdminMatchAction = (action, payload) => {
@@ -826,7 +921,7 @@ export class GameApp {
     this.activeMatchToken = null;
     this.setActiveGoalScorerId(null);
     this.hostEngine = null;
-    this.remoteInputs.clear();
+    this.clearRemoteInputTracking();
 
     this.networkHost?.destroy();
     this.networkHost = null;
@@ -911,8 +1006,7 @@ export class GameApp {
     client.onChatMessage = (sender, text, team, isHost, id) => this.pushChat(sender, text, team, isHost, id);
 
     client.onEmote = (playerId, emoji) => {
-      this.showEmote(playerId, emoji);
-      gameUI.onPlayerEmote?.(playerId, emoji);
+      this.dispatchEmoteWithRecord(playerId, emoji);
     };
 
     client.onGameFx = (fx, intensity, countdownValue) => {
@@ -995,7 +1089,7 @@ export class GameApp {
     this.activeMatchToken = null;
     this.setActiveGoalScorerId(null);
     this.hostEngine = null;
-    this.remoteInputs.clear();
+    this.clearRemoteInputTracking();
     this.currentRoomConfig = null;
     gameUI.isPracticeMode = false;
     gameUI.resetRoomSession();
@@ -1037,7 +1131,7 @@ export class GameApp {
     this.activeMatchToken = null;
     this.setActiveGoalScorerId(null);
     this.hostEngine = null;
-    this.remoteInputs.clear();
+    this.clearRemoteInputTracking();
     gameUI.isPracticeMode = false;
     gameUI.activeRoom = null;
     gameUI.isHost = true;

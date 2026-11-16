@@ -74,7 +74,7 @@ export class SimulationTicker {
         this.worker = new Worker(this.blobUrl);
         this.worker.onmessage = (e: MessageEvent<{ type: string; now?: number }>) => {
           if (e.data?.type === 'TICK') {
-            this.stepAccumulator(e.data.now ?? performance.now());
+            this.stepAccumulator(performance.now());
           }
         };
         this.worker.postMessage({ type: 'START' });

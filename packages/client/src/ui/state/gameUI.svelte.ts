@@ -10,6 +10,9 @@ import { $gameConfig as gameConfigStore } from '../../controllers/stores/gameSto
 import { triggerPitchEmote } from '../../renderer/DiscRenderer.js';
 import { EMOJI_CATALOG } from '../utils/constants.js';
 
+export const CHAT_COOLDOWN_MS = 1500;
+export const PENDING_INVITE_STORAGE_KEY = 'legacyx_pending_invite_room';
+
 export type ScreenType = 'GATEKEEPER' | 'LOBBY' | 'ROOM_CREATOR' | 'IN_GAME';
 export type ModalType =
   | 'NONE'
@@ -607,6 +610,7 @@ export interface RosterPlayer {
   team: TeamSlot;
   isAdmin: boolean;
   isHost: boolean;
+  isGuest?: boolean;
   ping: number;
   kit?: TeamKitConfig;
   localKit?: TeamKitConfig;
@@ -952,6 +956,7 @@ class GameUIStore {
   public activeRoom = $state<RoomInfo | null>(null);
   public pendingPasswordRoom = $state<RoomInfo | null>(null);
   public pendingPasswordInput = $state('');
+  public pendingInviteRoomId = $state<string | null>(null);
 
   // Team Roster & Match Config
   public teamsLocked = $state(false);
@@ -1128,8 +1133,8 @@ class GameUIStore {
     this.userRoleReader = reader;
   }
 
-  // Chat anti-spam cooldown (500ms)
-  private lastChatSentAtMs = -500;
+  // Chat anti-spam cooldown (1500ms)
+  private lastChatSentAtMs = -CHAT_COOLDOWN_MS;
   private chatCooldownTimer: ReturnType<typeof setTimeout> | null = null;
   public chatCooldownActive = $state<boolean>(false);
 
@@ -1141,7 +1146,7 @@ class GameUIStore {
   }
 
   public canSendChatNow(now: number = typeof performance !== 'undefined' ? performance.now() : Date.now()): boolean {
-    return now - this.lastChatSentAtMs >= 500;
+    return now - this.lastChatSentAtMs >= CHAT_COOLDOWN_MS;
   }
 
   public markChatSent(now: number = typeof performance !== 'undefined' ? performance.now() : Date.now()): void {
@@ -1156,7 +1161,7 @@ class GameUIStore {
     this.chatCooldownTimer = setTimeout(() => {
       this.chatCooldownActive = false;
       this.chatCooldownTimer = null;
-    }, 450);
+    }, 1450);
   }
 
   // Stylized Room Disconnect Notice Modal State
@@ -1286,6 +1291,10 @@ class GameUIStore {
     return true;
   }
 
+  public canTriggerPitchEmote(team: TeamSlot = this.myTeam): boolean {
+    return this.isAuthenticatedUser && (team === 'red' || team === 'blue');
+  }
+
   public triggerPlayerEmote(playerId: number, emoji: string): void {
     if (this.settings.showPitchEmotes !== false) {
       triggerPitchEmote(playerId, emoji);
@@ -1379,7 +1388,7 @@ class GameUIStore {
     void import('./userProfile.svelte.js')
       .then((mod) => {
         if (mod?.userProfile && !this._authReader) {
-          this._authReader = () => Boolean(mod.userProfile.isAuthenticated);
+          this._authReader = () => Boolean(mod.userProfile.isAuthenticated && !mod.userProfile.isGuest);
         }
       })
       .catch(() => {});
@@ -1460,7 +1469,91 @@ class GameUIStore {
     }
   }
 
+  public extractRoomIdFromLocation(loc: { search?: string; hash?: string } | null = typeof window !== 'undefined' ? window.location : null): string | null {
+    if (loc) {
+      const hash = String(loc.hash || '');
+      if (hash && !hash.includes('access_token=')) {
+        const hashRoomParam = hash.match(/(?:^#|&)room=([A-Za-z0-9_-]{3,64})(?:&|$)/i);
+        if (hashRoomParam?.[1]) {
+          return hashRoomParam[1].trim();
+        }
+        const hashPathMatch = hash.match(/^#\/?room\/([A-Za-z0-9_-]{3,64})(?:[/?#]|$)/i);
+        if (hashPathMatch?.[1]) {
+          return hashPathMatch[1].trim();
+        }
+      }
+      const search = String(loc.search || '');
+      if (search && typeof URLSearchParams !== 'undefined') {
+        const qRoom = new URLSearchParams(search).get('room')?.trim();
+        if (qRoom && /^[A-Za-z0-9_-]{3,64}$/.test(qRoom)) {
+          return qRoom;
+        }
+      }
+    }
+    if (typeof sessionStorage !== 'undefined') {
+      try {
+        const stored = sessionStorage.getItem(PENDING_INVITE_STORAGE_KEY)?.trim();
+        if (stored && /^[A-Za-z0-9_-]{3,64}$/.test(stored)) {
+          return stored;
+        }
+      } catch {
+        // Ignore restricted sessionStorage
+      }
+    }
+    return null;
+  }
+
+  public persistPendingInviteRoomId(roomId: string | null = this.pendingInviteRoomId): void {
+    if (typeof sessionStorage === 'undefined') return;
+    try {
+      if (roomId && /^[A-Za-z0-9_-]{3,64}$/.test(roomId.trim())) {
+        sessionStorage.setItem(PENDING_INVITE_STORAGE_KEY, roomId.trim());
+      } else {
+        sessionStorage.removeItem(PENDING_INVITE_STORAGE_KEY);
+      }
+    } catch {
+      // Ignore restricted sessionStorage
+    }
+  }
+
+  public clearRoomInviteUrl(): void {
+    if (typeof sessionStorage !== 'undefined') {
+      try {
+        sessionStorage.removeItem(PENDING_INVITE_STORAGE_KEY);
+      } catch {
+        // Ignore restricted sessionStorage
+      }
+    }
+    if (typeof window === 'undefined' || !window.location || !window.history?.replaceState) return;
+    try {
+      const url = new URL(window.location.href);
+      let changed = false;
+      if (url.searchParams.has('room')) {
+        url.searchParams.delete('room');
+        changed = true;
+      }
+      if (
+        url.hash &&
+        !url.hash.includes('access_token=') &&
+        (/^#room=/i.test(url.hash) || /^#\/?room\//i.test(url.hash) || /(?:^#|&)room=/i.test(url.hash))
+      ) {
+        url.hash = '';
+        changed = true;
+      }
+      if (changed) {
+        const nextUrl = `${url.pathname}${url.search}${url.hash}` || '/';
+        window.history.replaceState(window.history.state, '', nextUrl);
+      }
+    } catch {
+      // Ignore invalid URL environments
+    }
+  }
+
   public loadPersistedState(): void {
+    const inviteRoom = this.extractRoomIdFromLocation();
+    if (inviteRoom) {
+      this.pendingInviteRoomId = inviteRoom;
+    }
     if (typeof localStorage === 'undefined') return;
     try {
       const savedNick = localStorage.getItem(LEGACYX_PLAYER_NAME_KEY) ?? localStorage.getItem('haxball_nickname');
@@ -2599,6 +2692,7 @@ class GameUIStore {
       'Small Arena': 'small',
       medium: 'medium',
       Medium: 'medium',
+      mediano: 'medium',
       '3v3': 'medium',
       'Mediano (3v3)': 'medium',
       Mediano: 'medium',
@@ -2618,6 +2712,7 @@ class GameUIStore {
       'Big Stadium': 'big',
       af_3v3: 'af_3v3',
       af3v3: 'af_3v3',
+      'AF 3v3': 'af_3v3',
       'AF 3v3 Official': 'af_3v3'
     };
     const defaultNames: Record<string, string> = {
@@ -2708,7 +2803,7 @@ class GameUIStore {
     this.clearAllSlidingEventTimers();
     this.clearChatCooldownTimer();
     this.chatCooldownActive = false;
-    this.lastChatSentAtMs = -500;
+    this.lastChatSentAtMs = -CHAT_COOLDOWN_MS;
     this.showVarMonitor = false;
     this.varTelemetry = {
       ballSpeedPx: 0,

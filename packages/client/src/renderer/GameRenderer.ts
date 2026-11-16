@@ -134,7 +134,7 @@ export class GameRenderer {
     this.netRenderer = new NetRenderer();
     this.discRenderer = new DiscRenderer();
     this.discRenderer.theme = this.theme;
-    this.discRenderer.setStadiumBounds(this.stadium.bounds);
+    this.discRenderer.setStadiumBounds({ ...this.stadium.bounds, runOff: this.stadium.runOff });
     this.vfx = new VFXManager();
     this.minimapRenderer = new MinimapRenderer(this.stadium);
     this.offscreenRenderer = new OffscreenIndicatorRenderer();
@@ -229,7 +229,7 @@ export class GameRenderer {
     this.stadium = stadium;
     this.camera.setBounds(stadium.halfWidth, stadium.halfHeight);
     this.stadiumRenderer.setStadium(stadium);
-    this.discRenderer.setStadiumBounds(stadium.bounds);
+    this.discRenderer.setStadiumBounds({ ...stadium.bounds, runOff: stadium.runOff });
     this.minimapRenderer.setStadium(stadium);
     this.initLocalGoalNets();
     this.handleResize();

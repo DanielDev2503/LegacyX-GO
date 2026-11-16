@@ -6,6 +6,7 @@ import {
   type PlayerKinematicsState,
   type KinematicsConfig,
   type KickoffPhysicsContext,
+  type MatchPhase,
   type Stadium,
   Vec2
 } from '@legacyx/core';
@@ -41,6 +42,7 @@ export class ClientPredictionReconciler {
 
   public inputSeq: number = 0;
   public lastRecordedSeq: number = 0;
+  public didHardSnapLastReconcile: boolean = false;
   public inputBuffer: BufferedClientInput[] = [];
   public visualOffset: { x: number; y: number } = { x: 0, y: 0 };
 
@@ -77,14 +79,14 @@ export class ClientPredictionReconciler {
     return this.visualOffset;
   }
 
-  public recordInput(input: BufferedClientInput): void;
-  public recordInput(tickOrSeq: number, mask: number, aimAngle?: number | null, aimThrottle?: number): void;
+  public recordInput(input: BufferedClientInput): number;
+  public recordInput(tickOrSeq: number, mask: number, aimAngle?: number | null, aimThrottle?: number): number;
   public recordInput(
     inputOrTick: BufferedClientInput | number,
     maskArg?: number,
     aimAngle?: number | null,
     aimThrottle?: number
-  ): void {
+  ): number {
     const rawSeq =
       typeof inputOrTick === 'number'
         ? inputOrTick
@@ -120,6 +122,7 @@ export class ClientPredictionReconciler {
     if (this.inputBuffer.length > 120) {
       this.inputBuffer.shift();
     }
+    return seq;
   }
 
   public reset(): void {
@@ -128,6 +131,7 @@ export class ClientPredictionReconciler {
     this.visualOffset.y = 0;
     this.inputSeq = 0;
     this.lastRecordedSeq = 0;
+    this.didHardSnapLastReconcile = false;
   }
 
   private isSnapshotDrivenPhase(phase: number | undefined): boolean {
@@ -209,6 +213,8 @@ export class ClientPredictionReconciler {
     kickoffContext?: KickoffPhysicsContext | null,
     config?: KinematicsConfig
   ): { replayed: boolean; hardSnapped: boolean } {
+    this.didHardSnapLastReconcile = false;
+
     if (typeof (engineOrSnapshot as any).step === 'function') {
       const engine = engineOrSnapshot as EngineInstance;
       const authSnapshot = snapshotOrLocalDiscId as GameStateSnapshot;
@@ -223,6 +229,7 @@ export class ClientPredictionReconciler {
         this.visualOffset.x = 0;
         this.visualOffset.y = 0;
         this.inputBuffer.length = 0;
+        this.didHardSnapLastReconcile = true;
         return { replayed: false, hardSnapped: true };
       }
 
@@ -233,6 +240,7 @@ export class ClientPredictionReconciler {
         engine.setState(authSnapshot);
         this.visualOffset.x = 0;
         this.visualOffset.y = 0;
+        this.didHardSnapLastReconcile = false;
         return { replayed: false, hardSnapped: false };
       }
 
@@ -265,11 +273,22 @@ export class ClientPredictionReconciler {
 
       // Rewind to authoritative snapshot
       engine.setState(authSnapshot);
-      if ((authDisc as any).dashTimer !== undefined || (authDisc as any).dashCooldown !== undefined) {
-        const rt = (engine as any).getRuntime?.(localDiscId);
-        if (rt) {
-          if ((authDisc as any).dashTimer !== undefined) rt.ticksRemaining = (authDisc as any).dashTimer;
-          if ((authDisc as any).dashCooldown !== undefined) rt.cooldownTimer = (authDisc as any).dashCooldown / 1000;
+      const rawCd = (authDisc as any).dashCooldown ?? 0;
+      const cdSec = rawCd > 60 ? rawCd / 1000 : rawCd;
+      const rt = (engine as any).getRuntime?.(localDiscId);
+      if (rt) {
+        if ((authDisc as any).dashTimer !== undefined) {
+          rt.ticksRemaining = (authDisc as any).dashTimer;
+        }
+        rt.cooldownTimer = cdSec;
+        rt.prevDashDown = Boolean((authDisc.flags ?? 0) & (1 << 1));
+        const p = engine.players.get(localDiscId);
+        if (p && p.isDashing) {
+          const spd = Math.hypot(authDisc.vx, authDisc.vy);
+          if (spd > 1e-3) {
+            rt.dirX = authDisc.vx / spd;
+            rt.dirY = authDisc.vy / spd;
+          }
         }
       }
 
@@ -289,6 +308,15 @@ export class ClientPredictionReconciler {
           sequence: pending.seq ?? pending.tick
         });
         engine.step(this.replayMap, true);
+        if (authSnapshot.phase !== undefined) {
+          engine.fsm.currentState = authSnapshot.phase as MatchPhase;
+        }
+        if (authSnapshot.isNeutralKickoff !== undefined) {
+          (engine as any).isNeutralKickoff = authSnapshot.isNeutralKickoff;
+        }
+        if (authSnapshot.kickoffPossessingTeam !== undefined) {
+          (engine as any).kickoffPossessingTeam = authSnapshot.kickoffPossessingTeam;
+        }
       }
 
       if (engine.currentTick < this.lastRecordedSeq) {
@@ -306,15 +334,18 @@ export class ClientPredictionReconciler {
           // Hard snap: reset visualOffset to (0,0)
           this.visualOffset.x = 0;
           this.visualOffset.y = 0;
+          this.didHardSnapLastReconcile = true;
           return { replayed: true, hardSnapped: true };
         } else {
           // Continuous error absorption: visual position delta is 0.00 px at snapshot arrival!
           this.visualOffset.x = errX;
           this.visualOffset.y = errY;
+          this.didHardSnapLastReconcile = false;
           return { replayed: true, hardSnapped: false };
         }
       }
 
+      this.didHardSnapLastReconcile = false;
       return { replayed: true, hardSnapped: false };
     } else {
       const authSnapshot = engineOrSnapshot as GameStateSnapshot;
@@ -336,10 +367,12 @@ export class ClientPredictionReconciler {
         this.visualOffset.x = 0;
         this.visualOffset.y = 0;
         this.inputBuffer.length = 0;
+        this.didHardSnapLastReconcile = true;
         return { replayed: false, hardSnapped: true };
       }
 
       if (!authDisc) {
+        this.didHardSnapLastReconcile = false;
         return { replayed: false, hardSnapped: false };
       }
 
@@ -367,6 +400,9 @@ export class ClientPredictionReconciler {
         this.inputBuffer = this.inputBuffer.slice(-ClientPredictionReconciler.MAX_REPLAY_TICKS);
       }
 
+      const rawCd = (authDisc as any).dashCooldown ?? 0;
+      const cdSec = rawCd > 60 ? rawCd / 1000 : rawCd;
+
       this.predictedState.pos.x = authDisc.x;
       this.predictedState.pos.y = authDisc.y;
       this.predictedState.vel.x = authDisc.vx;
@@ -374,8 +410,16 @@ export class ClientPredictionReconciler {
       this.predictedState.stamina = authDisc.stamina ?? 100;
       this.predictedState.team = authDisc.team === 1 ? 'red' : authDisc.team === 2 ? 'blue' : 'spec';
       this.predictedState.dashTicksRemaining = (authDisc as any).dashTimer ?? 0;
-      this.predictedState.dashCooldownTimer = ((authDisc as any).dashCooldown ?? 0) / 1000;
+      this.predictedState.dashCooldownTimer = cdSec;
+      this.predictedState.prevDashState = Boolean(((authDisc.flags ?? 0) & (1 << 1)));
       this.predictedState.isDashing = this.predictedState.dashTicksRemaining > 0;
+      if (this.predictedState.isDashing) {
+        const spd = Math.hypot(authDisc.vx, authDisc.vy);
+        if (spd > 1e-3) {
+          this.predictedState.dashDirX = authDisc.vx / spd;
+          this.predictedState.dashDirY = authDisc.vy / spd;
+        }
+      }
       this.predictedState.isTurbo = false;
       this.predictedState.kicking = false;
 
@@ -403,10 +447,12 @@ export class ClientPredictionReconciler {
       if (distSq > ClientPredictionReconciler.CATASTROPHIC_ERROR_SQ) {
         this.visualOffset.x = 0;
         this.visualOffset.y = 0;
+        this.didHardSnapLastReconcile = true;
         return { replayed: true, hardSnapped: true };
       } else {
         this.visualOffset.x = errX;
         this.visualOffset.y = errY;
+        this.didHardSnapLastReconcile = false;
         return { replayed: true, hardSnapped: false };
       }
     }

@@ -195,6 +195,13 @@
     gameUI.setPlayerNickname(userProfile.username);
     gameUI.navigateTo('LOBBY');
   }
+
+  function handleGoogleLogin() {
+    soundFX.ensureContext();
+    soundFX.playUIClick();
+    gameUI.persistPendingInviteRoomId();
+    userProfile.loginWithGoogle();
+  }
 </script>
 
 <div class="gatekeeper-root">
@@ -222,6 +229,26 @@
         <p class="game-subtitle">FÚTBOL COMPETITIVO 2D · FÍSICA DETERMINISTA 60 HZ · P2P WEBRTC</p>
       </div>
     </header>
+
+    {#if gameUI.pendingInviteRoomId}
+      <div class="invite-context-banner" role="status" aria-live="polite">
+        <div class="invite-banner-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
+            <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
+          </svg>
+        </div>
+        <div class="invite-banner-copy">
+          <div class="invite-banner-heading">
+            <span class="invite-badge">INVITACIÓN A SALA</span>
+            <strong class="invite-room-code">#{gameUI.pendingInviteRoomId}</strong>
+          </div>
+          <p class="invite-banner-text">
+            Has sido invitado a la sala <strong>#{gameUI.pendingInviteRoomId}</strong>. Inicia sesión o elige un nickname de invitado para unirte automáticamente.
+          </p>
+        </div>
+      </div>
+    {/if}
 
     <!-- Panel Dual Dividido -->
     <main class="dual-grid">
@@ -352,7 +379,7 @@
               type="button"
               class="google-oauth-btn"
               disabled={userProfile.isLoading}
-              onclick={() => userProfile.loginWithGoogle()}
+              onclick={handleGoogleLogin}
             >
               <svg class="google-icon" viewBox="0 0 24 24" width="18" height="18">
                 <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
@@ -710,6 +737,77 @@
     font-size: 10.5px;
     letter-spacing: 0.08em;
     color: #8fa3bf;
+  }
+
+  .invite-context-banner {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 11px 15px;
+    background: linear-gradient(90deg, rgba(0, 229, 255, 0.14) 0%, #0b111c 78%);
+    border: 1px solid #00e5ff;
+    border-radius: 8px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45), 0 0 16px rgba(0, 229, 255, 0.18);
+  }
+
+  .invite-banner-icon {
+    width: 38px;
+    height: 38px;
+    border-radius: 8px;
+    background: rgba(0, 229, 255, 0.12);
+    border: 1px solid rgba(0, 229, 255, 0.45);
+    color: #00e5ff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+
+  .invite-banner-copy {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+  }
+
+  .invite-banner-heading {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .invite-badge {
+    padding: 2px 7px;
+    border-radius: 4px;
+    background: rgba(0, 229, 255, 0.16);
+    border: 1px solid rgba(0, 229, 255, 0.45);
+    color: #00e5ff;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: 0.06em;
+  }
+
+  .invite-room-code {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 13px;
+    font-weight: 800;
+    color: #ffd700;
+    letter-spacing: 0.04em;
+  }
+
+  .invite-banner-text {
+    margin: 0;
+    font-family: 'Chivo', sans-serif;
+    font-size: 12.5px;
+    line-height: 1.4;
+    color: #d6e2f2;
+  }
+
+  .invite-banner-text strong {
+    color: #ffffff;
+    font-family: 'JetBrains Mono', monospace;
   }
 
   .dual-grid {

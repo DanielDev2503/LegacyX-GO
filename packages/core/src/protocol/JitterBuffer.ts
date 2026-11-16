@@ -2,6 +2,7 @@ import { lerp } from '../math/MathUtils';
 import { BinaryProtocol, type GameStateSnapshot } from './BinaryProtocol';
 import { type GameSnapshot, type DiscSnapshot } from '../game/GameState';
 import { MatchPhase, toMatchPhase } from '../game/GameFSM';
+import { clampDiscToGoalAwareBounds } from '../physics/ContinuousCollision';
 
 export type AnySnapshot = GameSnapshot | GameStateSnapshot;
 export type InterpolationMode = 'linear' | 'hermite';
@@ -46,7 +47,7 @@ export class JitterBuffer<T extends AnySnapshot = any> {
   public static readonly MAX_AUTO_EXTRAPOLATION_MS = 200;
 
   public autoExtrapolationMs: number = JitterBuffer.DEFAULT_AUTO_EXTRAPOLATION_MS;
-  public arenaBounds: { halfWidth: number; halfHeight: number } | null = null;
+  public arenaBounds: { halfWidth: number; halfHeight: number; runOff?: number; goalHalfHeight?: number; goalDepth?: number } | null = null;
 
   constructor(interpolationDelayMs: number = 25, maxBufferSize: number = 30, isAdaptive: boolean = false) {
     this.interpolationDelayMs = interpolationDelayMs;
@@ -60,9 +61,15 @@ export class JitterBuffer<T extends AnySnapshot = any> {
       : 0;
   }
 
-  public setArenaBounds(halfWidth: number, halfHeight: number): void {
+  public setArenaBounds(
+    halfWidth: number,
+    halfHeight: number,
+    runOff: number = 0,
+    goalHalfHeight: number = 0,
+    goalDepth: number = 0
+  ): void {
     this.arenaBounds = halfWidth > 0 && halfHeight > 0
-      ? { halfWidth, halfHeight }
+      ? { halfWidth, halfHeight, runOff, goalHalfHeight, goalDepth }
       : null;
   }
 
@@ -185,7 +192,7 @@ export class JitterBuffer<T extends AnySnapshot = any> {
 
   public getInterpolatedSnapshot(
     now: number = (typeof performance !== 'undefined' ? performance.now() : Date.now()),
-    arenaBounds?: { halfWidth: number; halfHeight: number } | null
+    arenaBounds?: { halfWidth: number; halfHeight: number; runOff?: number; goalHalfHeight?: number; goalDepth?: number } | null
   ): T | null {
     if (this.buffer.length === 0) return null;
 
@@ -300,22 +307,17 @@ export class JitterBuffer<T extends AnySnapshot = any> {
           const r = typeof d.radius === 'number' && d.radius > 0
             ? d.radius
             : (d.id === 0 || d.team === 0 ? 10 : 15);
-          const maxX = Math.max(0, bounds.halfWidth - r);
-          const maxY = Math.max(0, bounds.halfHeight - r);
-          if (nextX < -maxX) {
-            nextX = -maxX;
-            if (nextVx < 0) nextVx = 0;
-          } else if (nextX > maxX) {
-            nextX = maxX;
-            if (nextVx > 0) nextVx = 0;
-          }
-          if (nextY < -maxY) {
-            nextY = -maxY;
-            if (nextVy < 0) nextVy = 0;
-          } else if (nextY > maxY) {
-            nextY = maxY;
-            if (nextVy > 0) nextVy = 0;
-          }
+          const isPlayer = d.id !== 0 && d.team !== 0;
+          const runOff = isPlayer ? (bounds.runOff ?? 0) : 0;
+          const goalHalfHeight = bounds.goalHalfHeight ?? 0;
+          const goalDepth = bounds.goalDepth ?? 0;
+
+          const proxy = { x: nextX, y: nextY, vx: nextVx, vy: nextVy, radius: r };
+          clampDiscToGoalAwareBounds(proxy, bounds.halfWidth, bounds.halfHeight, goalHalfHeight, goalDepth, runOff);
+          nextX = proxy.x;
+          nextY = proxy.y;
+          nextVx = proxy.vx ?? nextVx;
+          nextVy = proxy.vy ?? nextVy;
         }
 
         return {
@@ -434,7 +436,7 @@ export class JitterBuffer<T extends AnySnapshot = any> {
 
   public getInterpolatedState(
     now: number = (typeof performance !== 'undefined' ? performance.now() : Date.now()),
-    arenaBounds?: { halfWidth: number; halfHeight: number } | null
+    arenaBounds?: { halfWidth: number; halfHeight: number; runOff?: number; goalHalfHeight?: number; goalDepth?: number } | null
   ): T | null {
     return this.getInterpolatedSnapshot(now, arenaBounds);
   }

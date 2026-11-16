@@ -1554,6 +1554,18 @@ export class EngineInstance {
           p.cGroup = teamStr === 'red' ? COLLISION_GROUP_RED : COLLISION_GROUP_BLUE;
         }
         this.applyDiscSnapshot(d, p, false);
+        const rt = this.getRuntime(d.id);
+        rt.ticksRemaining = d.dashTimer ?? (p.isDashing ? 1 : 0);
+        rt.cooldownTimer = d.dashCooldown ?? 0;
+        if (d.lastAckedInputSeq !== undefined) rt.lastProcessedInputSeq = d.lastAckedInputSeq;
+        rt.prevDashDown = Boolean(p.isDashing);
+        if (p.isDashing) {
+          const spd = Math.hypot(d.vx, d.vy);
+          if (spd > 1e-3) {
+            rt.dirX = d.vx / spd;
+            rt.dirY = d.vy / spd;
+          }
+        }
       }
     }
     for (const existingId of Array.from(this.players.keys())) {

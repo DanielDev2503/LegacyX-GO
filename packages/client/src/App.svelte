@@ -120,14 +120,53 @@
 
     // Sincronizar retorno OAuth y entrada automática al Lobby una única vez al arrancar con sesión activa
     if (typeof window !== 'undefined' && window.location.hash?.includes('access_token=')) {
-      void userProfile.handleOAuthRedirect();
+      void userProfile.handleOAuthRedirect().then(() => {
+        const invite = gameUI.extractRoomIdFromLocation();
+        if (invite && !gameUI.pendingInviteRoomId) {
+          gameUI.pendingInviteRoomId = invite;
+        }
+      });
     } else if (!didAutoRouteAuthenticatedBoot && isLoggedAccount && gameUI.currentScreen === 'GATEKEEPER') {
       didAutoRouteAuthenticatedBoot = true;
+      const invite = gameUI.extractRoomIdFromLocation();
+      if (invite && !gameUI.pendingInviteRoomId) {
+        gameUI.pendingInviteRoomId = invite;
+      }
       gameUI.setPlayerNickname(userProfile.username);
       gameUI.navigateTo('LOBBY');
     } else if (gameUI.currentScreen !== 'GATEKEEPER') {
       didAutoRouteAuthenticatedBoot = true;
     }
+  });
+
+  $effect(() => {
+    if (typeof window === 'undefined') return;
+    const syncInviteFromUrl = () => {
+      const inviteId = gameUI.extractRoomIdFromLocation();
+      if (!inviteId) return;
+      gameUI.pendingInviteRoomId = inviteId;
+      const isLoggedAccount = Boolean(userProfile.isAuthenticated && !userProfile.isGuest);
+      const hasActiveGuestSession = Boolean(
+        userProfile.isGuest &&
+        gameUI.nickname.trim().length > 0 &&
+        gameUI.currentScreen !== 'GATEKEEPER'
+      );
+      if (isLoggedAccount || hasActiveGuestSession) {
+        if (gameApp.currentRoomId && gameApp.currentRoomId !== inviteId) {
+          gameApp.leaveCurrentRoom();
+        } else if (gameUI.currentScreen === 'IN_GAME' && !gameApp.currentRoomId) {
+          gameApp.teardownNetworkSession();
+        }
+        gameUI.clearModalStack();
+        gameUI.navigateTo('LOBBY');
+      }
+    };
+    window.addEventListener('hashchange', syncInviteFromUrl);
+    window.addEventListener('popstate', syncInviteFromUrl);
+    return () => {
+      window.removeEventListener('hashchange', syncInviteFromUrl);
+      window.removeEventListener('popstate', syncInviteFromUrl);
+    };
   });
 
   $effect(() => {
@@ -521,6 +560,14 @@
     gameUI.onStadiumChanged = (stadiumId: string) => {
       if (rendererInstance) {
         rendererInstance.setStadium(createStadium(stadiumId));
+        const s = rendererInstance.stadium;
+        gameApp.networkClient?.jitterBuffer.setArenaBounds(
+          s.halfWidth,
+          s.halfHeight,
+          s.runOff ?? 0,
+          s.goalHalfHeight ?? 0,
+          s.goalDepth ?? 0
+        );
       }
       if (predEngine && predStadiumId !== stadiumId) {
         predStadiumId = stadiumId as any;
@@ -535,6 +582,27 @@
     };
 
     gameUI.onChatSent = (text: string) => {
+      const canEmote =
+        Boolean(userProfile.isAuthenticated && !userProfile.isGuest) &&
+        (gameUI.myTeam === 'red' || gameUI.myTeam === 'blue') &&
+        gameUI.settings.showPitchEmotes !== false;
+      const emoteEmoji = canEmote ? gameUI.matchEmoteTrigger(text) : null;
+      if (emoteEmoji) {
+        const pid = gameUI.localPlayerId || (gameUI.isHost ? 1 : 0);
+        if (pid > 0) {
+          gameApp.markLocalEmoteDispatched(pid, emoteEmoji);
+          gameUI.triggerPlayerEmote(pid, emoteEmoji);
+          if (!gameUI.isPracticeMode && (gameApp.networkHost || gameApp.networkClient)) {
+            if (gameUI.isHost) {
+              gameApp.networkHost?.sendEmote(pid, emoteEmoji);
+            } else {
+              gameApp.networkClient?.sendEmote(emoteEmoji);
+            }
+          }
+        }
+        return;
+      }
+
       if (gameUI.isPracticeMode || (!gameApp.networkHost && !gameApp.networkClient)) {
         const msgId = `local-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
         gameUI.addChatMessage({
@@ -805,6 +873,13 @@
     });
     rendererInstance = renderer;
     renderer.setTeamKits(gameUI.redCaptainKit, gameUI.blueCaptainKit);
+    gameApp.networkClient?.jitterBuffer.setArenaBounds(
+      renderer.stadium.halfWidth,
+      renderer.stadium.halfHeight,
+      renderer.stadium.runOff ?? 0,
+      renderer.stadium.goalHalfHeight ?? 0,
+      renderer.stadium.goalDepth ?? 0
+    );
 
     let measuredChatWidth = 0;
     let measuredChatHeight = gameUI.chatHeight;
@@ -968,8 +1043,13 @@
 
     function dispatchImmediateGuestInput(): void {
       if (gameUI.isHost || !gameApp.networkClient) return;
+      const phase = predEngine ? predEngine.fsm.state : gameUI.matchPhase;
+      if (!isMovablePhase(phase)) return;
       const pkt = computeLocalPlayerInput(false);
-      const tick = predEngine ? predEngine.currentTick + 1 : clientTick;
+      const tick = Math.max(
+        reconciler.lastRecordedSeq + 1,
+        predEngine ? predEngine.currentTick + 1 : clientTick
+      ) >>> 0;
       gameApp.networkClient.sendInput(pkt.inputMask ?? 0, tick, pkt.aimAngle, pkt.aimThrottle);
     }
 
@@ -1027,9 +1107,6 @@
     const onMouseUp = (e: MouseEvent) => {
       const code = mouseButtonToCode(e.button);
       if (!code) return;
-      if (gameUI.keybinds.dash.includes(code)) {
-        dashTriggered = false;
-      }
       const wasDown = Boolean(keyState.get(code));
       if (wasDown) {
         keyState.set(code, false);
@@ -1137,9 +1214,6 @@
     };
 
     const onKeyUp = (e: KeyboardEvent) => {
-      if (gameUI.keybinds.dash.includes(e.code)) {
-        dashTriggered = false;
-      }
       const wasDown = Boolean(keyState.get(e.code));
       keyState.set(e.code, false);
       if (wasDown && isGameplayBindCode(e.code)) {
@@ -1241,16 +1315,41 @@
       currSnapshot = snap;
       syncHudTelemetryFromSnapshot(snap);
       if (!predEngine && !gameUI.isHost) {
-        predEngine = new EngineInstance(gameUI.selectedStadiumId || 'mediano');
+        predStadiumId = gameUI.selectedStadiumId || 'mediano';
+        predEngine = new EngineInstance(predStadiumId);
         predEngine.applyModifiers(gameUI.physicsModifiers);
+      } else if (predEngine && !gameUI.isHost && gameUI.selectedStadiumId && predStadiumId !== gameUI.selectedStadiumId) {
+        predStadiumId = gameUI.selectedStadiumId;
+        predEngine.loadStadium(predStadiumId);
+      }
+      if (!gameUI.isHost && rendererInstance && gameApp.networkClient) {
+        const s = rendererInstance.stadium;
+        gameApp.networkClient.jitterBuffer.setArenaBounds(
+          s.halfWidth,
+          s.halfHeight,
+          s.runOff ?? 0,
+          s.goalHalfHeight ?? 0,
+          s.goalDepth ?? 0
+        );
       }
       if (predEngine && gameUI.localPlayerId > 0) {
         syncEngineMatchLimits(predEngine);
+        const predDiscBefore = predEngine.players.get(gameUI.localPlayerId);
+        const beforeSnapX = predDiscBefore?.pos.x ?? 0;
+        const beforeSnapY = predDiscBefore?.pos.y ?? 0;
+        const hadLocalBefore = Boolean(predDiscBefore);
         reconciler.reconcile(predEngine, snap, gameUI.localPlayerId);
         const localDisc = predEngine.players.get(gameUI.localPlayerId);
         if (localDisc) {
-          prevPredLocalPos.x = localDisc.pos.x;
-          prevPredLocalPos.y = localDisc.pos.y;
+          if (hasPredLocalPos && hadLocalBefore && !reconciler.didHardSnapLastReconcile) {
+            const dx = localDisc.pos.x - beforeSnapX;
+            const dy = localDisc.pos.y - beforeSnapY;
+            prevPredLocalPos.x += dx;
+            prevPredLocalPos.y += dy;
+          } else {
+            prevPredLocalPos.x = localDisc.pos.x;
+            prevPredLocalPos.y = localDisc.pos.y;
+          }
           currPredLocalPos.x = localDisc.pos.x;
           currPredLocalPos.y = localDisc.pos.y;
           hasPredLocalPos = true;
@@ -1301,15 +1400,15 @@
 
             const nextTick = (predEngine.currentTick + 1) >>> 0;
             const localMask = localPkt.inputMask ?? 0;
-            reconciler.recordInput(nextTick, localMask, localPkt.aimAngle, localPkt.aimThrottle);
+            const seq = reconciler.recordInput(nextTick, localMask, localPkt.aimAngle, localPkt.aimThrottle);
             gameApp.networkClient.sendInput(
               localMask,
-              nextTick,
+              seq,
               localPkt.aimAngle,
               localPkt.aimThrottle
             );
 
-            (localPkt as any).sequence = nextTick;
+            (localPkt as any).sequence = seq;
             guestLocalInputMap.clear();
             guestLocalInputMap.set(gameUI.localPlayerId, localPkt);
             predEngine.step(guestLocalInputMap);
@@ -1320,12 +1419,13 @@
               currPredLocalPos.y = localDiscAfter.pos.y;
               hasPredLocalPos = true;
             }
-            clientTick = predEngine.currentTick;
+            clientTick = seq;
           } else {
-            const nextTick = (++clientTick) >>> 0;
+            const seq = Math.max(reconciler.lastRecordedSeq + 1, ++clientTick) >>> 0;
+            clientTick = seq;
             gameApp.networkClient.sendInput(
               localPkt.inputMask ?? 0,
-              nextTick,
+              seq,
               localPkt.aimAngle,
               localPkt.aimThrottle
             );
@@ -1353,6 +1453,7 @@
 
         prevSnapshot = currSnapshot;
         engine.step(hostSimulationInputs);
+        gameApp.consumeRemoteImpulses();
         currSnapshot = engine.getState();
 
         // Broadcast snapshot autoritativo a todos los peers conectados
@@ -1407,6 +1508,18 @@
       radius: number;
     }> = [];
     const sepOtherIndexByDisc: number[] = [];
+    const scratchExtrapInput = {
+      id: 0,
+      team: 0 as 0 | 1 | 2,
+      x: 0,
+      y: 0,
+      vx: 0,
+      vy: 0,
+      radius: 15,
+      kicking: false,
+      avatar: '',
+      isDashing: false
+    };
 
     function computeDiscTelemetrySpeed(
       disc: CompactDiscState | undefined,
@@ -1611,6 +1724,7 @@
             sepLocalDisc.radius = playerRad;
 
             let nonLocalCount = 0;
+            renderer.discRenderer.isPaused = false;
             for (let i = 0; i < inDiscs.length; i++) {
               const d = inDiscs[i]!;
               if (d.id !== localId) {
@@ -1619,13 +1733,24 @@
                   slot = { id: 0, team: 0, x: 0, y: 0, vx: 0, vy: 0, radius: playerRad };
                   sepOtherPool.push(slot);
                 }
+                const discRadius = d.id === 0 || d.team === 0 ? ballRad : playerRad;
+                scratchExtrapInput.id = d.id;
+                scratchExtrapInput.team = (d.team === 1 || d.team === 2 ? d.team : 0) as 0 | 1 | 2;
+                scratchExtrapInput.x = d.x;
+                scratchExtrapInput.y = d.y;
+                scratchExtrapInput.vx = d.vx;
+                scratchExtrapInput.vy = d.vy;
+                scratchExtrapInput.radius = discRadius;
+                scratchExtrapInput.isDashing = Boolean((d.flags ?? 0) & (1 << 1));
+                const extrapD = renderer.discRenderer.getRenderDisc(scratchExtrapInput, true);
+
                 slot.id = d.id;
                 slot.team = d.team;
-                slot.x = d.x;
-                slot.y = d.y;
+                slot.x = extrapD.x;
+                slot.y = extrapD.y;
                 slot.vx = d.vx;
                 slot.vy = d.vy;
-                slot.radius = d.id === 0 || d.team === 0 ? ballRad : playerRad;
+                slot.radius = discRadius;
                 sepOtherDiscs.push(slot);
                 sepOtherIndexByDisc[i] = nonLocalCount;
                 nonLocalCount++;
@@ -1640,7 +1765,8 @@
               renderer.stadium.halfWidth,
               renderer.stadium.halfHeight,
               renderer.stadium.goalHalfHeight,
-              renderer.stadium.goalDepth
+              renderer.stadium.goalDepth,
+              renderer.stadium.runOff ?? 45
             );
 
             for (let i = 0; i < inDiscs.length; i++) {
@@ -1707,6 +1833,7 @@
             scratchRenderSnapshot.kickoffPossessingTeam = interpSnap.kickoffPossessingTeam;
             scratchRenderSnapshot.discs = scratchDiscs;
             renderSnap = scratchRenderSnapshot;
+            renderer.discRenderer.skipNextFrameExtrapolation = true;
           }
           currSnapshot = renderSnap;
           prevSnapshot = renderSnap;

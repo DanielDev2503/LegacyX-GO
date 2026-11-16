@@ -27,6 +27,7 @@ export interface PlayerInfo {
 export class NetworkHost {
   private static readonly MAX_PROBE_PEERS = 8;
   private static readonly PROBE_PEER_TTL_MS = 4000;
+  private static readonly CHAT_EMOTE_COOLDOWN_MS = 1450;
 
   private signaling: SignalingClient;
   private peers = new Map<string, PeerConnection>();
@@ -517,37 +518,37 @@ export class NetworkHost {
         this.broadcastRoomStateSync();
       }
     } else if (msg.type === 'CHAT' || msg.type === 'CHAT_MSG') {
-      const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
-      const lastChatAt = this.lastChatAtByPlayerId.get(playerId) ?? -Infinity;
-      if (now - lastChatAt < 450) {
+      const text = String(msg.text || '').trim().slice(0, 140);
+      if (!text || !this.tryConsumeChatCooldown(playerId)) {
         return;
       }
-      const text = String(msg.text || '').trim().slice(0, 140);
-      if (text) {
-        this.lastChatAtByPlayerId.set(playerId, now);
-        const msgId = typeof msg.id === 'string'
-          ? msg.id
-          : `${playerId}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-        this.onChatMessage?.(player.nickname, text, player.team, msgId);
-        this.broadcastReliable({
-          type: 'CHAT',
-          id: msgId,
-          sender: player.nickname,
-          text,
-          team: player.team,
-          isHost: Boolean(player.isHost)
-        });
-      }
+      const msgId = typeof msg.id === 'string'
+        ? msg.id
+        : `${playerId}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+      this.onChatMessage?.(player.nickname, text, player.team, msgId);
+      this.broadcastReliable({
+        type: 'CHAT',
+        id: msgId,
+        sender: player.nickname,
+        text,
+        team: player.team,
+        isHost: Boolean(player.isHost)
+      });
     } else if (msg.type === 'EMOTE') {
       const emoji = String(msg.emoji || '').trim();
-      if (emoji && player.team !== 'spectator') {
-        this.onPlayerEmote?.(playerId, emoji);
-        this.broadcastReliable({
+      const isGuestPlayer = player.isGuest === true || /^inv_/i.test(player.nickname || '');
+      const isActiveTeam = player.team === 'red' || player.team === 'blue';
+      if (!emoji || isGuestPlayer || !isActiveTeam) return;
+      if (!this.tryConsumeChatCooldown(playerId)) return;
+      this.onPlayerEmote?.(playerId, emoji);
+      this.broadcastReliable(
+        {
           type: 'EMOTE',
           playerId,
           emoji
-        });
-      }
+        },
+        peerId
+      );
     } else if (msg.type === 'TEAM_CHANGE') {
       const targetId = Number(msg.targetPlayerId ?? playerId);
       const targetTeam = msg.team as 'red' | 'blue' | 'spectator';
@@ -791,8 +792,19 @@ export class NetworkHost {
     });
   }
 
-  public broadcastReliable(msg: unknown): void {
-    this.peers.forEach((peer) => {
+  private tryConsumeChatCooldown(playerId: number): boolean {
+    const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    const lastAt = this.lastChatAtByPlayerId.get(playerId) ?? -Infinity;
+    if (now - lastAt < NetworkHost.CHAT_EMOTE_COOLDOWN_MS) {
+      return false;
+    }
+    this.lastChatAtByPlayerId.set(playerId, now);
+    return true;
+  }
+
+  public broadcastReliable(msg: unknown, excludePeerId?: string): void {
+    this.peers.forEach((peer, pid) => {
+      if (excludePeerId !== undefined && pid === excludePeerId) return;
       peer.sendReliable(msg);
     });
   }

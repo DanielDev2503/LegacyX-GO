@@ -151,6 +151,7 @@ export const STADIUM_PRESETS: Record<string, StadiumPreset> = {
   'AF 3v3': STADIUM_AF_3V3,
   'AF 3v3 Official': STADIUM_AF_3V3,
   af3v3: STADIUM_AF_3V3,
+  af_3v3: STADIUM_AF_3V3,
   small: STADIUM_SMALL,
   '2v2': STADIUM_SMALL,
   classic: STADIUM_CLASSIC,
@@ -184,7 +185,12 @@ export function createStadium(id: StadiumId | string = defaultStadium, customOpt
   let preset: StadiumPreset;
   if (id === 'individual' || id === '1v1' || id === 'Individual' || id === 'Individual (1v1)') {
     preset = STADIUM_INDIVIDUAL;
-  } else if (id === 'AF 3v3') {
+  } else if (
+    id === 'AF 3v3' ||
+    id === 'AF 3v3 Official' ||
+    id === 'af_3v3' ||
+    id === 'af3v3'
+  ) {
     preset = STADIUM_AF_3V3;
   } else if (id === 'small' || id === '2v2' || id === 'Small' || id === 'Pequeño' || id === 'Pequeño (2v2)' || id === 'Small Arena') {
     preset = STADIUM_SMALL;
@@ -198,8 +204,7 @@ export function createStadium(id: StadiumId | string = defaultStadium, customOpt
     id === 'Mediano' ||
     id === 'Mediano (3v3)' ||
     id === 'Classic' ||
-    id === 'Classic Stadium' ||
-    id === 'AF 3v3 Official'
+    id === 'Classic Stadium'
   ) {
     preset = STADIUM_CLASSIC;
   } else {

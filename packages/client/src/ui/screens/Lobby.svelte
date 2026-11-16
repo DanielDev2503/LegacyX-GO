@@ -10,6 +10,13 @@
   let passwordError = $state('');
   let isRefreshing = $state(false);
   let hoveredRoomId = $state<string | null>(null);
+  let pendingRankedInviteRoomId = $state<string | null>(null);
+  let isAutoJoiningInvite = false;
+  let isLobbyUnmounted = false;
+
+  $effect(() => () => {
+    isLobbyUnmounted = true;
+  });
 
   function getPingTier(pingMs: number): 'optimal' | 'good' | 'high' | 'pending' {
     if (!(pingMs > 0)) return 'pending';
@@ -63,9 +70,71 @@
 
   function goCreateAccount() {
     soundFX.playUIClick();
-    userProfile.gatekeeperTab = 'register';
+    if (pendingRankedInviteRoomId) {
+      gameUI.pendingInviteRoomId = pendingRankedInviteRoomId;
+      pendingRankedInviteRoomId = null;
+      userProfile.gatekeeperTab = 'login';
+    } else {
+      userProfile.gatekeeperTab = 'register';
+    }
     gameUI.navigateTo('GATEKEEPER');
   }
+
+  async function attemptInviteAutoJoin(targetRoomId: string): Promise<void> {
+    try {
+      await sharedSignaling.ensureConnected().catch(() => {});
+      const ok = await gameApp.joinRoom(targetRoomId);
+      if (isLobbyUnmounted) return;
+
+      if (ok) {
+        gameUI.navigateTo('IN_GAME');
+        gameUI.clearModalStack();
+        gameUI.openModal('TEAM_SELECT');
+        return;
+      }
+
+      const errCode = gameApp.lastJoinErrorCode;
+      if (errCode === 'INVALID_PASSWORD') {
+        gameUI.lobbyError = null;
+        const existingRoom = gameUI.rooms.find((r) => r.id === targetRoomId);
+        const room: RoomInfo = existingRoom ?? {
+          id: targetRoomId,
+          name: `Sala ${targetRoomId}`,
+          playersCount: 1,
+          maxPlayers: 12,
+          ping: 0,
+          roomType: 'casual',
+          isPrivate: true,
+          stadium: 'mediano'
+        };
+        gameUI.pendingPasswordRoom = room;
+        passwordInput = '';
+        passwordError = '';
+        gameUI.openModal('PASSWORD_PROMPT');
+      } else if (errCode === 'RANKED_ACCOUNT_REQUIRED') {
+        pendingRankedInviteRoomId = targetRoomId;
+      }
+    } catch {
+      if (!isLobbyUnmounted && !gameUI.lobbyError) {
+        gameUI.lobbyError =
+          gameApp.lastJoinError || 'No se pudo conectar con la sala invitada.';
+      }
+    } finally {
+      isAutoJoiningInvite = false;
+    }
+  }
+
+  $effect(() => {
+    const targetRoomId = gameUI.pendingInviteRoomId;
+    if (!targetRoomId || isAutoJoiningInvite) return;
+
+    isAutoJoiningInvite = true;
+    pendingRankedInviteRoomId = null;
+    gameUI.pendingInviteRoomId = null;
+    gameUI.clearRoomInviteUrl();
+
+    void attemptInviteAutoJoin(targetRoomId);
+  });
 
   $effect(() => {
     void userProfile.fetchLeaderboard(userProfile.leaderboardCategory);
@@ -272,12 +341,20 @@
             <span>{gameUI.lobbyError}</span>
           </div>
           <div class="err-actions">
-            {#if userProfile.isGuest}
+            {#if userProfile.isGuest || pendingRankedInviteRoomId}
               <button type="button" class="err-login-btn" onclick={goCreateAccount}>
                 Iniciar sesión
               </button>
             {/if}
-            <button type="button" class="err-dismiss-btn" onclick={() => (gameUI.lobbyError = null)} aria-label="Cerrar aviso">
+            <button
+              type="button"
+              class="err-dismiss-btn"
+              onclick={() => {
+                gameUI.lobbyError = null;
+                pendingRankedInviteRoomId = null;
+              }}
+              aria-label="Cerrar aviso"
+            >
               ×
             </button>
           </div>
