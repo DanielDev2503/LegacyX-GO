@@ -1,10 +1,12 @@
 <script lang="ts">
+  import { untrack } from 'svelte';
   import { gameUI } from '../state/gameUI.svelte.js';
   import { userProfile } from '../state/userProfile.svelte.js';
   import { soundFX } from '../../audio/SoundFX.js';
   import { matchRecorder } from '../../recorder/MatchRecorder.svelte.js';
   import MatchScoreboard, { type ScoreboardDesign } from '../components/MatchScoreboard.svelte';
   import KitPatternBadge from '../components/KitPatternBadge.svelte';
+  import MobileControlsOverlay from './MobileControlsOverlay.svelte';
   import { getKitPatternCss } from '../utils/kitPatterns.js';
   import {
     applyMentionCandidate,
@@ -50,6 +52,18 @@
   let telemetryEl = $state<HTMLElement | null>(null);
   let telemetryWidth = $state(140);
   let isResizingChat = $state(false);
+  let isMobileChatOpen = $state(false);
+  let unreadMobileMentions = $state(0);
+  let mobilePreviewIds = $state<Array<string | number>>([]);
+  const mobilePreviewTimers = new Map<string | number, ReturnType<typeof setTimeout>>();
+  let lastObservedChatMsgId: string | number | null =
+    gameUI.chatMessages.length > 0 ? gameUI.chatMessages[gameUI.chatMessages.length - 1]!.id : null;
+
+  let mobilePreviewMessages = $derived.by(() => {
+    if (!gameUI.isMobileLayout || isMobileChatOpen || mobilePreviewIds.length === 0) return [];
+    const wanted = new Set(mobilePreviewIds);
+    return gameUI.chatMessages.filter((m) => wanted.has(m.id)).slice(-2);
+  });
 
   let pingColorClass = $derived(
     gameUI.pingMs < 60 ? 'text-emerald' : gameUI.pingMs <= 120 ? 'text-amber' : 'text-crimson'
@@ -260,6 +274,113 @@
     }
   }
 
+  function clearMobilePreviewTimers(): void {
+    for (const timer of mobilePreviewTimers.values()) {
+      clearTimeout(timer);
+    }
+    mobilePreviewTimers.clear();
+  }
+
+  $effect(() => {
+    const msgs = gameUI.chatMessages;
+    const latestId = msgs.length > 0 ? msgs[msgs.length - 1]!.id : null;
+
+    if (!gameUI.isMobileLayout || isMobileChatOpen) {
+      lastObservedChatMsgId = latestId;
+      if (untrack(() => mobilePreviewIds.length) > 0) {
+        mobilePreviewIds = [];
+      }
+      clearMobilePreviewTimers();
+      return;
+    }
+
+    if (latestId === lastObservedChatMsgId) return;
+    const prevIdx =
+      lastObservedChatMsgId !== null ? msgs.findIndex((m) => m.id === lastObservedChatMsgId) : -1;
+    const newMsgs = prevIdx >= 0 ? msgs.slice(prevIdx + 1) : msgs.slice(-2);
+    lastObservedChatMsgId = latestId;
+
+    if (newMsgs.length === 0) return;
+
+    const nextIds = [...untrack(() => mobilePreviewIds)];
+    let addedMentions = 0;
+    const names = untrack(() => knownRosterNames);
+    for (const msg of newMsgs) {
+      if (!nextIds.includes(msg.id)) {
+        nextIds.push(msg.id);
+      }
+      const prevTimer = mobilePreviewTimers.get(msg.id);
+      if (prevTimer) clearTimeout(prevTimer);
+      mobilePreviewTimers.set(
+        msg.id,
+        setTimeout(() => {
+          mobilePreviewTimers.delete(msg.id);
+          mobilePreviewIds = mobilePreviewIds.filter((id) => id !== msg.id);
+        }, 6000)
+      );
+
+      const isSystemMsg = Boolean(msg.isSystem || msg.team === 'SYSTEM' || msg.senderTeam === 'system');
+      if (!isSystemMsg && msg.text) {
+        const hasRelevantMention = segmentChatMentions(
+          msg.text,
+          gameUI.nickname,
+          names,
+          msg.sender
+        ).some((seg) => seg.kind === 'mention' && (seg.isSelf || seg.isAll));
+        if (hasRelevantMention) {
+          addedMentions += 1;
+        }
+      }
+    }
+    mobilePreviewIds = nextIds.slice(-2);
+    if (addedMentions > 0) {
+      unreadMobileMentions = untrack(() => unreadMobileMentions) + addedMentions;
+    }
+  });
+
+  $effect(() => () => {
+    clearMobilePreviewTimers();
+  });
+
+  $effect(() => {
+    if (isMobileChatOpen && (gameUI.isHudEditorOpen || gameUI.activeModal !== 'NONE')) {
+      isMobileChatOpen = false;
+      isChatInputActive = false;
+      gameUI.isChatFocused = false;
+      chatInputEl?.blur();
+    }
+  });
+
+  function openMobileChat(event?: Event) {
+    blurHudControl(event);
+    soundFX.playUIClick();
+    isMobileChatOpen = true;
+    unreadMobileMentions = 0;
+    mobilePreviewIds = [];
+    clearMobilePreviewTimers();
+  }
+
+  function closeMobileChat(event?: Event) {
+    blurHudControl(event);
+    soundFX.playUIClick();
+    isMobileChatOpen = false;
+    isChatInputActive = false;
+    gameUI.isChatFocused = false;
+    chatInputEl?.blur();
+  }
+
+  function handleSkipGoalReplay(event?: Event) {
+    blurHudControl(event);
+    soundFX.playUIClick();
+    gameUI.onSkipGoalReplay?.();
+  }
+
+  function handleQuickPause(event?: Event) {
+    blurHudControl(event);
+    soundFX.playUIClick();
+    gameUI.togglePause();
+  }
+
   function handleSendChat(event?: Event) {
     const triggerEl = event?.currentTarget as HTMLElement | null;
     if (triggerEl && triggerEl !== chatInputEl) {
@@ -280,6 +401,11 @@
       }
       if (!gameUI.canSendChatNow()) {
         gameUI.triggerChatCooldownNotice();
+        if (gameUI.isMobileLayout) {
+          isChatInputActive = false;
+          gameUI.isChatFocused = false;
+          chatInputEl?.blur();
+        }
         return;
       }
       soundFX.playUIClick();
@@ -328,6 +454,9 @@
       chatCursor = 0;
       isChatInputActive = false;
       gameUI.isChatFocused = false;
+      if (gameUI.isMobileLayout) {
+        isMobileChatOpen = false;
+      }
       chatInputEl?.blur();
     }
   }
@@ -335,6 +464,17 @@
   function focusChat() {
     isChatInputActive = true;
     gameUI.isChatFocused = true;
+    if (gameUI.isMobileLayout && !isMobileChatOpen) {
+      isMobileChatOpen = true;
+      unreadMobileMentions = 0;
+      mobilePreviewIds = [];
+      clearMobilePreviewTimers();
+      queueMicrotask(() => {
+        chatInputEl?.focus();
+        syncChatCursor();
+      });
+      return;
+    }
     chatInputEl?.focus();
     syncChatCursor();
   }
@@ -511,7 +651,7 @@
   }
 </script>
 
-<div class="hud-root">
+<div class="hud-root" class:is-mobile={gameUI.isMobileLayout}>
   <!-- ========================================== -->
   <!-- 1. TOP BAR: 3 CÁPSULAS FLOTANTES           -->
   <!-- ========================================== -->
@@ -549,7 +689,14 @@
           <span>REPETICIÓN DEL GOL</span>
         </span>
         {#if canSkipGoalReplay}
-          <span class="goal-replay-skip-hint">Pulsa ENTER para saltar</span>
+          <button
+            type="button"
+            id="btn-hud-skip-replay"
+            class="goal-replay-skip-hint"
+            tabindex="-1"
+            onkeydown={preventHudButtonKeyActivation}
+            onclick={handleSkipGoalReplay}
+          >{gameUI.isMobileLayout ? 'Saltar repetición ⏭' : 'Pulsa ENTER para saltar'}</button>
         {/if}
       </div>
     {/if}
@@ -612,6 +759,32 @@
         <div class="rec-auth-warning-toast" role="alert">
           <span>🔒 {recAuthWarning}</span>
         </div>
+      {/if}
+
+      {#if gameUI.isMobileLayout && (gameUI.isHost || gameUI.isAdmin) && gameUI.matchPhase !== 0}
+        {@const isMatchPaused = gameUI.matchPhase === 2.1 || gameUI.fsmPhase === 'PAUSED'}
+        <button
+          type="button"
+          id="btn-hud-pause"
+          class="hud-action-btn"
+          class:is-paused-active={isMatchPaused}
+          tabindex="-1"
+          title={isMatchPaused ? 'Reanudar partida' : 'Pausar partida'}
+          aria-label={isMatchPaused ? 'Reanudar partida' : 'Pausar partida'}
+          onkeydown={preventHudButtonKeyActivation}
+          onclick={handleQuickPause}
+        >
+          {#if isMatchPaused}
+            <svg class="hud-btn-svg text-amber" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+              <polygon points="6 4 20 12 6 20 6 4"></polygon>
+            </svg>
+          {:else}
+            <svg class="hud-btn-svg text-cyan" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+              <rect x="6" y="4" width="4" height="16" rx="1"></rect>
+              <rect x="14" y="4" width="4" height="16" rx="1"></rect>
+            </svg>
+          {/if}
+        </button>
       {/if}
 
       <!-- 1. Silenciar / Audio Toggle -->
@@ -946,130 +1119,197 @@
   <!-- ========================================== -->
   <!-- 3. CHAT TÁCTICO FLOTANTE (ADAPTATIVO)      -->
   <!-- ========================================== -->
-  <div
-    class="hud-chat-container"
-    style="--chat-opacity: {normalizedChatOpacity};"
-  >
-    <!-- Tirador superior de redimensionamiento vertical -->
-    <div
-      class="chat-resize-handle"
-      role="slider"
-      aria-label="Ajustar altura del chat"
-      aria-valuenow={gameUI.chatHeight}
-      aria-valuemin={100}
-      aria-valuemax={450}
-      aria-orientation="vertical"
-      tabindex="0"
-      onpointerdown={handleResizePointerDown}
-      onkeydown={(e) => {
-        if (e.key === 'ArrowUp') {
-          e.preventDefault();
-          gameUI.chatHeight = Math.min(450, gameUI.chatHeight + 10);
-        } else if (e.key === 'ArrowDown') {
-          e.preventDefault();
-          gameUI.chatHeight = Math.max(100, gameUI.chatHeight - 10);
-        }
-      }}
-      title="Arrastra para ajustar la altura del chat"
-    >
-      <span class="resize-handle-bar"></span>
-    </div>
-
-    <div class="chat-messages-scroll custom-scrollbar" bind:this={chatScrollEl}>
-      {#if gameUI.chatMessages.length === 0}
-        <div class="chat-empty-state">
-          <span class="chat-empty-hint">Sala iniciada. Presiona Enter para escribir (@all / @usuario)...</span>
-        </div>
-      {:else}
-        {#each gameUI.chatMessages as msg (msg.id)}
-          {#if msg.isSystem || msg.team === 'SYSTEM' || msg.senderTeam === 'system'}
-            <div class="chat-line chat-line-system">
-              <span class="chat-system-notice">
-                {msg.text}
-              </span>
-            </div>
-          {:else}
-            <div class="chat-line">
-              <span class="chat-sender {msg.team.toLowerCase()} font-bold">
-                {msg.sender}:
-              </span>
-              <span class="chat-text">
-                {#each segmentChatMentions(msg.text, gameUI.nickname, knownRosterNames, msg.sender) as seg}
-                  {#if seg.kind === 'mention'}
-                    <span class="chat-mention-pill" class:is-self={seg.isSelf} class:is-all={seg.isAll}>{seg.value}</span>
-                  {:else}
-                    {seg.value}
-                  {/if}
-                {/each}
-              </span>
-            </div>
-          {/if}
-        {/each}
-      {/if}
-    </div>
-
-    {#if isMentionMenuOpen}
-      <div class="mention-popup" role="listbox" aria-label="Autocompletar mención">
-        {#each mentionCandidates as candidate, idx (candidate.handle)}
-          <button
-            type="button"
-            role="option"
-            aria-selected={idx === mentionIndex}
-            class="mention-option"
-            class:is-active={idx === mentionIndex}
-            onmousedown={(e) => {
-              e.preventDefault();
-              selectMentionCandidate(idx);
-            }}
-          >
-            <span class="mention-handle">@{candidate.handle}</span>
-            <span class="mention-meta">{candidate.handle === 'all' ? 'Todos' : candidate.team.toUpperCase()}</span>
-          </button>
-        {/each}
-      </div>
-    {/if}
-
-    <div class="chat-input-bar" class:is-cooldown={gameUI.chatCooldownActive}>
-      <input
-        bind:this={chatInputEl}
-        type="text"
-        class="chat-text-input"
-        placeholder="Presiona Enter para escribir (@usuario, @all, /extrapolation)..."
-        bind:value={chatMessage}
-        oninput={syncChatCursor}
-        onclick={syncChatCursor}
-        onkeyup={syncChatCursor}
-        onkeydown={handleChatKeyDown}
-        onfocus={() => {
-          isChatInputActive = true;
-          gameUI.isChatFocused = true;
-          syncChatCursor();
-        }}
-        onblur={() => {
-          isChatInputActive = false;
-          gameUI.isChatFocused = false;
-        }}
-      />
-      {#if gameUI.chatCooldownActive}
-        <span class="chat-cooldown-pill" role="status" aria-live="polite">0.5s</span>
-      {/if}
+  {#if gameUI.isMobileLayout && !isMobileChatOpen}
+    <div class="mobile-chat-collapsed" aria-label="Chat contraído">
       <button
         type="button"
-        class="chat-send-trigger"
-        class:is-cooldown={gameUI.chatCooldownActive}
+        id="btn-mobile-chat-toggle"
+        class="mobile-chat-toggle-btn"
+        title="Abrir chat"
+        aria-label="Abrir chat"
         tabindex="-1"
-        aria-label="Enviar Mensaje"
         onkeydown={preventHudButtonKeyActivation}
-        onclick={handleSendChat}
+        onclick={openMobileChat}
       >
-        <span>ENVIAR</span>
-        <svg class="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <line x1="22" y1="2" x2="11" y2="13"></line>
-          <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+        <svg class="mobile-chat-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+          <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
         </svg>
+        {#if unreadMobileMentions > 0}
+          <span class="mobile-chat-badge" aria-label="{unreadMobileMentions} menciones sin leer">@</span>
+        {/if}
       </button>
+
+      {#if mobilePreviewMessages.length > 0}
+        <div class="mobile-chat-preview-stack">
+          {#each mobilePreviewMessages as previewMsg (previewMsg.id)}
+            {@const isSys = Boolean(previewMsg.isSystem || previewMsg.team === 'SYSTEM' || previewMsg.senderTeam === 'system')}
+            <button
+              type="button"
+              class="mobile-chat-preview-bar"
+              class:is-system={isSys}
+              tabindex="-1"
+              onclick={openMobileChat}
+            >
+              {#if !isSys}
+                <span class="chat-sender preview-sender {previewMsg.team.toLowerCase()}">{previewMsg.sender}:</span>
+              {/if}
+              <span class="preview-text">{previewMsg.text}</span>
+            </button>
+          {/each}
+        </div>
+      {/if}
     </div>
-  </div>
+  {/if}
+
+  {#if !gameUI.isMobileLayout || isMobileChatOpen}
+    <div
+      class="hud-chat-container"
+      class:mobile-chat-expanded={gameUI.isMobileLayout && isMobileChatOpen}
+      style="--chat-opacity: {normalizedChatOpacity};"
+    >
+      {#if gameUI.isMobileLayout}
+        <div class="mobile-chat-header">
+          <span class="mobile-chat-title">CHAT</span>
+          <button
+            type="button"
+            id="btn-mobile-chat-close"
+            class="mobile-chat-close-btn"
+            title="Cerrar chat"
+            aria-label="Cerrar chat"
+            tabindex="-1"
+            onkeydown={preventHudButtonKeyActivation}
+            onclick={closeMobileChat}
+          >✕</button>
+        </div>
+      {:else}
+        <!-- Tirador superior de redimensionamiento vertical -->
+        <div
+          class="chat-resize-handle"
+          role="slider"
+          aria-label="Ajustar altura del chat"
+          aria-valuenow={gameUI.chatHeight}
+          aria-valuemin={100}
+          aria-valuemax={450}
+          aria-orientation="vertical"
+          tabindex="0"
+          onpointerdown={handleResizePointerDown}
+          onkeydown={(e) => {
+            if (e.key === 'ArrowUp') {
+              e.preventDefault();
+              gameUI.chatHeight = Math.min(450, gameUI.chatHeight + 10);
+            } else if (e.key === 'ArrowDown') {
+              e.preventDefault();
+              gameUI.chatHeight = Math.max(100, gameUI.chatHeight - 10);
+            }
+          }}
+          title="Arrastra para ajustar la altura del chat"
+        >
+          <span class="resize-handle-bar"></span>
+        </div>
+      {/if}
+
+      <div class="chat-messages-scroll custom-scrollbar" bind:this={chatScrollEl}>
+        {#if gameUI.chatMessages.length === 0}
+          <div class="chat-empty-state">
+            <span class="chat-empty-hint">Sala iniciada. Presiona Enter para escribir (@all / @usuario)...</span>
+          </div>
+        {:else}
+          {#each gameUI.chatMessages as msg (msg.id)}
+            {#if msg.isSystem || msg.team === 'SYSTEM' || msg.senderTeam === 'system'}
+              <div class="chat-line chat-line-system">
+                <span class="chat-system-notice">
+                  {msg.text}
+                </span>
+              </div>
+            {:else}
+              <div class="chat-line">
+                <span class="chat-sender {msg.team.toLowerCase()} font-bold">
+                  {msg.sender}:
+                </span>
+                <span class="chat-text">
+                  {#each segmentChatMentions(msg.text, gameUI.nickname, knownRosterNames, msg.sender) as seg}
+                    {#if seg.kind === 'mention'}
+                      <span class="chat-mention-pill" class:is-self={seg.isSelf} class:is-all={seg.isAll}>{seg.value}</span>
+                    {:else}
+                      {seg.value}
+                    {/if}
+                  {/each}
+                </span>
+              </div>
+            {/if}
+          {/each}
+        {/if}
+      </div>
+
+      {#if isMentionMenuOpen}
+        <div class="mention-popup" role="listbox" aria-label="Autocompletar mención">
+          {#each mentionCandidates as candidate, idx (candidate.handle)}
+            <button
+              type="button"
+              role="option"
+              aria-selected={idx === mentionIndex}
+              class="mention-option"
+              class:is-active={idx === mentionIndex}
+              onmousedown={(e) => {
+                e.preventDefault();
+                selectMentionCandidate(idx);
+              }}
+            >
+              <span class="mention-handle">@{candidate.handle}</span>
+              <span class="mention-meta">{candidate.handle === 'all' ? 'Todos' : candidate.team.toUpperCase()}</span>
+            </button>
+          {/each}
+        </div>
+      {/if}
+
+      <div class="chat-input-bar" class:is-cooldown={gameUI.chatCooldownActive}>
+        <input
+          bind:this={chatInputEl}
+          type="text"
+          class="chat-text-input"
+          placeholder={gameUI.isMobileLayout
+            ? 'Escribe un mensaje (@usuario, @all)...'
+            : 'Presiona Enter para escribir (@usuario, @all, /extrapolation)...'}
+          bind:value={chatMessage}
+          oninput={syncChatCursor}
+          onclick={syncChatCursor}
+          onkeyup={syncChatCursor}
+          onkeydown={handleChatKeyDown}
+          onfocus={() => {
+            isChatInputActive = true;
+            gameUI.isChatFocused = true;
+            syncChatCursor();
+          }}
+          onblur={() => {
+            isChatInputActive = false;
+            gameUI.isChatFocused = false;
+          }}
+        />
+        {#if gameUI.chatCooldownActive}
+          <span class="chat-cooldown-pill" role="status" aria-live="polite">0.5s</span>
+        {/if}
+        <button
+          type="button"
+          class="chat-send-trigger"
+          class:is-cooldown={gameUI.chatCooldownActive}
+          tabindex="-1"
+          aria-label="Enviar Mensaje"
+          onkeydown={preventHudButtonKeyActivation}
+          onclick={handleSendChat}
+        >
+          <span>ENVIAR</span>
+          <svg class="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="22" y1="2" x2="11" y2="13"></line>
+            <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+          </svg>
+        </button>
+      </div>
+    </div>
+  {/if}
+
+  {#if gameUI.isMobileLayout && (gameUI.activeModal === 'NONE' || gameUI.isHudEditorOpen)}
+    <MobileControlsOverlay />
+  {/if}
 </div>
 
 <style>
@@ -1275,6 +1515,19 @@
     font-size: 0.68rem;
     font-weight: 700;
     letter-spacing: 0.03em;
+    pointer-events: auto;
+    cursor: pointer;
+    transition: border-color 0.15s ease, transform 0.12s ease, background 0.15s ease;
+  }
+
+  .goal-replay-skip-hint:hover {
+    background: #132036;
+    border-color: #00e5ff;
+    color: #ffffff;
+  }
+
+  .goal-replay-skip-hint:active {
+    transform: scale(0.97);
   }
 
   @keyframes warningPulse30s {
@@ -2558,5 +2811,225 @@
   }
   .custom-scrollbar::-webkit-scrollbar-thumb:hover {
     background: #00e5ff;
+  }
+
+  /* ========================================================= */
+  /* MODO MÓVIL LANDSCAPE (LAYOUT COMPACTO + CHAT 2 ESTADOS)    */
+  /* ========================================================= */
+  .hud-root.is-mobile .top-card-left {
+    left: calc(10px + env(safe-area-inset-left, 0px));
+    height: 36px;
+    padding: 0 0.65rem;
+    gap: 0.45rem;
+  }
+
+  .hud-root.is-mobile .room-title {
+    font-size: 0.72rem;
+    max-width: min(145px, 22vw);
+  }
+
+  .hud-root.is-mobile .top-card-center {
+    transform: translateX(-50%) scale(0.84);
+    transform-origin: top center;
+  }
+
+  .hud-root.is-mobile .top-card-right {
+    right: calc(10px + env(safe-area-inset-right, 0px));
+    height: 36px;
+    padding: 0 0.45rem;
+    gap: 0.3rem;
+  }
+
+  .hud-root.is-mobile .hud-replay-btn,
+  .hud-root.is-mobile .hud-action-btn {
+    width: 1.85rem;
+    height: 1.85rem;
+  }
+
+  .hud-root.is-mobile .hud-rec-btn {
+    height: 1.85rem;
+    padding: 0 0.48rem;
+    font-size: 0.64rem;
+  }
+
+  .hud-root.is-mobile .goal-replay-pill-bar {
+    top: 46px;
+  }
+
+  .hud-root.is-mobile .hud-telemetry-corner {
+    top: calc(42px + env(safe-area-inset-top, 0px));
+    right: calc(10px + env(safe-area-inset-right, 0px));
+    bottom: auto;
+    left: auto;
+    z-index: 42;
+    padding: 0.2rem 0.5rem;
+    gap: 0.35rem;
+    font-size: 0.66rem;
+    background: rgba(10, 16, 26, 0.88);
+  }
+
+  .hud-action-btn.is-paused-active {
+    background: rgba(255, 183, 3, 0.2);
+    border-color: rgba(255, 183, 3, 0.75);
+    box-shadow: 0 0 12px rgba(255, 183, 3, 0.35);
+  }
+
+  .mobile-chat-collapsed {
+    position: fixed;
+    top: calc(44px + env(safe-area-inset-top, 0px));
+    left: calc(10px + env(safe-area-inset-left, 0px));
+    z-index: 95;
+    display: flex;
+    align-items: flex-start;
+    gap: 0.45rem;
+    pointer-events: none;
+  }
+
+  .mobile-chat-toggle-btn {
+    pointer-events: auto;
+    position: relative;
+    width: 34px;
+    height: 34px;
+    border-radius: 9999px;
+    background: rgba(10, 16, 26, 0.86);
+    border: 1px solid rgba(0, 229, 255, 0.45);
+    color: #00e5ff;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.55);
+    cursor: pointer;
+    flex-shrink: 0;
+  }
+
+  .mobile-chat-toggle-btn:active {
+    transform: scale(0.94);
+  }
+
+  .mobile-chat-icon {
+    width: 1rem;
+    height: 1rem;
+  }
+
+  .mobile-chat-badge {
+    position: absolute;
+    top: -4px;
+    right: -4px;
+    min-width: 16px;
+    height: 16px;
+    padding: 0 4px;
+    border-radius: 9999px;
+    background: #ef4444;
+    border: 1px solid #fecaca;
+    color: #ffffff;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.6rem;
+    font-weight: 900;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 1;
+  }
+
+  .mobile-chat-preview-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    max-width: min(215px, 34vw);
+  }
+
+  .mobile-chat-preview-bar {
+    pointer-events: auto;
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+    padding: 0.22rem 0.5rem;
+    border-radius: 0.45rem;
+    background: rgba(10, 16, 26, 0.82);
+    border: 1px solid rgba(0, 229, 255, 0.25);
+    color: #e2e8f0;
+    font-family: 'Chivo', system-ui, sans-serif;
+    font-size: 0.68rem;
+    text-align: left;
+    cursor: pointer;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    animation: chatMsgSlideIn 180ms ease-out both;
+  }
+
+  .mobile-chat-preview-bar.is-system {
+    border-color: rgba(250, 204, 21, 0.3);
+    color: #fde68a;
+  }
+
+  .preview-sender {
+    font-family: 'JetBrains Mono', monospace;
+    font-weight: 800;
+    flex-shrink: 0;
+  }
+
+  .preview-text {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .hud-chat-container.mobile-chat-expanded {
+    top: calc(42px + env(safe-area-inset-top, 0px));
+    left: calc(10px + env(safe-area-inset-left, 0px));
+    bottom: auto;
+    right: auto;
+    width: min(295px, 44vw);
+    height: min(210px, calc(100dvh - 208px));
+    min-height: 132px;
+    z-index: 105;
+  }
+
+  .mobile-chat-header {
+    height: 28px;
+    padding: 0 0.55rem;
+    background: #080e18;
+    border-bottom: 1px solid rgba(0, 229, 255, 0.2);
+    border-radius: 0.75rem 0.75rem 0 0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-shrink: 0;
+  }
+
+  .mobile-chat-title {
+    font-family: 'Space Grotesk', system-ui, sans-serif;
+    font-size: 0.68rem;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    color: #00e5ff;
+  }
+
+  .mobile-chat-close-btn {
+    width: 22px;
+    height: 22px;
+    border-radius: 0.35rem;
+    background: #131c2b;
+    border: 1px solid rgba(148, 163, 184, 0.3);
+    color: #cbd5e1;
+    font-size: 0.72rem;
+    font-weight: 800;
+    line-height: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+  }
+
+  .mobile-chat-close-btn:active {
+    background: rgba(255, 51, 102, 0.25);
+    border-color: #ff3366;
+    color: #ffffff;
+  }
+
+  .hud-root.is-mobile .chat-messages-scroll {
+    touch-action: pan-y;
+    padding: 0.4rem 0.6rem;
+    font-size: 0.72rem;
   }
 </style>

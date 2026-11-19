@@ -1467,6 +1467,7 @@ class GameUIStore {
   public onStartPracticeMode: (() => void) | null = null;
   public onStadiumChanged: ((stadiumId: string) => void) | null = null;
   public onTogglePause: (() => void) | null = null;
+  public onSkipGoalReplay: (() => void) | null = null;
   public onStartMatch: (() => void) | null = null;
   public onStopMatch: (() => void) | null = null;
   public onSettingsChanged: ((settings: SettingsConfig) => void) | null = null;

@@ -46,6 +46,8 @@
     enterImmersiveMode,
     setHostWakeLock
   } from './controllers/MobileRuntime.js';
+  import { mobileTouchController } from './controllers/MobileTouchController.js';
+  import { mobileHaptics } from './controllers/MobileHaptics.js';
 
   import Gatekeeper from './ui/screens/Gatekeeper.svelte';
   import Lobby from './ui/screens/Lobby.svelte';
@@ -461,6 +463,9 @@
       if (gameUI.screenShake) {
         rendererInstance?.triggerShake(intensity, durationMs);
       }
+      if (!gameUI.isHost && gameUI.isMobileLayout) {
+        void (intensity >= 12 ? mobileHaptics.impactHeavy() : mobileHaptics.impactMedium());
+      }
     };
 
     gameUI.onStartMatch = () => {
@@ -738,6 +743,9 @@
         if (gameUI.screenShake) {
           rendererInstance?.triggerShake(15, 500);
         }
+        if (gameUI.isMobileLayout) {
+          void mobileHaptics.impactHeavy();
+        }
         gameApp.networkHost?.broadcastGameFx('goal');
 
         if (typeof payload?.redScore === 'number') gameUI.redScore = payload.redScore;
@@ -805,6 +813,9 @@
         if (gameUI.screenShake) {
           rendererInstance?.triggerShake(7, 220);
         }
+        if (gameUI.isMobileLayout) {
+          void mobileHaptics.impactMedium();
+        }
         gameApp.networkHost?.broadcastGameFx('post');
       });
 
@@ -817,6 +828,9 @@
         const isPower = Boolean(payload?.isPowerShot);
         const strength = payload?.strength ?? (isPower ? 1.8 : 1.0);
         soundFX.playKick(strength);
+        if (gameUI.isMobileLayout) {
+          void (isPower ? mobileHaptics.impactMedium() : mobileHaptics.impactLight());
+        }
         gameApp.networkHost?.broadcastGameFx(isPower ? 'power_shot' : 'kick', strength);
       });
 
@@ -937,6 +951,8 @@
       playerInfos: new Map()
     });
     rendererInstance = renderer;
+    renderer.isMobileLayout = gameUI.isMobileLayout;
+    mobileTouchController.setMinimapRenderer(renderer.minimapRenderer);
     renderer.setTeamKits(gameUI.redCaptainKit, gameUI.blueCaptainKit);
     gameApp.networkClient?.jitterBuffer.setArenaBounds(
       renderer.stadium.halfWidth,
@@ -950,6 +966,56 @@
     let measuredChatHeight = gameUI.chatHeight;
     let observedChatEl: Element | null = null;
     let chatResizeObserver: ResizeObserver | null = null;
+    const mobileExclusionJoystick = { x: 0, y: 0, width: 0, height: 0 };
+    const mobileExclusionActions = { x: 0, y: 0, width: 0, height: 0 };
+    const mobileExclusionChat = { x: 0, y: 0, width: 0, height: 0 };
+    const mobileExclusionList = [
+      mobileExclusionJoystick,
+      mobileExclusionActions,
+      mobileExclusionChat
+    ];
+
+    function updateExclusionRect(
+      selector: string,
+      out: { x: number; y: number; width: number; height: number },
+      cLeft: number,
+      cTop: number
+    ): void {
+      const el = document.querySelector(selector);
+      if (!el) {
+        out.width = 0;
+        out.height = 0;
+        return;
+      }
+      const r = el.getBoundingClientRect();
+      if (r.width <= 0 || r.height <= 0) {
+        out.width = 0;
+        out.height = 0;
+        return;
+      }
+      out.x = Math.round(r.left - cLeft);
+      out.y = Math.round(r.top - cTop);
+      out.width = Math.round(r.width);
+      out.height = Math.round(r.height);
+    }
+
+    function syncMobileExclusionZones(): void {
+      if (!gameUI.isMobileLayout || typeof document === 'undefined') {
+        for (let i = 0; i < mobileExclusionList.length; i++) {
+          mobileExclusionList[i]!.width = 0;
+          mobileExclusionList[i]!.height = 0;
+        }
+        renderer.mobileExclusionZones = [];
+        return;
+      }
+      const canvasRect = canvasEl.getBoundingClientRect();
+      const cLeft = canvasRect.left || 0;
+      const cTop = canvasRect.top || 0;
+      updateExclusionRect('.mobile-joystick-zone', mobileExclusionJoystick, cLeft, cTop);
+      updateExclusionRect('.mobile-action-cluster', mobileExclusionActions, cLeft, cTop);
+      updateExclusionRect('.mobile-chat-collapsed, .hud-chat-container.mobile-chat-expanded', mobileExclusionChat, cLeft, cTop);
+      renderer.mobileExclusionZones = mobileExclusionList;
+    }
 
     function syncChatBounds(): void {
       if (typeof document !== 'undefined') {
@@ -974,6 +1040,7 @@
         }
       }
       renderer.setChatBounds(measuredChatWidth, Math.max(measuredChatHeight, gameUI.chatHeight));
+      syncMobileExclusionZones();
     }
 
     const handleResize = () => {
@@ -1040,7 +1107,10 @@
 
     function computeLocalPlayerInput(consumeDash: boolean): PlayerInput {
       let mask = 0;
-      const isInputActive = gameUI.currentScreen === 'IN_GAME' && gameUI.activeModal === 'NONE';
+      const isInputActive =
+        gameUI.currentScreen === 'IN_GAME' &&
+        gameUI.activeModal === 'NONE' &&
+        !gameUI.isHudEditorOpen;
       const activeEl = document.activeElement;
       const isTyping = activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA');
 
@@ -1049,6 +1119,9 @@
         dashTriggered = false;
         gameUI.isFocusingBall = false;
         renderer.focusBallOnly = false;
+        if (mobileTouchController.hasActiveInput() || mobileTouchController.isEmoteMenuOpen) {
+          mobileTouchController.resetAll();
+        }
         return { inputMask: isTyping ? INPUT_FLAG_TYPING : 0, aimAngle: null, aimThrottle: 0 };
       }
 
@@ -1057,10 +1130,15 @@
         keyState.clear();
         dashTriggered = false;
         gameUI.isFocusingBall = false;
+        if (mobileTouchController.hasActiveInput() || mobileTouchController.isEmoteMenuOpen) {
+          mobileTouchController.resetAll();
+        }
         return { inputMask: 0, aimAngle: null, aimThrottle: 0 };
       }
 
-      const focusHeld = gameUI.keybinds.focusBall.some((k) => keyState.get(k));
+      const focusHeld =
+        gameUI.keybinds.focusBall.some((k) => keyState.get(k)) ||
+        (gameUI.isMobileLayout && mobileTouchController.isHoldingMinimap);
       gameUI.isFocusingBall = focusHeld;
       renderer.focusBallOnly = focusHeld;
 
@@ -1081,7 +1159,19 @@
         mask |= INPUT_FLAG_MAGNUS_RIGHT;
       }
 
-      if (gameUI.settings.movementMode === 'mouse') {
+      if (gameUI.isMobileLayout) {
+        const touchPkt = mobileTouchController.sampleInput(consumeDash);
+        mask |= touchPkt.inputMask ?? 0;
+        if (touchPkt.aimAngle !== null && (touchPkt.aimThrottle ?? 0) > 0) {
+          return {
+            inputMask: mask,
+            aimAngle: touchPkt.aimAngle,
+            aimThrottle: touchPkt.aimThrottle ?? 0
+          };
+        }
+      }
+
+      if (!gameUI.isMobileLayout && gameUI.settings.movementMode === 'mouse') {
         const localPos = getLocalPlayerWorldPos();
         if (hasMousePosition && localPos) {
           const mouseWorld = renderer.clientToWorld(mouseClientX, mouseClientY);
@@ -1115,8 +1205,13 @@
       gameApp.networkClient.sendInput(pkt.inputMask ?? 0, tick, pkt.aimAngle, pkt.aimThrottle);
     }
 
+    mobileTouchController.onInputChanged = () => {
+      dispatchImmediateGuestInput();
+    };
+
     function hasAnyHeldInput(): boolean {
       if (dashTriggered || gameUI.isFocusingBall) return true;
+      if (gameUI.isMobileLayout && mobileTouchController.hasActiveInput()) return true;
       for (const pressed of keyState.values()) {
         if (pressed) return true;
       }
@@ -1129,6 +1224,9 @@
       dashTriggered = false;
       gameUI.isFocusingBall = false;
       renderer.focusBallOnly = false;
+      if (mobileTouchController.hasActiveInput() || mobileTouchController.isEmoteMenuOpen) {
+        mobileTouchController.resetAll();
+      }
       const activeTag = typeof document !== 'undefined' ? document.activeElement?.tagName : '';
       if (hadHeld || activeTag === 'INPUT' || activeTag === 'TEXTAREA') {
         dispatchImmediateGuestInput();
@@ -1142,7 +1240,7 @@
       hasMousePosition = true;
 
       if (e.target !== canvasEl) return;
-      if (gameUI.currentScreen !== 'IN_GAME' || gameUI.activeModal !== 'NONE') return;
+      if (gameUI.currentScreen !== 'IN_GAME' || gameUI.activeModal !== 'NONE' || gameUI.isHudEditorOpen) return;
 
       const activeEl = document.activeElement;
       const isTyping = activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA');
@@ -1178,6 +1276,35 @@
       }
     };
 
+    function skipGoalReplayIfAllowed(): boolean {
+      const currentPhase = gameUI.isHost && engine ? engine.fsm.state : (currSnapshot?.phase ?? gameUI.matchPhase);
+      if (currentPhase !== MatchPhase.GOAL_REPLAY) return false;
+      const activeFieldPlayers = gameUI.rosterPlayers.filter(
+        (p) => p.team === 'red' || p.team === 'blue'
+      ).length;
+      const isScorer =
+        gameUI.localPlayerId > 0 &&
+        gameUI.activeGoalScorerId !== null &&
+        gameUI.localPlayerId === gameUI.activeGoalScorerId;
+      const isSoloOrPractice = gameUI.isPracticeMode || activeFieldPlayers <= 1;
+      if (!isScorer && !isSoloOrPractice) return false;
+
+      if (gameUI.isHost && engine) {
+        if (!gameApp.skipGoalReplay(engine)) {
+          engine.skipGoalReplay(gameUI.localPlayerId);
+        }
+        gameApp.syncMatchPhase(engine.fsm.state);
+        gameUI.handleMatchPhaseTransition(engine.fsm.state);
+      } else {
+        gameApp.skipGoalReplay();
+      }
+      return true;
+    }
+
+    gameUI.onSkipGoalReplay = () => {
+      skipGoalReplayIfAllowed();
+    };
+
     const onKeyDown = (e: KeyboardEvent) => {
       soundFX.ensureContext();
 
@@ -1210,25 +1337,8 @@
       ) {
         const currentPhase = gameUI.isHost && engine ? engine.fsm.state : (currSnapshot?.phase ?? gameUI.matchPhase);
         if (currentPhase === MatchPhase.GOAL_REPLAY) {
-          const activeFieldPlayers = gameUI.rosterPlayers.filter(
-            (p) => p.team === 'red' || p.team === 'blue'
-          ).length;
-          const isScorer =
-            gameUI.localPlayerId > 0 &&
-            gameUI.activeGoalScorerId !== null &&
-            gameUI.localPlayerId === gameUI.activeGoalScorerId;
-          const isSoloOrPractice = gameUI.isPracticeMode || activeFieldPlayers <= 1;
-          if (isScorer || isSoloOrPractice) {
+          if (skipGoalReplayIfAllowed()) {
             e.preventDefault();
-            if (gameUI.isHost && engine) {
-              if (!gameApp.skipGoalReplay(engine)) {
-                engine.skipGoalReplay(gameUI.localPlayerId);
-              }
-              gameApp.syncMatchPhase(engine.fsm.state);
-              gameUI.handleMatchPhaseTransition(engine.fsm.state);
-            } else {
-              gameApp.skipGoalReplay();
-            }
           }
           return;
         }
@@ -1453,11 +1563,11 @@
 
     const guestLocalInputMap = new Map<number, PlayerInput>();
     const hostSimulationInputs = new Map<number, PlayerInput>();
-    let wasModalOpen = gameUI.activeModal !== 'NONE';
+    let wasModalOpen = gameUI.activeModal !== 'NONE' || gameUI.isHudEditorOpen;
 
     const simTicker = new SimulationTicker((now) => {
       lastSimTimestamp = now;
-      const isModalOpen = gameUI.activeModal !== 'NONE';
+      const isModalOpen = gameUI.activeModal !== 'NONE' || gameUI.isHudEditorOpen;
       if (!wasModalOpen && isModalOpen) {
         releaseAndFlushHeldInputs();
       }
@@ -1704,7 +1814,13 @@
       // Sincronizar cámara, zoom y proyección 2D
       const liveRenderPhase =
         gameUI.isHost && engine ? engine.fsm.state : (currSnapshot?.phase ?? gameUI.matchPhase);
-      renderer.camera.setZoom(gameUI.settings.cameraZoom || 1.0);
+      if (renderer.isMobileLayout !== gameUI.isMobileLayout) {
+        renderer.isMobileLayout = gameUI.isMobileLayout;
+        syncMobileExclusionZones();
+      }
+      const baseZoom = gameUI.settings.cameraZoom || 1.0;
+      const targetZoom = gameUI.isMobileLayout ? baseZoom * renderer.getMobileAutoZoom() : baseZoom;
+      renderer.camera.setZoom(targetZoom);
       renderer.scale = renderer.camera.zoom;
       renderer.focusBallOnly = gameUI.isFocusingBall || liveRenderPhase === MatchPhase.GOAL_REPLAY;
       if (renderer.theme !== gameUI.theme) {
@@ -1988,6 +2104,48 @@
       }
       wasRecordingPrevFrame = matchRecorder.isRecording;
 
+      if (gameUI.isMobileLayout) {
+        const localId = gameUI.localPlayerId;
+        const maxDashCd = Math.max(
+          0.2,
+          Number(gameUI.gameplayConfig.dashCooldown ?? gameUI.modifiers.dashCooldown ?? 1.0)
+        );
+        if (Math.abs(gameUI.localDashMaxCooldown - maxDashCd) > 0.01) {
+          gameUI.localDashMaxCooldown = maxDashCd;
+        }
+        let nextStamina = 100;
+        let nextDashCd = 0;
+        let nextIsDashing = false;
+        let nextIsTurbo = false;
+
+        if (localId > 0 && currSnapshot && Array.isArray(currSnapshot.discs)) {
+          for (let i = 0; i < currSnapshot.discs.length; i++) {
+            const d = currSnapshot.discs[i]!;
+            if (d.id === localId) {
+              nextStamina = d.stamina ?? 100;
+              nextDashCd = d.dashCooldown ?? 0;
+              const flags = d.flags ?? 0;
+              nextIsDashing = Boolean(flags & (1 << 1));
+              nextIsTurbo = Boolean(flags & (1 << 4));
+              break;
+            }
+          }
+        }
+
+        if (Math.abs(gameUI.localStamina - nextStamina) > 0.25) {
+          gameUI.localStamina = nextStamina;
+        }
+        if (Math.abs(gameUI.localDashCooldown - nextDashCd) > 0.02 || (nextDashCd === 0 && gameUI.localDashCooldown !== 0)) {
+          gameUI.localDashCooldown = nextDashCd;
+        }
+        if (gameUI.localIsDashing !== nextIsDashing) {
+          gameUI.localIsDashing = nextIsDashing;
+        }
+        if (gameUI.localIsTurbo !== nextIsTurbo) {
+          gameUI.localIsTurbo = nextIsTurbo;
+        }
+      }
+
       // Actualizar telemetría en vivo /var (Superadmin)
       if (gameUI.showVarMonitor && currSnapshot && Array.isArray(currSnapshot.discs)) {
         const discs = currSnapshot.discs;
@@ -2129,10 +2287,14 @@
       }
       gameApp.onScoreEventReceived = null;
       gameUI.onTriggerShake = null;
+      gameUI.onSkipGoalReplay = null;
       gameUI.onChatAdded = undefined;
       gameUI.onBannerApplied = undefined;
       gameUI.onHudStateChange = undefined;
       gameUI.isFocusingBall = false;
+      mobileTouchController.onInputChanged = null;
+      mobileTouchController.setMinimapRenderer(null);
+      mobileTouchController.resetAll();
       chatResizeObserver?.disconnect();
       chatResizeObserver = null;
       cancelAnimationFrame(animFrameId);
@@ -2177,18 +2339,20 @@
     {/if}
 
     <!-- Modales canónicos -->
-    {#if gameUI.activeModal === 'PHYSICS_MODIFIERS' || gameUI.activeModal === 'physics' || gameUI.activeModal === 'MODIFIERS'}
-      <PhysicsModal />
-    {:else if gameUI.activeModal === 'TEAM_MANAGEMENT' || gameUI.activeModal === 'teamSelect' || gameUI.activeModal === 'TEAM_SELECT' || gameUI.activeModal === 'STATS' || gameUI.activeModal === 'stats'}
-      <TeamSelectModal />
-    {:else if gameUI.activeModal === 'STADIUM_SELECTOR' || gameUI.activeModal === 'stadiumSelect' || gameUI.activeModal === 'STADIUM_SELECT'}
-      <StadiumSelectModal />
-    {:else if gameUI.activeModal === 'SETTINGS' || gameUI.activeModal === 'settings'}
-      <SettingsModal />
-    {:else if gameUI.activeModal === 'KEYBINDS' || gameUI.activeModal === 'keybinds'}
-      <KeybindModal />
-    {:else if (gameUI.activeModal === 'REPLAY_VIEWER' || gameUI.activeModal === 'replayViewer') && userProfile.isAuthenticated && !userProfile.isGuest}
-      <ReplayViewerModal />
+    {#if !gameUI.isHudEditorOpen}
+      {#if gameUI.activeModal === 'PHYSICS_MODIFIERS' || gameUI.activeModal === 'physics' || gameUI.activeModal === 'MODIFIERS'}
+        <PhysicsModal />
+      {:else if gameUI.activeModal === 'TEAM_MANAGEMENT' || gameUI.activeModal === 'teamSelect' || gameUI.activeModal === 'TEAM_SELECT' || gameUI.activeModal === 'STATS' || gameUI.activeModal === 'stats'}
+        <TeamSelectModal />
+      {:else if gameUI.activeModal === 'STADIUM_SELECTOR' || gameUI.activeModal === 'stadiumSelect' || gameUI.activeModal === 'STADIUM_SELECT'}
+        <StadiumSelectModal />
+      {:else if gameUI.activeModal === 'SETTINGS' || gameUI.activeModal === 'settings'}
+        <SettingsModal />
+      {:else if gameUI.activeModal === 'KEYBINDS' || gameUI.activeModal === 'keybinds'}
+        <KeybindModal />
+      {:else if (gameUI.activeModal === 'REPLAY_VIEWER' || gameUI.activeModal === 'replayViewer') && userProfile.isAuthenticated && !userProfile.isGuest}
+        <ReplayViewerModal />
+      {/if}
     {/if}
 
     <!-- Tooltip Global Singleton (Portal) -->
