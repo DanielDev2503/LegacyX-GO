@@ -34,6 +34,19 @@
     });
   }
 
+  // Mobile has no hover: probe unmeasured visible rooms automatically.
+  // probeRoomPing dedupes in-flight probes and caches results internally.
+  const AUTO_PING_MAX_ROOMS = 12;
+  function autoProbeVisibleRooms() {
+    for (const room of gameUI.filteredRooms.slice(0, AUTO_PING_MAX_ROOMS)) {
+      if (room.ping > 0) continue;
+      const roomId = room.id;
+      void sharedSignaling.probeRoomPing(roomId).then((measured) => {
+        if (!isLobbyUnmounted && measured > 0) gameUI.updateRoomHoverPing(roomId, measured);
+      });
+    }
+  }
+
   const rankingTabs: ReadonlyArray<{ id: LeaderboardCategory; label: string; unit: string }> = [
     { id: 'elo', label: 'Mayor ELO', unit: 'ELO' },
     { id: 'goals', label: 'Goles', unit: 'Goles' },
@@ -55,6 +68,7 @@
     void sharedSignaling.ensureConnected().then(() => {
       sharedSignaling.send({ type: 'get_rooms' });
       sharedSignaling.send({ type: 'ROOM_LIST' });
+      autoProbeVisibleRooms();
     });
     gameUI.refreshRooms();
     void userProfile.fetchLeaderboard(userProfile.leaderboardCategory);
@@ -164,6 +178,7 @@
             stadium: r.stadiumId || r.stadium || 'AF 3v3'
           };
         });
+        autoProbeVisibleRooms();
       }
       if (typeof data.onlineCount === 'number') {
         gameUI.onlineUsersCount = data.onlineCount;
@@ -1852,5 +1867,180 @@
 
   .disconnect-confirm-btn:active {
     transform: translateY(0) scale(0.98);
+  }
+
+  /* ===== Mobile / Landscape táctil ===== */
+  @media (max-height: 520px), (max-width: 960px) {
+    .lobby-root {
+      padding: 6px;
+      overflow-y: auto;
+      touch-action: pan-y;
+      -webkit-overflow-scrolling: touch;
+      overscroll-behavior: contain;
+    }
+
+    .room-list,
+    .ranking-list {
+      touch-action: pan-y;
+      -webkit-overflow-scrolling: touch;
+      overscroll-behavior: contain;
+    }
+
+    .rooms-card {
+      padding: 8px 10px;
+      gap: 6px;
+    }
+
+    .ranking-card {
+      padding: 8px 10px;
+      gap: 6px;
+    }
+
+    .card-header {
+      gap: 8px;
+    }
+
+    .header-left-group {
+      gap: 8px;
+      min-width: 0;
+    }
+
+    .nav-pill-btn {
+      min-height: 36px;
+      padding: 4px 10px;
+    }
+
+    .online-pill {
+      flex-shrink: 0;
+    }
+
+    .search-input {
+      min-height: 36px;
+    }
+
+    .refresh-btn {
+      min-width: 38px;
+      min-height: 36px;
+    }
+
+    .room-row {
+      min-height: 44px;
+      padding: 4px 8px;
+      gap: 6px;
+    }
+
+    .stadium-mini-label {
+      display: none;
+    }
+
+    .room-meta {
+      gap: 5px;
+    }
+
+    .capacity-badge {
+      min-width: 44px;
+    }
+
+    .join-room-btn {
+      height: 36px;
+      padding: 0 12px;
+    }
+
+    .btn-create-room,
+    .btn-secondary-hud {
+      height: 40px;
+    }
+
+    .btn-secondary-hud {
+      padding: 0 10px;
+    }
+
+    .right-column {
+      gap: 6px;
+    }
+
+    .identity-and-practice {
+      gap: 6px;
+    }
+
+    .player-card {
+      padding: 6px 8px;
+    }
+
+    .player-avatar {
+      width: 32px;
+      height: 32px;
+    }
+
+    .btn-train-compact {
+      padding: 6px 8px;
+      min-height: 44px;
+    }
+
+    .rank-tab-btn {
+      height: 34px;
+    }
+
+    .rank-row {
+      min-height: 32px;
+    }
+
+    .cta-create-account-btn {
+      min-height: 40px;
+    }
+
+    .modal-cancel-btn,
+    .modal-submit-btn {
+      min-height: 42px;
+    }
+
+    .password-modal-card,
+    .disconnect-modal-card {
+      max-height: calc(100dvh - 16px);
+      overflow-y: auto;
+      touch-action: pan-y;
+      -webkit-overflow-scrolling: touch;
+    }
+  }
+
+  /* Landscape de teléfono: mantener 2 columnas con scroll interno */
+  @media (max-height: 520px) and (orientation: landscape) and (min-width: 560px) {
+    .lobby-root {
+      overflow: hidden;
+    }
+
+    .lobby-workspace {
+      height: calc(100dvh - 12px);
+      grid-template-columns: minmax(0, 1.45fr) minmax(240px, 0.9fr);
+      gap: 8px;
+    }
+
+    .card-title,
+    .ranking-title {
+      font-size: 13px;
+    }
+
+    .card-footer {
+      gap: 6px;
+    }
+
+    .btn-create-room,
+    .btn-secondary-hud {
+      height: 38px;
+      font-size: 11px;
+    }
+
+    .btn-secondary-hud span {
+      display: none;
+    }
+
+    .identity-and-practice {
+      grid-template-columns: 1fr 1fr;
+    }
+
+    .player-sub,
+    .train-copy span {
+      display: none;
+    }
   }
 </style>

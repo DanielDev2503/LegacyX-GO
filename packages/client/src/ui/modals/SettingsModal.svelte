@@ -4,7 +4,11 @@
     formatKeybindCode,
     type BallSkinType,
     type PatternType,
-    type ScoreboardDesignType
+    type ScoreboardDesignType,
+    type MobileControlsMode,
+    type MobileJoystickMode,
+    type MobileJoystickAnchor,
+    type MobileTurboMode
   } from '../state/gameUI.svelte.js';
   import { userProfile, validateAccountUsername } from '../state/userProfile.svelte.js';
   import { mouseButtonToCode } from '../../controllers/InputManager.js';
@@ -211,6 +215,99 @@
   function handleResetControls() {
     soundFX.playUIClick();
     gameUI.resetKeybinds();
+  }
+
+  // Mobile Touch Controls & HUD Customization Helpers
+  let mobileHudScaleValue = $derived(
+    Math.max(0.7, Math.min(1.4, Math.round((Number(gameUI.settings.mobileHudScale) || 1.0) * 20) / 20))
+  );
+  let mobileHudScalePercent = $derived(Math.round(mobileHudScaleValue * 100));
+
+  let mobileHudOpacityPercent = $derived(
+    Math.max(
+      20,
+      Math.min(
+        100,
+        Math.round(
+          (((Number(gameUI.settings.mobileHudOpacity) || 0.78) <= 1.5
+            ? (Number(gameUI.settings.mobileHudOpacity) || 0.78) * 100
+            : Number(gameUI.settings.mobileHudOpacity)) /
+            5)
+        ) * 5
+      )
+    )
+  );
+
+  function setMobileControlsEnabled(mode: MobileControlsMode) {
+    soundFX.playUIClick();
+    gameUI.settings.mobileControlsEnabled = mode;
+    gameUI.saveSettings({ mobileControlsEnabled: mode });
+  }
+
+  function setMobileJoystickMode(mode: MobileJoystickMode) {
+    soundFX.playUIClick();
+    gameUI.settings.mobileJoystickMode = mode;
+    gameUI.saveSettings({ mobileJoystickMode: mode });
+  }
+
+  function setMobileJoystickAnchor(anchor: MobileJoystickAnchor) {
+    soundFX.playUIClick();
+    gameUI.settings.mobileJoystickAnchor = anchor;
+    gameUI.saveSettings({ mobileJoystickAnchor: anchor });
+  }
+
+  function setMobileTurboMode(mode: MobileTurboMode) {
+    soundFX.playUIClick();
+    gameUI.settings.mobileTurboMode = mode;
+    gameUI.saveSettings({ mobileTurboMode: mode });
+  }
+
+  function setMobileHudScale(rawScale: number) {
+    const clamped = Math.max(0.7, Math.min(1.4, Math.round(rawScale * 20) / 20));
+    gameUI.settings.mobileHudScale = clamped;
+    gameUI.saveSettings({ mobileHudScale: clamped });
+  }
+
+  function setMobileHudOpacityPercent(rawPercent: number) {
+    const clampedPct = Math.max(20, Math.min(100, Math.round(rawPercent / 5) * 5));
+    const normalized = Math.round(clampedPct) / 100;
+    gameUI.settings.mobileHudOpacity = normalized;
+    gameUI.saveSettings({ mobileHudOpacity: normalized });
+  }
+
+  function handleMobileHapticsToggle(e: Event) {
+    soundFX.playUIClick();
+    const checked = (e.currentTarget as HTMLInputElement).checked;
+    gameUI.settings.mobileHapticsEnabled = checked;
+    gameUI.saveSettings({ mobileHapticsEnabled: checked });
+  }
+
+  function handleOpenMobileHudEditor() {
+    soundFX.playUIClick();
+    if (gameUI.currentScreen !== 'IN_GAME') {
+      gameUI.enterPracticeMode();
+    } else {
+      gameUI.closeOverlay();
+    }
+    gameUI.isHudEditorOpen = true;
+    (gameUI as unknown as { isEditingMobileHud?: boolean }).isEditingMobileHud = true;
+  }
+
+  function handleResetMobileCustomLayout() {
+    soundFX.playUIClick();
+    gameUI.settings.mobileCustomLayout = {};
+    const uiAny = gameUI as unknown as {
+      resetMobileCustomLayout?: () => void;
+      resetMobileHudLayout?: () => void;
+    };
+    if (typeof uiAny.resetMobileCustomLayout === 'function') {
+      uiAny.resetMobileCustomLayout();
+    }
+    if (typeof uiAny.resetMobileHudLayout === 'function') {
+      uiAny.resetMobileHudLayout();
+    } else {
+      gameUI.saveSettings({ mobileCustomLayout: {} });
+    }
   }
 
   function handleResetGraphics() {
@@ -810,6 +907,266 @@
                   >
                     {rebindingAction === 'chat' ? '...' : getKeyLabel(gameUI.keybinds.chat)}
                   </button>
+                </div>
+              </div>
+            </div>
+
+            <!-- Subsección: Controles Táctiles y HUD Móvil -->
+            <div class="controls-card mobile-controls-card" data-testid="mobile-controls-section">
+              <div class="mobile-controls-header">
+                <div>
+                  <h4 class="card-title">Controles Táctiles y HUD Móvil</h4>
+                  <small class="bind-hint">
+                    Configura el joystick virtual, botones de acción multitáctil, vibración háptica y disposición del HUD en pantalla horizontal.
+                  </small>
+                </div>
+              </div>
+
+              <div class="mobile-controls-stack">
+                <!-- 1. Modo de Controles Táctiles (mobileControlsEnabled) -->
+                <div class="mobile-setting-row">
+                  <div class="setting-copy">
+                    <span class="setting-title">Modo de Controles Táctiles</span>
+                    <span class="setting-desc">Activa automáticamente en dispositivos móviles o fuerza su visibilidad</span>
+                  </div>
+                  <div class="segmented-pills" role="group" aria-label="Modo de Controles Táctiles">
+                    <button
+                      type="button"
+                      class="seg-pill"
+                      class:active={gameUI.settings.mobileControlsEnabled === 'auto'}
+                      onclick={() => setMobileControlsEnabled('auto')}
+                    >
+                      Automático
+                    </button>
+                    <button
+                      type="button"
+                      class="seg-pill"
+                      class:active={gameUI.settings.mobileControlsEnabled === 'on'}
+                      onclick={() => setMobileControlsEnabled('on')}
+                    >
+                      Siempre Activo
+                    </button>
+                    <button
+                      type="button"
+                      class="seg-pill"
+                      class:active={gameUI.settings.mobileControlsEnabled === 'off'}
+                      onclick={() => setMobileControlsEnabled('off')}
+                    >
+                      Desactivado
+                    </button>
+                  </div>
+                </div>
+
+                <!-- 2. Modo de Movimiento del Joystick (mobileJoystickMode) -->
+                <div class="mobile-setting-row">
+                  <div class="setting-copy">
+                    <span class="setting-title">Modo de Movimiento del Joystick</span>
+                    <span class="setting-desc">Vector analógico continuo 360° o cruceta digital de 8 direcciones</span>
+                  </div>
+                  <div class="segmented-pills" role="group" aria-label="Modo de Movimiento del Joystick">
+                    <button
+                      type="button"
+                      class="seg-pill"
+                      class:active={gameUI.settings.mobileJoystickMode === '360'}
+                      onclick={() => setMobileJoystickMode('360')}
+                    >
+                      Analógico 360°
+                    </button>
+                    <button
+                      type="button"
+                      class="seg-pill"
+                      class:active={gameUI.settings.mobileJoystickMode === '8dir'}
+                      onclick={() => setMobileJoystickMode('8dir')}
+                    >
+                      8 Direcciones Clásicas
+                    </button>
+                  </div>
+                </div>
+
+                <!-- 3. Anclaje del Joystick (mobileJoystickAnchor) -->
+                <div class="mobile-setting-row">
+                  <div class="setting-copy">
+                    <span class="setting-title">Anclaje del Joystick</span>
+                    <span class="setting-desc">Centro fijo en la esquina inferior izquierda o aparición donde apoyes el pulgar</span>
+                  </div>
+                  <div class="segmented-pills" role="group" aria-label="Anclaje del Joystick">
+                    <button
+                      type="button"
+                      class="seg-pill"
+                      class:active={gameUI.settings.mobileJoystickAnchor === 'fixed'}
+                      onclick={() => setMobileJoystickAnchor('fixed')}
+                    >
+                      Fijo en esquina inferior izq.
+                    </button>
+                    <button
+                      type="button"
+                      class="seg-pill"
+                      class:active={gameUI.settings.mobileJoystickAnchor === 'dynamic'}
+                      onclick={() => setMobileJoystickAnchor('dynamic')}
+                    >
+                      Dinámico al apoyar el pulgar
+                    </button>
+                  </div>
+                </div>
+
+                <!-- 4. Activación de Turbo (mobileTurboMode) -->
+                <div class="mobile-setting-row">
+                  <div class="setting-copy">
+                    <span class="setting-title">Activación de Turbo</span>
+                    <span class="setting-desc">Mantener pulsado para esprintar o alternar con un toque</span>
+                  </div>
+                  <div class="segmented-pills" role="group" aria-label="Activación de Turbo">
+                    <button
+                      type="button"
+                      class="seg-pill"
+                      class:active={gameUI.settings.mobileTurboMode === 'hold'}
+                      onclick={() => setMobileTurboMode('hold')}
+                    >
+                      Mantener pulsado
+                    </button>
+                    <button
+                      type="button"
+                      class="seg-pill"
+                      class:active={gameUI.settings.mobileTurboMode === 'toggle'}
+                      onclick={() => setMobileTurboMode('toggle')}
+                    >
+                      Interruptor / Toque
+                    </button>
+                  </div>
+                </div>
+
+                <!-- 5. Tamaño de Controles (mobileHudScale: 0.70 - 1.40, step 0.05) -->
+                <div class="slider-block">
+                  <div class="slider-meta">
+                    <div class="setting-copy">
+                      <span class="setting-title">Tamaño de Controles</span>
+                      <span class="setting-desc">Escala general del joystick y botones de acción (70% - 140%)</span>
+                    </div>
+                    <strong class="param-val-pill">{mobileHudScalePercent}%</strong>
+                  </div>
+                  <div class="zoom-stepper-control">
+                    <button
+                      type="button"
+                      class="zoom-step-btn"
+                      aria-label="Reducir tamaño de controles"
+                      disabled={mobileHudScaleValue <= 0.70}
+                      onclick={() => {
+                        soundFX.playUIClick();
+                        setMobileHudScale(mobileHudScaleValue - 0.05);
+                      }}
+                    >-</button>
+                    <input
+                      type="range"
+                      class="custom-slider"
+                      aria-label="Tamaño de Controles"
+                      min="0.70"
+                      max="1.40"
+                      step="0.05"
+                      style:--val-percent="{((mobileHudScaleValue - 0.70) / (1.40 - 0.70)) * 100}%"
+                      value={mobileHudScaleValue}
+                      oninput={(e) => {
+                        setMobileHudScale(Number((e.currentTarget as HTMLInputElement).value));
+                      }}
+                    />
+                    <button
+                      type="button"
+                      class="zoom-step-btn"
+                      aria-label="Aumentar tamaño de controles"
+                      disabled={mobileHudScaleValue >= 1.40}
+                      onclick={() => {
+                        soundFX.playUIClick();
+                        setMobileHudScale(mobileHudScaleValue + 0.05);
+                      }}
+                    >+</button>
+                  </div>
+                </div>
+
+                <!-- 6. Opacidad del HUD Táctil (mobileHudOpacity: 20 - 100, step 5) -->
+                <div class="slider-block">
+                  <div class="slider-meta">
+                    <div class="setting-copy">
+                      <span class="setting-title">Opacidad del HUD Táctil</span>
+                      <span class="setting-desc">Transparencia visual de los botones táctiles en partido (20% - 100%)</span>
+                    </div>
+                    <strong class="param-val-pill">{mobileHudOpacityPercent}%</strong>
+                  </div>
+                  <div class="zoom-stepper-control">
+                    <button
+                      type="button"
+                      class="zoom-step-btn"
+                      aria-label="Reducir opacidad del HUD táctil"
+                      disabled={mobileHudOpacityPercent <= 20}
+                      onclick={() => {
+                        soundFX.playUIClick();
+                        setMobileHudOpacityPercent(mobileHudOpacityPercent - 5);
+                      }}
+                    >-</button>
+                    <input
+                      type="range"
+                      class="custom-slider"
+                      aria-label="Opacidad del HUD Táctil"
+                      min="20"
+                      max="100"
+                      step="5"
+                      style:--val-percent="{((mobileHudOpacityPercent - 20) / (100 - 20)) * 100}%"
+                      value={mobileHudOpacityPercent}
+                      oninput={(e) => {
+                        setMobileHudOpacityPercent(Number((e.currentTarget as HTMLInputElement).value));
+                      }}
+                    />
+                    <button
+                      type="button"
+                      class="zoom-step-btn"
+                      aria-label="Aumentar opacidad del HUD táctil"
+                      disabled={mobileHudOpacityPercent >= 100}
+                      onclick={() => {
+                        soundFX.playUIClick();
+                        setMobileHudOpacityPercent(mobileHudOpacityPercent + 5);
+                      }}
+                    >+</button>
+                  </div>
+                </div>
+
+                <!-- 7. Vibración Háptica (mobileHapticsEnabled) -->
+                <div class="mobile-setting-row">
+                  <div class="setting-copy">
+                    <span class="setting-title">Vibración Háptica</span>
+                    <span class="setting-desc">Respuesta táctil al patear, activar Dash/Turbo o marcar gol</span>
+                  </div>
+                  <div class="setting-control">
+                    <label class="switch-toggle" aria-label="Vibración Háptica">
+                      <input
+                        type="checkbox"
+                        checked={gameUI.settings.mobileHapticsEnabled !== false}
+                        onchange={handleMobileHapticsToggle}
+                      />
+                      <span class="toggle-slider"></span>
+                    </label>
+                  </div>
+                </div>
+
+                <!-- 8. Personalización de Posiciones del HUD -->
+                <div class="mobile-hud-layout-box">
+                  <div class="setting-copy">
+                    <span class="setting-title">Personalización de Posiciones del HUD</span>
+                    <span class="setting-desc">Arrastra libremente cada botón en pantalla o vuelve a la disposición del boceto original</span>
+                  </div>
+                  <div class="mobile-hud-actions-row">
+                    <button
+                      type="button"
+                      class="btn-hud-edit"
+                      onclick={handleOpenMobileHudEditor}
+                    >
+                      Editar posición de botones en pantalla
+                    </button>
+                    <button
+                      type="button"
+                      class="btn-hud-reset"
+                      onclick={handleResetMobileCustomLayout}
+                    >
+                      Restablecer al boceto original
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>
@@ -2978,6 +3335,8 @@
     display: flex;
     flex-direction: column;
     overflow-y: auto;
+    touch-action: pan-y;
+    -webkit-overflow-scrolling: touch;
     background: #0d1526;
     box-sizing: border-box;
     pointer-events: auto;
@@ -3229,6 +3588,7 @@
   .custom-slider {
     width: 100%;
     height: 6px;
+    touch-action: pan-x;
     background: linear-gradient(
       to right,
       #00e5ff 0%,
@@ -5270,18 +5630,194 @@
     gap: 0.5rem;
   }
 
-  /* Responsive Adjustments */
-  @media (max-width: 768px) {
+  /* Mobile Touch Controls & HUD Section Styles */
+  .mobile-controls-card {
+    border-color: rgba(0, 229, 255, 0.22);
+    background: linear-gradient(180deg, rgba(16, 26, 44, 0.92) 0%, #1a202a 100%);
+  }
+
+  .mobile-controls-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 1rem;
+    margin-bottom: 0.95rem;
+  }
+
+  .mobile-controls-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 0.9rem;
+  }
+
+  .mobile-setting-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 0.65rem 0.85rem;
+    background: rgba(11, 17, 30, 0.55);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 0.45rem;
+  }
+
+  .mobile-hud-layout-box {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    padding: 0.8rem 0.9rem;
+    background: rgba(11, 17, 30, 0.65);
+    border: 1px solid rgba(0, 229, 255, 0.2);
+    border-radius: 0.45rem;
+  }
+
+  .mobile-hud-actions-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.65rem;
+  }
+
+  .btn-hud-edit,
+  .btn-hud-reset {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.45rem;
+    padding: 0.55rem 0.95rem;
+    border-radius: 0.45rem;
+    font-family: 'Chivo', system-ui, sans-serif;
+    font-size: 0.8rem;
+    font-weight: 700;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+
+  .btn-hud-edit {
+    background: rgba(0, 229, 255, 0.14);
+    border: 1px solid rgba(0, 229, 255, 0.5);
+    color: #00e5ff;
+    box-shadow: 0 0 12px rgba(0, 229, 255, 0.16);
+  }
+
+  .btn-hud-edit:hover {
+    background: rgba(0, 229, 255, 0.24);
+    border-color: #00e5ff;
+    color: #ffffff;
+  }
+
+  .btn-hud-reset {
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    color: #cbd5e1;
+  }
+
+  .btn-hud-reset:hover {
+    background: rgba(239, 68, 68, 0.15);
+    border-color: rgba(239, 68, 68, 0.45);
+    color: #fecaca;
+  }
+
+  /* Responsive Adjustments — Mobile Landscape & Compact Touch Viewports */
+  @media (max-height: 520px), (max-width: 960px) {
+    .floating-back-btn {
+      top: 0.45rem;
+      left: 0.55rem;
+      padding: 0.35rem 0.75rem;
+      font-size: 0.75rem;
+    }
+
+    .modal-backdrop {
+      padding: 0.4rem 0.65rem;
+    }
+
+    .settings-modal-card {
+      height: calc(100vh - 0.8rem);
+      max-height: 96vh;
+      max-width: 100%;
+    }
+
+    .tabs-sidebar {
+      width: 185px;
+      padding: 0.6rem 0;
+      overflow-y: auto;
+      touch-action: pan-y;
+      -webkit-overflow-scrolling: touch;
+    }
+
+    .sidebar-header {
+      margin-bottom: 0.6rem;
+      padding: 0 0.75rem;
+      gap: 0.5rem;
+    }
+
+    .settings-icon-box {
+      width: 1.85rem;
+      height: 1.85rem;
+    }
+
+    .main-header {
+      font-size: 0.82rem;
+    }
+
+    .sub-header {
+      font-size: 0.62rem;
+    }
+
+    .tab-btn {
+      padding: 0.55rem 0.8rem;
+      font-size: 0.78rem;
+      gap: 0.5rem;
+    }
+
+    .tab-content,
+    .controls-scroll-area,
+    .settings-scroll-area {
+      touch-action: pan-y;
+      -webkit-overflow-scrolling: touch;
+    }
+
+    .tab-pane {
+      padding: 0.85rem 1rem;
+      gap: 0.75rem;
+    }
+
+    .section-heading {
+      font-size: 1.2rem;
+    }
+
+    .controls-card,
+    .channel-card,
+    .graphics-card,
+    .triggers-editor-card,
+    .emotes-toggle-card {
+      padding: 0.8rem 0.9rem;
+    }
+
+    .mobile-setting-row,
+    .video-setting-row,
+    .slider-meta {
+      flex-wrap: wrap;
+    }
+
+    .custom-slider,
+    input[type='range'] {
+      touch-action: pan-x;
+    }
+  }
+
+  @media (max-width: 680px) and (min-height: 521px) {
     .settings-modal-card {
       flex-direction: column;
     }
     .tabs-sidebar {
       width: 100%;
+      height: auto;
       flex-direction: row;
       overflow-x: auto;
       border-right: none;
       border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-      padding: 0.75rem;
+      padding: 0.5rem;
     }
     .nav-tabs {
       flex-direction: row;
@@ -5291,6 +5827,7 @@
       border-bottom: none;
       border-left: none;
       border-bottom: 2px solid transparent;
+      white-space: nowrap;
     }
     .tab-btn.active {
       border-left: none;
@@ -5299,10 +5836,6 @@
     .sound-grid-2col,
     .kits-layout-grid {
       grid-template-columns: 1fr;
-    }
-    .video-setting-row,
-    .slider-meta {
-      flex-wrap: wrap;
     }
     .ball-cards-grid {
       grid-template-columns: repeat(2, 1fr);

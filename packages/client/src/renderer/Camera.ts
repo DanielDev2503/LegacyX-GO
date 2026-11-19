@@ -27,9 +27,22 @@ export class Camera {
   public maxScale: number = 2.50;
 
   public setZoom(z: number): void {
-    this.zoom = clamp(z, 0.40, 2.50);
+    this.zoom = clamp(z, this.minScale, this.maxScale);
     this.scale = this.zoom;
   }
+
+  public getMobileAutoZoom(viewportHeight: number = this.viewportHeight): number {
+    if (!this.isMobileLayout) {
+      return 1.0;
+    }
+    if (typeof viewportHeight !== 'number' || !Number.isFinite(viewportHeight) || viewportHeight <= 0) {
+      return 1.0;
+    }
+    const minBound = Math.max(0.1, this.minScale);
+    const maxBound = Math.min(1.0, this.maxScale);
+    return clamp(viewportHeight / Camera.MOBILE_REFERENCE_HEIGHT, minBound, maxBound);
+  }
+
   public readonly lerpFactor: number = 0.12;
   public smoothing: number = 0.12;
 
@@ -37,6 +50,8 @@ export class Camera {
   public viewportHeight: number = 600;
   public topHudHeightPx: number = 0;
   public isFocusingBall: boolean = false;
+  public isMobileLayout: boolean = false;
+  public static readonly MOBILE_REFERENCE_HEIGHT: number = 720;
 
   private bounds: CameraBounds = {
     minX: -600,

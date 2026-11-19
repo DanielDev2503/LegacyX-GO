@@ -490,34 +490,52 @@
                 </div>
 
                 <!-- Slider Track con Indicador Rastro / Delta y Marca Por Defecto -->
-                <div class="slider-track-wrap">
-                  <div class="track-bg"></div>
+                <div class="slider-stepper-row">
+                  <button
+                    type="button"
+                    class="touch-step-btn"
+                    disabled={!gameUI.isHost || currentVal <= ctrl.min}
+                    onclick={() => stepValue(ctrl.key, ctrl.step, ctrl.min, ctrl.max, -1)}
+                    aria-label="Reducir {ctrl.label}"
+                  >-</button>
 
-                  <!-- Marca discreta del valor por defecto (hover/focus) -->
-                  <div
-                    class="default-dot"
-                    style="left: {calcPercent(ctrl.defaultVal, ctrl.min, ctrl.max)}%;"
-                    title="Valor por defecto: {ctrl.defaultVal}"
-                  ></div>
+                  <div class="slider-track-wrap">
+                    <div class="track-bg"></div>
 
-                  <!-- Rastro / Barra Delta respecto al valor original -->
-                  <div
-                    class="delta-track-fill"
-                    class:positive={currentVal >= ctrl.defaultVal}
-                    class:negative={currentVal < ctrl.defaultVal}
-                    style="left: {getDeltaLeft(currentVal, ctrl.defaultVal, ctrl.min, ctrl.max)}%; width: {getDeltaWidth(currentVal, ctrl.defaultVal, ctrl.min, ctrl.max)}%;"
-                  ></div>
+                    <!-- Marca discreta del valor por defecto (hover/focus) -->
+                    <div
+                      class="default-dot"
+                      style="left: {calcPercent(ctrl.defaultVal, ctrl.min, ctrl.max)}%;"
+                      title="Valor por defecto: {ctrl.defaultVal}"
+                    ></div>
 
-                  <input
-                    type="range"
-                    class="range-slider"
-                    min={ctrl.min}
-                    max={ctrl.max}
-                    step={ctrl.step}
-                    value={currentVal}
-                    disabled={!gameUI.isHost}
-                    oninput={(e) => handleSlider(ctrl.key, e, ctrl.min, ctrl.max)}
-                  />
+                    <!-- Rastro / Barra Delta respecto al valor original -->
+                    <div
+                      class="delta-track-fill"
+                      class:positive={currentVal >= ctrl.defaultVal}
+                      class:negative={currentVal < ctrl.defaultVal}
+                      style="left: {getDeltaLeft(currentVal, ctrl.defaultVal, ctrl.min, ctrl.max)}%; width: {getDeltaWidth(currentVal, ctrl.defaultVal, ctrl.min, ctrl.max)}%;"
+                    ></div>
+
+                    <input
+                      type="range"
+                      class="range-slider"
+                      min={ctrl.min}
+                      max={ctrl.max}
+                      step={ctrl.step}
+                      value={currentVal}
+                      disabled={!gameUI.isHost}
+                      oninput={(e) => handleSlider(ctrl.key, e, ctrl.min, ctrl.max)}
+                    />
+                  </div>
+
+                  <button
+                    type="button"
+                    class="touch-step-btn"
+                    disabled={!gameUI.isHost || currentVal >= ctrl.max}
+                    onclick={() => stepValue(ctrl.key, ctrl.step, ctrl.min, ctrl.max, 1)}
+                    aria-label="Aumentar {ctrl.label}"
+                  >+</button>
                 </div>
               </div>
             {/each}
@@ -582,32 +600,50 @@
                   </div>
                 </div>
 
-                <div class="slider-track-wrap">
-                  <div class="track-bg"></div>
+                <div class="slider-stepper-row">
+                  <button
+                    type="button"
+                    class="touch-step-btn"
+                    disabled={!gameUI.isHost || currentVal <= ctrl.min}
+                    onclick={() => stepValue(ctrl.key, ctrl.step, ctrl.min, ctrl.max, -1)}
+                    aria-label="Reducir {ctrl.label}"
+                  >-</button>
 
-                  <div
-                    class="default-dot"
-                    style="left: {calcPercent(ctrl.defaultVal, ctrl.min, ctrl.max)}%;"
-                    title="Valor por defecto: {ctrl.defaultVal}"
-                  ></div>
+                  <div class="slider-track-wrap">
+                    <div class="track-bg"></div>
 
-                  <div
-                    class="delta-track-fill"
-                    class:positive={currentVal >= ctrl.defaultVal}
-                    class:negative={currentVal < ctrl.defaultVal}
-                    style="left: {getDeltaLeft(currentVal, ctrl.defaultVal, ctrl.min, ctrl.max)}%; width: {getDeltaWidth(currentVal, ctrl.defaultVal, ctrl.min, ctrl.max)}%;"
-                  ></div>
+                    <div
+                      class="default-dot"
+                      style="left: {calcPercent(ctrl.defaultVal, ctrl.min, ctrl.max)}%;"
+                      title="Valor por defecto: {ctrl.defaultVal}"
+                    ></div>
 
-                  <input
-                    type="range"
-                    class="range-slider"
-                    min={ctrl.min}
-                    max={ctrl.max}
-                    step={ctrl.step}
-                    value={currentVal}
-                    disabled={!gameUI.isHost}
-                    oninput={(e) => handleSlider(ctrl.key, e, ctrl.min, ctrl.max)}
-                  />
+                    <div
+                      class="delta-track-fill"
+                      class:positive={currentVal >= ctrl.defaultVal}
+                      class:negative={currentVal < ctrl.defaultVal}
+                      style="left: {getDeltaLeft(currentVal, ctrl.defaultVal, ctrl.min, ctrl.max)}%; width: {getDeltaWidth(currentVal, ctrl.defaultVal, ctrl.min, ctrl.max)}%;"
+                    ></div>
+
+                    <input
+                      type="range"
+                      class="range-slider"
+                      min={ctrl.min}
+                      max={ctrl.max}
+                      step={ctrl.step}
+                      value={currentVal}
+                      disabled={!gameUI.isHost}
+                      oninput={(e) => handleSlider(ctrl.key, e, ctrl.min, ctrl.max)}
+                    />
+                  </div>
+
+                  <button
+                    type="button"
+                    class="touch-step-btn"
+                    disabled={!gameUI.isHost || currentVal >= ctrl.max}
+                    onclick={() => stepValue(ctrl.key, ctrl.step, ctrl.min, ctrl.max, 1)}
+                    aria-label="Aumentar {ctrl.label}"
+                  >+</button>
                 </div>
               </div>
             {/each}
@@ -751,32 +787,50 @@
                   </div>
                 </div>
 
-                <div class="slider-track-wrap">
-                  <div class="track-bg"></div>
+                <div class="slider-stepper-row">
+                  <button
+                    type="button"
+                    class="touch-step-btn"
+                    disabled={!gameUI.isHost || isParentDisabled || currentVal <= ctrl.min}
+                    onclick={() => stepValue(ctrl.key, ctrl.step, ctrl.min, ctrl.max, -1)}
+                    aria-label="Reducir {ctrl.label}"
+                  >-</button>
 
-                  <div
-                    class="default-dot"
-                    style="left: {calcPercent(ctrl.defaultVal, ctrl.min, ctrl.max)}%;"
-                    title="Valor por defecto: {ctrl.defaultVal}"
-                  ></div>
+                  <div class="slider-track-wrap">
+                    <div class="track-bg"></div>
 
-                  <div
-                    class="delta-track-fill"
-                    class:positive={currentVal >= ctrl.defaultVal}
-                    class:negative={currentVal < ctrl.defaultVal}
-                    style="left: {getDeltaLeft(currentVal, ctrl.defaultVal, ctrl.min, ctrl.max)}%; width: {getDeltaWidth(currentVal, ctrl.defaultVal, ctrl.min, ctrl.max)}%;"
-                  ></div>
+                    <div
+                      class="default-dot"
+                      style="left: {calcPercent(ctrl.defaultVal, ctrl.min, ctrl.max)}%;"
+                      title="Valor por defecto: {ctrl.defaultVal}"
+                    ></div>
 
-                  <input
-                    type="range"
-                    class="range-slider"
-                    min={ctrl.min}
-                    max={ctrl.max}
-                    step={ctrl.step}
-                    value={currentVal}
-                    disabled={!gameUI.isHost || isParentDisabled}
-                    oninput={(e) => handleSlider(ctrl.key, e, ctrl.min, ctrl.max)}
-                  />
+                    <div
+                      class="delta-track-fill"
+                      class:positive={currentVal >= ctrl.defaultVal}
+                      class:negative={currentVal < ctrl.defaultVal}
+                      style="left: {getDeltaLeft(currentVal, ctrl.defaultVal, ctrl.min, ctrl.max)}%; width: {getDeltaWidth(currentVal, ctrl.defaultVal, ctrl.min, ctrl.max)}%;"
+                    ></div>
+
+                    <input
+                      type="range"
+                      class="range-slider"
+                      min={ctrl.min}
+                      max={ctrl.max}
+                      step={ctrl.step}
+                      value={currentVal}
+                      disabled={!gameUI.isHost || isParentDisabled}
+                      oninput={(e) => handleSlider(ctrl.key, e, ctrl.min, ctrl.max)}
+                    />
+                  </div>
+
+                  <button
+                    type="button"
+                    class="touch-step-btn"
+                    disabled={!gameUI.isHost || isParentDisabled || currentVal >= ctrl.max}
+                    onclick={() => stepValue(ctrl.key, ctrl.step, ctrl.min, ctrl.max, 1)}
+                    aria-label="Aumentar {ctrl.label}"
+                  >+</button>
                 </div>
               </div>
             {/each}
@@ -999,6 +1053,8 @@
     display: flex;
     flex-direction: column;
     overflow-y: auto;
+    touch-action: pan-y;
+    -webkit-overflow-scrolling: touch;
     background: #0d1526;
     box-sizing: border-box;
     pointer-events: auto;
@@ -1075,6 +1131,8 @@
     flex-direction: column;
     gap: 1rem;
     overflow-y: auto;
+    touch-action: pan-y;
+    -webkit-overflow-scrolling: touch;
     scrollbar-width: thin;
     scrollbar-color: rgba(0, 229, 255, 0.35) rgba(8, 14, 24, 0.6);
   }
@@ -1242,13 +1300,57 @@
     cursor: not-allowed;
   }
 
+  /* Slider Row with Touch-Friendly -/+ Steppers */
+  .slider-stepper-row {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    width: 100%;
+  }
+
+  .touch-step-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    flex-shrink: 0;
+    border-radius: 0.35rem;
+    border: 1px solid rgba(0, 229, 255, 0.28);
+    background: rgba(11, 17, 30, 0.85);
+    color: #7dd3fc;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.85rem;
+    font-weight: 800;
+    line-height: 1;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+
+  .touch-step-btn:hover:not(:disabled) {
+    background: rgba(0, 229, 255, 0.18);
+    border-color: #00e5ff;
+    color: #ffffff;
+  }
+
+  .touch-step-btn:active:not(:disabled) {
+    transform: scale(0.94);
+  }
+
+  .touch-step-btn:disabled {
+    opacity: 0.3;
+    cursor: not-allowed;
+  }
+
   /* Slider Track with Delta Range & Discrete Default Dot */
   .slider-track-wrap {
     position: relative;
+    flex: 1;
     width: 100%;
     height: 24px;
     display: flex;
     align-items: center;
+    touch-action: pan-x;
   }
 
   .track-bg {
@@ -1304,6 +1406,7 @@
     position: relative;
     width: 100%;
     height: 24px;
+    touch-action: pan-x;
     background: transparent;
     appearance: none;
     cursor: pointer;
@@ -1443,8 +1546,108 @@
     border: 0;
   }
 
-  /* Responsive Adjustments */
-  @media (max-width: 768px) {
+  /* Responsive Adjustments — Mobile Landscape & Compact Touch Viewports */
+  @media (max-height: 520px), (max-width: 960px) {
+    .floating-back-btn {
+      top: 0.45rem;
+      left: 0.55rem;
+      padding: 0.35rem 0.75rem;
+      font-size: 0.75rem;
+    }
+
+    .modal-backdrop {
+      padding: 0.4rem 0.65rem;
+    }
+
+    .modal-card {
+      height: calc(100vh - 0.8rem);
+      max-height: 96vh;
+      max-width: 100%;
+    }
+
+    .sidebar {
+      width: 185px;
+      padding: 0.6rem 0.55rem;
+      overflow-y: auto;
+      touch-action: pan-y;
+      -webkit-overflow-scrolling: touch;
+    }
+
+    .sidebar-header {
+      margin-bottom: 0.65rem;
+      padding: 0.15rem 0.3rem;
+      gap: 0.5rem;
+    }
+
+    .lightning-box {
+      width: 1.85rem;
+      height: 1.85rem;
+    }
+
+    .main-header {
+      font-size: 0.82rem;
+    }
+
+    .sub-header {
+      font-size: 0.62rem;
+    }
+
+    .tab-btn {
+      padding: 0.5rem 0.65rem;
+      font-size: 0.76rem;
+      gap: 0.45rem;
+    }
+
+    .sidebar-footer {
+      padding-top: 0.55rem;
+    }
+
+    .reset-btn {
+      padding: 0.5rem 0.6rem;
+      min-height: 36px;
+      font-size: 0.72rem;
+    }
+
+    .content-panel,
+    .sliders-container {
+      touch-action: pan-y;
+      -webkit-overflow-scrolling: touch;
+    }
+
+    .panel-header {
+      padding: 0.65rem 1rem 0.55rem 1rem;
+    }
+
+    .panel-title {
+      font-size: 0.9rem;
+    }
+
+    .sliders-container {
+      padding: 0.75rem 1rem;
+      gap: 0.65rem;
+    }
+
+    .control-item {
+      padding: 0.55rem 0.75rem;
+    }
+
+    .touch-step-btn {
+      width: 30px;
+      height: 30px;
+      font-size: 0.95rem;
+    }
+
+    .micro-step-btn {
+      padding: 3px 6px;
+      font-size: 0.62rem;
+    }
+
+    .range-slider {
+      touch-action: pan-x;
+    }
+  }
+
+  @media (max-width: 680px) and (min-height: 521px) {
     .modal-card {
       flex-direction: column;
     }

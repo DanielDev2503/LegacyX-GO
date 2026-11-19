@@ -546,6 +546,8 @@
     flex-direction: column;
     gap: 0;
     overflow-y: auto;
+    touch-action: pan-y;
+    -webkit-overflow-scrolling: touch;
     scrollbar-width: thin;
     scrollbar-color: rgba(0, 229, 255, 0.35) rgba(8, 14, 24, 0.6);
   }
@@ -674,6 +676,8 @@
     flex-direction: column;
     background: #080e18;
     overflow-y: auto;
+    touch-action: pan-y;
+    -webkit-overflow-scrolling: touch;
     padding: 1.25rem;
     box-sizing: border-box;
     gap: 1rem;
@@ -872,8 +876,113 @@
     }
   }
 
-  /* Responsive */
-  @media (max-width: 768px) {
+  /* Responsive — Mobile Landscape & Compact Touch Viewports */
+  @media (max-height: 520px), (max-width: 960px) {
+    .floating-back-btn {
+      top: 0.45rem;
+      left: 0.55rem;
+      padding: 0.35rem 0.75rem;
+      font-size: 0.75rem;
+    }
+
+    .modal-backdrop {
+      padding: 0.4rem 0.65rem;
+    }
+
+    .stadium-modal-card {
+      width: min(98vw, 920px);
+      height: calc(100vh - 0.8rem);
+      max-height: 96vh;
+    }
+
+    .modal-header-ribbon {
+      padding: 0.5rem 0.9rem;
+    }
+
+    .stadium-icon-box {
+      width: 1.85rem;
+      height: 1.85rem;
+    }
+
+    .dialog-title {
+      font-size: 0.95rem;
+    }
+
+    .dialog-subtitle {
+      font-size: 0.65rem;
+    }
+
+    .subtitle-bar {
+      padding: 0.3rem 0.9rem;
+      font-size: 0.68rem;
+    }
+
+    .stadium-sidebar {
+      width: 210px;
+      padding: 0.6rem 0.55rem;
+    }
+
+    .sidebar-header-row {
+      padding-bottom: 0.45rem;
+      margin-bottom: 0.45rem;
+    }
+
+    .stadium-scroll-list,
+    .stadium-detail-panel {
+      touch-action: pan-y;
+      -webkit-overflow-scrolling: touch;
+    }
+
+    .arena-card {
+      padding: 0.5rem 0.5rem;
+      min-height: 38px;
+      gap: 0.55rem;
+    }
+
+    .arena-name {
+      font-size: 0.8rem;
+    }
+
+    .stadium-detail-panel {
+      padding: 0.65rem 0.85rem;
+      gap: 0.6rem;
+    }
+
+    .tactical-pitch-surface {
+      height: 140px;
+      min-height: 115px;
+      flex-shrink: 0;
+    }
+
+    .technical-specs-panel {
+      padding: 0.6rem 0.85rem;
+    }
+
+    .specs-header {
+      margin-bottom: 0.5rem;
+      padding-bottom: 0.35rem;
+    }
+
+    .specs-list {
+      gap: 0.45rem 0.85rem;
+    }
+
+    .specs-list li {
+      font-size: 0.74rem;
+    }
+
+    .modal-footer {
+      padding: 0.5rem 0.9rem;
+    }
+
+    .confirm-selection-btn {
+      padding: 0.55rem 1.35rem;
+      min-height: 38px;
+      font-size: 0.8rem;
+    }
+  }
+
+  @media (max-width: 680px) and (min-height: 521px) {
     .stadium-content-grid {
       flex-direction: column;
     }

@@ -3,6 +3,7 @@
  * Centralized Reactive UI State for LegacyX-GO using Svelte 5 Runes ($state, $derived).
  */
 
+import { Capacitor } from '@capacitor/core';
 import { soundFX } from '../../audio/SoundFX.js';
 import { sharedSignaling, type SignalingClient } from '../../net/SignalingClient.js';
 import { type GameplayConfig, DEFAULT_GAMEPLAY_CONFIG } from '@legacyx/core';
@@ -171,6 +172,12 @@ export interface EmoteTrigger {
   emoji: string;
 }
 
+export type MobileControlsMode = 'auto' | 'on' | 'off';
+export type MobileJoystickMode = '360' | '8dir';
+export type MobileJoystickAnchor = 'fixed' | 'dynamic';
+export type MobileTurboMode = 'hold' | 'toggle';
+export type MobileHudLayoutMap = Record<string, { x: number; y: number }>;
+
 export const SETTINGS_STORAGE_KEY = 'haxball_settings_v1';
 export const KEYBINDS_STORAGE_KEY = 'haxball_keybinds_v1';
 export const SETTINGS_VERSION_KEY = 'haxball_settings_version';
@@ -290,6 +297,16 @@ export interface SettingsConfig {
   // Avatar y Emotes
   showPitchEmotes: boolean;
   emoteTriggers: EmoteTrigger[];
+
+  // Controles Móviles / Táctiles
+  mobileControlsEnabled: MobileControlsMode;
+  mobileJoystickMode: MobileJoystickMode;
+  mobileJoystickAnchor: MobileJoystickAnchor;
+  mobileTurboMode: MobileTurboMode;
+  mobileHudScale: number;
+  mobileHudOpacity: number;
+  mobileHapticsEnabled: boolean;
+  mobileCustomLayout: MobileHudLayoutMap;
 }
 
 export const DEFAULT_SETTINGS: SettingsConfig = {
@@ -387,7 +404,16 @@ export const DEFAULT_SETTINGS: SettingsConfig = {
     { trigger: 'wow', emoji: '😮' },
     { trigger: 'fire', emoji: '🔥' },
     { trigger: 'fuego', emoji: '🔥' }
-  ]
+  ],
+
+  mobileControlsEnabled: 'auto',
+  mobileJoystickMode: '360',
+  mobileJoystickAnchor: 'fixed',
+  mobileTurboMode: 'hold',
+  mobileHudScale: 1.0,
+  mobileHudOpacity: 0.78,
+  mobileHapticsEnabled: true,
+  mobileCustomLayout: {}
 };
 
 export interface KeybindConfig {
@@ -527,6 +553,173 @@ export function normalizeBallSettings<
     ballMode: raw.ballMode === 'color' ? 'color' : DEFAULT_SETTINGS.ballMode,
     ballSkin: (isValidTexture ? raw.ballSkin : DEFAULT_SETTINGS.ballSkin) as BallSkinType | 'futsal',
     ballCustomColor
+  };
+}
+
+export type MobileSettingsFields = Pick<
+  SettingsConfig,
+  | 'mobileControlsEnabled'
+  | 'mobileJoystickMode'
+  | 'mobileJoystickAnchor'
+  | 'mobileTurboMode'
+  | 'mobileHudScale'
+  | 'mobileHudOpacity'
+  | 'mobileHapticsEnabled'
+  | 'mobileCustomLayout'
+>;
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+export function normalizeMobileSettings<T extends Partial<MobileSettingsFields>>(
+  raw: T
+): T & MobileSettingsFields {
+  const mobileControlsEnabled: MobileControlsMode =
+    raw.mobileControlsEnabled === 'on' || raw.mobileControlsEnabled === 'off' || raw.mobileControlsEnabled === 'auto'
+      ? raw.mobileControlsEnabled
+      : DEFAULT_SETTINGS.mobileControlsEnabled;
+
+  const mobileJoystickMode: MobileJoystickMode =
+    raw.mobileJoystickMode === '8dir' || raw.mobileJoystickMode === '360'
+      ? raw.mobileJoystickMode
+      : DEFAULT_SETTINGS.mobileJoystickMode;
+
+  const mobileJoystickAnchor: MobileJoystickAnchor =
+    raw.mobileJoystickAnchor === 'dynamic' || raw.mobileJoystickAnchor === 'fixed'
+      ? raw.mobileJoystickAnchor
+      : DEFAULT_SETTINGS.mobileJoystickAnchor;
+
+  const mobileTurboMode: MobileTurboMode =
+    raw.mobileTurboMode === 'toggle' || raw.mobileTurboMode === 'hold'
+      ? raw.mobileTurboMode
+      : DEFAULT_SETTINGS.mobileTurboMode;
+
+  const mobileHudScale =
+    typeof raw.mobileHudScale === 'number' && Number.isFinite(raw.mobileHudScale)
+      ? Math.max(0.7, Math.min(1.5, raw.mobileHudScale))
+      : DEFAULT_SETTINGS.mobileHudScale;
+
+  const mobileHudOpacity =
+    typeof raw.mobileHudOpacity === 'number' && Number.isFinite(raw.mobileHudOpacity)
+      ? Math.max(0.25, Math.min(1.0, raw.mobileHudOpacity))
+      : DEFAULT_SETTINGS.mobileHudOpacity;
+
+  const mobileHapticsEnabled =
+    typeof raw.mobileHapticsEnabled === 'boolean'
+      ? raw.mobileHapticsEnabled
+      : DEFAULT_SETTINGS.mobileHapticsEnabled;
+
+  const clonedLayout: MobileHudLayoutMap = {};
+  if (raw.mobileCustomLayout && typeof raw.mobileCustomLayout === 'object' && !Array.isArray(raw.mobileCustomLayout)) {
+    for (const [key, value] of Object.entries(raw.mobileCustomLayout)) {
+      if (
+        key === '__proto__' ||
+        key === 'constructor' ||
+        key === 'prototype' ||
+        Object.prototype.hasOwnProperty.call(Object.prototype, key)
+      ) {
+        continue;
+      }
+      if (
+        value &&
+        typeof value === 'object' &&
+        !Array.isArray(value) &&
+        typeof value.x === 'number' &&
+        Number.isFinite(value.x) &&
+        typeof value.y === 'number' &&
+        Number.isFinite(value.y)
+      ) {
+        clonedLayout[key] = { x: value.x, y: value.y };
+      }
+    }
+  }
+
+  return {
+    ...raw,
+    mobileControlsEnabled,
+    mobileJoystickMode,
+    mobileJoystickAnchor,
+    mobileTurboMode,
+    mobileHudScale,
+    mobileHudOpacity,
+    mobileHapticsEnabled,
+    mobileCustomLayout: clonedLayout
+  };
+}
+
+export interface MobileLayoutEnv {
+  mode: MobileControlsMode;
+  isCapacitorNative: boolean;
+  hasTouchCapability: boolean;
+  hasCoarsePointer: boolean;
+  isMobileUserAgent: boolean;
+  viewportWidth: number;
+  viewportHeight: number;
+}
+
+export function resolveMobileLayout(env: MobileLayoutEnv): boolean {
+  if (env.mode === 'on') return true;
+  if (env.mode === 'off') return false;
+  if (env.isCapacitorNative) return true;
+  const minDim = Math.min(env.viewportWidth || 0, env.viewportHeight || 0);
+  const maxDim = Math.max(env.viewportWidth || 0, env.viewportHeight || 0);
+  if (env.isMobileUserAgent && (env.hasTouchCapability || env.hasCoarsePointer)) {
+    return true;
+  }
+  if (env.hasCoarsePointer && minDim > 0 && minDim <= 1024) {
+    return true;
+  }
+  if (env.hasTouchCapability && minDim > 0 && minDim <= 600 && maxDim <= 1024) {
+    return true;
+  }
+  return false;
+}
+
+function safeIsCapacitorNative(): boolean {
+  try {
+    return Boolean(Capacitor?.isNativePlatform?.());
+  } catch {
+    return false;
+  }
+}
+
+function detectDeviceEnvironment(): Omit<MobileLayoutEnv, 'mode'> {
+  const isCapacitorNative = safeIsCapacitorNative();
+  if (typeof window === 'undefined') {
+    return {
+      isCapacitorNative,
+      hasTouchCapability: false,
+      hasCoarsePointer: false,
+      isMobileUserAgent: false,
+      viewportWidth: 0,
+      viewportHeight: 0
+    };
+  }
+  const viewportWidth =
+    window.innerWidth || (typeof document !== 'undefined' ? document.documentElement?.clientWidth : 0) || 0;
+  const viewportHeight =
+    window.innerHeight || (typeof document !== 'undefined' ? document.documentElement?.clientHeight : 0) || 0;
+  const nav = typeof navigator !== 'undefined' ? navigator : undefined;
+  const maxTouchPoints = typeof nav?.maxTouchPoints === 'number' ? nav.maxTouchPoints : 0;
+  const hasTouchCapability = 'ontouchstart' in window || maxTouchPoints > 0;
+  let hasCoarsePointer = false;
+  try {
+    hasCoarsePointer = Boolean(window.matchMedia?.('(pointer: coarse)')?.matches);
+  } catch {
+    hasCoarsePointer = false;
+  }
+  const ua = typeof nav?.userAgent === 'string' ? nav.userAgent : '';
+  const platform = typeof nav?.platform === 'string' ? nav.platform : '';
+  const isIpadDesktopUa = platform === 'MacIntel' && maxTouchPoints > 1;
+  const isMobileUserAgent = /Android|iPhone|iPad|iPod|Mobile|Tablet|Silk|Kindle/i.test(ua) || isIpadDesktopUa;
+  return {
+    isCapacitorNative,
+    hasTouchCapability,
+    hasCoarsePointer,
+    isMobileUserAgent,
+    viewportWidth,
+    viewportHeight
   };
 }
 
@@ -861,8 +1054,87 @@ class GameUIStore {
   public isFocusingBall = $state<boolean>(false);
   public lastKeybindSwapNotice = $state<string | null>(null);
 
+  // Mobile Runtime & Touch HUD Telemetry
+  public viewportWidth = $state<number>(0);
+  public viewportHeight = $state<number>(0);
+  public hasTouchCapability = $state<boolean>(false);
+  public hasCoarsePointer = $state<boolean>(false);
+  public isMobileUserAgent = $state<boolean>(false);
+  public isCapacitorNative = $state<boolean>(false);
+  public isHudEditorOpen = $state<boolean>(false);
+  public localStamina = $state<number>(100);
+  public localDashCooldown = $state<number>(0);
+  public localDashMaxCooldown = $state<number>(1.0);
+  public localIsDashing = $state<boolean>(false);
+  public localIsTurbo = $state<boolean>(false);
+
   // Settings & Keybinds
-  public settings = $state<SettingsConfig>({ ...DEFAULT_SETTINGS });
+  public settings = $state<SettingsConfig>({
+    ...DEFAULT_SETTINGS,
+    mobileCustomLayout: { ...DEFAULT_SETTINGS.mobileCustomLayout }
+  });
+
+  private _isMobileLayout = $derived.by(() =>
+    resolveMobileLayout({
+      mode: this.settings.mobileControlsEnabled,
+      isCapacitorNative: this.isCapacitorNative,
+      hasTouchCapability: this.hasTouchCapability,
+      hasCoarsePointer: this.hasCoarsePointer,
+      isMobileUserAgent: this.isMobileUserAgent,
+      viewportWidth: this.viewportWidth,
+      viewportHeight: this.viewportHeight
+    })
+  );
+
+  public get isMobileLayout(): boolean {
+    return this._isMobileLayout;
+  }
+
+  private _isPortraitOnMobile = $derived(
+    this._isMobileLayout && this.viewportHeight > this.viewportWidth
+  );
+
+  public get isPortraitOnMobile(): boolean {
+    return this._isPortraitOnMobile;
+  }
+
+  public setViewportEnvironment(
+    width: number,
+    height: number,
+    isTouch?: boolean,
+    isNative?: boolean,
+    hasCoarsePointer?: boolean,
+    isMobileUa?: boolean
+  ): void {
+    this.viewportWidth = Number.isFinite(width) ? Math.max(0, width) : 0;
+    this.viewportHeight = Number.isFinite(height) ? Math.max(0, height) : 0;
+    if (isTouch !== undefined) {
+      this.hasTouchCapability = Boolean(isTouch);
+    }
+    if (isNative !== undefined) {
+      this.isCapacitorNative = Boolean(isNative);
+    }
+    if (hasCoarsePointer !== undefined) {
+      this.hasCoarsePointer = Boolean(hasCoarsePointer);
+    }
+    if (isMobileUa !== undefined) {
+      this.isMobileUserAgent = Boolean(isMobileUa);
+    }
+  }
+
+  public refreshDeviceEnvironment(): void {
+    const detected = detectDeviceEnvironment();
+    this.isCapacitorNative = detected.isCapacitorNative;
+    this.hasTouchCapability = detected.hasTouchCapability;
+    this.hasCoarsePointer = detected.hasCoarsePointer;
+    this.isMobileUserAgent = detected.isMobileUserAgent;
+    this.viewportWidth = detected.viewportWidth;
+    this.viewportHeight = detected.viewportHeight;
+  }
+
+  public resetMobileHudLayout(): void {
+    this.saveSettings({ mobileCustomLayout: {} });
+  }
   public extrapolationMs = $state<number>(0);
   public activeBanner = $state<MatchBannerPayload>({ kind: 'NONE' });
   public activeSettingsTab = $state<SettingsTabType>('controls');
@@ -1384,6 +1656,7 @@ class GameUIStore {
   }
 
   constructor() {
+    this.refreshDeviceEnvironment();
     this.loadPersistedState();
     void import('./userProfile.svelte.js')
       .then((mod) => {
@@ -1579,88 +1852,110 @@ class GameUIStore {
       } else if (savedAvatarType === 'text' || savedAvatarType === 'letters') {
         this.avatarMode = 'letters';
       }
-      const currentVersion = Number(localStorage.getItem(SETTINGS_VERSION_KEY) || 0);
+    } catch {
+      // Ignore corrupt profile localStorage
+    }
 
+    try {
       const rawSettings = localStorage.getItem(SETTINGS_STORAGE_KEY);
       if (rawSettings) {
-        const parsed = JSON.parse(rawSettings) as Partial<SettingsConfig>;
-        const localKit = { ...DEFAULT_SETTINGS.localKit, ...(parsed.localKit || {}) };
-        if (localKit.name === 'Local FC') localKit.name = 'RED';
-        if (localKit.tag === 'LOC') localKit.tag = 'RED';
+        const parsedRaw: unknown = JSON.parse(rawSettings);
+        if (isPlainObject(parsedRaw)) {
+          const parsed = parsedRaw as Partial<SettingsConfig>;
+          const parsedLocalKit = isPlainObject(parsed.localKit) ? parsed.localKit : {};
+          const localKit = { ...DEFAULT_SETTINGS.localKit, ...parsedLocalKit };
+          if (localKit.name === 'Local FC') localKit.name = 'RED';
+          if (localKit.tag === 'LOC') localKit.tag = 'RED';
 
-        const visitorKit = { ...DEFAULT_SETTINGS.visitorKit, ...(parsed.visitorKit || {}) };
-        if (visitorKit.name === 'Visitante CF') visitorKit.name = 'BLUE';
-        if (visitorKit.tag === 'VIS') visitorKit.tag = 'BLUE';
-        if (visitorKit.primaryColor === '#3498db') visitorKit.primaryColor = '#00e5ff';
+          const parsedVisitorKit = isPlainObject(parsed.visitorKit) ? parsed.visitorKit : {};
+          const visitorKit = { ...DEFAULT_SETTINGS.visitorKit, ...parsedVisitorKit };
+          if (visitorKit.name === 'Visitante CF') visitorKit.name = 'BLUE';
+          if (visitorKit.tag === 'VIS') visitorKit.tag = 'BLUE';
+          if (visitorKit.primaryColor === '#3498db') visitorKit.primaryColor = '#00e5ff';
 
-        const rawZoom = typeof parsed.cameraZoom === 'number' ? parsed.cameraZoom : DEFAULT_SETTINGS.cameraZoom;
-        const clampedZoom = Math.max(0.40, Math.min(2.50, rawZoom));
-        const rawChatOpacity = typeof parsed.chatOpacity === 'number' && Number.isFinite(parsed.chatOpacity)
-          ? parsed.chatOpacity
-          : DEFAULT_SETTINGS.chatOpacity;
-        const normalizedChatOpacityPct =
-          rawChatOpacity > 0 && rawChatOpacity <= 1
-            ? Math.round(rawChatOpacity * 100)
-            : Math.max(10, Math.min(100, Math.round(rawChatOpacity)));
-        const normalizedBall = normalizeBallSettings(parsed);
-        const legacySolidSkin =
-          String(parsed.ballSkin || '') === 'solid' ||
-          localStorage.getItem('haxball_ball_skin') === 'solid';
+          const rawZoom = typeof parsed.cameraZoom === 'number' ? parsed.cameraZoom : DEFAULT_SETTINGS.cameraZoom;
+          const clampedZoom = Math.max(0.40, Math.min(2.50, rawZoom));
+          const rawChatOpacity = typeof parsed.chatOpacity === 'number' && Number.isFinite(parsed.chatOpacity)
+            ? parsed.chatOpacity
+            : DEFAULT_SETTINGS.chatOpacity;
+          const normalizedChatOpacityPct =
+            rawChatOpacity > 0 && rawChatOpacity <= 1
+              ? Math.round(rawChatOpacity * 100)
+              : Math.max(10, Math.min(100, Math.round(rawChatOpacity)));
+          const normalizedBall = normalizeBallSettings(parsed);
+          const normalizedMobile = normalizeMobileSettings(parsed);
+          const legacySolidSkin =
+            String(parsed.ballSkin || '') === 'solid' ||
+            localStorage.getItem('haxball_ball_skin') === 'solid';
 
-        const scoreboardDesign: ScoreboardDesignType = (
-          VALID_SCOREBOARD_DESIGNS as readonly string[]
-        ).includes(String(parsed.scoreboardDesign || ''))
-          ? (parsed.scoreboardDesign as ScoreboardDesignType)
-          : DEFAULT_SETTINGS.scoreboardDesign;
+          const scoreboardDesign: ScoreboardDesignType = (
+            VALID_SCOREBOARD_DESIGNS as readonly string[]
+          ).includes(String(parsed.scoreboardDesign || ''))
+            ? (parsed.scoreboardDesign as ScoreboardDesignType)
+            : DEFAULT_SETTINGS.scoreboardDesign;
 
-        this.settings = {
-          ...DEFAULT_SETTINGS,
-          ...parsed,
-          ballMode: normalizedBall.ballMode,
-          ballSkin: normalizedBall.ballSkin,
-          ballCustomColor: normalizedBall.ballCustomColor,
-          scoreboardDesign,
-          fpsCap:
-            typeof parsed.fpsCap === 'number' && Number.isFinite(parsed.fpsCap) && parsed.fpsCap >= 0
-              ? parsed.fpsCap
-              : DEFAULT_SETTINGS.fpsCap,
-          showTypingIndicator:
-            typeof parsed.showTypingIndicator === 'boolean'
-              ? parsed.showTypingIndicator
-              : DEFAULT_SETTINGS.showTypingIndicator,
-          showPlayerAvatars:
-            typeof parsed.showPlayerAvatars === 'boolean'
-              ? parsed.showPlayerAvatars
-              : DEFAULT_SETTINGS.showPlayerAvatars,
-          autoExtrapolation:
-            typeof parsed.autoExtrapolation === 'boolean'
-              ? parsed.autoExtrapolation
-              : DEFAULT_SETTINGS.autoExtrapolation,
-          cameraZoom: clampedZoom,
-          chatOpacity: normalizedChatOpacityPct,
-          localKit,
-          visitorKit,
-          emoteTriggers: Array.isArray(parsed.emoteTriggers) && parsed.emoteTriggers.length > 0
-            ? parsed.emoteTriggers
-            : [...DEFAULT_SETTINGS.emoteTriggers]
-        };
-        if (legacySolidSkin) {
-          localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(this.settings));
-          localStorage.setItem('haxball_ball_skin', this.settings.ballSkin);
+          this.settings = {
+            ...DEFAULT_SETTINGS,
+            ...parsed,
+            ballMode: normalizedBall.ballMode,
+            ballSkin: normalizedBall.ballSkin,
+            ballCustomColor: normalizedBall.ballCustomColor,
+            scoreboardDesign,
+            fpsCap:
+              typeof parsed.fpsCap === 'number' && Number.isFinite(parsed.fpsCap) && parsed.fpsCap >= 0
+                ? parsed.fpsCap
+                : DEFAULT_SETTINGS.fpsCap,
+            showTypingIndicator:
+              typeof parsed.showTypingIndicator === 'boolean'
+                ? parsed.showTypingIndicator
+                : DEFAULT_SETTINGS.showTypingIndicator,
+            showPlayerAvatars:
+              typeof parsed.showPlayerAvatars === 'boolean'
+                ? parsed.showPlayerAvatars
+                : DEFAULT_SETTINGS.showPlayerAvatars,
+            autoExtrapolation:
+              typeof parsed.autoExtrapolation === 'boolean'
+                ? parsed.autoExtrapolation
+                : DEFAULT_SETTINGS.autoExtrapolation,
+            cameraZoom: clampedZoom,
+            chatOpacity: normalizedChatOpacityPct,
+            localKit,
+            visitorKit,
+            emoteTriggers: Array.isArray(parsed.emoteTriggers) && parsed.emoteTriggers.length > 0
+              ? parsed.emoteTriggers
+              : [...DEFAULT_SETTINGS.emoteTriggers],
+            mobileControlsEnabled: normalizedMobile.mobileControlsEnabled,
+            mobileJoystickMode: normalizedMobile.mobileJoystickMode,
+            mobileJoystickAnchor: normalizedMobile.mobileJoystickAnchor,
+            mobileTurboMode: normalizedMobile.mobileTurboMode,
+            mobileHudScale: normalizedMobile.mobileHudScale,
+            mobileHudOpacity: normalizedMobile.mobileHudOpacity,
+            mobileHapticsEnabled: normalizedMobile.mobileHapticsEnabled,
+            mobileCustomLayout: normalizedMobile.mobileCustomLayout
+          };
+          if (legacySolidSkin) {
+            localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(this.settings));
+            localStorage.setItem('haxball_ball_skin', this.settings.ballSkin);
+          }
+          this.isAudioMuted = this.settings.isMuted;
+          this.masterVolume = this.settings.masterVolume;
+
+          soundFX.setMuted(this.settings.isMuted);
+          soundFX.setMasterVolume(this.settings.masterVolume);
+          soundFX.setChatVolume(this.settings.chatVolume);
+          soundFX.setSfxVolume(this.settings.sfxVolume);
+          soundFX.setEnvVolume(this.settings.envVolume);
         }
-        this.isAudioMuted = this.settings.isMuted;
-        this.masterVolume = this.settings.masterVolume;
-
-        soundFX.setMuted(this.settings.isMuted);
-        soundFX.setMasterVolume(this.settings.masterVolume);
-        soundFX.setChatVolume(this.settings.chatVolume);
-        soundFX.setSfxVolume(this.settings.sfxVolume);
-        soundFX.setEnvVolume(this.settings.envVolume);
       } else if (localStorage.getItem('haxball_ball_skin') === 'solid') {
         this.settings.ballMode = 'color';
         this.settings.ballSkin = 'classic';
         localStorage.setItem('haxball_ball_skin', 'classic');
       }
+    } catch {
+      // Ignore corrupt settings localStorage
+    }
+
+    try {
       const savedExtrap =
         localStorage.getItem(LEGACYX_EXTRAPOLATION_KEY) ??
         localStorage.getItem('haxball_extrapolation_ms');
@@ -1676,6 +1971,11 @@ class GameUIStore {
         this.extrapolationMs = clampedExtrap;
         this.settings.extrapolationMs = clampedExtrap;
       }
+    } catch {
+      // Ignore corrupt extrapolation localStorage
+    }
+
+    try {
       if (!localStorage.getItem('lxg_audio_max_default_v1')) {
         this.settings = {
           ...this.settings,
@@ -1688,30 +1988,40 @@ class GameUIStore {
         localStorage.setItem('lxg_audio_max_default_v1', '1');
         this.saveSettings();
       }
-      const hostEntry = this.rosterPlayers.find((p) => p.id === this.localPlayerId);
-      if (hostEntry) {
-        hostEntry.avatarType = this.avatarMode;
-        hostEntry.kit = { ...this.effectiveLocalKit };
-        hostEntry.localKit = { ...this.effectiveLocalKit };
-        hostEntry.visitorKit = { ...this.effectiveVisitorKit };
-      }
+    } catch {
+      // Ignore corrupt audio migration localStorage
+    }
+
+    const hostEntry = this.rosterPlayers.find((p) => p.id === this.localPlayerId);
+    if (hostEntry) {
+      hostEntry.avatarType = this.avatarMode;
+      hostEntry.kit = { ...this.effectiveLocalKit };
+      hostEntry.localKit = { ...this.effectiveLocalKit };
+      hostEntry.visitorKit = { ...this.effectiveVisitorKit };
+    }
+
+    try {
+      const currentVersion = Number(localStorage.getItem(SETTINGS_VERSION_KEY) || 0);
       const rawKeybinds = localStorage.getItem(KEYBINDS_STORAGE_KEY);
       if (currentVersion < SETTINGS_VERSION || !rawKeybinds) {
         this.resetKeybinds();
         localStorage.setItem(SETTINGS_VERSION_KEY, String(SETTINGS_VERSION));
       } else {
-        const parsedKeys = JSON.parse(rawKeybinds) as Partial<KeybindConfig>;
-        this.keybinds = {
-          ...DEFAULT_KEYBINDS,
-          ...parsedKeys,
-          focusBall:
-            Array.isArray(parsedKeys.focusBall) && parsedKeys.focusBall.length > 0
-              ? parsedKeys.focusBall
-              : [...DEFAULT_KEYBINDS.focusBall]
-        };
+        const parsedKeysRaw: unknown = JSON.parse(rawKeybinds);
+        if (isPlainObject(parsedKeysRaw)) {
+          const parsedKeys = parsedKeysRaw as Partial<KeybindConfig>;
+          this.keybinds = {
+            ...DEFAULT_KEYBINDS,
+            ...parsedKeys,
+            focusBall:
+              Array.isArray(parsedKeys.focusBall) && parsedKeys.focusBall.length > 0
+                ? parsedKeys.focusBall
+                : [...DEFAULT_KEYBINDS.focusBall]
+          };
+        }
       }
     } catch {
-      // Ignore corrupt localStorage
+      // Ignore corrupt keybinds localStorage
     }
   }
 
@@ -1794,6 +2104,15 @@ class GameUIStore {
     this.settings.ballMode = normalizedBall.ballMode;
     this.settings.ballSkin = normalizedBall.ballSkin;
     this.settings.ballCustomColor = normalizedBall.ballCustomColor;
+    const normalizedMobile = normalizeMobileSettings(this.settings);
+    this.settings.mobileControlsEnabled = normalizedMobile.mobileControlsEnabled;
+    this.settings.mobileJoystickMode = normalizedMobile.mobileJoystickMode;
+    this.settings.mobileJoystickAnchor = normalizedMobile.mobileJoystickAnchor;
+    this.settings.mobileTurboMode = normalizedMobile.mobileTurboMode;
+    this.settings.mobileHudScale = normalizedMobile.mobileHudScale;
+    this.settings.mobileHudOpacity = normalizedMobile.mobileHudOpacity;
+    this.settings.mobileHapticsEnabled = normalizedMobile.mobileHapticsEnabled;
+    this.settings.mobileCustomLayout = normalizedMobile.mobileCustomLayout;
     this.extrapolationMs = Math.max(0, Math.min(250, Math.round(Number(this.settings.extrapolationMs) || 0)));
     this.settings.extrapolationMs = this.extrapolationMs;
     this.isAudioMuted = this.settings.isMuted;
@@ -2818,6 +3137,13 @@ class GameUIStore {
       ping: 0
     };
     this.resetTelemetry();
+    this.isHudEditorOpen = false;
+    this.isFocusingBall = false;
+    this.localStamina = 100;
+    this.localDashCooldown = 0;
+    this.localDashMaxCooldown = 1.0;
+    this.localIsDashing = false;
+    this.localIsTurbo = false;
     this.isPracticeMode = false;
     this.chatMessages = [];
     this.players = [];

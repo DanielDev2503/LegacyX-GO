@@ -1463,4 +1463,140 @@
     opacity: 0.4;
     cursor: not-allowed;
   }
+
+  /* ===== Mobile Landscape & Touch Adaptation ===== */
+  @media (max-height: 520px), (max-width: 960px) {
+    .gatekeeper-root {
+      align-items: flex-start;
+      padding: 8px 10px;
+      overflow-y: auto;
+      touch-action: pan-y;
+      -webkit-overflow-scrolling: touch;
+      overscroll-behavior: contain;
+    }
+
+    .gatekeeper-shell {
+      width: min(980px, 98vw);
+      margin: 0 auto;
+      gap: 8px;
+      padding-bottom: 12px;
+    }
+
+    .panel-card,
+    .verify-box,
+    .active-session-box {
+      touch-action: pan-y;
+      -webkit-overflow-scrolling: touch;
+    }
+
+    .brand-header {
+      gap: 10px;
+    }
+
+    .logo-badge {
+      width: 38px;
+      height: 38px;
+    }
+
+    .game-title {
+      font-size: 18px;
+    }
+
+    .game-subtitle {
+      font-size: 9px;
+    }
+
+    .invite-context-banner {
+      padding: 7px 10px;
+      gap: 8px;
+    }
+
+    .dual-grid {
+      gap: 10px;
+    }
+
+    .panel-card {
+      padding: 10px 12px;
+      gap: 8px;
+    }
+
+    .panel-title {
+      font-size: 13px;
+    }
+
+    .benefits-list {
+      padding: 6px 8px;
+      gap: 4px;
+    }
+
+    .benefit-item {
+      font-size: 11px;
+    }
+
+    .google-oauth-btn {
+      height: 36px;
+      font-size: 11.5px;
+    }
+
+    .oauth-section {
+      gap: 6px;
+    }
+
+    .subtab-btn {
+      height: 30px;
+      font-size: 11.5px;
+    }
+
+    .auth-form,
+    .guest-form {
+      gap: 8px;
+    }
+
+    .styled-input,
+    .prefixed-input-row,
+    .avatar-text-input {
+      height: 36px;
+      font-size: 12.5px;
+    }
+
+    .primary-cyan-btn,
+    .guest-play-btn {
+      height: 38px;
+      font-size: 12px;
+    }
+
+    .otp-row {
+      gap: 5px;
+    }
+
+    .otp-cell {
+      height: 38px;
+      font-size: 16px;
+    }
+
+    .amber-warning-box {
+      padding: 6px 9px;
+    }
+
+    .amber-warning-box p {
+      font-size: 11px;
+    }
+
+    .avatar-disc-preview {
+      width: 34px;
+      height: 34px;
+      font-size: 13px;
+    }
+
+    .emoji-choice-btn {
+      height: 30px;
+      font-size: 14px;
+    }
+  }
+
+  @media (max-height: 520px) and (orientation: landscape) and (min-width: 560px) {
+    .dual-grid {
+      grid-template-columns: 1.05fr 0.95fr;
+    }
+  }
 </style>

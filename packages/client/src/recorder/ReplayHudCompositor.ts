@@ -1,3 +1,4 @@
+import { Capacitor } from '@capacitor/core';
 import { createStadium, MatchPhase, type GameStateSnapshot, type StadiumId } from '@legacyx/core';
 import { drawBallDesign, type BallSkin } from '../renderer/ballDesigns.js';
 import { GameRenderer } from '../renderer/GameRenderer.js';
@@ -2481,7 +2482,13 @@ function pickSupportedWebmMime(): string {
   if (typeof MediaRecorder === 'undefined' || typeof MediaRecorder.isTypeSupported !== 'function') {
     return '';
   }
-  const candidates = ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'];
+  const candidates = [
+    'video/webm;codecs=vp9',
+    'video/webm;codecs=vp8',
+    'video/webm',
+    'video/mp4;codecs=avc1',
+    'video/mp4'
+  ];
   return candidates.find((c) => MediaRecorder.isTypeSupported(c)) ?? '';
 }
 
@@ -2609,13 +2616,14 @@ function renderSingleExportFrame(
   ctx.restore();
 }
 
-function buildCleanWebmFilename(roomName?: string): string {
+function buildCleanWebmFilename(roomName?: string, mimeType = 'video/webm'): string {
   const cleanBase = (roomName || 'legacyx-replay')
     .toLowerCase()
     .replace(/[^a-z0-9_-]+/g, '-')
     .replace(/^-+|-+$/g, '')
     .slice(0, 32);
-  return `${cleanBase || 'legacyx-replay'}.webm`;
+  const ext = mimeType.toLowerCase().includes('mp4') ? 'mp4' : 'webm';
+  return `${cleanBase || 'legacyx-replay'}.${ext}`;
 }
 
 interface ResolvedWebCodecsExportConfig {
@@ -2797,11 +2805,11 @@ async function exportReplayWithMediaRecorder(
   const stoppedPromise = new Promise<WebmExportResult>((resolve, reject) => {
     recorder.onerror = () => reject(new Error('Falló la codificación del video WebM.'));
     recorder.onstop = () => {
-      const outMime = mimeType || 'video/webm';
+      const outMime = mimeType || recorder.mimeType || 'video/webm';
       const blob = new Blob(chunks, { type: outMime });
       resolve({
         blob,
-        filename: buildCleanWebmFilename(replay.roomName),
+        filename: buildCleanWebmFilename(replay.roomName, outMime),
         mimeType: outMime
       });
     };
@@ -2976,15 +2984,43 @@ export async function exportReplayToWebm(
   }
 }
 
-export function triggerWebmDownload(result: WebmExportResult): void {
+function isMobileOrNativeShareEnv(): boolean {
+  try {
+    if (typeof Capacitor !== 'undefined' && Boolean(Capacitor?.isNativePlatform?.())) {
+      return true;
+    }
+  } catch {
+    // Ignored
+  }
+  if (typeof navigator !== 'undefined') {
+    const ua = typeof navigator.userAgent === 'string' ? navigator.userAgent : '';
+    if (/Android|iPhone|iPad|iPod|Mobile|Tablet/i.test(ua)) {
+      return true;
+    }
+    if (typeof navigator.maxTouchPoints === 'number' && navigator.maxTouchPoints > 0) {
+      return true;
+    }
+  }
+  if (typeof window !== 'undefined') {
+    if ('ontouchstart' in window) return true;
+    try {
+      if (window.matchMedia?.('(pointer: coarse)')?.matches) return true;
+    } catch {
+      // Ignored
+    }
+  }
+  return false;
+}
+
+function triggerAnchorDownload(result: WebmExportResult): void {
   if (typeof document === 'undefined' || typeof URL === 'undefined') return;
   const url = URL.createObjectURL(result.blob);
   const a = document.createElement('a');
   a.href = url;
   a.download = result.filename;
-  document.body.appendChild(a);
+  document.body?.appendChild(a);
   a.click();
-  document.body.removeChild(a);
+  document.body?.removeChild(a);
   setTimeout(() => {
     try {
       URL.revokeObjectURL(url);
@@ -2992,4 +3028,36 @@ export function triggerWebmDownload(result: WebmExportResult): void {
       // Ignored
     }
   }, 1500);
+}
+
+export function triggerWebmDownload(result: WebmExportResult): void {
+  const nav = typeof navigator !== 'undefined' ? navigator : undefined;
+  const shouldTryNativeShare =
+    Boolean(nav && typeof nav.share === 'function' && typeof nav.canShare === 'function') &&
+    (isMobileOrNativeShareEnv() || typeof window === 'undefined');
+
+  if (shouldTryNativeShare && nav && typeof File !== 'undefined') {
+    try {
+      const cleanMime = (result.mimeType || result.blob.type || 'video/webm').split(';')[0] || 'video/webm';
+      const videoFile = new File([result.blob], result.filename, { type: cleanMime });
+      if (nav.canShare?.({ files: [videoFile] })) {
+        void Promise.resolve(
+          nav.share({
+            files: [videoFile],
+            title: result.filename
+          })
+        ).catch((err: unknown) => {
+          const errName = (err as { name?: string } | null)?.name;
+          if (errName !== 'AbortError') {
+            triggerAnchorDownload(result);
+          }
+        });
+        return;
+      }
+    } catch {
+      // Fallback to anchor download below
+    }
+  }
+
+  triggerAnchorDownload(result);
 }

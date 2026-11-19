@@ -1289,4 +1289,111 @@
   .launch-btn:hover:not(:disabled) {
     filter: brightness(1.1);
   }
+
+  /* ===== Mobile Landscape & Touch Adaptation ===== */
+  @media (max-height: 520px), (max-width: 960px) {
+    .creator-root {
+      padding: 6px 10px;
+      gap: 6px;
+      justify-content: flex-start;
+      overflow-y: auto;
+      touch-action: pan-y;
+      -webkit-overflow-scrolling: touch;
+      overscroll-behavior: contain;
+    }
+
+    .nav-pill-btn {
+      padding: 0.35rem 0.75rem;
+      font-size: 0.75rem;
+    }
+
+    .creator-card {
+      width: min(98vw, 860px);
+      max-height: none;
+      overflow-y: visible;
+      padding: 10px 12px;
+      margin: 0 auto 10px auto;
+      gap: 8px;
+      touch-action: pan-y;
+      -webkit-overflow-scrolling: touch;
+    }
+
+    .config-column {
+      padding: 8px 10px;
+      gap: 7px;
+      touch-action: pan-y;
+    }
+
+    .card-header {
+      padding-bottom: 6px;
+    }
+
+    .accent-bar {
+      height: 20px;
+    }
+
+    .card-title {
+      font-size: 14.5px;
+    }
+
+    .card-subtitle {
+      font-size: 10.5px;
+    }
+
+    .columns-grid {
+      gap: 8px;
+    }
+
+    .type-btn {
+      height: 32px;
+      font-size: 11px;
+    }
+
+    .styled-input,
+    .styled-sub-input,
+    .rule-select-box {
+      height: 34px;
+      font-size: 12px;
+    }
+
+    .rule-btn {
+      height: 36px;
+      padding: 3px 8px;
+    }
+
+    .stadium-preview-box {
+      height: 96px;
+    }
+
+    .captcha-section {
+      padding: 8px 10px;
+      gap: 6px;
+    }
+
+    .captcha-canvas {
+      width: 148px;
+      height: 40px;
+    }
+
+    .captcha-refresh-btn {
+      width: 36px;
+      height: 40px;
+    }
+
+    .captcha-input {
+      height: 40px;
+      font-size: 15px;
+    }
+
+    .launch-btn {
+      height: 38px;
+      font-size: 12.5px;
+    }
+  }
+
+  @media (max-height: 520px) and (orientation: landscape) and (min-width: 560px) {
+    .columns-grid {
+      grid-template-columns: 1fr 1fr;
+    }
+  }
 </style>

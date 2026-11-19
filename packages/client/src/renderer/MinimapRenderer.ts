@@ -1,11 +1,17 @@
 import type { Stadium, GameSnapshot, GameStateSnapshot } from '@legacyx/core';
 import { Camera, type CameraViewportBounds } from './Camera';
 
+export type MinimapPositionMode = 'bottom-right' | 'bottom-center';
+
 export interface MinimapSettings {
   minimapEnabled: boolean;
   minimapOpacity: number;
   minimapSize: number; // 160 | 200 | 240
   minimapCameraFrustum: boolean;
+  minimapPositionMode?: MinimapPositionMode;
+  minimapBottomMargin?: number;
+  viewportCenterX?: number;
+  viewportCenterY?: number;
 }
 
 export const DEFAULT_MINIMAP_SETTINGS: MinimapSettings = {
@@ -44,6 +50,8 @@ export class MinimapRenderer {
   public enabled: boolean = true;
   public opacity: number = 0.6;
   public cameraFrustum: boolean = true;
+  public positionMode: MinimapPositionMode = 'bottom-right';
+  public mobileBottomMargin: number = 8;
 
   public cachedCanvas: HTMLCanvasElement | OffscreenCanvas | null = null;
   private cachedStadium: Stadium | null = null;
@@ -104,6 +112,71 @@ export class MinimapRenderer {
     if (settings.minimapCameraFrustum !== undefined) {
       this.cameraFrustum = settings.minimapCameraFrustum;
     }
+    if (settings.minimapPositionMode === 'bottom-center' || settings.minimapPositionMode === 'bottom-right') {
+      this.positionMode = settings.minimapPositionMode;
+    }
+    if (
+      typeof settings.minimapBottomMargin === 'number' &&
+      Number.isFinite(settings.minimapBottomMargin) &&
+      settings.minimapBottomMargin >= 0
+    ) {
+      this.mobileBottomMargin = settings.minimapBottomMargin;
+    }
+  }
+
+  public computeRect(
+    screenW: number,
+    screenH: number,
+    positionMode?: MinimapPositionMode,
+    bottomMargin?: number
+  ): { x: number; y: number; width: number; height: number } {
+    const mode = positionMode ?? this.positionMode;
+    const activeBottomMargin =
+      typeof bottomMargin === 'number' && Number.isFinite(bottomMargin) && bottomMargin >= 0
+        ? bottomMargin
+        : typeof this.mobileBottomMargin === 'number' &&
+            Number.isFinite(this.mobileBottomMargin) &&
+            this.mobileBottomMargin >= 0
+          ? this.mobileBottomMargin
+          : 8;
+
+    if (mode === 'bottom-center') {
+      return {
+        x: Math.round((screenW - this.width) / 2),
+        y: Math.round(screenH - this.height - activeBottomMargin),
+        width: this.width,
+        height: this.height
+      };
+    }
+
+    return {
+      x: screenW - this.width - MinimapRenderer.DEFAULT_MARGIN,
+      y: screenH - this.height - MinimapRenderer.DEFAULT_MARGIN,
+      width: this.width,
+      height: this.height
+    };
+  }
+
+  public getRect(): { x: number; y: number; width: number; height: number } {
+    return {
+      x: this.x,
+      y: this.y,
+      width: this.width,
+      height: this.height
+    };
+  }
+
+  public hitTest(screenX: number, screenY: number): boolean {
+    if (!this.enabled) return false;
+    if (!Number.isFinite(screenX) || !Number.isFinite(screenY)) return false;
+    if (this.width <= 0 || this.height <= 0) return false;
+    if (!Number.isFinite(this.x) || !Number.isFinite(this.y)) return false;
+    return (
+      screenX >= this.x &&
+      screenX <= this.x + this.width &&
+      screenY >= this.y &&
+      screenY <= this.y + this.height
+    );
   }
 
   public invalidateCache(): void {
@@ -292,8 +365,13 @@ export class MinimapRenderer {
 
     const screenW = viewportWidth !== undefined ? viewportWidth : (ctx.canvas ? ctx.canvas.width : 800);
     const screenH = viewportHeight !== undefined ? viewportHeight : (ctx.canvas ? ctx.canvas.height : 600);
-    this.x = screenW - this.width - MinimapRenderer.DEFAULT_MARGIN;
-    this.y = screenH - this.height - MinimapRenderer.DEFAULT_MARGIN;
+    const settingsMode =
+      settings?.minimapPositionMode === 'bottom-center' || settings?.minimapPositionMode === 'bottom-right'
+        ? settings.minimapPositionMode
+        : undefined;
+    const rect = this.computeRect(screenW, screenH, settingsMode, settings?.minimapBottomMargin);
+    this.x = rect.x;
+    this.y = rect.y;
 
     if (this.cachedCanvas && typeof ctx.drawImage === 'function') {
       ctx.save();
@@ -316,7 +394,15 @@ export class MinimapRenderer {
     if (showFrustum && camera) {
       const vW = viewportWidth !== undefined ? viewportWidth : screenW;
       const vH = viewportHeight !== undefined ? viewportHeight : screenH;
-      camera.getViewportBounds(vW, vH, vW / 2, vH / 2, this.scratchFrustum);
+      const cx =
+        typeof settings?.viewportCenterX === 'number' && Number.isFinite(settings.viewportCenterX)
+          ? settings.viewportCenterX
+          : vW / 2;
+      const cy =
+        typeof settings?.viewportCenterY === 'number' && Number.isFinite(settings.viewportCenterY)
+          ? settings.viewportCenterY
+          : vH / 2;
+      camera.getViewportBounds(vW, vH, cx, cy, this.scratchFrustum);
 
       const fMinX = this.scratchFrustum.minX;
       const fMinY = this.scratchFrustum.minY;

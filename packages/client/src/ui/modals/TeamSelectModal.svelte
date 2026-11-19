@@ -87,6 +87,18 @@
   let specPlayers = $derived(gameUI.players.filter((p) => p.team === 'spectator'));
   let bluePlayers = $derived(gameUI.players.filter((p) => p.team === 'blue'));
 
+  let localPlayer = $derived(gameUI.players.find((p) => p.id === gameUI.localPlayerId));
+  let localTeam = $derived<TeamSlot>(localPlayer?.team ?? gameUI.myTeam);
+  let canSwitchOwnTeam = $derived(!gameUI.teamsLocked || gameUI.isAdmin || gameUI.isHost);
+
+  function handleQuickJoinTeam(targetTeam: TeamSlot) {
+    if (localTeam === targetTeam || !canSwitchOwnTeam) return;
+    soundFX.playUIClick();
+    if (gameUI.changeTeam(gameUI.localPlayerId, targetTeam)) {
+      onTeamChange(gameUI.localPlayerId, targetTeam);
+    }
+  }
+
   let redCaptain = $derived(redPlayers[0]);
   let blueCaptain = $derived(bluePlayers[0]);
   let redActiveKit = $derived(gameUI.redCaptainKit);
@@ -183,10 +195,103 @@
   let wasDragged = $state(false);
   let dragStartTime = 0;
 
+  // Pointer Events touch drag state
+  let pointerDragPlayerId = $state<number | null>(null);
+  let pointerDragId = $state<number | null>(null);
+  let pointerStartX = 0;
+  let pointerStartY = 0;
+  let pointerHasMoved = false;
+  const POINTER_DRAG_THRESHOLD_PX = 10;
+
   function canDragPlayer(player: RosterPlayer): boolean {
     if (gameUI.isAdmin || gameUI.isHost) return true;
     if (!gameUI.teamsLocked && player.id === gameUI.localPlayerId) return true;
     return false;
+  }
+
+  function resolveTeamColumnAtPoint(clientX: number, clientY: number): TeamSlot | null {
+    if (typeof document === 'undefined' || typeof document.elementFromPoint !== 'function') {
+      return null;
+    }
+    const hitEl = document.elementFromPoint(clientX, clientY);
+    const colEl = hitEl?.closest?.('[data-team-column]') as HTMLElement | null;
+    const raw = colEl?.dataset?.teamColumn;
+    if (raw === 'red' || raw === 'spectator' || raw === 'blue') {
+      return raw;
+    }
+    return null;
+  }
+
+  function handlePlayerPointerDown(e: PointerEvent, player: RosterPlayer) {
+    if (!canDragPlayer(player)) return;
+    if (typeof e.button === 'number' && e.button !== 0) return;
+    pointerDragPlayerId = player.id;
+    pointerDragId = e.pointerId;
+    pointerStartX = e.clientX;
+    pointerStartY = e.clientY;
+    pointerHasMoved = false;
+    if (e.pointerType === 'touch' || e.pointerType === 'pen') {
+      (e.currentTarget as HTMLElement | null)?.setPointerCapture?.(e.pointerId);
+    }
+  }
+
+  function handlePlayerPointerMove(e: PointerEvent, player: RosterPlayer) {
+    if (pointerDragPlayerId !== player.id) return;
+    if (pointerDragId !== null && e.pointerId !== pointerDragId) return;
+
+    const dx = e.clientX - pointerStartX;
+    const dy = e.clientY - pointerStartY;
+    if (!pointerHasMoved && Math.hypot(dx, dy) <= POINTER_DRAG_THRESHOLD_PX) {
+      return;
+    }
+
+    if (!pointerHasMoved) {
+      pointerHasMoved = true;
+      draggedPlayerId = player.id;
+      wasDragged = true;
+      dragStartTime = Date.now();
+      (e.currentTarget as HTMLElement | null)?.setPointerCapture?.(e.pointerId);
+    }
+
+    dragOverTeam = resolveTeamColumnAtPoint(e.clientX, e.clientY);
+  }
+
+  function handlePlayerPointerUp(e: PointerEvent, player: RosterPlayer) {
+    if (pointerDragPlayerId !== player.id) return;
+    if (pointerDragId !== null && e.pointerId !== pointerDragId) return;
+
+    if (pointerHasMoved) {
+      const targetTeam = resolveTeamColumnAtPoint(e.clientX, e.clientY) ?? dragOverTeam;
+      dragOverTeam = null;
+      draggedPlayerId = null;
+      if (targetTeam && targetTeam !== player.team) {
+        soundFX.playUIClick();
+        if (gameUI.changeTeam(player.id, targetTeam)) {
+          onTeamChange(player.id, targetTeam);
+        }
+      }
+      dragStartTime = Date.now();
+      setTimeout(() => {
+        wasDragged = false;
+      }, 150);
+    }
+
+    (e.currentTarget as HTMLElement | null)?.releasePointerCapture?.(e.pointerId);
+    pointerDragPlayerId = null;
+    pointerDragId = null;
+    pointerHasMoved = false;
+  }
+
+  function handlePlayerPointerCancel(e: PointerEvent) {
+    (e.currentTarget as HTMLElement | null)?.releasePointerCapture?.(e.pointerId);
+    pointerDragPlayerId = null;
+    pointerDragId = null;
+    pointerHasMoved = false;
+    dragOverTeam = null;
+    draggedPlayerId = null;
+    setTimeout(() => {
+      wasDragged = false;
+    }, 150);
   }
 
   function handleDragStart(e: DragEvent, player: RosterPlayer) {
@@ -262,17 +367,17 @@
     e.stopPropagation();
     soundFX.playUIClick();
 
-    const menuWidth = 175;
-    const menuHeight = 145;
+    const menuWidth = 190;
+    const menuHeight = 235;
     let x = e.clientX;
     let y = e.clientY;
 
     if (typeof window !== 'undefined') {
       if (x + menuWidth > window.innerWidth - 12) {
-        x = window.innerWidth - menuWidth - 12;
+        x = Math.max(8, window.innerWidth - menuWidth - 12);
       }
       if (y + menuHeight > window.innerHeight - 12) {
-        y = window.innerHeight - menuHeight - 12;
+        y = Math.max(8, window.innerHeight - menuHeight - 12);
       }
     }
 
@@ -286,6 +391,16 @@
 
   function closeContextMenu() {
     contextMenu.visible = false;
+  }
+
+  function handleContextMoveTeam(targetTeam: TeamSlot) {
+    if (!contextMenu.player) return;
+    const targetId = contextMenu.player.id;
+    soundFX.playUIClick();
+    if (gameUI.changeTeam(targetId, targetTeam)) {
+      onTeamChange(targetId, targetTeam);
+    }
+    closeContextMenu();
   }
 
   // ==========================================
@@ -1110,6 +1225,7 @@
                 <!-- 1. EQUIPO ROJO (LOCAL) -->
                 <div
                   class="bench-card red-bench"
+                  data-team-column="red"
                   role="region"
                   aria-label="Banquillo Equipo Rojo"
                   style="--captain-local-primary: {redPrimaryColor}; --captain-local-glow: {redPrimaryColor}40; --bench-team-primary: {redPrimaryColor}; --captain-local-tertiary: {redKitTertiary};"
@@ -1126,26 +1242,37 @@
                       class="team-name"
                       style="color: {redKitTertiary}; {redHasOutline ? '-webkit-text-stroke: 2px #000000; paint-order: stroke fill; text-shadow: -1px -1px 0 #000000, 1px -1px 0 #000000, -1px 1px 0 #000000, 1px 1px 0 #000000;' : 'text-shadow: 0 1px 2px rgba(0, 0, 0, 0.65);'}"
                     >{redTeamName}</span>
-                    <div class="kit-variant-toggles" role="group" aria-label="Equipación del equipo rojo">
+                    <div class="bench-header-actions">
+                      <div class="kit-variant-toggles" role="group" aria-label="Equipación del equipo rojo">
+                        <button
+                          type="button"
+                          class="kit-variant-btn"
+                          class:active={gameUI.redKitVariant === 'home'}
+                          disabled={!isRedCaptainOrAdmin}
+                          title={isRedCaptainOrAdmin ? 'Equipación Local' : 'Solo capitán o admin'}
+                          onclick={() => handleSetRedKitVariant('home')}
+                        >
+                          Local
+                        </button>
+                        <button
+                          type="button"
+                          class="kit-variant-btn"
+                          class:active={gameUI.redKitVariant === 'away'}
+                          disabled={!isRedCaptainOrAdmin}
+                          title={isRedCaptainOrAdmin ? 'Equipación Visitante' : 'Solo capitán o admin'}
+                          onclick={() => handleSetRedKitVariant('away')}
+                        >
+                          Visitante
+                        </button>
+                      </div>
                       <button
                         type="button"
-                        class="kit-variant-btn"
-                        class:active={gameUI.redKitVariant === 'home'}
-                        disabled={!isRedCaptainOrAdmin}
-                        title={isRedCaptainOrAdmin ? 'Equipación Local' : 'Solo capitán o admin'}
-                        onclick={() => handleSetRedKitVariant('home')}
+                        class="bench-join-btn"
+                        disabled={localTeam === 'red' || !canSwitchOwnTeam}
+                        onclick={() => handleQuickJoinTeam('red')}
+                        title="Unirse al equipo Rojo"
                       >
-                        Local
-                      </button>
-                      <button
-                        type="button"
-                        class="kit-variant-btn"
-                        class:active={gameUI.redKitVariant === 'away'}
-                        disabled={!isRedCaptainOrAdmin}
-                        title={isRedCaptainOrAdmin ? 'Equipación Visitante' : 'Solo capitán o admin'}
-                        onclick={() => handleSetRedKitVariant('away')}
-                      >
-                        Visitante
+                        + Unirse
                       </button>
                     </div>
                   </div>
@@ -1164,6 +1291,10 @@
                         draggable={isDraggable}
                         ondragstart={(e) => handleDragStart(e, p)}
                         ondragend={handleDragEnd}
+                        onpointerdown={(e) => handlePlayerPointerDown(e, p)}
+                        onpointermove={(e) => handlePlayerPointerMove(e, p)}
+                        onpointerup={(e) => handlePlayerPointerUp(e, p)}
+                        onpointercancel={handlePlayerPointerCancel}
                         onclick={(e) => handlePlayerCardClick(e, p)}
                         onkeydown={(e) => {
                           if (e.key === 'Enter' || e.key === ' ') {
@@ -1205,6 +1336,7 @@
                 <!-- 2. ESPECTADORES (SPEC) -->
                 <div
                   class="bench-card spec-bench"
+                  data-team-column="spectator"
                   role="region"
                   aria-label="Banquillo Espectadores"
                   class:is-drag-over={dragOverTeam === 'spectator'}
@@ -1214,6 +1346,15 @@
                 >
                   <div class="bench-card-header spec-header">
                     <span class="team-name">Espectadores</span>
+                    <button
+                      type="button"
+                      class="bench-join-btn"
+                      disabled={localTeam === 'spectator' || !canSwitchOwnTeam}
+                      onclick={() => handleQuickJoinTeam('spectator')}
+                      title="Unirse a Espectadores"
+                    >
+                      + Unirse
+                    </button>
                   </div>
 
                   <div id="specPlayersList" class="bench-players-list custom-scrollbar">
@@ -1229,6 +1370,10 @@
                         draggable={isDraggable}
                         ondragstart={(e) => handleDragStart(e, p)}
                         ondragend={handleDragEnd}
+                        onpointerdown={(e) => handlePlayerPointerDown(e, p)}
+                        onpointermove={(e) => handlePlayerPointerMove(e, p)}
+                        onpointerup={(e) => handlePlayerPointerUp(e, p)}
+                        onpointercancel={handlePlayerPointerCancel}
                         onclick={(e) => handlePlayerCardClick(e, p)}
                         onkeydown={(e) => {
                           if (e.key === 'Enter' || e.key === ' ') {
@@ -1256,6 +1401,7 @@
                 <!-- 3. EQUIPO AZUL (VISITANTE) -->
                 <div
                   class="bench-card blue-bench"
+                  data-team-column="blue"
                   role="region"
                   aria-label="Banquillo Equipo Azul"
                   style="--captain-visitor-primary: {bluePrimaryColor}; --captain-visitor-glow: {bluePrimaryColor}40; --bench-team-primary: {bluePrimaryColor}; --captain-visitor-tertiary: {blueKitTertiary};"
@@ -1272,26 +1418,37 @@
                       class="team-name"
                       style="color: {blueKitTertiary}; {blueHasOutline ? '-webkit-text-stroke: 2px #000000; paint-order: stroke fill; text-shadow: -1px -1px 0 #000000, 1px -1px 0 #000000, -1px 1px 0 #000000, 1px 1px 0 #000000;' : 'text-shadow: 0 1px 2px rgba(0, 0, 0, 0.65);'}"
                     >{blueTeamName}</span>
-                    <div class="kit-variant-toggles" role="group" aria-label="Equipación del equipo azul">
+                    <div class="bench-header-actions">
+                      <div class="kit-variant-toggles" role="group" aria-label="Equipación del equipo azul">
+                        <button
+                          type="button"
+                          class="kit-variant-btn"
+                          class:active={gameUI.blueKitVariant === 'home'}
+                          disabled={!isBlueCaptainOrAdmin}
+                          title={isBlueCaptainOrAdmin ? 'Equipación Local' : 'Solo capitán o admin'}
+                          onclick={() => handleSetBlueKitVariant('home')}
+                        >
+                          Local
+                        </button>
+                        <button
+                          type="button"
+                          class="kit-variant-btn"
+                          class:active={gameUI.blueKitVariant === 'away'}
+                          disabled={!isBlueCaptainOrAdmin}
+                          title={isBlueCaptainOrAdmin ? 'Equipación Visitante' : 'Solo capitán o admin'}
+                          onclick={() => handleSetBlueKitVariant('away')}
+                        >
+                          Visitante
+                        </button>
+                      </div>
                       <button
                         type="button"
-                        class="kit-variant-btn"
-                        class:active={gameUI.blueKitVariant === 'home'}
-                        disabled={!isBlueCaptainOrAdmin}
-                        title={isBlueCaptainOrAdmin ? 'Equipación Local' : 'Solo capitán o admin'}
-                        onclick={() => handleSetBlueKitVariant('home')}
+                        class="bench-join-btn"
+                        disabled={localTeam === 'blue' || !canSwitchOwnTeam}
+                        onclick={() => handleQuickJoinTeam('blue')}
+                        title="Unirse al equipo Azul"
                       >
-                        Local
-                      </button>
-                      <button
-                        type="button"
-                        class="kit-variant-btn"
-                        class:active={gameUI.blueKitVariant === 'away'}
-                        disabled={!isBlueCaptainOrAdmin}
-                        title={isBlueCaptainOrAdmin ? 'Equipación Visitante' : 'Solo capitán o admin'}
-                        onclick={() => handleSetBlueKitVariant('away')}
-                      >
-                        Visitante
+                        + Unirse
                       </button>
                     </div>
                   </div>
@@ -1310,6 +1467,10 @@
                         draggable={isDraggable}
                         ondragstart={(e) => handleDragStart(e, p)}
                         ondragend={handleDragEnd}
+                        onpointerdown={(e) => handlePlayerPointerDown(e, p)}
+                        onpointermove={(e) => handlePlayerPointerMove(e, p)}
+                        onpointerup={(e) => handlePlayerPointerUp(e, p)}
+                        onpointercancel={handlePlayerPointerCancel}
                         onclick={(e) => handlePlayerCardClick(e, p)}
                         onkeydown={(e) => {
                           if (e.key === 'Enter' || e.key === ' ') {
@@ -1369,6 +1530,33 @@
       <div class="menu-target-header">
         <span class="target-name">{contextMenu.player.name || contextMenu.player.nickname}</span>
       </div>
+      {#if contextMenu.player.team !== 'red'}
+        <button
+          type="button"
+          class="context-menu-item item-move-red"
+          onclick={() => handleContextMoveTeam('red')}
+        >
+          <span>Mover a Rojo</span>
+        </button>
+      {/if}
+      {#if contextMenu.player.team !== 'spectator'}
+        <button
+          type="button"
+          class="context-menu-item item-move-spec"
+          onclick={() => handleContextMoveTeam('spectator')}
+        >
+          <span>Mover a Espectadores</span>
+        </button>
+      {/if}
+      {#if contextMenu.player.team !== 'blue'}
+        <button
+          type="button"
+          class="context-menu-item item-move-blue"
+          onclick={() => handleContextMoveTeam('blue')}
+        >
+          <span>Mover a Azul</span>
+        </button>
+      {/if}
       {#if !contextMenu.player.isHost}
         <button
           type="button"
@@ -3008,5 +3196,277 @@
   }
   .custom-scrollbar-red::-webkit-scrollbar-thumb:hover {
     background: #ff3366;
+  }
+
+  /* Quick + Unirse bench actions & context menu team moves */
+  .bench-header-actions {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex-shrink: 0;
+  }
+
+  .spec-header {
+    justify-content: space-between;
+    gap: 0.5rem;
+    padding: 0 0.6rem;
+  }
+
+  .bench-join-btn {
+    border: 1px solid rgba(255, 255, 255, 0.38);
+    background: rgba(8, 14, 24, 0.72);
+    color: #ffffff;
+    font-family: 'Space Grotesk', system-ui, sans-serif;
+    font-size: 0.64rem;
+    font-weight: 800;
+    letter-spacing: 0.04em;
+    padding: 3px 7px;
+    border-radius: 4px;
+    cursor: pointer;
+    white-space: nowrap;
+    flex-shrink: 0;
+    transition: all 0.14s ease;
+  }
+
+  .bench-join-btn:hover:not(:disabled) {
+    background: #00e5ff;
+    border-color: #00e5ff;
+    color: #050811;
+    box-shadow: 0 0 10px rgba(0, 229, 255, 0.45);
+  }
+
+  .bench-join-btn:disabled {
+    opacity: 0.38;
+    cursor: not-allowed;
+  }
+
+  .context-menu-item.item-move-red {
+    color: #ff6b81;
+  }
+
+  .context-menu-item.item-move-spec {
+    color: #cbd5e1;
+  }
+
+  .context-menu-item.item-move-blue {
+    color: #38bdf8;
+  }
+
+  /* ======================================================== */
+  /* MOBILE LANDSCAPE & TOUCH ADAPTATION                      */
+  /* ======================================================== */
+  @media (max-height: 520px), (max-width: 960px) {
+    .corridor-container {
+      top: 38px;
+      bottom: 6px;
+      width: min(98vw, 1140px);
+      max-height: calc(100dvh - 44px);
+    }
+
+    .team-modal-card,
+    .col-settings-scroll,
+    .bench-players-list,
+    .table-scroll-body,
+    .admin-context-menu {
+      touch-action: pan-y;
+      -webkit-overflow-scrolling: touch;
+      overscroll-behavior: contain;
+    }
+
+    .admin-context-menu {
+      max-height: calc(100dvh - 16px);
+      overflow-y: auto;
+    }
+
+    .external-nav-tab {
+      padding: 6px 10px;
+      font-size: 11px;
+    }
+
+    .right-tab {
+      right: 6px;
+      top: 6px;
+      transform: none;
+    }
+
+    .left-tab {
+      left: 6px;
+      top: 6px;
+      transform: none;
+    }
+
+    .modal-header {
+      height: 38px;
+      padding: 0 0.65rem;
+    }
+
+    .room-title {
+      font-size: 0.86rem;
+      max-width: 220px;
+    }
+
+    .practice-offline-badge {
+      font-size: 0.58rem;
+      padding: 0.14rem 0.4rem;
+      max-width: 240px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .btn-copy-link,
+    .btn-leave,
+    .btn-close-x {
+      padding: 0.25rem 0.5rem;
+      font-size: 0.65rem;
+      min-height: 28px;
+    }
+
+    /* Compact 4-column layout for Slide 1 (Settings + 3 Benches) */
+    .col-settings-panel {
+      width: 210px;
+      min-width: 195px;
+      max-width: 225px;
+      padding: 0.45rem;
+    }
+
+    .col-settings-scroll {
+      gap: 0.45rem;
+      padding-right: 0.2rem;
+    }
+
+    .rules-4btn-grid {
+      gap: 0.3rem;
+    }
+
+    .rule-cartouche,
+    .rule-cartouche-btn {
+      height: 32px;
+      padding: 0 0.4rem;
+    }
+
+    .rule-value,
+    .lock-label {
+      font-size: 10px;
+    }
+
+    .auto-reset-container {
+      height: 32px;
+      gap: 4px;
+    }
+
+    .stadium-preview-box {
+      min-height: 64px;
+      max-height: 82px;
+    }
+
+    .stadium-overlay {
+      padding: 3px 8px;
+      gap: 2px;
+    }
+
+    .stadium-name {
+      font-size: 11px;
+    }
+
+    .stadium-action-text {
+      font-size: 9px;
+      padding: 1px 5px;
+    }
+
+    .advanced-settings-card {
+      padding: 0.4rem;
+      gap: 0.35rem;
+    }
+
+    .fsm-footer-controls {
+      padding-top: 0.4rem;
+    }
+
+    .btn-start-match,
+    .btn-stop-match,
+    .btn-pause-match {
+      padding: 0.45rem;
+      font-size: 0.72rem;
+    }
+
+    .col-benches-grid {
+      padding: 0.45rem;
+      gap: 0.4rem;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+
+    .bench-card-header {
+      height: 32px;
+      padding: 0 0.4rem;
+    }
+
+    .team-name {
+      font-size: 0.68rem;
+    }
+
+    .kit-variant-btn {
+      font-size: 0.55rem;
+      padding: 2px 4px;
+    }
+
+    .bench-join-btn {
+      font-size: 0.58rem;
+      padding: 2px 5px;
+    }
+
+    .bench-players-list {
+      padding: 0.32rem;
+      gap: 0.3rem;
+    }
+
+    .player-slot-card {
+      padding: 0.3rem 0.42rem;
+      gap: 0.4rem;
+      touch-action: pan-y;
+    }
+
+    .slot-avatar {
+      width: 24px;
+      height: 24px;
+      min-width: 24px;
+      font-size: 0.65rem;
+    }
+
+    .slot-nickname {
+      font-size: 0.74rem;
+    }
+
+    /* Slide 0 (Stats) dual tables compact landscape fit */
+    .stats-header-row {
+      padding: 0.45rem 0.7rem;
+      gap: 0.45rem;
+    }
+
+    .stats-acronym-badge {
+      min-width: 48px;
+      height: 28px;
+      padding: 0 8px;
+      font-size: 0.78rem;
+    }
+
+    .stats-score-num {
+      font-size: 1.25rem;
+    }
+
+    .tables-parallel-grid {
+      padding: 0.45rem 0.65rem 0.65rem 0.65rem;
+      gap: 0.45rem;
+    }
+
+    .table-header {
+      padding: 0.35rem 0.45rem;
+      font-size: 0.68rem;
+    }
+
+    .row-summary {
+      padding: 0.32rem 0.45rem;
+      font-size: 0.68rem;
+    }
   }
 </style>

@@ -40,6 +40,12 @@
   import { computeMouseMovementVector, mouseButtonToCode } from './controllers/InputManager.js';
   import { matchRecorder } from './recorder/MatchRecorder.svelte.js';
   import { userProfile } from './ui/state/userProfile.svelte.js';
+  import {
+    initMobileRuntime,
+    lockLandscapeOrientation,
+    enterImmersiveMode,
+    setHostWakeLock
+  } from './controllers/MobileRuntime.js';
 
   import Gatekeeper from './ui/screens/Gatekeeper.svelte';
   import Lobby from './ui/screens/Lobby.svelte';
@@ -166,6 +172,62 @@
     return () => {
       window.removeEventListener('hashchange', syncInviteFromUrl);
       window.removeEventListener('popstate', syncInviteFromUrl);
+    };
+  });
+
+  $effect(() => {
+    return untrack(() => {
+      const cleanup = initMobileRuntime({
+        onViewportChange: (w, h) => {
+          gameUI.refreshDeviceEnvironment();
+          gameUI.setViewportEnvironment(w, h);
+        },
+        onBackButton: () => {
+          if (gameUI.isHudEditorOpen) {
+            gameUI.isHudEditorOpen = false;
+            return true;
+          }
+          if (gameUI.roomDisconnectNotice !== null) {
+            gameUI.clearRoomDisconnectNotice();
+            return true;
+          }
+          if (gameUI.activeModal === 'PASSWORD_PROMPT' || gameUI.isSecondaryOverlayOpen) {
+            gameUI.closeOverlay();
+            return true;
+          }
+          if (gameUI.currentScreen === 'IN_GAME') {
+            if (gameUI.isRoomPanelOpen) {
+              if (gameUI.matchPhase !== 0) {
+                gameUI.clearModalStack();
+              } else {
+                gameUI.leaveRoom();
+              }
+              return true;
+            }
+            gameUI.openModal('TEAM_MANAGEMENT');
+            return true;
+          }
+          if (gameUI.currentScreen === 'ROOM_CREATOR') {
+            gameUI.navigateTo('LOBBY');
+            return true;
+          }
+          // On root screens (GATEKEEPER / LOBBY), return false so MobileRuntime minimizes the app cleanly.
+          return false;
+        }
+      });
+      if (gameUI.isMobileLayout) {
+        void lockLandscapeOrientation();
+        void enterImmersiveMode();
+      }
+      return cleanup;
+    });
+  });
+
+  $effect(() => {
+    const shouldKeepAwake = gameUI.currentScreen === 'IN_GAME' && gameUI.isHost;
+    void setHostWakeLock(shouldKeepAwake, 'app-host');
+    return () => {
+      void setHostWakeLock(false, 'app-host');
     };
   });
 
@@ -2102,7 +2164,7 @@
   {/if}
 
   <!-- Capa 1: Interfaz reactiva superpuesta en z-index 10 -->
-  <div class="ui-layer">
+  <div class="ui-layer" class:mobile-safe={gameUI.isMobileLayout}>
     <!-- Pantallas principales -->
     {#if gameUI.currentScreen === 'GATEKEEPER'}
       <Gatekeeper />
@@ -2132,6 +2194,28 @@
     <!-- Tooltip Global Singleton (Portal) -->
     <GlobalTooltip />
   </div>
+
+  {#if gameUI.isMobileLayout && gameUI.isPortraitOnMobile}
+    <div class="portrait-rotate-overlay" role="dialog" aria-modal="true" aria-label="Girar dispositivo a horizontal">
+      <div class="portrait-rotate-card">
+        <div class="portrait-rotate-icon" aria-hidden="true">📱</div>
+        <h2 class="portrait-rotate-title">Gira tu dispositivo a horizontal</h2>
+        <p class="portrait-rotate-desc">
+          LegacyX-GO funciona en orientación horizontal (landscape) para disfrutar toda la cancha y los controles multitouch.
+        </p>
+        <button
+          type="button"
+          class="portrait-rotate-btn"
+          onclick={() => {
+            void lockLandscapeOrientation();
+            void enterImmersiveMode();
+          }}
+        >
+          Bloquear Horizontal y Pantalla Completa
+        </button>
+      </div>
+    </div>
+  {/if}
 </main>
 
 <style>
@@ -2139,12 +2223,15 @@
     position: relative;
     width: 100vw;
     height: 100vh;
+    height: 100dvh;
     margin: 0;
     padding: 0;
     background-color: #050811;
     color: #dde2f1;
     overflow: hidden;
+    overscroll-behavior: none;
     user-select: none;
+    -webkit-tap-highlight-color: transparent;
     font-family: 'Space Grotesk', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   }
 
@@ -2166,5 +2253,81 @@
     inset: 0;
     z-index: 10;
     pointer-events: none;
+  }
+
+  .ui-layer.mobile-safe {
+    padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px)
+      env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px);
+    box-sizing: border-box;
+  }
+
+  .portrait-rotate-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 9999;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    background: rgba(5, 8, 17, 0.96);
+    pointer-events: auto;
+  }
+
+  .portrait-rotate-card {
+    max-width: 340px;
+    width: 100%;
+    padding: 24px 20px;
+    border-radius: 16px;
+    border: 1px solid rgba(0, 229, 255, 0.35);
+    background: linear-gradient(160deg, rgba(14, 21, 38, 0.98), rgba(7, 11, 22, 0.98));
+    box-shadow: 0 18px 42px rgba(0, 0, 0, 0.65);
+    text-align: center;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .portrait-rotate-icon {
+    font-size: 40px;
+    line-height: 1;
+    transform: rotate(-90deg);
+    filter: drop-shadow(0 0 12px rgba(0, 229, 255, 0.45));
+  }
+
+  .portrait-rotate-title {
+    margin: 0;
+    font-size: 1.15rem;
+    font-weight: 700;
+    color: #f3f7ff;
+    letter-spacing: 0.02em;
+  }
+
+  .portrait-rotate-desc {
+    margin: 0;
+    font-family: 'Chivo', sans-serif;
+    font-size: 0.88rem;
+    line-height: 1.45;
+    color: #9eb0cf;
+  }
+
+  .portrait-rotate-btn {
+    margin-top: 4px;
+    width: 100%;
+    min-height: 44px;
+    padding: 10px 16px;
+    border-radius: 10px;
+    border: 1px solid rgba(0, 229, 255, 0.6);
+    background: linear-gradient(135deg, rgba(0, 229, 255, 0.2), rgba(0, 145, 234, 0.25));
+    color: #e6fbff;
+    font-family: 'Space Grotesk', sans-serif;
+    font-size: 0.88rem;
+    font-weight: 700;
+    cursor: pointer;
+    touch-action: manipulation;
+  }
+
+  .portrait-rotate-btn:active {
+    transform: scale(0.98);
   }
 </style>

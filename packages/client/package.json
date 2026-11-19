@@ -6,12 +6,24 @@
     "dev": "vite",
     "build": "vite build",
     "check": "svelte-check --tsconfig ./tsconfig.json",
-    "test": "node ../core/node_modules/vitest/vitest.mjs run"
+    "test": "node ../core/node_modules/vitest/vitest.mjs run",
+    "cap:sync": "npm run build && npx cap sync android",
+    "android:open": "npx cap open android",
+    "android:apk": "npm run cap:sync && cd android && gradlew.bat assembleDebug --no-daemon",
+    "android:aab": "npm run cap:sync && cd android && gradlew.bat bundleRelease --no-daemon"
   },
   "dependencies": {
+    "@capacitor-community/keep-awake": "^8.0.1",
+    "@capacitor/android": "^8.6.2",
+    "@capacitor/app": "^8.1.2",
+    "@capacitor/core": "^8.6.2",
+    "@capacitor/haptics": "^8.0.2",
+    "@capacitor/screen-orientation": "^8.0.2",
+    "@capacitor/status-bar": "^8.0.4",
     "@legacyx/core": "*"
   },
   "devDependencies": {
+    "@capacitor/cli": "^8.6.2",
     "@sveltejs/vite-plugin-svelte": "^4.0.4",
     "svelte": "^5.57.2",
     "svelte-check": "^4.7.6",

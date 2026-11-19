@@ -1497,6 +1497,8 @@
     flex: 1;
     min-height: 0;
     overflow: auto;
+    touch-action: pan-y;
+    -webkit-overflow-scrolling: touch;
     border: 1px solid rgba(148, 163, 184, 0.16);
     border-radius: 12px;
     background: rgba(10, 15, 28, 0.75);
@@ -2298,6 +2300,7 @@
 
   .timeline-slider {
     width: 100%;
+    touch-action: pan-x;
     accent-color: #38bdf8;
     cursor: pointer;
   }
@@ -2342,5 +2345,106 @@
     border-color: #38bdf8;
     background: rgba(14, 165, 233, 0.24);
     color: #e0f2fe;
+  }
+
+  /* Responsive — Mobile Landscape & Compact Touch Viewports */
+  @media (max-height: 520px), (max-width: 960px) {
+    .modal-backdrop {
+      padding: 6px 10px;
+    }
+
+    .replay-shell {
+      width: 100%;
+      height: calc(100vh - 12px);
+      max-height: 98vh;
+      border-radius: 10px;
+    }
+
+    .replay-header {
+      padding: 8px 12px;
+      gap: 8px;
+    }
+
+    .header-title h2 {
+      font-size: 0.85rem;
+    }
+
+    .subtitle {
+      font-size: 0.68rem;
+    }
+
+    .cyber-btn {
+      padding: 6px 10px;
+      font-size: 0.72rem;
+    }
+
+    .close-btn,
+    .icon-action.refresh {
+      width: 30px;
+      height: 30px;
+    }
+
+    .banner {
+      padding: 6px 12px;
+      font-size: 0.74rem;
+    }
+
+    .cloud-replays-container {
+      padding: 10px 12px;
+      gap: 8px;
+      touch-action: pan-y;
+      -webkit-overflow-scrolling: touch;
+    }
+
+    .quota-bar {
+      padding: 6px 10px;
+      font-size: 0.74rem;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+
+    .replays-table-wrap {
+      touch-action: pan-y;
+      -webkit-overflow-scrolling: touch;
+    }
+
+    .replays-table {
+      font-size: 0.76rem;
+    }
+
+    .replays-table th,
+    .replays-table td {
+      padding: 7px 8px;
+    }
+
+    .player-viewport {
+      padding: 6px 10px 8px;
+      gap: 6px;
+    }
+
+    .controls-bar {
+      padding: 5px 10px;
+      gap: 8px;
+      border-radius: 8px;
+    }
+
+    .play-btn {
+      width: 30px;
+      height: 30px;
+    }
+
+    .time-readout {
+      font-size: 0.72rem;
+      min-width: 82px;
+    }
+
+    .timeline-slider {
+      touch-action: pan-x;
+    }
+
+    .speed-chip {
+      padding: 4px 7px;
+      font-size: 0.68rem;
+    }
   }
 </style>

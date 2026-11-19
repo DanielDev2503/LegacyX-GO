@@ -21,7 +21,11 @@ import { NetRenderer } from './NetRenderer';
 import { DiscRenderer, type PlayerVisualInfo } from './DiscRenderer';
 import { VFXManager } from './VFXManager';
 import { MinimapRenderer, type MinimapSettings } from './MinimapRenderer';
-import { OffscreenIndicatorRenderer, type OffscreenDrawOptions } from './OffscreenIndicatorRenderer';
+import {
+  OffscreenIndicatorRenderer,
+  type OffscreenDrawOptions,
+  type ExclusionRect
+} from './OffscreenIndicatorRenderer';
 
 export interface FloatingScoreText {
   text: string;
@@ -63,12 +67,53 @@ export class GameRenderer {
   public scale: number = 1.0;
   public offsetX: number = 0;
   public offsetY: number = 0;
-  public safeAreaBottom: number = 160;
+  private _desktopSafeAreaBottom: number = 160;
+  private _isMobileLayout: boolean = false;
+  public mobileExclusionZones: ExclusionRect[] = [];
   public chatHeight: number = 130;
   public chatWidth: number = 340;
   public theme: 'dark' | 'light' = 'dark';
   public overrideDpr?: number;
   public focusBallOnly: boolean = false;
+
+  public get isMobileLayout(): boolean {
+    return this._isMobileLayout;
+  }
+
+  public set isMobileLayout(value: boolean) {
+    const next = Boolean(value);
+    if (this._isMobileLayout === next) return;
+    this._isMobileLayout = next;
+    this.camera.isMobileLayout = next;
+    this.minimapRenderer.positionMode = next ? 'bottom-center' : 'bottom-right';
+    const hasCanvasDims =
+      !!this.canvas &&
+      ((this.canvas.clientWidth > 0 && this.canvas.clientHeight > 0) ||
+        (this.canvas.width > 0 && this.canvas.height > 0));
+    if (hasCanvasDims) {
+      this.handleResize();
+    } else if (next) {
+      const vHeight = this.camera.viewportHeight;
+      if (typeof vHeight === 'number' && Number.isFinite(vHeight) && vHeight > 0) {
+        const autoZoom = this.getMobileAutoZoom(vHeight);
+        this.camera.setZoom(autoZoom);
+        this.scale = this.camera.zoom;
+      }
+    } else {
+      this.camera.setZoom(1.0);
+      this.scale = 1.0;
+    }
+  }
+
+  public get safeAreaBottom(): number {
+    return this.getEffectiveSafeAreaBottom();
+  }
+
+  public set safeAreaBottom(value: number) {
+    if (typeof value === 'number' && Number.isFinite(value) && value >= 0) {
+      this._desktopSafeAreaBottom = value;
+    }
+  }
 
   // Visual toggles
   public netDeformationEnabled: boolean = true;
@@ -225,6 +270,48 @@ export class GameRenderer {
     return this.safeAreaBottom;
   }
 
+  public getEffectiveSafeAreaBottom(
+    minimapEnabledOverride?: boolean,
+    minimapSizeOverride?: number
+  ): number {
+    if (!this._isMobileLayout) {
+      return this._desktopSafeAreaBottom;
+    }
+    const isMinimapOn =
+      minimapEnabledOverride !== undefined ? minimapEnabledOverride : this.minimapEnabled;
+    const rawMargin = this.minimapRenderer.mobileBottomMargin;
+    const margin =
+      typeof rawMargin === 'number' && Number.isFinite(rawMargin) && rawMargin >= 0 ? rawMargin : 8;
+    if (!isMinimapOn) {
+      return Math.max(8, margin);
+    }
+    const targetSize =
+      typeof minimapSizeOverride === 'number' &&
+      Number.isFinite(minimapSizeOverride) &&
+      minimapSizeOverride > 0
+        ? minimapSizeOverride
+        : this.minimapSize;
+    if (targetSize > 0 && this.minimapRenderer.width !== targetSize) {
+      this.minimapRenderer.setSize(targetSize);
+    }
+    return this.minimapRenderer.height + margin * 2;
+  }
+
+  public getMobileAutoZoom(viewportHeight?: number): number {
+    if (!this._isMobileLayout) {
+      return 1.0;
+    }
+    const dpr = this.getEffectiveDpr();
+    const vHeight =
+      viewportHeight !== undefined
+        ? viewportHeight
+        : this.canvas.height > 0
+          ? this.canvas.height / dpr
+          : this.camera.viewportHeight || 600;
+    this.camera.isMobileLayout = true;
+    return this.camera.getMobileAutoZoom(vHeight);
+  }
+
   public setStadium(stadium: Stadium): void {
     this.stadium = stadium;
     this.camera.setBounds(stadium.halfWidth, stadium.halfHeight);
@@ -268,13 +355,62 @@ export class GameRenderer {
     return this.scale || 1.0;
   }
 
-  private getOffscreenOptions(zoom: number): OffscreenDrawOptions {
-    return {
+  private getOffscreenOptions(
+    zoom: number,
+    viewportWidth?: number,
+    viewportHeight?: number,
+    minimapActive: boolean = this.minimapEnabled,
+    minimapSizeOverride?: number
+  ): OffscreenDrawOptions {
+    if (!this._isMobileLayout) {
+      return {
+        zoom,
+        chatWidth: this.chatWidth,
+        redColor: this.stadiumRenderer.redTeamColor,
+        blueColor: this.stadiumRenderer.blueTeamColor
+      };
+    }
+
+    const opts: OffscreenDrawOptions = {
       zoom,
-      chatWidth: this.chatWidth,
+      chatWidth: 0,
       redColor: this.stadiumRenderer.redTeamColor,
       blueColor: this.stadiumRenderer.blueTeamColor
     };
+
+    const zones: ExclusionRect[] = [];
+    for (let i = 0; i < this.mobileExclusionZones.length; i++) {
+      const r = this.mobileExclusionZones[i];
+      if (
+        r &&
+        Number.isFinite(r.x) &&
+        Number.isFinite(r.y) &&
+        Number.isFinite(r.width) &&
+        Number.isFinite(r.height) &&
+        r.width > 0 &&
+        r.height > 0
+      ) {
+        zones.push(r);
+      }
+    }
+
+    if (minimapActive && viewportWidth && viewportHeight && viewportWidth > 0 && viewportHeight > 0) {
+      const targetSize =
+        minimapSizeOverride !== undefined && minimapSizeOverride > 0 ? minimapSizeOverride : this.minimapSize;
+      if (targetSize > 0) {
+        this.minimapRenderer.setSize(targetSize);
+      }
+      const minimapRect = this.minimapRenderer.computeRect(viewportWidth, viewportHeight);
+      if (minimapRect.width > 0 && minimapRect.height > 0) {
+        zones.push(minimapRect);
+      }
+    }
+
+    if (zones.length > 0) {
+      opts.exclusionZones = zones;
+    }
+
+    return opts;
   }
 
   public resize(width?: number, height?: number): void {
@@ -297,13 +433,29 @@ export class GameRenderer {
       this.canvas.height = Math.round(displayHeight * dpr);
     }
 
-    // Strict 1:1 scale invariance
-    this.scale = 1.0;
+    const vWidth = this.canvas.width / dpr;
+    const vHeight = this.canvas.height / dpr;
+    const effectiveSafeBottom = this.getEffectiveSafeAreaBottom();
+    const topHud = this._isMobileLayout ? (this.camera.topHudHeightPx || 0) : 0;
 
-    const usableHeight = this.canvas.height / dpr - this.safeAreaBottom;
-    this.offsetX = this.canvas.width / dpr / 2;
-    this.offsetY = Math.max(usableHeight / 2, this.canvas.height / dpr / 4);
-    this.camera.resize(this.canvas.width / dpr, this.canvas.height / dpr, this.stadium.width, this.stadium.height);
+    this.offsetX = vWidth / 2;
+    if (this._isMobileLayout) {
+      const usableHeight = Math.max(100, vHeight - topHud - effectiveSafeBottom);
+      this.offsetY = topHud + usableHeight / 2;
+    } else {
+      const usableHeight = vHeight - effectiveSafeBottom;
+      this.offsetY = Math.max(usableHeight / 2, vHeight / 4);
+    }
+
+    this.camera.resize(vWidth, vHeight, this.stadium.width, this.stadium.height);
+    if (this._isMobileLayout) {
+      const autoZoom = this.getMobileAutoZoom(vHeight);
+      this.camera.setZoom(autoZoom);
+      this.scale = this.camera.zoom;
+    } else {
+      // Strict 1:1 scale invariance
+      this.scale = 1.0;
+    }
   }
 
   public triggerShake(intensity: number, durationMs: number = 220): void {
@@ -319,19 +471,28 @@ export class GameRenderer {
   }
 
   public clientToWorld(clientX: number, clientY: number): { x: number; y: number } {
+    const dpr = this.getEffectiveDpr();
+    const fallbackW =
+      this.canvas.clientWidth ||
+      this.camera.viewportWidth ||
+      (this.canvas.width ? this.canvas.width / dpr : 800);
+    const fallbackH =
+      this.canvas.clientHeight ||
+      this.camera.viewportHeight ||
+      (this.canvas.height ? this.canvas.height / dpr : 600);
     const rect =
       typeof this.canvas.getBoundingClientRect === 'function'
         ? this.canvas.getBoundingClientRect()
-        : { left: 0, top: 0, width: this.canvas.width || 800, height: this.canvas.height || 600 };
-    const cssW = rect.width || this.canvas.width || 800;
-    const cssH = rect.height || this.canvas.height || 600;
-    const canvasW = this.canvas.width || cssW;
-    const canvasH = this.canvas.height || cssH;
+        : { left: 0, top: 0, width: fallbackW, height: fallbackH };
+    const cssW = rect.width > 0 ? rect.width : fallbackW;
+    const cssH = rect.height > 0 ? rect.height : fallbackH;
+    const viewW = this.camera.viewportWidth > 0 ? this.camera.viewportWidth : cssW;
+    const viewH = this.camera.viewportHeight > 0 ? this.camera.viewportHeight : cssH;
 
-    const canvasX = (clientX - rect.left) * (canvasW / cssW);
-    const canvasY = (clientY - rect.top) * (canvasH / cssH);
+    const screenX = (clientX - rect.left) * (viewW / cssW);
+    const screenY = (clientY - rect.top) * (viewH / cssH);
 
-    return this.camera.screenToWorld(canvasX, canvasY, this.safeAreaBottom);
+    return this.camera.screenToWorld(screenX, screenY, this.safeAreaBottom);
   }
 
   public addFloatingScore(text: string, x: number, y: number, color?: string): void {
@@ -566,7 +727,8 @@ export class GameRenderer {
 
     const wExt = this.stadium.width + (this.stadium.goalDepth + this.stadium.runOff) * 2;
     const hExt = this.stadium.height + this.stadium.runOff * 2;
-    this.camera.clamp(wExt, hExt, vWidth, vHeight, this.safeAreaBottom);
+    const effectiveSafeBottom = this.getEffectiveSafeAreaBottom();
+    this.camera.clamp(wExt, hExt, vWidth, vHeight, effectiveSafeBottom);
 
     const isFrozenPhase =
       s1.phase === MatchPhase.PAUSE ||
@@ -663,9 +825,10 @@ export class GameRenderer {
     ctx.fillStyle = this.theme === 'dark' ? '#050811' : '#E0F2FE';
     ctx.fillRect(0, 0, vWidth, vHeight);
 
-    const usableHeight = Math.max(100, vHeight - this.safeAreaBottom);
+    const topHud = this._isMobileLayout ? (this.camera.topHudHeightPx || 0) : 0;
+    const usableHeight = Math.max(100, vHeight - topHud - effectiveSafeBottom);
     const cx = vWidth / 2;
-    const cy = usableHeight / 2;
+    const cy = topHud + usableHeight / 2;
     const effectiveZoom = this.getEffectiveZoom();
 
     ctx.save();
@@ -707,12 +870,13 @@ export class GameRenderer {
         cy,
         vWidth,
         vHeight,
-        this.chatHeight,
-        this.getOffscreenOptions(effectiveZoom)
+        this._isMobileLayout ? 0 : this.chatHeight,
+        this.getOffscreenOptions(effectiveZoom, vWidth, vHeight, this.minimapEnabled, this.minimapSize)
       );
     }
 
     // 10. Minimap Radar
+    this.minimapRenderer.enabled = this.minimapEnabled;
     if (this.minimapEnabled) {
       this.minimapRenderer.render(
         ctx,
@@ -723,7 +887,9 @@ export class GameRenderer {
           minimapEnabled: this.minimapEnabled,
           minimapOpacity: this.minimapOpacity,
           minimapSize: this.minimapSize,
-          minimapCameraFrustum: this.minimapCameraFrustum
+          minimapCameraFrustum: this.minimapCameraFrustum,
+          viewportCenterX: cx,
+          viewportCenterY: cy
         },
         vWidth,
         vHeight
@@ -758,15 +924,31 @@ export class GameRenderer {
       }
     }
 
+    const effectiveMinimapEnabled =
+      settings?.minimapEnabled !== undefined ? settings.minimapEnabled : this.minimapEnabled;
+    if (
+      this._isMobileLayout &&
+      effectiveMinimapEnabled !== false &&
+      settings?.minimapSize !== undefined &&
+      settings.minimapSize > 0
+    ) {
+      this.minimapRenderer.setSize(settings.minimapSize);
+    }
+
     const vWidth = (this.canvas.width || 800) / dpr;
     const vHeight = (this.canvas.height || 600) / dpr;
-    const usableHeight = Math.max(100, vHeight - this.safeAreaBottom);
+    const effectiveSafeBottom = this.getEffectiveSafeAreaBottom(
+      effectiveMinimapEnabled !== false,
+      settings?.minimapSize
+    );
+    const topHud = this._isMobileLayout ? (this.camera.topHudHeightPx || 0) : 0;
+    const usableHeight = Math.max(100, vHeight - topHud - effectiveSafeBottom);
     this.offsetX = vWidth / 2;
-    this.offsetY = usableHeight / 2;
+    this.offsetY = topHud + usableHeight / 2;
 
     const wExt = this.stadium.width + (this.stadium.goalDepth + this.stadium.runOff) * 2;
     const hExt = this.stadium.height + this.stadium.runOff * 2;
-    this.camera.clamp(wExt, hExt, vWidth, vHeight, this.safeAreaBottom);
+    this.camera.clamp(wExt, hExt, vWidth, vHeight, effectiveSafeBottom);
 
     const currentPhaseSingle: GameMatchPhase =
       snapshot.matchPhase !== undefined ? snapshot.matchPhase : toMatchPhase(snapshot.matchState);
@@ -836,15 +1018,19 @@ export class GameRenderer {
         this.offsetY + this.cameraOffset.y,
         vWidth,
         vHeight,
-        this.chatHeight,
-        this.getOffscreenOptions(effectiveZoom)
+        this._isMobileLayout ? 0 : this.chatHeight,
+        this.getOffscreenOptions(
+          effectiveZoom,
+          vWidth,
+          vHeight,
+          effectiveMinimapEnabled !== false,
+          settings?.minimapSize
+        )
       );
       ctx.restore();
     }
 
-    const effectiveMinimapEnabled =
-      settings?.minimapEnabled !== undefined ? settings.minimapEnabled : this.minimapEnabled;
-
+    this.minimapRenderer.enabled = effectiveMinimapEnabled !== false;
     if (effectiveMinimapEnabled !== false) {
       ctx.save();
       ctx.scale(dpr, dpr);
@@ -857,7 +1043,9 @@ export class GameRenderer {
           minimapEnabled: effectiveMinimapEnabled,
           minimapOpacity: settings?.minimapOpacity ?? this.minimapOpacity,
           minimapSize: settings?.minimapSize ?? this.minimapSize,
-          minimapCameraFrustum: settings?.minimapCameraFrustum ?? this.minimapCameraFrustum
+          minimapCameraFrustum: settings?.minimapCameraFrustum ?? this.minimapCameraFrustum,
+          viewportCenterX: this.offsetX + this.cameraOffset.x,
+          viewportCenterY: this.offsetY + this.cameraOffset.y
         },
         vWidth,
         vHeight
