@@ -89,6 +89,7 @@ export class PeerConnection {
   private isRecovering: boolean = false;
   private disconnectedGraceTimer: ReturnType<typeof setTimeout> | null = null;
   public hasEverConnected: boolean = false;
+  private notifiedConnected: boolean = false;
   private signalingClient?: { isOpen: () => boolean; reconnect: () => void };
   private isClosingIntentionally = false;
   private options: PeerConnectionOptions | null = null;
@@ -186,8 +187,8 @@ export class PeerConnection {
         this.clearRestartTimer();
         this.clearDisconnectedGraceTimer();
         void this.auditIceConnection();
-        if (this.areChannelsOpen() && this.onConnected) {
-          this.onConnected();
+        if (this.areChannelsOpen()) {
+          this.emitConnectedOnce();
         }
       } else if (state === 'disconnected') {
         this.linkState = 'disconnected';
@@ -204,12 +205,14 @@ export class PeerConnection {
         }
       } else if (state === 'failed') {
         this.linkState = 'failed';
+        this.notifiedConnected = false;
         this.clearDisconnectedGraceTimer();
         if (!this.isClosingIntentionally && this.hasEverConnected) {
           this.scheduleRecovery();
         }
       } else if (state === 'closed') {
         this.linkState = 'closed';
+        this.notifiedConnected = false;
         this.clearRestartTimer();
         this.clearDisconnectedGraceTimer();
         if (this.onDisconnected) this.onDisconnected();
@@ -224,17 +227,19 @@ export class PeerConnection {
         this.isRecovering = false;
         this.clearRestartTimer();
         this.clearDisconnectedGraceTimer();
-        if (this.areChannelsOpen() && this.onConnected) {
-          this.onConnected();
+        if (this.areChannelsOpen()) {
+          this.emitConnectedOnce();
         }
       } else if (state === 'failed') {
         this.linkState = 'failed';
+        this.notifiedConnected = false;
         this.clearDisconnectedGraceTimer();
         if (!this.isClosingIntentionally && this.hasEverConnected) {
           this.scheduleRecovery();
         }
       } else if (state === 'closed') {
         this.linkState = 'closed';
+        this.notifiedConnected = false;
         this.clearRestartTimer();
         this.clearDisconnectedGraceTimer();
         if (this.onDisconnected) this.onDisconnected();
@@ -320,8 +325,15 @@ export class PeerConnection {
     }, delayMs);
   }
 
+  private emitConnectedOnce(): void {
+    if (this.notifiedConnected) return;
+    this.notifiedConnected = true;
+    if (this.onConnected) this.onConnected();
+  }
+
   public async executeIceRestart(): Promise<RTCSessionDescriptionInit | null> {
     if (this.isClosingIntentionally) return null;
+    this.notifiedConnected = false;
     try {
       if (typeof this.pc.restartIce === 'function') {
         this.pc.restartIce();
@@ -385,7 +397,7 @@ export class PeerConnection {
       this.hasEverConnected = true;
       this.linkState = 'connected';
       this.flushReliableOutbox();
-      if (this.onConnected) this.onConnected();
+      this.emitConnectedOnce();
     };
     channel.onclose = () => {
       if (this.isClosingIntentionally && this.onDisconnected) {
@@ -415,7 +427,7 @@ export class PeerConnection {
       this.linkState = 'connected';
       this.flushReliableOutbox();
       if (this.onUnreliableOpen) this.onUnreliableOpen();
-      if (this.onConnected) this.onConnected();
+      this.emitConnectedOnce();
     };
 
     channel.onclose = () => {
@@ -647,6 +659,7 @@ export class PeerConnection {
   public close(): void {
     this.isClosingIntentionally = true;
     this.isRecovering = false;
+    this.notifiedConnected = false;
     this.clearRestartTimer();
     this.clearDisconnectedGraceTimer();
     this.pendingCandidates = [];

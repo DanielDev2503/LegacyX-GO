@@ -16,17 +16,18 @@ export class SimulationTicker {
   private blobUrl: string | null = null;
   private lastTime: number = 0;
   private accumulator: number = 0;
+  private lastForegroundPumpAt: number = 0;
 
   constructor(onTick: (now: number) => void) {
     this.onTick = onTick;
   }
 
-  private stepAccumulator(now: number): void {
-    if (!this.isRunning) return;
+  private stepAccumulator(now: number): number {
+    if (!this.isRunning) return 0;
     if (this.lastTime === 0) {
       this.lastTime = now;
       this.onTick(now);
-      return;
+      return 1;
     }
 
     let delta = now - this.lastTime;
@@ -37,10 +38,31 @@ export class SimulationTicker {
     this.lastTime = now;
     this.accumulator += delta;
 
+    let executed = 0;
     while (this.accumulator >= SimulationTicker.FIXED_STEP_MS) {
       this.onTick(now);
       this.accumulator -= SimulationTicker.FIXED_STEP_MS;
+      executed++;
     }
+    return executed;
+  }
+
+  public pump(now: number = performance.now()): number {
+    if (!this.isRunning) return 0;
+    this.lastForegroundPumpAt = now;
+    return this.stepAccumulator(now);
+  }
+
+  public getInterpolationAlpha(now: number = performance.now()): number {
+    if (!this.isRunning || this.lastTime === 0) return 0;
+    const elapsed = Math.max(0, Math.min(SimulationTicker.MAX_ACCUMULATOR_MS, now - this.lastTime));
+    const totalAcc = this.accumulator + elapsed;
+    return Math.max(0, Math.min(1, totalAcc / SimulationTicker.FIXED_STEP_MS));
+  }
+
+  private shouldSkipBackgroundPulse(now: number): boolean {
+    const isHidden = typeof document !== 'undefined' && document.hidden;
+    return !isHidden && this.lastForegroundPumpAt > 0 && now - this.lastForegroundPumpAt < 34;
   }
 
   public start(): void {
@@ -50,6 +72,7 @@ export class SimulationTicker {
     this.isRunning = true;
     this.lastTime = 0;
     this.accumulator = 0;
+    this.lastForegroundPumpAt = 0;
 
     if (typeof Worker !== 'undefined') {
       try {
@@ -60,7 +83,7 @@ export class SimulationTicker {
               if (id !== null) return;
               id = setInterval(function() {
                 self.postMessage({ type: 'TICK', now: performance.now() });
-              }, 1000 / 60);
+              }, 8);
             } else if (e.data && e.data.type === 'STOP') {
               if (id !== null) {
                 clearInterval(id);
@@ -74,7 +97,10 @@ export class SimulationTicker {
         this.worker = new Worker(this.blobUrl);
         this.worker.onmessage = (e: MessageEvent<{ type: string; now?: number }>) => {
           if (e.data?.type === 'TICK') {
-            this.stepAccumulator(performance.now());
+            const now = performance.now();
+            if (!this.shouldSkipBackgroundPulse(now)) {
+              this.stepAccumulator(now);
+            }
           }
         };
         this.worker.postMessage({ type: 'START' });
@@ -87,8 +113,11 @@ export class SimulationTicker {
 
     // Fallback for non-browser / test environments
     this.fallbackInterval = setInterval(() => {
-      this.stepAccumulator(performance.now());
-    }, 1000 / 60);
+      const now = performance.now();
+      if (!this.shouldSkipBackgroundPulse(now)) {
+        this.stepAccumulator(now);
+      }
+    }, 8);
   }
 
   public stop(): void {
@@ -96,6 +125,7 @@ export class SimulationTicker {
     this.isRunning = false;
     this.lastTime = 0;
     this.accumulator = 0;
+    this.lastForegroundPumpAt = 0;
 
     if (this.worker) {
       this.worker.postMessage({ type: 'STOP' });

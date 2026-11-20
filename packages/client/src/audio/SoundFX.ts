@@ -750,17 +750,20 @@ export class SoundFX {
   }
 
   /**
-   * Mantiene activo un oscilador inaudible de ganancia casi cero (0.00001) para el Host.
+   * Mantiene activo un oscilador inaudible de ganancia casi cero (0.00015) para el Host.
    * Evita que el navegador suspenda o ralentice la pestaña del Host cuando está en segundo plano.
    */
   public startHostKeepAlive(): void {
     const ctx = this.ensureContext();
     if (!ctx) return;
+    if (ctx.state === 'suspended' && typeof ctx.resume === 'function') {
+      void ctx.resume().catch(() => {});
+    }
     if (this.keepAliveOsc) return;
 
     try {
       this.keepAliveGain = ctx.createGain();
-      this.keepAliveGain.gain.setValueAtTime(0.00001, ctx.currentTime);
+      this.keepAliveGain.gain.setValueAtTime(0.00015, ctx.currentTime);
       this.keepAliveOsc = ctx.createOscillator();
       this.keepAliveOsc.type = 'sine';
       this.keepAliveOsc.frequency.setValueAtTime(40, ctx.currentTime);

@@ -114,7 +114,7 @@ describe('Mobile HUD & App Wiring (Phase 5)', () => {
     expect(appSrc).toContain('mobileTouchController.sampleInput');
     expect(appSrc).toContain('mobileTouchController.resetAll');
     expect(appSrc).toContain('mobileTouchController.isHoldingMinimap');
-    expect(appSrc).toContain('mobileTouchController.onInputChanged');
+    expect(appSrc).not.toContain('dispatchImmediateGuestInput');
     expect(appSrc).toContain('renderer.isMobileLayout');
     expect(appSrc).toContain('renderer.getMobileAutoZoom()');
     expect(appSrc).toContain('renderer.mobileExclusionZones');

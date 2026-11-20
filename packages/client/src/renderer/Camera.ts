@@ -82,11 +82,20 @@ export class Camera {
     this.targetY = initialY;
   }
 
-  public follow(targetX: number, targetY: number): void {
+  private resolveLerpFactor(dt?: number): number {
+    if (dt === undefined || !Number.isFinite(dt) || dt <= 0) {
+      return this.lerpFactor;
+    }
+    const clampedDt = Math.min(0.1, dt);
+    return 1 - Math.pow(1 - this.lerpFactor, clampedDt * 60);
+  }
+
+  public follow(targetX: number, targetY: number, dt?: number): void {
     this.targetX = targetX;
     this.targetY = targetY;
-    this.x += (this.targetX - this.x) * this.lerpFactor;
-    this.y += (this.targetY - this.y) * this.lerpFactor;
+    const f = this.resolveLerpFactor(dt);
+    this.x += (this.targetX - this.x) * f;
+    this.y += (this.targetY - this.y) * f;
   }
 
   public calculateDualTarget(
@@ -125,7 +134,8 @@ export class Camera {
     ballX: number,
     ballY: number,
     wBall: number = 0.25,
-    maxDistance: number = 180
+    maxDistance: number = 180,
+    dt?: number
   ): void {
     const dx = ballX - playerX;
     const dy = ballY - playerY;
@@ -147,8 +157,9 @@ export class Camera {
       }
     }
 
-    this.x += (this.targetX - this.x) * this.lerpFactor;
-    this.y += (this.targetY - this.y) * this.lerpFactor;
+    const f = this.resolveLerpFactor(dt);
+    this.x += (this.targetX - this.x) * f;
+    this.y += (this.targetY - this.y) * f;
   }
 
   public clamp(wExt: number, hExt: number, vWidth: number, vHeight: number, safeAreaBottom: number = 0): void {

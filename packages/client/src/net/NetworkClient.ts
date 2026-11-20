@@ -39,10 +39,17 @@ export class NetworkClient {
   public localPlayerId: number | null = null;
   public players: PlayerInfo[] = [];
   public teamsLocked: boolean = false;
-  public jitterBuffer = new JitterBuffer(24, 30, true);
+  public jitterBuffer = new JitterBuffer(32, 30, true);
   public latestSnapshot: GameStateSnapshot | null = null;
   public activeGoalScorerId: number | null = null;
   public autoExtrapolationMs: number = 0;
+
+  private highestSnapshotTick: number = -1;
+  private lastSnapshotPhase: number | null = null;
+  private lastSyncedStadiumId: string | null = null;
+  private lastSyncedConfigSig: string = '';
+  private rttSamples: number[] = [];
+  private pingWarmupTimers: ReturnType<typeof setTimeout>[] = [];
 
   public onConnected?: (playerId: number) => void;
   public onDisconnected?: () => void;
@@ -235,6 +242,8 @@ export class NetworkClient {
   private initPeerConnection(): void {
     if (this.peer) return;
     this.helloSent = false;
+    this.highestSnapshotTick = -1;
+    this.lastSnapshotPhase = null;
     this.peer = new PeerConnection({
       peerId: this.hostPeerId,
       isInitiator: false,
@@ -249,13 +258,29 @@ export class NetworkClient {
       onUnreliableSnapshot: (buffer: ArrayBuffer) => {
         const snapshot = BinaryProtocol.decodeSnapshot(buffer);
         if (!snapshot) return;
+        this.jitterBuffer.push(snapshot, performance.now());
+
+        const phaseChangedToSpecial =
+          snapshot.phase !== this.lastSnapshotPhase &&
+          (snapshot.phase === 0 || snapshot.phase === 3.5);
+        const isTickReset =
+          this.highestSnapshotTick >= 0 && snapshot.tick + 100 < this.highestSnapshotTick;
+        const isMonotonic =
+          this.highestSnapshotTick < 0 ||
+          snapshot.tick >= this.highestSnapshotTick ||
+          phaseChangedToSpecial ||
+          isTickReset;
+
+        if (!isMonotonic) return;
+
+        this.highestSnapshotTick = snapshot.tick;
+        this.lastSnapshotPhase = snapshot.phase;
         this.latestSnapshot = snapshot;
         if (snapshot.phase === 3.5) {
           this.jitterBuffer.setMatchState(3.5);
         } else if (snapshot.phase === 0 || snapshot.phase === 1) {
           this.updateActiveGoalScorerId(null);
         }
-        this.jitterBuffer.push(snapshot, performance.now());
         this.onSnapshotDecoded?.(snapshot);
         this.onSnapshotBuffer?.(buffer);
       },
@@ -311,8 +336,14 @@ export class NetworkClient {
       if (typeof msg.allowCaptainKitSwitch === 'boolean') {
         gameUI.allowCaptainKitSwitch = msg.allowCaptainKitSwitch;
       }
-      if (typeof msg.stadiumId === 'string' && msg.stadiumId) {
-        gameUI.onStadiumChanged?.(msg.stadiumId);
+      if (
+        typeof msg.stadiumId === 'string' &&
+        msg.stadiumId &&
+        msg.stadiumId !== this.lastSyncedStadiumId &&
+        gameUI.onStadiumChanged
+      ) {
+        this.lastSyncedStadiumId = msg.stadiumId;
+        gameUI.onStadiumChanged(msg.stadiumId);
       }
       if (msg.redKitVariant === 'home' || msg.redKitVariant === 'away') {
         gameUI.redKitVariant = msg.redKitVariant;
@@ -321,7 +352,16 @@ export class NetworkClient {
         gameUI.blueKitVariant = msg.blueKitVariant;
       }
       if (msg.gameplayConfig || msg.modifiers) {
-        gameUI.applyRemoteGameplayConfig(msg.gameplayConfig as any, msg.modifiers as any);
+        let configSig = '';
+        try {
+          configSig = JSON.stringify([msg.gameplayConfig ?? null, msg.modifiers ?? null]);
+        } catch {
+          configSig = String(Date.now());
+        }
+        if (configSig !== this.lastSyncedConfigSig) {
+          this.lastSyncedConfigSig = configSig;
+          gameUI.applyRemoteGameplayConfig(msg.gameplayConfig as any, msg.modifiers as any);
+        }
       }
 
       // Gestionar transición de fase sin cerrar el menú en bucle durante el partido
@@ -366,9 +406,16 @@ export class NetworkClient {
       const sentTime = Number(msg.t || 0);
       if (sentTime > 0) {
         const rtt = Math.max(1, Math.round(now - sentTime));
-        const prev = gameUI.pingMs;
-        const smoothed = prev > 0 ? Math.round(0.7 * prev + 0.3 * rtt) : rtt;
-        gameUI.recordTelemetrySample(smoothed, gameUI.fps);
+        this.rttSamples.push(rtt);
+        if (this.rttSamples.length > 5) {
+          this.rttSamples.shift();
+        }
+        let targetPing = rtt;
+        if (this.rttSamples.length >= 2) {
+          const sorted = this.rttSamples.slice().sort((a, b) => a - b);
+          targetPing = sorted[Math.floor(sorted.length / 2)]!;
+        }
+        gameUI.recordTelemetrySample(targetPing, gameUI.fps);
         if (typeof (gameUI as any).effectiveExtrapolationMs === 'number') {
           this.setAutoExtrapolationMs((gameUI as any).effectiveExtrapolationMs);
         }
@@ -555,7 +602,7 @@ export class NetworkClient {
     } else {
       jb.autoExtrapolationMs = clamped;
     }
-    const targetDelay = Math.max(16, Math.min(80, 24 + clamped * 0.25));
+    const targetDelay = Math.max(28, Math.min(60, 28 + clamped * 0.25));
     jb.interpolationDelayMs = jb.interpolationDelayMs * 0.8 + targetDelay * 0.2;
   }
 
@@ -599,12 +646,21 @@ export class NetworkClient {
   public startPingProbe(): void {
     this.sendPingProbe();
     if (this.pingIntervalId !== null) return;
+    this.pingWarmupTimers.push(
+      setTimeout(() => this.sendPingProbe(), 250),
+      setTimeout(() => this.sendPingProbe(), 550)
+    );
     this.pingIntervalId = setInterval(() => {
       this.sendPingProbe();
     }, 1000);
   }
 
   public stopPingProbe(): void {
+    for (let i = 0; i < this.pingWarmupTimers.length; i++) {
+      clearTimeout(this.pingWarmupTimers[i]);
+    }
+    this.pingWarmupTimers.length = 0;
+    this.rttSamples.length = 0;
     if (this.pingIntervalId !== null) {
       clearInterval(this.pingIntervalId);
       this.pingIntervalId = null;
@@ -614,6 +670,10 @@ export class NetworkClient {
   public disconnect(): void {
     this.isDisconnecting = true;
     this.stopPingProbe();
+    this.highestSnapshotTick = -1;
+    this.lastSnapshotPhase = null;
+    this.lastSyncedStadiumId = null;
+    this.lastSyncedConfigSig = '';
     this.cleanupSignalingListeners();
     if (this.peer) {
       this.peer.close();

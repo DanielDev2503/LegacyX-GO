@@ -98,6 +98,7 @@ export function mapPlayersToRoster(players: PlayerInfo[]): RosterPlayer[] {
 }
 
 export class GameApp {
+  private static readonly MAX_REMOTE_INPUT_QUEUE = 4;
   public signaling: SignalingClient;
   public networkHost: NetworkHost | null = null;
   public networkClient: NetworkClient | null = null;
@@ -106,6 +107,8 @@ export class GameApp {
   public currentRoomConfig: CreateRoomParams | null = null;
   /** Inputs de jugadores remotos recibidos por el Host (playerId → máscara). */
   public remoteInputs = new Map<number, PlayerInput>();
+  private remoteInputQueues = new Map<number, PlayerInput[]>();
+  private lastConsumedRemoteSeq = new Map<number, number>();
   private pendingImpulseMasks = new Map<number, number>();
   private rawRemoteMasks = new Map<number, number>();
   private lastRemoteInputSeq = new Map<number, number>();
@@ -276,6 +279,34 @@ export class GameApp {
     }
   }
 
+  public popRemoteInputsForTick(out: Map<number, PlayerInput>): void {
+    for (const [playerId, queue] of this.remoteInputQueues.entries()) {
+      if (queue.length === 0) continue;
+      const next = queue.shift()!;
+      const latched = this.pendingImpulseMasks.get(playerId) ?? 0;
+      if (latched !== 0) {
+        next.inputMask = (next.inputMask ?? 0) | latched;
+        this.pendingImpulseMasks.delete(playerId);
+      }
+      const consumedSeq = ((next as any).seq ?? next.tick ?? 0) >>> 0;
+      this.lastConsumedRemoteSeq.set(playerId, consumedSeq);
+      this.remoteInputs.set(playerId, next);
+      this.rawRemoteMasks.set(playerId, next.inputMask ?? 0);
+      out.set(playerId, next);
+    }
+
+    for (const [playerId, last] of this.remoteInputs.entries()) {
+      if (out.has(playerId)) continue;
+      const latched = this.pendingImpulseMasks.get(playerId) ?? 0;
+      if (latched !== 0) {
+        this.pendingImpulseMasks.delete(playerId);
+      }
+      const baseMask = this.rawRemoteMasks.get(playerId) ?? last.inputMask ?? 0;
+      last.inputMask = (baseMask & ~INPUT_FLAG_DASH) | latched;
+      out.set(playerId, last);
+    }
+  }
+
   public consumeRemoteImpulses(): void {
     this.pendingImpulseMasks.clear();
     for (const [playerId, entry] of this.remoteInputs.entries()) {
@@ -290,6 +321,8 @@ export class GameApp {
 
   private clearRemoteInputTracking(): void {
     this.remoteInputs.clear();
+    this.remoteInputQueues.clear();
+    this.lastConsumedRemoteSeq.clear();
     this.pendingImpulseMasks.clear();
     this.rawRemoteMasks.clear();
     this.lastRemoteInputSeq.clear();
@@ -675,9 +708,17 @@ export class GameApp {
       for (const id of this.remoteInputs.keys()) {
         if (!activeIds.has(id)) {
           this.remoteInputs.delete(id);
+          this.remoteInputQueues.delete(id);
+          this.lastConsumedRemoteSeq.delete(id);
           this.pendingImpulseMasks.delete(id);
           this.rawRemoteMasks.delete(id);
           this.lastRemoteInputSeq.delete(id);
+        }
+      }
+      for (const id of this.remoteInputQueues.keys()) {
+        if (!activeIds.has(id)) {
+          this.remoteInputQueues.delete(id);
+          this.lastConsumedRemoteSeq.delete(id);
         }
       }
       if (this.currentRoomId) {
@@ -687,31 +728,85 @@ export class GameApp {
 
     host.onPlayerInput = (playerId, inputMask, tick, aimAngle, aimThrottle) => {
       const seq = tick >>> 0;
+      const lastConsumed = this.lastConsumedRemoteSeq.get(playerId);
       const lastSeq = this.lastRemoteInputSeq.get(playerId);
-      const isStale =
-        lastSeq !== undefined &&
-        seq < lastSeq &&
-        lastSeq - seq < 500;
-      const impulseBits = inputMask & REMOTE_IMPULSE_FLAGS;
-      const latched = (this.pendingImpulseMasks.get(playerId) ?? 0) | impulseBits;
-      this.pendingImpulseMasks.set(playerId, latched);
-      if (isStale) {
-        const existing = this.remoteInputs.get(playerId);
-        if (existing) {
-          existing.inputMask = (existing.inputMask ?? 0) | latched;
-        }
-        return;
+      const seqReset =
+        (lastConsumed !== undefined && lastConsumed >= 500 && lastConsumed - seq >= 500) ||
+        (lastSeq !== undefined && lastSeq >= 500 && lastSeq - seq >= 500);
+      if (seqReset) {
+        this.remoteInputQueues.delete(playerId);
+        this.lastConsumedRemoteSeq.delete(playerId);
+        this.lastRemoteInputSeq.delete(playerId);
+        this.pendingImpulseMasks.delete(playerId);
       }
-      this.lastRemoteInputSeq.set(playerId, seq);
-      this.rawRemoteMasks.set(playerId, inputMask);
-      this.remoteInputs.set(playerId, {
-        inputMask: inputMask | latched,
+
+      const activeConsumed = this.lastConsumedRemoteSeq.get(playerId);
+      if (activeConsumed !== undefined) {
+        if (seq === activeConsumed) {
+          return;
+        }
+        if (seq < activeConsumed && activeConsumed - seq < 500) {
+          const impulseBits = inputMask & REMOTE_IMPULSE_FLAGS;
+          if (impulseBits !== 0) {
+            this.pendingImpulseMasks.set(
+              playerId,
+              (this.pendingImpulseMasks.get(playerId) ?? 0) | impulseBits
+            );
+          }
+          return;
+        }
+      }
+
+      let queue = this.remoteInputQueues.get(playerId);
+      if (!queue) {
+        queue = [];
+        this.remoteInputQueues.set(playerId, queue);
+      }
+
+      for (let i = 0; i < queue.length; i++) {
+        const queuedSeq = ((queue[i] as any).seq ?? queue[i]!.tick ?? 0) >>> 0;
+        if (queuedSeq === seq) {
+          queue[i]!.inputMask = (queue[i]!.inputMask ?? 0) | (inputMask & REMOTE_IMPULSE_FLAGS);
+          return;
+        }
+      }
+
+      const entry: PlayerInput = {
+        inputMask,
         aimAngle,
         aimThrottle,
         tick: seq,
         sequence: seq,
         seq
-      } as any);
+      } as any;
+
+      let inserted = false;
+      for (let i = queue.length - 1; i >= 0; i--) {
+        const queuedSeq = ((queue[i] as any).seq ?? queue[i]!.tick ?? 0) >>> 0;
+        if (seq > queuedSeq) {
+          queue.splice(i + 1, 0, entry);
+          inserted = true;
+          break;
+        }
+      }
+      if (!inserted) {
+        queue.unshift(entry);
+      }
+
+      while (queue.length > GameApp.MAX_REMOTE_INPUT_QUEUE) {
+        const dropped = queue.shift()!;
+        const droppedImpulses = (dropped.inputMask ?? 0) & REMOTE_IMPULSE_FLAGS;
+        if (droppedImpulses !== 0 && queue.length > 0) {
+          queue[0]!.inputMask = (queue[0]!.inputMask ?? 0) | droppedImpulses;
+        }
+      }
+
+      const prevLast = this.lastRemoteInputSeq.get(playerId) ?? 0;
+      if (seq >= prevLast) {
+        this.lastRemoteInputSeq.set(playerId, seq);
+        this.rawRemoteMasks.set(playerId, inputMask);
+        this.remoteInputs.set(playerId, entry);
+      }
     };
 
     host.onChatMessage = (sender, text, team, id) => {
@@ -986,9 +1081,6 @@ export class GameApp {
         gameUI.modifiers.timeLimit = state.timeLimit;
       }
       if (typeof state.scoreLimit === 'number') gameUI.modifiers.goalLimit = state.scoreLimit;
-      if (state.gameplayConfig || state.modifiers) {
-        gameUI.applyRemoteGameplayConfig(state.gameplayConfig, state.modifiers);
-      }
       if (typeof state.matchPhase === 'number') {
         if (state.matchPhase === 0) {
           gameUI.matchTimeFormatted = '00:00';

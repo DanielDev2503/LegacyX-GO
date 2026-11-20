@@ -44,8 +44,8 @@ export class JitterBuffer<T extends AnySnapshot = any> {
   private lastTick: number | null = null;
   private clockOffsetMs: number | null = null;
 
-  public static readonly MIN_DELAY_MS = 16;
-  public static readonly MAX_DELAY_MS = 40;
+  public static readonly MIN_DELAY_MS = 28;
+  public static readonly MAX_DELAY_MS = 60;
   public static readonly DEFAULT_AUTO_EXTRAPOLATION_MS = 200;
   public static readonly MAX_AUTO_EXTRAPOLATION_MS = 200;
   private static readonly TICK_MS = 1000 / 60;
@@ -104,7 +104,7 @@ export class JitterBuffer<T extends AnySnapshot = any> {
   }
 
   public calculateTargetDelay(): number {
-    const raw = this.meanJitter * 1.5;
+    const raw = JitterBuffer.MIN_DELAY_MS + this.meanJitter * 1.8;
     return Math.max(JitterBuffer.MIN_DELAY_MS, Math.min(JitterBuffer.MAX_DELAY_MS, raw));
   }
 
@@ -181,17 +181,15 @@ export class JitterBuffer<T extends AnySnapshot = any> {
     this.lastArrival = now;
     this.lastTick = snapshot.tick;
 
-    // Sincronización suave del reloj lógico del Host (inmune a ráfagas UDP/WebRTC)
+    // Sincronización simétrica y acotada del reloj lógico del Host (evita inversiones de timeline)
     const logicalMs = snapshot.tick * JitterBuffer.TICK_MS;
     const measuredOffset = now - logicalMs;
-    if (this.clockOffsetMs === null || Math.abs(measuredOffset - this.clockOffsetMs) > 500) {
+    if (this.clockOffsetMs === null || Math.abs(measuredOffset - this.clockOffsetMs) > 350) {
       this.clockOffsetMs = measuredOffset;
-    } else if (measuredOffset < this.clockOffsetMs) {
-      // Un paquete llegó más rápido (menor cola): ajustar más rápido el offset mínimo
-      this.clockOffsetMs = this.clockOffsetMs * 0.75 + measuredOffset * 0.25;
     } else {
-      // Un paquete llegó atrasado por ráfaga/jitter: absorber lentamente para no comprimir el timeline
-      this.clockOffsetMs = this.clockOffsetMs * 0.98 + measuredOffset * 0.02;
+      const err = measuredOffset - this.clockOffsetMs;
+      const step = Math.max(-2.5, Math.min(2.5, err * 0.05));
+      this.clockOffsetMs += step;
     }
 
     const item: BufferedSnapshot<T> = {
@@ -302,7 +300,9 @@ export class JitterBuffer<T extends AnySnapshot = any> {
 
     const renderTime = now - this.interpolationDelayMs;
     const getTime = (b: BufferedSnapshot<T>): number =>
-      b.timelineAt !== undefined ? b.timelineAt : b.receivedAt;
+      this.clockOffsetMs !== null
+        ? b.snapshot.tick * JitterBuffer.TICK_MS + this.clockOffsetMs
+        : (b.timelineAt !== undefined ? b.timelineAt : b.receivedAt);
 
     if (renderTime <= getTime(this.buffer[0])) {
       this.lastProcessedTick = Math.max(this.lastProcessedTick, this.buffer[0].snapshot.tick);
@@ -410,11 +410,20 @@ export class JitterBuffer<T extends AnySnapshot = any> {
       for (const d0 of (s0.snapshot as any).discs) {
         const d1 = s1DiscsById.get(d0.id);
         if (d1) {
+          const jumpDist = Math.hypot(d1.x - d0.x, d1.y - d0.y);
+          const sameDirection = (d0.vx * d1.vx + d0.vy * d1.vy) >= 0;
+          const useHermite =
+            jumpDist < 80 &&
+            sameDirection &&
+            Number.isFinite(d0.vx) &&
+            Number.isFinite(d1.vx) &&
+            Number.isFinite(d0.vy) &&
+            Number.isFinite(d1.vy);
           interpolatedDiscs.push({
             id: d0.id,
             team: d1.team,
-            x: hermite(d0.x, d1.x, d0.vx, d1.vx, alpha, dtSec),
-            y: hermite(d0.y, d1.y, d0.vy, d1.vy, alpha, dtSec),
+            x: useHermite ? hermite(d0.x, d1.x, d0.vx, d1.vx, alpha, dtSec) : lerp(d0.x, d1.x, alpha),
+            y: useHermite ? hermite(d0.y, d1.y, d0.vy, d1.vy, alpha, dtSec) : lerp(d0.y, d1.y, alpha),
             vx: lerp(d0.vx, d1.vx, alpha),
             vy: lerp(d0.vy, d1.vy, alpha),
             radius: d1.radius,
@@ -465,7 +474,14 @@ export class JitterBuffer<T extends AnySnapshot = any> {
         return d1;
       }
 
-      const useHermite = jumpDist < 80 && Number.isFinite(d0.vx) && Number.isFinite(d1.vx);
+      const sameDirection = (d0.vx * d1.vx + d0.vy * d1.vy) >= 0;
+      const useHermite =
+        jumpDist < 80 &&
+        sameDirection &&
+        Number.isFinite(d0.vx) &&
+        Number.isFinite(d1.vx) &&
+        Number.isFinite(d0.vy) &&
+        Number.isFinite(d1.vy);
       const ix = useHermite ? hermite(d0.x, d1.x, d0.vx, d1.vx, alpha, dtSec) : lerp(d0.x, d1.x, alpha);
       const iy = useHermite ? hermite(d0.y, d1.y, d0.vy, d1.vy, alpha, dtSec) : lerp(d0.y, d1.y, alpha);
 

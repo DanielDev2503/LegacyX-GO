@@ -238,6 +238,8 @@ export class EngineInstance {
   public playerNames: Map<number, string> = new Map();
   public matchStats: Map<number, PlayerMatchStats> = new Map();
   private playerRuntime: Map<number, EngineDashState> = new Map();
+  private readonly seenPlayerIds: Set<number> = new Set();
+  private readonly stalePlayerIds: number[] = [];
   private touchHistory: Array<{
     playerId: number;
     team: 'red' | 'blue';
@@ -1604,13 +1606,13 @@ export class EngineInstance {
       this.kickoffPossessingTeam = snapshot.kickoffPossessingTeam;
     }
 
-    const seenPlayerIds = new Set<number>();
+    this.seenPlayerIds.clear();
     for (let i = 0; i < snapshot.discs.length; i++) {
       const d = snapshot.discs[i]!;
       if (d.id === 0 || d.team === 0) {
         this.applyDiscSnapshot(d, this.ball, false);
       } else {
-        seenPlayerIds.add(d.id);
+        this.seenPlayerIds.add(d.id);
         const teamStr: 'red' | 'blue' | 'spec' = d.team === 1 ? 'red' : d.team === 2 ? 'blue' : 'spec';
         let p = this.players.get(d.id);
         if (!p) {
@@ -1623,6 +1625,9 @@ export class EngineInstance {
         const rt = this.getRuntime(d.id);
         rt.ticksRemaining = d.dashTimer ?? (p.isDashing ? 1 : 0);
         rt.cooldownTimer = d.dashCooldown ?? 0;
+        if (!((d.flags ?? 0) & (1 << 0))) {
+          rt.kickConsumed = false;
+        }
         if (d.lastAckedInputSeq !== undefined) rt.lastProcessedInputSeq = d.lastAckedInputSeq;
         rt.prevDashDown = Boolean(p.isDashing);
         if (p.isDashing) {
@@ -1634,10 +1639,14 @@ export class EngineInstance {
         }
       }
     }
-    for (const existingId of Array.from(this.players.keys())) {
-      if (!seenPlayerIds.has(existingId)) {
-        this.removePlayer(existingId);
+    this.stalePlayerIds.length = 0;
+    for (const existingId of this.players.keys()) {
+      if (!this.seenPlayerIds.has(existingId)) {
+        this.stalePlayerIds.push(existingId);
       }
+    }
+    for (let i = 0; i < this.stalePlayerIds.length; i++) {
+      this.removePlayer(this.stalePlayerIds[i]!);
     }
   }
 

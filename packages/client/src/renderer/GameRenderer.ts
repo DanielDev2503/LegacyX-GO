@@ -712,13 +712,13 @@ export class GameRenderer {
 
     // Hold-to-focus ball override or dual-target camera with 180px leash
     if (this.focusBallOnly && hasBall) {
-      this.camera.follow(ballX, ballY);
+      this.camera.follow(ballX, ballY, dt);
     } else if (hasLocalPlayer && hasBall) {
-      this.camera.followDual(localPlayerX, localPlayerY, ballX, ballY, 0.25, 180);
+      this.camera.followDual(localPlayerX, localPlayerY, ballX, ballY, 0.25, 180, dt);
     } else if (hasLocalPlayer) {
-      this.camera.follow(localPlayerX, localPlayerY);
+      this.camera.follow(localPlayerX, localPlayerY, dt);
     } else if (hasBall) {
-      this.camera.follow(ballX, ballY);
+      this.camera.follow(ballX, ballY, dt);
     }
 
     const dpr = this.getEffectiveDpr();
