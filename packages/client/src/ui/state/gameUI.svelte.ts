@@ -6,7 +6,12 @@
 import { Capacitor } from '@capacitor/core';
 import { soundFX } from '../../audio/SoundFX.js';
 import { sharedSignaling, type SignalingClient } from '../../net/SignalingClient.js';
-import { type GameplayConfig, DEFAULT_GAMEPLAY_CONFIG } from '@legacyx/core';
+import {
+  type GameplayConfig,
+  DEFAULT_GAMEPLAY_CONFIG,
+  GAMEPLAY_PRESETS,
+  type GameplayPresetId
+} from '@legacyx/core';
 import { $gameConfig as gameConfigStore } from '../../controllers/stores/gameStore.js';
 import { triggerPitchEmote } from '../../renderer/DiscRenderer.js';
 import { EMOJI_CATALOG } from '../utils/constants.js';
@@ -83,7 +88,19 @@ export const VALID_SCOREBOARD_DESIGNS: readonly ScoreboardDesignType[] = [
   'wc2026'
 ];
 
-export type SettingsTabType = 'controls' | 'audio' | 'video' | 'visual' | 'kits' | 'avatar' | 'club' | 'account';
+export type SettingsTabType =
+  | 'controls'
+  | 'audio'
+  | 'video'
+  | 'visual'
+  | 'kits'
+  | 'avatar'
+  | 'club'
+  | 'account'
+  | 'social'
+  | 'legal';
+
+export type LegalDocId = 'privacy' | 'terms' | 'legal' | 'cookies' | 'rights';
 
 export interface SlidingScoreEvent {
   id: string;
@@ -894,6 +911,7 @@ export interface PhysicsModifiers {
   dashDistance?: number;
   dashesPerFullBar?: number;
   staminaRechargeRate?: number;
+  staminaRechargeDelay?: number;
   staminaRegenMoving?: boolean;
   staminaRegenMovingRate?: number;
   magnusCurveStrength?: number;
@@ -904,17 +922,17 @@ export interface PhysicsModifiers {
 
 export const DEFAULT_PHYSICS_MODIFIERS: Readonly<PhysicsModifiers> = {
   gravity: 0.0,
-  pitchFriction: 0.99,
-  wallBounciness: 0.412,
+  pitchFriction: DEFAULT_GAMEPLAY_CONFIG.ballFriction,
+  wallBounciness: DEFAULT_GAMEPLAY_CONFIG.ballRestitution,
   postBounciness: 0.5,
-  baseKickStrength: 320.0,
-  dashPower: 280.0,
-  dashCooldown: 1.0,
-  playerMass: 2.0,
-  playerRadius: 15.0,
-  ballMass: 1.0,
-  ballRadius: 5.8,
-  magnusCoefficient: 1.05,
+  baseKickStrength: (DEFAULT_GAMEPLAY_CONFIG.kickStrength / 4.545) * 450.0,
+  dashPower: (DEFAULT_GAMEPLAY_CONFIG.dashDistance / 7) * 60,
+  dashCooldown: DEFAULT_GAMEPLAY_CONFIG.dashCooldown,
+  playerMass: DEFAULT_GAMEPLAY_CONFIG.playerMass,
+  playerRadius: DEFAULT_GAMEPLAY_CONFIG.playerRadius,
+  ballMass: DEFAULT_GAMEPLAY_CONFIG.ballMass,
+  ballRadius: DEFAULT_GAMEPLAY_CONFIG.ballRadius,
+  magnusCoefficient: DEFAULT_GAMEPLAY_CONFIG.magnusCurveStrength,
   netElasticity: 0.45,
   netDamping: 0.12,
   goalCelebrationDuration: 3.0,
@@ -922,21 +940,22 @@ export const DEFAULT_PHYSICS_MODIFIERS: Readonly<PhysicsModifiers> = {
   matchTimeMinutes: 3.0,
   goldenGoalOvertime: true,
   airDensity: 1.0,
-  playerMaxSpeed: 3.5,
-  playerSpeed: 1.25,
-  playerAcceleration: 0.14,
-  kickingAcceleration: 0.108,
-  playerFriction: 0.96,
-  ballFriction: 0.99,
-  ballRestitution: 0.412,
-  kickStrength: 4.545,
-  kickMargin: 4.0,
+  playerMaxSpeed: DEFAULT_GAMEPLAY_CONFIG.playerMaxSpeed,
+  playerSpeed: DEFAULT_GAMEPLAY_CONFIG.playerSpeed,
+  playerAcceleration: DEFAULT_GAMEPLAY_CONFIG.playerAcceleration,
+  kickingAcceleration: DEFAULT_GAMEPLAY_CONFIG.kickingAcceleration,
+  playerFriction: DEFAULT_GAMEPLAY_CONFIG.playerFriction,
+  ballFriction: DEFAULT_GAMEPLAY_CONFIG.ballFriction,
+  ballRestitution: DEFAULT_GAMEPLAY_CONFIG.ballRestitution,
+  kickStrength: DEFAULT_GAMEPLAY_CONFIG.kickStrength,
+  kickMargin: DEFAULT_GAMEPLAY_CONFIG.kickMargin,
   boostMultiplier: DEFAULT_GAMEPLAY_CONFIG.boostMultiplier,
   dashDistance: DEFAULT_GAMEPLAY_CONFIG.dashDistance,
   dashesPerFullBar: DEFAULT_GAMEPLAY_CONFIG.dashesPerFullBar,
   staminaRechargeRate: DEFAULT_GAMEPLAY_CONFIG.staminaRechargeRate,
-  staminaRegenMoving: false,
-  staminaRegenMovingRate: 25,
+  staminaRechargeDelay: DEFAULT_GAMEPLAY_CONFIG.staminaRechargeDelay,
+  staminaRegenMoving: DEFAULT_GAMEPLAY_CONFIG.staminaRegenMoving,
+  staminaRegenMovingRate: DEFAULT_GAMEPLAY_CONFIG.staminaRegenMovingRate,
   magnusCurveStrength: DEFAULT_GAMEPLAY_CONFIG.magnusCurveStrength,
   turboEnabled: true,
   dashEnabled: true,
@@ -1379,7 +1398,18 @@ class GameUIStore {
   // Physical Modifiers and Gameplay Config
   public modifiers = $state<PhysicsModifiers>({ ...DEFAULT_PHYSICS_MODIFIERS });
   public gameplayConfig = $state<GameplayConfig>({ ...DEFAULT_GAMEPLAY_CONFIG });
-  public activeModifiersTab = $state<'player' | 'ball' | 'mechanics'>('player');
+  public activeModifiersTab = $state<'presets' | 'player' | 'ball' | 'mechanics'>('presets');
+  public activeLegalDoc = $state<LegalDocId | null>(null);
+
+  public openLegalDoc(doc: LegalDocId = 'privacy'): void {
+    soundFX.playUIClick();
+    this.activeLegalDoc = doc;
+  }
+
+  public closeLegalDoc(): void {
+    soundFX.playUIClick();
+    this.activeLegalDoc = null;
+  }
 
   // Audio convenience getters/state
   public isAudioMuted = $state(false);
@@ -2919,32 +2949,51 @@ class GameUIStore {
     this.modifiers.playerMaxSpeed = cfg.playerMaxSpeed;
     this.modifiers.playerSpeed = cfg.playerSpeed ?? cfg.playerMaxSpeed / 2.8;
     this.modifiers.playerAcceleration = cfg.playerAcceleration;
-    this.modifiers.kickingAcceleration = cfg.kickingAcceleration ?? cfg.playerAcceleration * (0.108 / 0.14);
-    this.modifiers.playerFriction = cfg.playerFriction ?? 0.96;
+    this.modifiers.kickingAcceleration = cfg.kickingAcceleration ?? cfg.playerAcceleration;
+    this.modifiers.playerFriction = cfg.playerFriction ?? DEFAULT_GAMEPLAY_CONFIG.playerFriction;
     this.modifiers.playerRadius = cfg.playerRadius;
-    this.modifiers.playerMass = cfg.playerMass ?? 2.0;
+    this.modifiers.playerMass = cfg.playerMass ?? DEFAULT_GAMEPLAY_CONFIG.playerMass;
     this.modifiers.ballRadius = cfg.ballRadius;
-    this.modifiers.ballMass = cfg.ballMass ?? 1.0;
-    this.modifiers.ballFriction = cfg.ballFriction ?? 0.99;
-    this.modifiers.pitchFriction = cfg.ballFriction ?? 0.99;
+    this.modifiers.ballMass = cfg.ballMass ?? DEFAULT_GAMEPLAY_CONFIG.ballMass;
+    this.modifiers.ballFriction = cfg.ballFriction ?? DEFAULT_GAMEPLAY_CONFIG.ballFriction;
+    this.modifiers.pitchFriction = cfg.ballFriction ?? DEFAULT_GAMEPLAY_CONFIG.ballFriction;
     this.modifiers.ballRestitution = cfg.ballRestitution;
     this.modifiers.wallBounciness = cfg.ballRestitution;
     this.modifiers.kickStrength = cfg.kickStrength;
-    this.modifiers.baseKickStrength = (cfg.kickStrength / 4.545) * 320.0;
-    this.modifiers.kickMargin = cfg.kickMargin ?? 4.0;
+    this.modifiers.baseKickStrength = (cfg.kickStrength / 4.545) * 450.0;
+    this.modifiers.kickMargin = cfg.kickMargin ?? DEFAULT_GAMEPLAY_CONFIG.kickMargin;
     this.modifiers.boostMultiplier = cfg.boostMultiplier;
     this.modifiers.dashDistance = cfg.dashDistance;
     this.modifiers.dashPower = (cfg.dashDistance / 7) * 60;
-    this.modifiers.dashCooldown = cfg.dashCooldown ?? 1.0;
-    this.modifiers.dashesPerFullBar = cfg.dashesPerFullBar ?? 4;
+    this.modifiers.dashCooldown = cfg.dashCooldown ?? DEFAULT_GAMEPLAY_CONFIG.dashCooldown;
+    this.modifiers.dashesPerFullBar = cfg.dashesPerFullBar ?? DEFAULT_GAMEPLAY_CONFIG.dashesPerFullBar;
     this.modifiers.staminaRechargeRate = cfg.staminaRechargeRate;
+    this.modifiers.staminaRechargeDelay =
+      cfg.staminaRechargeDelay ?? DEFAULT_GAMEPLAY_CONFIG.staminaRechargeDelay;
     this.modifiers.staminaRegenMoving = cfg.staminaRegenMoving === true;
-    this.modifiers.staminaRegenMovingRate = cfg.staminaRegenMovingRate ?? 25;
+    this.modifiers.staminaRegenMovingRate =
+      cfg.staminaRegenMovingRate ?? DEFAULT_GAMEPLAY_CONFIG.staminaRegenMovingRate;
     this.modifiers.magnusCurveStrength = cfg.magnusCurveStrength;
     this.modifiers.magnusCoefficient = cfg.magnusCurveStrength;
     this.modifiers.turboEnabled = cfg.turboEnabled !== false;
     this.modifiers.dashEnabled = cfg.dashEnabled !== false;
     this.modifiers.magnusEnabled = cfg.magnusEnabled !== false;
+  }
+
+  public applyGameplayPreset(presetId: GameplayPresetId): void {
+    const preset = GAMEPLAY_PRESETS[presetId];
+    if (!preset) return;
+    soundFX.playUIClick();
+    this.gameplayConfig = { ...preset.config };
+    gameConfigStore.set({ ...this.gameplayConfig });
+    this.syncGameplayConfigToModifiers();
+    this.onModifiersChanged?.({ ...this.modifiers });
+    if (this.isHost) {
+      this.onRoomConfigChanged?.({
+        gameplayConfig: { ...this.gameplayConfig },
+        modifiers: { ...this.modifiers }
+      });
+    }
   }
 
   public updateGameplayConfig<K extends keyof GameplayConfig>(key: K, value: GameplayConfig[K]): void {

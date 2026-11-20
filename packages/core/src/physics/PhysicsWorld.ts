@@ -119,7 +119,7 @@ export class PhysicsWorld {
     }
 
     // Instanciar GoalNet de caja con red elástica subamortiguada (N = 15 partículas)
-    const depth = 36;
+    const depth = stadium.goalDepth ?? 35;
     const leftNet = new GoalNet({
       side: 'left',
       mouthX: leftXPost,

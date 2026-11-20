@@ -1,4 +1,4 @@
-import { clampDiscToGoalAwareBounds, type DiscSnapshot, type CompactDiscState } from '@legacyx/core';
+import { clampDiscToGoalAwareBounds, DEFAULT_GAMEPLAY_CONFIG, type DiscSnapshot, type CompactDiscState } from '@legacyx/core';
 import {
   drawBallDesign,
   isBallSkin,
@@ -90,8 +90,9 @@ export class DiscRenderer {
     -1 * INV_NORM,  -1 * INV_NORM,  1 * INV_NORM,   1 * INV_NORM
   ]);
 
-  public ballRadius: number = 5.8;
-  public playerRadius: number = 15;
+  public ballRadius: number = DEFAULT_GAMEPLAY_CONFIG.ballRadius;
+  public playerRadius: number = DEFAULT_GAMEPLAY_CONFIG.playerRadius;
+  public kickMargin: number = DEFAULT_GAMEPLAY_CONFIG.kickMargin;
   public ballSkin: BallSkin = 'classic';
   public ballMode: 'texture' | 'color' = 'texture';
   public ballCustomColor: string = '#ffffff';
@@ -198,7 +199,7 @@ export class DiscRenderer {
       if (d.id === localDiscId && d.team !== 0) {
         const dx = ball.x - d.x;
         const dy = ball.y - d.y;
-        const touchDist = (ball.radius || 5.8) + (d.radius || 15) + 4;
+        const touchDist = (ball.radius || this.ballRadius) + (d.radius || this.playerRadius) + this.kickMargin;
         if (dx * dx + dy * dy <= touchDist * touchDist && d.kicking) {
           return true;
         }
@@ -225,7 +226,7 @@ export class DiscRenderer {
       const hh = this.stadiumBounds.halfHeight;
       const gh = this.stadiumBounds.goalHalfHeight;
       const gd = this.stadiumBounds.goalDepth;
-      const r = disc.radius || (disc.team === 0 ? 5.8 : 15);
+      const r = disc.radius || (disc.team === 0 ? this.ballRadius : this.playerRadius);
       const isPlayer = disc.team !== 0;
       const runOff = isPlayer ? (this.stadiumBounds.runOff ?? 0) : 0;
 
@@ -937,14 +938,15 @@ export class DiscRenderer {
     }
     ctx.restore();
 
-    // Borde fino perimetral: blanco (#ffffff) al patear, o color normal de la equipación
+    // Borde fino perimetral hacia adentro: borde exterior = radio físico exacto
     const isKicking = Boolean(disc.kicking || (disc as any).isKicking);
     const normalBorderColor = tertiaryColor || primaryColor || neonColor;
+    const borderWidth = isKicking ? 2.5 : 2.0;
     ctx.save();
     ctx.strokeStyle = isKicking ? '#ffffff' : normalBorderColor;
-    ctx.lineWidth = isKicking ? 2.5 : 2.0;
+    ctx.lineWidth = borderWidth;
     ctx.beginPath();
-    ctx.arc(x, y, radius, 0, Math.PI * 2);
+    ctx.arc(x, y, Math.max(1, radius - borderWidth * 0.5), 0, Math.PI * 2);
     ctx.stroke();
     ctx.restore();
 

@@ -26,6 +26,7 @@ import { ScoreEventCategory } from '../protocol/ControlMessages';
 import { GameplayConfig, sanitizeGameplayConfig, defaultStadium } from './GameConfig';
 import { Vec2 } from '../math/Vec2';
 import { stepPlayerKinematics, type PlayerKinematicsState } from '../physics/PlayerKinematics';
+import { resolveGoalAndPitchBoundaries } from '../physics/ContinuousCollision';
 
 export const SHOT_ON_GOAL_COOLDOWN_TICKS = 240; // 4.0 segundos a 60 Hz
 export const COMPLETED_PASS_COOLDOWN_TICKS = 180; // 3.0 segundos a 60 Hz
@@ -797,6 +798,9 @@ export class GameEngine {
     for (const [playerId, player] of this.players.entries()) {
       player.inputMask = 0;
       player.stamina = 100;
+      player.staminaIdleTimer = 0;
+      player.staminaRegenUnlocked = false;
+      player.kickConsumed = false;
       player.isDashing = false;
       player.dashTicksRemaining = 0;
       player.dashCooldownTimer = 0;
@@ -886,7 +890,7 @@ export class GameEngine {
     }
 
     const dt = 1 / 60;
-    const kickStrength = (this.gameplayConfig.kickStrength / 4.545) * 320.0;
+    const kickStrength = (this.gameplayConfig.kickStrength / 4.545) * 450.0;
     const kickMargin = this.gameplayConfig.kickMargin ?? 4.0;
 
     for (const [playerId, player] of this.players.entries()) {
@@ -894,7 +898,7 @@ export class GameEngine {
       if (!disc) continue;
 
       const rawInput = inputs.get(playerId);
-      let mask = player.inputMask;
+      let mask = 0;
       if (typeof rawInput === 'number') {
         mask = rawInput;
       } else if (rawInput && typeof rawInput === 'object') {
@@ -916,6 +920,8 @@ export class GameEngine {
         vel: disc.vel,
         radius: disc.radius,
         stamina: player.stamina,
+        staminaIdleTimer: player.staminaIdleTimer,
+        staminaRegenUnlocked: player.staminaRegenUnlocked,
         isDashing: player.isDashing,
         dashTicksRemaining: player.dashTicksRemaining,
         dashCooldownTimer: player.dashCooldownTimer,
@@ -943,6 +949,8 @@ export class GameEngine {
       );
 
       player.stamina = pState.stamina;
+      player.staminaIdleTimer = pState.staminaIdleTimer ?? 0;
+      player.staminaRegenUnlocked = pState.staminaRegenUnlocked ?? false;
       player.isDashing = pState.isDashing;
       player.dashTicksRemaining = pState.dashTicksRemaining;
       player.dashCooldownTimer = pState.dashCooldownTimer;
@@ -958,7 +966,10 @@ export class GameEngine {
       disc.kicking = pState.kicking ?? false;
 
       const isKicking = disc.kicking;
-      if (isKicking) {
+      if (!isKicking) {
+        player.kickConsumed = false;
+      }
+      if (isKicking && !player.kickConsumed) {
         const diffX = this.ball.pos.x - disc.pos.x;
         const diffY = this.ball.pos.y - disc.pos.y;
         const distSq = diffX * diffX + diffY * diffY;
@@ -969,12 +980,6 @@ export class GameEngine {
           const kickDirX = dist > 1e-6 ? diffX / dist : 1;
           const kickDirY = dist > 1e-6 ? diffY / dist : 0;
 
-          const minKickDist = disc.radius + this.ball.radius;
-          if (dist < minKickDist) {
-            this.ball.pos.x = disc.pos.x + kickDirX * minKickDist;
-            this.ball.pos.y = disc.pos.y + kickDirY * minKickDist;
-          }
-
           const pVelAlongKick = Math.max(0, disc.vel.x * kickDirX + disc.vel.y * kickDirY);
           let effectiveKickStrength = kickStrength + pVelAlongKick * 0.35;
           if (player.isDashing) {
@@ -983,8 +988,25 @@ export class GameEngine {
             effectiveKickStrength = Math.max(effectiveKickStrength, kickStrength * 1.15 + pVelAlongKick * 0.35);
           }
 
-          this.ball.vel.x += kickDirX * effectiveKickStrength;
-          this.ball.vel.y += kickDirY * effectiveKickStrength;
+          const existingBallAlongKick = Math.max(0, this.ball.vel.x * kickDirX + this.ball.vel.y * kickDirY);
+          this.ball.vel.x = kickDirX * (effectiveKickStrength + existingBallAlongKick * 0.25);
+          this.ball.vel.y = kickDirY * (effectiveKickStrength + existingBallAlongKick * 0.25);
+
+          const minKickDist = disc.radius + this.ball.radius;
+          if (dist < minKickDist) {
+            this.ball.pos.x = disc.pos.x + kickDirX * minKickDist;
+            this.ball.pos.y = disc.pos.y + kickDirY * minKickDist;
+            resolveGoalAndPitchBoundaries(this.ball.pos, this.ball.vel, this.ball.radius, {
+              halfWidth: this.stadium.halfWidth,
+              halfHeight: this.stadium.halfHeight,
+              goalHalfHeight: this.stadium.goalHalfHeight,
+              goalDepth: this.stadium.goalDepth,
+              runOff: 0,
+              postRadius: this.stadium.postRadius
+            });
+          }
+
+          player.kickConsumed = true;
 
           const bSpeedAfterKick = Math.hypot(this.ball.vel.x, this.ball.vel.y);
           const powerShotThreshold = kickStrength * 1.12;
@@ -1166,7 +1188,7 @@ export class GameEngine {
     if (this.fsm.isVictoryCelebration() || this.fsm.isMatchEnded()) {
       // Score lock active during celebration/match end
     } else if (this.fsm.currentState === MatchPhase.PLAYING) {
-      const goalScored = this.stadium.checkGoal(this.ball.pos.x, this.ball.pos.y);
+      const goalScored = this.stadium.checkGoal(this.ball.pos.x, this.ball.pos.y, this.ball.radius);
       if (goalScored) {
         if (goalScored === 'red') {
           this.redScore++;

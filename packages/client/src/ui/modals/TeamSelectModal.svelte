@@ -25,25 +25,113 @@
     onTeamChange?: (playerId: number, team: TeamSlot) => void;
   } = $props();
 
-  // Solo se puede mostrar STATS si el partido está detenido y hay estadísticas de un partido concluido
+  // Solo se puede mostrar STATS en escritorio si el partido está detenido y hay estadísticas de un partido concluido
   let canShowStats = $derived(
     gameUI.matchPhase === 0 && gameUI.hasCompletedMatch === true && gameUI.lastMatchStats !== null
   );
 
-  // Diapositiva del corredor deslizante: 0 = STATS, 1 = LOBBY / MENÚ DE SALA
-  let currentSlide = $derived<0 | 1>(
-    canShowStats && gameUI.activeSlide === 'STATS' ? 0 : 1
+  // En móvil existe 3ra vista a la derecha: 0 = STATS, 1 = MENÚ DE SALA (centro), 2 = CHAT DE SALA
+  let mobileActiveSlide = $state<0 | 1 | 2>(
+    gameUI.activeSlide === 'STATS' ? 0 : 1
   );
 
-  function goToSlide(slide: 0 | 1) {
-    if (slide === 0 && !canShowStats) return;
+  $effect(() => {
+    if (!gameUI.isMobileLayout) return;
+    if (gameUI.activeSlide === 'STATS' && mobileActiveSlide !== 0) {
+      mobileActiveSlide = 0;
+    } else if (gameUI.activeSlide === 'MENU' && mobileActiveSlide === 0) {
+      mobileActiveSlide = 1;
+    }
+  });
+
+  let currentSlide = $derived<0 | 1 | 2>(
+    gameUI.isMobileLayout
+      ? mobileActiveSlide
+      : canShowStats && gameUI.activeSlide === 'STATS'
+        ? 0
+        : 1
+  );
+
+  let menuChatInput = $state('');
+  let menuChatScrollEl = $state<HTMLDivElement | null>(null);
+  let lastSeenChatCount = $state(gameUI.chatMessages.length);
+  let unreadChatCount = $derived(
+    currentSlide === 2 ? 0 : Math.max(0, gameUI.chatMessages.length - lastSeenChatCount)
+  );
+  let mobilePingClass = $derived(
+    gameUI.pingMs < 60 ? 'is-good' : gameUI.pingMs <= 120 ? 'is-mid' : 'is-high'
+  );
+
+  $effect(() => {
+    const count = gameUI.chatMessages.length;
+    if (currentSlide === 2) {
+      lastSeenChatCount = count;
+      if (menuChatScrollEl) {
+        menuChatScrollEl.scrollTop = menuChatScrollEl.scrollHeight;
+      }
+    }
+  });
+
+  function goToSlide(slide: 0 | 1 | 2) {
+    if (!gameUI.isMobileLayout && slide === 2) return;
+    if (!gameUI.isMobileLayout && slide === 0 && !canShowStats) return;
     soundFX.playUIClick();
-    gameUI.activeSlide = slide === 0 ? 'STATS' : 'MENU';
+    if (gameUI.isMobileLayout) {
+      mobileActiveSlide = slide;
+    }
     if (slide === 0) {
+      gameUI.activeSlide = 'STATS';
       gameUI.activeModal = 'STATS';
     } else {
+      gameUI.activeSlide = 'MENU';
       gameUI.activeModal = 'TEAM_SELECT';
     }
+    if (slide === 2) {
+      lastSeenChatCount = gameUI.chatMessages.length;
+    }
+  }
+
+  let swipeStartX = 0;
+  let swipeStartY = 0;
+  let swipeTracking = false;
+
+  function handleCorridorTouchStart(e: TouchEvent) {
+    if (!gameUI.isMobileLayout || e.touches.length !== 1) return;
+    if (draggedPlayerId !== null || pointerDragPlayerId !== null) return;
+    const target = e.target as HTMLElement | null;
+    if (target?.closest('input, select, textarea, .room-slider, .player-slot-card')) {
+      swipeTracking = false;
+      return;
+    }
+    const t = e.touches[0]!;
+    swipeStartX = t.clientX;
+    swipeStartY = t.clientY;
+    swipeTracking = true;
+  }
+
+  function handleCorridorTouchEnd(e: TouchEvent) {
+    if (!swipeTracking) return;
+    swipeTracking = false;
+    if (!gameUI.isMobileLayout || draggedPlayerId !== null || pointerDragPlayerId !== null) return;
+    const t = e.changedTouches[0];
+    if (!t) return;
+    const dx = t.clientX - swipeStartX;
+    const dy = t.clientY - swipeStartY;
+    if (Math.abs(dx) < 48 || Math.abs(dx) <= Math.abs(dy) * 1.25) return;
+    if (dx < 0 && currentSlide < 2) {
+      goToSlide((currentSlide + 1) as 0 | 1 | 2);
+    } else if (dx > 0 && currentSlide > 0) {
+      goToSlide((currentSlide - 1) as 0 | 1 | 2);
+    }
+  }
+
+  function handleSendMenuChat(e: SubmitEvent) {
+    e.preventDefault();
+    const trimmed = menuChatInput.trim();
+    if (!trimmed) return;
+    gameUI.sendChatMessage(trimmed);
+    menuChatInput = '';
+    lastSeenChatCount = gameUI.chatMessages.length;
   }
 
   let expandedPlayers = $state<Set<string>>(new Set());
@@ -520,27 +608,36 @@
 >
   <!-- Viewport del Corredor Deslizante -->
   <div class="corridor-viewport">
-    <div class="corridor-container">
+    <div
+      class="corridor-container"
+      class:is-mobile-carousel={gameUI.isMobileLayout}
+      role="region"
+      aria-label="Carrusel de vistas de sala"
+      ontouchstart={handleCorridorTouchStart}
+      ontouchend={handleCorridorTouchEnd}
+    >
       <!-- ======================================================== -->
       <!-- DIAPOSITIVA 0: ESTADÍSTICAS Y MVP (CORREDOR DESLIZANTE)  -->
       <!-- ======================================================== -->
       <div
         class="corridor-slide slide-stats"
         class:is-active={currentSlide === 0}
-        class:slide-out-left={currentSlide === 1}
+        class:slide-out-left={currentSlide !== 0}
         id="slide-stats"
       >
-        <!-- Pestaña exterior lateral DERECHA: MENÚ > -->
-        <button
-          type="button"
-          id="btn-goto-menu"
-          class="external-nav-tab right-tab"
-          aria-label="Ir a Menú de Sala"
-          onclick={() => goToSlide(1)}
-        >
-          <span id="stats-to-menu-btn">MENÚ</span>
-          <span class="nav-chevron">&gt;</span>
-        </button>
+        <!-- Pestaña exterior lateral DERECHA (solo escritorio): MENÚ > -->
+        {#if !gameUI.isMobileLayout}
+          <button
+            type="button"
+            id="btn-goto-menu"
+            class="external-nav-tab right-tab"
+            aria-label="Ir a Menú de Sala"
+            onclick={() => goToSlide(1)}
+          >
+            <span id="stats-to-menu-btn">MENÚ</span>
+            <span class="nav-chevron">&gt;</span>
+          </button>
+        {/if}
 
         <!-- Tarjeta Central de Estadísticas (Competitive Match Hero + Dual Tables) -->
         {#snippet statsBreakdownDrawer(player: PlayerStatEntry)}
@@ -711,7 +808,18 @@
         {/snippet}
 
         <div class="team-modal-card stats-modal-card">
-          <!-- Hero Header Competitivo del Partido -->
+          {#if gameUI.isMobileLayout && !canShowStats}
+            <div class="stats-empty-mobile">
+              <div class="stats-empty-badge">ESTADÍSTICAS DEL PARTIDO</div>
+              <p class="stats-empty-desc">
+                Las estadísticas detalladas, MVP y desglose por jugador aparecerán aquí al finalizar el partido.
+              </p>
+              <button type="button" class="stats-empty-back-btn" onclick={() => goToSlide(1)}>
+                Volver al Menú de Sala &gt;
+              </button>
+            </div>
+          {:else}
+            <!-- Hero Header Competitivo del Partido -->
           <header class="stats-header-row">
             <div class="stats-hero-matchup">
               <div class="hero-team-side hero-red">
@@ -782,11 +890,12 @@
             </div>
           </header>
 
-          <!-- Tablas Duales Paralelas RED y BLUE con columnas PTS | G | A | S | P | T -->
-          <div class="tables-parallel-grid">
-            {@render statsTeamTable('red', redTeamName, redPrimaryColor, redSecondaryColor, redKitTertiary, redHasOutline, gameUI.redTeamStats)}
-            {@render statsTeamTable('blue', blueTeamName, bluePrimaryColor, blueSecondaryColor, blueKitTertiary, blueHasOutline, gameUI.blueTeamStats)}
-          </div>
+            <!-- Tablas Duales Paralelas RED y BLUE con columnas PTS | G | A | S | P | T -->
+            <div class="tables-parallel-grid">
+              {@render statsTeamTable('red', redTeamName, redPrimaryColor, redSecondaryColor, redKitTertiary, redHasOutline, gameUI.redTeamStats)}
+              {@render statsTeamTable('blue', blueTeamName, bluePrimaryColor, blueSecondaryColor, blueKitTertiary, blueHasOutline, gameUI.blueTeamStats)}
+            </div>
+          {/if}
         </div>
       </div>
 
@@ -797,10 +906,11 @@
         class="corridor-slide slide-menu"
         class:is-active={currentSlide === 1}
         class:slide-out-right={currentSlide === 0}
+        class:slide-out-left={currentSlide === 2}
         id="slide-lobby"
       >
-        <!-- Pestaña exterior lateral IZQUIERDA: < STATS -->
-        {#if canShowStats}
+        <!-- Pestaña exterior lateral IZQUIERDA (solo escritorio): < STATS -->
+        {#if canShowStats && !gameUI.isMobileLayout}
           <button
             type="button"
             id="btn-goto-stats"
@@ -826,6 +936,14 @@
                   </span>
                 {:else}
                   <span class="room-id-badge">ID: {gameUI.matchId || gameUI.activeRoom?.id || 'CTNYRS'}</span>
+                {/if}
+                {#if gameUI.isMobileLayout}
+                  <span class="mobile-menu-telemetry {mobilePingClass}" aria-label="Ping y FPS en vivo">
+                    <span class="m-tel-dot" aria-hidden="true"></span>
+                    <span>{gameUI.pingMs} ms</span>
+                    <span class="m-tel-sep">·</span>
+                    <span>{gameUI.fps} FPS</span>
+                  </span>
                 {/if}
               </div>
 
@@ -1509,8 +1627,123 @@
             </div>
           </div>
         </div>
-      </div>
+
+      <!-- ======================================================== -->
+      <!-- SLIDE 2: CHAT EN VIVO EN MENÚ (MÓVIL)                    -->
+      <!-- ======================================================== -->
+      {#if gameUI.isMobileLayout}
+        <div
+          class="corridor-slide slide-chat"
+          class:is-active={currentSlide === 2}
+          class:slide-out-right={currentSlide !== 2}
+          id="slide-chat"
+        >
+          <div class="team-modal-card chat-modal-card">
+            <header class="modal-header chat-slide-header">
+              <div class="room-identity">
+                <h2 class="room-title">CHAT DE LA SALA</h2>
+                <span class="header-divider">|</span>
+                <span class="mobile-menu-telemetry {mobilePingClass}">
+                  <span class="m-tel-dot" aria-hidden="true"></span>
+                  <span>{gameUI.pingMs} ms</span>
+                  <span class="m-tel-sep">·</span>
+                  <span>{gameUI.fps} FPS</span>
+                </span>
+              </div>
+              <button
+                type="button"
+                class="btn-close-x"
+                onclick={() => goToSlide(1)}
+                aria-label="Volver al Menú de Sala"
+              >
+                &lt; Menú
+              </button>
+            </header>
+
+            <div class="mobile-menu-chat-messages custom-scrollbar" bind:this={menuChatScrollEl}>
+              {#if gameUI.chatMessages.length === 0}
+                <div class="mobile-chat-empty">
+                  Aún no hay mensajes en esta sala. ¡Saluda a los demás jugadores!
+                </div>
+              {:else}
+                {#each gameUI.chatMessages as msg (msg.id)}
+                  <div class="mobile-chat-row" class:is-system={msg.team === 'SYSTEM'}>
+                    <span
+                      class="mchat-sender"
+                      class:is-red={msg.team === 'RED'}
+                      class:is-blue={msg.team === 'BLUE'}
+                      class:is-spec={msg.team === 'SPEC'}
+                      class:is-sys={msg.team === 'SYSTEM'}
+                    >
+                      {msg.sender}:
+                    </span>
+                    <span class="mchat-text">{msg.text}</span>
+                  </div>
+                {/each}
+              {/if}
+            </div>
+
+            <form class="mobile-menu-chat-form" onsubmit={handleSendMenuChat}>
+              <input
+                type="text"
+                class="mobile-chat-input"
+                maxlength="140"
+                placeholder="Escribe en el chat de la sala..."
+                bind:value={menuChatInput}
+              />
+              <button
+                type="submit"
+                class="mobile-chat-send-btn"
+                disabled={gameUI.chatCooldownActive || !menuChatInput.trim()}
+              >
+                {gameUI.chatCooldownActive ? 'Espera...' : 'Enviar'}
+              </button>
+            </form>
+          </div>
+        </div>
+      {/if}
     </div>
+
+    <!-- Indicador inferior reactivo del carrusel móvil (Stats ← Menú → Chat) -->
+    {#if gameUI.isMobileLayout}
+      <nav class="mobile-carousel-indicator" aria-label="Indicador de vistas del menú">
+        <button
+          type="button"
+          class="carousel-pill is-stats"
+          class:is-active={currentSlide === 0}
+          onclick={() => goToSlide(0)}
+        >
+          <span class="pill-arrow" aria-hidden="true">‹</span>
+          <span class="pill-dot" aria-hidden="true"></span>
+          <span class="pill-label">Stats</span>
+        </button>
+
+        <button
+          type="button"
+          class="carousel-pill is-menu"
+          class:is-active={currentSlide === 1}
+          onclick={() => goToSlide(1)}
+        >
+          <span class="pill-dot" aria-hidden="true"></span>
+          <span class="pill-label">Menú</span>
+        </button>
+
+        <button
+          type="button"
+          class="carousel-pill is-chat"
+          class:is-active={currentSlide === 2}
+          onclick={() => goToSlide(2)}
+        >
+          <span class="pill-dot" aria-hidden="true"></span>
+          <span class="pill-label">Chat</span>
+          {#if unreadChatCount > 0}
+            <span class="pill-unread-badge">{unreadChatCount > 9 ? '9+' : unreadChatCount}</span>
+          {/if}
+          <span class="pill-arrow" aria-hidden="true">›</span>
+        </button>
+      </nav>
+    {/if}
+  </div>
 
   <!-- Menú Contextual de Administrador (Clic Directo con Disociación de Drag) -->
   {#if contextMenu.visible && contextMenu.player}
@@ -1655,6 +1888,12 @@
     pointer-events: auto;
     z-index: 30;
   }
+  .slide-menu.slide-out-left {
+    transform: translateX(-115%);
+    opacity: 0;
+    pointer-events: none;
+    z-index: 20;
+  }
   .slide-stats.slide-out-left {
     transform: translateX(-115%);
     opacity: 0;
@@ -1670,6 +1909,20 @@
     z-index: 30;
   }
   .slide-menu.slide-out-right {
+    transform: translateX(115%);
+    opacity: 0;
+    pointer-events: none;
+    z-index: 20;
+  }
+
+  /* Diapositiva Activa CHAT (Móvil) */
+  .slide-chat.is-active {
+    transform: translateX(0);
+    opacity: 1;
+    pointer-events: auto;
+    z-index: 30;
+  }
+  .slide-chat.slide-out-right {
     transform: translateX(115%);
     opacity: 0;
     pointer-events: none;
@@ -3255,12 +3508,265 @@
   /* ======================================================== */
   /* MOBILE LANDSCAPE & TOUCH ADAPTATION                      */
   /* ======================================================== */
+  .mobile-menu-telemetry {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.28rem;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.68rem;
+    font-weight: 700;
+    padding: 0.18rem 0.48rem;
+    border-radius: 999px;
+    background: rgba(8, 14, 24, 0.92);
+    border: 1px solid rgba(0, 229, 255, 0.35);
+    color: #67e8f9;
+    white-space: nowrap;
+  }
+
+  .mobile-menu-telemetry.is-good {
+    color: #4ade80;
+    border-color: rgba(74, 222, 128, 0.4);
+  }
+  .mobile-menu-telemetry.is-mid {
+    color: #fbbf24;
+    border-color: rgba(251, 191, 36, 0.45);
+  }
+  .mobile-menu-telemetry.is-high {
+    color: #f87171;
+    border-color: rgba(248, 113, 113, 0.5);
+  }
+
+  .m-tel-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: currentColor;
+  }
+
+  .m-tel-sep {
+    opacity: 0.45;
+  }
+
+  .mobile-carousel-indicator {
+    position: fixed;
+    left: 50%;
+    bottom: max(6px, env(safe-area-inset-bottom, 6px));
+    transform: translateX(-50%);
+    z-index: 45;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+    padding: 0.28rem 0.65rem;
+    border-radius: 999px;
+    background: rgba(8, 14, 24, 0.9);
+    border: 1px solid rgba(0, 229, 255, 0.32);
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.55);
+    pointer-events: auto;
+  }
+
+  .carousel-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    padding: 0.22rem 0.52rem;
+    border-radius: 999px;
+    border: 1px solid transparent;
+    background: transparent;
+    color: #94a3b8;
+    font-family: 'Space Grotesk', system-ui, sans-serif;
+    font-size: 0.68rem;
+    font-weight: 700;
+    opacity: 0.52;
+    transform: scale(0.9);
+    transition: transform 0.2s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.2s ease, background 0.2s ease,
+      color 0.2s ease, box-shadow 0.2s ease;
+    cursor: pointer;
+  }
+
+  .carousel-pill .pill-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 999px;
+    background: currentColor;
+    transition: width 0.2s ease, height 0.2s ease;
+  }
+
+  .carousel-pill.is-active {
+    opacity: 1;
+    transform: scale(1.12);
+    color: #06101c;
+    background: #00e5ff;
+    border-color: #a5f3fc;
+    box-shadow: 0 0 14px rgba(0, 229, 255, 0.55);
+  }
+
+  .carousel-pill.is-stats.is-active {
+    background: #ffd700;
+    border-color: #fef08a;
+    box-shadow: 0 0 14px rgba(255, 215, 0, 0.5);
+  }
+
+  .carousel-pill.is-active .pill-dot {
+    width: 8px;
+    height: 8px;
+  }
+
+  .pill-arrow {
+    font-size: 0.8rem;
+    line-height: 1;
+    opacity: 0.75;
+  }
+
+  .pill-unread-badge {
+    padding: 0 0.34rem;
+    border-radius: 999px;
+    background: #ff4757;
+    color: #ffffff;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.6rem;
+    font-weight: 800;
+    line-height: 1.35;
+  }
+
+  .chat-modal-card {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .mobile-menu-chat-messages {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 0.65rem 0.85rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.38rem;
+    user-select: text;
+    -webkit-user-select: text;
+  }
+
+  .mobile-chat-empty {
+    margin: auto;
+    text-align: center;
+    font-size: 0.82rem;
+    color: #94a3b8;
+    padding: 1rem;
+  }
+
+  .mobile-chat-row {
+    font-size: 0.78rem;
+    line-height: 1.38;
+    padding: 0.28rem 0.5rem;
+    border-radius: 6px;
+    background: rgba(15, 23, 42, 0.65);
+    word-break: break-word;
+  }
+
+  .mobile-chat-row.is-system {
+    background: rgba(250, 204, 21, 0.1);
+    color: #fde68a;
+  }
+
+  .mchat-sender {
+    font-family: 'JetBrains Mono', monospace;
+    font-weight: 800;
+    margin-right: 0.35rem;
+  }
+  .mchat-sender.is-red { color: #ff6b81; }
+  .mchat-sender.is-blue { color: #38bdf8; }
+  .mchat-sender.is-spec { color: #cbd5e1; }
+  .mchat-sender.is-sys { color: #facc15; }
+
+  .mchat-text {
+    color: #f1f5f9;
+  }
+
+  .mobile-menu-chat-form {
+    display: flex;
+    gap: 0.45rem;
+    padding: 0.55rem 0.75rem;
+    border-top: 1px solid rgba(0, 229, 255, 0.18);
+    background: rgba(8, 14, 24, 0.92);
+  }
+
+  .mobile-chat-input {
+    flex: 1;
+    min-width: 0;
+    height: 36px;
+    padding: 0 0.7rem;
+    border-radius: 8px;
+    border: 1px solid rgba(0, 229, 255, 0.35);
+    background: rgba(15, 23, 42, 0.9);
+    color: #ffffff;
+    font-size: 0.8rem;
+  }
+
+  .mobile-chat-send-btn {
+    height: 36px;
+    padding: 0 0.85rem;
+    border-radius: 8px;
+    border: 1px solid rgba(0, 229, 255, 0.65);
+    background: rgba(0, 229, 255, 0.2);
+    color: #e0f2fe;
+    font-size: 0.76rem;
+    font-weight: 800;
+    cursor: pointer;
+    flex-shrink: 0;
+  }
+
+  .mobile-chat-send-btn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+
+  .stats-empty-mobile {
+    margin: auto;
+    max-width: 380px;
+    padding: 1.5rem 1.25rem;
+    text-align: center;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.75rem;
+  }
+
+  .stats-empty-badge {
+    font-size: 0.7rem;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    color: #ffd700;
+    padding: 0.22rem 0.65rem;
+    border-radius: 999px;
+    border: 1px solid rgba(255, 215, 0, 0.45);
+    background: rgba(255, 215, 0, 0.1);
+  }
+
+  .stats-empty-desc {
+    margin: 0;
+    font-size: 0.82rem;
+    line-height: 1.45;
+    color: #94a3b8;
+  }
+
+  .stats-empty-back-btn {
+    padding: 0.5rem 1rem;
+    border-radius: 8px;
+    border: 1px solid rgba(0, 229, 255, 0.55);
+    background: rgba(0, 229, 255, 0.16);
+    color: #67e8f9;
+    font-size: 0.78rem;
+    font-weight: 700;
+    cursor: pointer;
+  }
+
   @media (max-height: 520px), (max-width: 960px) {
-    .corridor-container {
-      top: 38px;
-      bottom: 6px;
+    .corridor-container,
+    .corridor-container.is-mobile-carousel {
+      top: calc(36px + env(safe-area-inset-top, 0px));
+      bottom: calc(40px + env(safe-area-inset-bottom, 0px));
       width: min(98vw, 1140px);
-      max-height: calc(100dvh - 44px);
+      max-height: calc(100dvh - 80px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px));
     }
 
     .team-modal-card,
@@ -3437,26 +3943,54 @@
       font-size: 0.74rem;
     }
 
-    /* Slide 0 (Stats) dual tables compact landscape fit */
+    /* Slide 0 (Stats) dual tables compact landscape fit & zero overlaps */
     .stats-header-row {
-      padding: 0.45rem 0.7rem;
+      padding: 0.45rem 0.65rem;
+      gap: 0.4rem;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .stats-hero-matchup {
+      padding: 0.28rem 0.5rem;
       gap: 0.45rem;
     }
 
+    .hero-team-label {
+      max-width: 72px;
+      font-size: 0.72rem;
+    }
+
     .stats-acronym-badge {
-      min-width: 48px;
-      height: 28px;
-      padding: 0 8px;
-      font-size: 0.78rem;
+      min-width: 44px;
+      height: 26px;
+      padding: 0 7px;
+      font-size: 0.74rem;
     }
 
     .stats-score-num {
-      font-size: 1.25rem;
+      font-size: 1.2rem;
+    }
+
+    .mvp-golden-plaque {
+      padding: 0.22rem 0.55rem;
+      gap: 0.35rem;
+    }
+
+    .mvp-title {
+      font-size: 0.72rem;
     }
 
     .tables-parallel-grid {
       padding: 0.45rem 0.65rem 0.65rem 0.65rem;
       gap: 0.45rem;
+    }
+
+    .drawer-grid {
+      grid-template-columns: repeat(auto-fit, minmax(76px, 1fr));
+      gap: 0.28rem;
     }
 
     .table-header {
@@ -3467,6 +4001,25 @@
     .row-summary {
       padding: 0.32rem 0.45rem;
       font-size: 0.68rem;
+    }
+  }
+
+  @media (max-width: 720px) {
+    .tables-parallel-grid {
+      grid-template-columns: 1fr;
+    }
+    .modal-body-layout {
+      flex-direction: column;
+      overflow-y: auto;
+    }
+    .col-settings-panel {
+      width: 100%;
+      max-width: none;
+      border-right: none;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    }
+    .col-benches-grid {
+      grid-template-columns: 1fr;
     }
   }
 </style>

@@ -1045,16 +1045,18 @@
   {/if}
 
   <!-- ========================================== -->
-  <!-- 2. TELEMETRÍA EN VIVO (ESQUINA INFERIOR IZQ)-->
+  <!-- 2. TELEMETRÍA EN VIVO (SOLO ESCRITORIO; EN MÓVIL VA EN EL MENÚ) -->
   <!-- ========================================== -->
-  <div class="hud-telemetry-corner" bind:this={telemetryEl}>
-    <span class="tel-pulse-dot"></span>
-    <span class="tel-label">Ping:</span>
-    <span class="tel-val {pingColorClass}">{gameUI.pingMs} ms</span>
-    <span class="tel-sep">|</span>
-    <span class="tel-label">FPS:</span>
-    <span class="tel-val text-cyan">{gameUI.fps}</span>
-  </div>
+  {#if !gameUI.isMobileLayout}
+    <div class="hud-telemetry-corner" bind:this={telemetryEl}>
+      <span class="tel-pulse-dot"></span>
+      <span class="tel-label">Ping:</span>
+      <span class="tel-val {pingColorClass}">{gameUI.pingMs} ms</span>
+      <span class="tel-sep">|</span>
+      <span class="tel-label">FPS:</span>
+      <span class="tel-val text-cyan">{gameUI.fps}</span>
+    </div>
+  {/if}
 
   <!-- ========================================== -->
   <!-- 2.5 MONITOR TELEMETRÍA /var (SUPERADMIN)   -->
@@ -2853,19 +2855,11 @@
   }
 
   .hud-root.is-mobile .goal-replay-pill-bar {
-    top: 46px;
+    top: calc(44px + env(safe-area-inset-top, 0px));
   }
 
   .hud-root.is-mobile .hud-telemetry-corner {
-    top: calc(42px + env(safe-area-inset-top, 0px));
-    right: calc(10px + env(safe-area-inset-right, 0px));
-    bottom: auto;
-    left: auto;
-    z-index: 42;
-    padding: 0.2rem 0.5rem;
-    gap: 0.35rem;
-    font-size: 0.66rem;
-    background: rgba(10, 16, 26, 0.88);
+    display: none;
   }
 
   .hud-action-btn.is-paused-active {
@@ -2979,9 +2973,9 @@
     left: calc(10px + env(safe-area-inset-left, 0px));
     bottom: auto;
     right: auto;
-    width: min(295px, 44vw);
-    height: min(210px, calc(100dvh - 208px));
-    min-height: 132px;
+    width: min(290px, 44vw);
+    height: min(195px, calc(100dvh - 216px));
+    min-height: 120px;
     z-index: 105;
   }
 

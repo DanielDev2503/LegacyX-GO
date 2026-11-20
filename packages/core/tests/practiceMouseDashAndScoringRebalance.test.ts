@@ -180,19 +180,37 @@ describe('Gates 3, 4, 5 & BinaryProtocol 12-Byte Mouse Aim', () => {
 
       // 0% moving rate -> 0 recharge over 1 second (60 ticks) while moving
       pRed.stamina = 40;
-      engine.setGameplayConfig({ staminaRechargeRate: 25, staminaRegenMoving: true, staminaRegenMovingRate: 0 });
+      pRed.staminaRegenUnlocked = true;
+      engine.setGameplayConfig({
+        staminaRechargeDelay: 0,
+        staminaRechargeRate: 25,
+        staminaRegenMoving: true,
+        staminaRegenMovingRate: 0
+      });
       for (let i = 0; i < 60; i++) engine.tick(moveInputs);
       expect(pRed.stamina).toBeCloseTo(40, 2);
 
       // 100% moving rate -> +25 stamina over 60 ticks while moving
       pRed.stamina = 40;
-      engine.setGameplayConfig({ staminaRechargeRate: 25, staminaRegenMoving: true, staminaRegenMovingRate: 100 });
+      pRed.staminaRegenUnlocked = true;
+      engine.setGameplayConfig({
+        staminaRechargeDelay: 0,
+        staminaRechargeRate: 25,
+        staminaRegenMoving: true,
+        staminaRegenMovingRate: 100
+      });
       for (let i = 0; i < 60; i++) engine.tick(moveInputs);
       expect(pRed.stamina).toBeCloseTo(65, 1);
 
       // 200% moving rate -> +50 stamina over 60 ticks while moving
       pRed.stamina = 40;
-      engine.setGameplayConfig({ staminaRechargeRate: 25, staminaRegenMoving: true, staminaRegenMovingRate: 200 });
+      pRed.staminaRegenUnlocked = true;
+      engine.setGameplayConfig({
+        staminaRechargeDelay: 0,
+        staminaRechargeRate: 25,
+        staminaRegenMoving: true,
+        staminaRegenMovingRate: 200
+      });
       for (let i = 0; i < 60; i++) engine.tick(moveInputs);
       expect(pRed.stamina).toBeCloseTo(90, 1);
     });

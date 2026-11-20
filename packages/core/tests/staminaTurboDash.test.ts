@@ -26,7 +26,12 @@ describe('Shared Stamina System (Turbo, Dash, Immobility Recharge & Tackle)', ()
   });
 
   it('executes Dash consuming calibrated 25% stamina (4 dashes per bar) for calibrated 37.5 px displacement over 7 ticks with configurable cooldown', () => {
-    engine.setGameplayConfig({ dashCooldown: 0, staminaRegenMoving: false, dashesPerFullBar: 4 });
+    engine.setGameplayConfig({
+      dashCooldown: 0,
+      dashDistance: 37.5,
+      staminaRegenMoving: false,
+      dashesPerFullBar: 4
+    });
     engine.ball.pos.set(1000, 1000);
     const disc = engine.playerDiscs.get('p1')!;
     disc.pos.set(0, 0);
@@ -96,7 +101,7 @@ describe('Shared Stamina System (Turbo, Dash, Immobility Recharge & Tackle)', ()
     engine.tick(inputs);
     expect(playerRed.stamina).toBe(75);
     expect(playerRed.isDashing).toBe(true);
-    expect(playerRed.dashCooldownTimer).toBeCloseTo(1.0, 2);
+    expect(playerRed.dashCooldownTimer).toBeCloseTo(1.25, 2);
 
     // Keep holding Dash key for 10 ticks: dash completes (7 ticks total) and does NOT auto-fire second dash
     for (let i = 0; i < 10; i++) {
@@ -113,9 +118,9 @@ describe('Shared Stamina System (Turbo, Dash, Immobility Recharge & Tackle)', ()
     expect(playerRed.isDashing).toBe(false);
     expect(playerRed.stamina).toBe(75);
 
-    // Advance past 1.0s cooldown (~50 more ticks) with key released, then press rising edge -> fires!
+    // Advance past 1.25s cooldown (75 ticks total: 65 more ticks after 13 elapsed) with key released, then press rising edge -> fires!
     inputs.set('p1', INPUT_RIGHT);
-    for (let i = 0; i < 50; i++) {
+    for (let i = 0; i < 65; i++) {
       engine.tick(inputs);
     }
     inputs.set('p1', INPUT_RIGHT | INPUT_DASH);
@@ -144,7 +149,8 @@ describe('Shared Stamina System (Turbo, Dash, Immobility Recharge & Tackle)', ()
     expect(playerRed.stamina).toBeCloseTo(60, 0);
     expect(playerRed.isTurbo).toBe(true);
     const speed = Math.hypot(disc.vel.x, disc.vel.y);
-    expect(speed).toBeCloseTo(420.0 * 0.96, 0.5);
+    // Agile Competitive default: playerMaxSpeed 3.9 * 60 = 234 px/s * 1.4 boost = 327.6 * 0.95 friction = 311.22
+    expect(speed).toBeCloseTo(327.6 * 0.95, 0.5);
 
     // Drain remaining stamina (another 90 ticks = 1.5s, total 150 ticks = 2.5s)
     for (let i = 0; i < 90; i++) {
@@ -157,12 +163,13 @@ describe('Shared Stamina System (Turbo, Dash, Immobility Recharge & Tackle)', ()
 
   it('recharges stamina at +25%/s at rest and while moving (when staminaRegenMoving = true), or blocks moving recharge when false', () => {
     engine.ball.pos.set(1000, 1000);
+    engine.setGameplayConfig({ staminaRechargeDelay: 0, staminaRechargeRate: 25 });
     const disc = engine.playerDiscs.get('p1')!;
     playerRed.stamina = 0;
     disc.pos.set(0, 0);
     disc.prevPos.set(0, 0);
 
-    // Case 1: moving disc (vel = 50) gliding with 0 inputs -> RECHARGES immediately
+    // Case 1: moving disc (vel = 50) gliding with 0 inputs -> RECHARGES immediately when delay = 0
     disc.vel.set(50, 0);
     const inputs = new Map<string, number>();
     inputs.set('p1', 0);
@@ -171,14 +178,16 @@ describe('Shared Stamina System (Turbo, Dash, Immobility Recharge & Tackle)', ()
 
     // Case 2a: default staminaRegenMoving = false -> holding move key without Turbo does NOT recharge
     playerRed.stamina = 0;
+    playerRed.staminaRegenUnlocked = false;
     disc.vel.set(0, 0);
     inputs.set('p1', INPUT_UP);
     engine.tick(inputs);
     expect(playerRed.stamina).toBe(0);
 
-    // Case 2b: when staminaRegenMoving = true (rate 100%) -> holding move key recharges at 100% of base rate
+    // Case 2b: when staminaRegenMoving = true (rate 100%, unlocked) -> holding move key recharges at 100% of base rate
     engine.setGameplayConfig({ staminaRegenMoving: true, staminaRegenMovingRate: 100 });
     playerRed.stamina = 0;
+    playerRed.staminaRegenUnlocked = true;
     disc.vel.set(0, 0);
     inputs.set('p1', INPUT_UP);
     engine.tick(inputs);
@@ -202,8 +211,10 @@ describe('Shared Stamina System (Turbo, Dash, Immobility Recharge & Tackle)', ()
 
   it('boosts kick impulse by x1.35 on Dash and x1.15 on Turbo', () => {
     const disc = engine.playerDiscs.get('p1')!;
+    const baseKick = (engine.gameplayConfig.kickStrength / 4.545) * 450.0;
+    const ballDamp = engine.gameplayConfig.ballFriction ?? 0.988;
 
-    // 1. Regular kick (320 px/s with 0.99 ball damping after 1 tick = 316.8)
+    // 1. Regular kick
     disc.pos.set(-24, 0);
     disc.prevPos.set(-24, 0);
     disc.vel.set(0, 0);
@@ -215,9 +226,12 @@ describe('Shared Stamina System (Turbo, Dash, Immobility Recharge & Tackle)', ()
     inputs.set('p1', INPUT_KICK);
     engine.tick(inputs);
     const normalKickVx = engine.ball.vel.x;
-    expect(normalKickVx).toBeCloseTo(320 * 0.99, 1);
+    expect(normalKickVx).toBeCloseTo(baseKick * ballDamp, 1);
 
-    // 2. Dash kick (x1.35 -> 320 * 1.35 * 0.99 = 427.68)
+    // Release INPUT_KICK for 1 tick (single-shot latch reset)
+    engine.tick(new Map([['p1', 0]]));
+
+    // 2. Dash kick (x1.35)
     playerRed.stamina = 100;
     disc.pos.set(-24, 0);
     disc.prevPos.set(-24, 0);
@@ -231,9 +245,12 @@ describe('Shared Stamina System (Turbo, Dash, Immobility Recharge & Tackle)', ()
     inputs.set('p1', INPUT_DASH | INPUT_KICK | INPUT_UP);
     engine.tick(inputs);
     const dashKickVx = engine.ball.vel.x;
-    expect(dashKickVx).toBeCloseTo(320 * 1.35 * 0.99, 1);
+    expect(dashKickVx).toBeCloseTo(baseKick * 1.35 * ballDamp, 1);
 
-    // 3. Turbo kick (x1.15 -> 320 * 1.15 * 0.99 = 364.32)
+    // Release INPUT_KICK for 1 tick (single-shot latch reset)
+    engine.tick(new Map([['p1', 0]]));
+
+    // 3. Turbo kick (x1.15)
     playerRed.stamina = 100;
     playerRed.isDashing = false;
     disc.pos.set(-24, 0);
@@ -247,7 +264,7 @@ describe('Shared Stamina System (Turbo, Dash, Immobility Recharge & Tackle)', ()
     inputs.set('p1', INPUT_TURBO | INPUT_KICK | INPUT_UP);
     engine.tick(inputs);
     const turboKickVx = engine.ball.vel.x;
-    expect(turboKickVx).toBeCloseTo(320 * 1.15 * 0.99, 1);
+    expect(turboKickVx).toBeCloseTo(baseKick * 1.15 * ballDamp, 1);
   });
 
   it('applies x1.8 inertial mass tackle scale in player-player collisions when dashing or turbo', () => {

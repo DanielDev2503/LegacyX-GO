@@ -3,6 +3,7 @@ import { BinaryProtocol, type GameStateSnapshot } from './BinaryProtocol';
 import { type GameSnapshot, type DiscSnapshot } from '../game/GameState';
 import { MatchPhase, toMatchPhase } from '../game/GameFSM';
 import { clampDiscToGoalAwareBounds } from '../physics/ContinuousCollision';
+import { DEFAULT_GAMEPLAY_CONFIG } from '../game/GameConfig';
 
 export type AnySnapshot = GameSnapshot | GameStateSnapshot;
 export type InterpolationMode = 'linear' | 'hermite';
@@ -10,6 +11,7 @@ export type InterpolationMode = 'linear' | 'hermite';
 export interface BufferedSnapshot<T extends AnySnapshot = any> {
   snapshot: T;
   receivedAt: number;
+  timelineAt?: number;
 }
 
 /**
@@ -35,19 +37,29 @@ export class JitterBuffer<T extends AnySnapshot = any> {
   public currentMatchState: MatchPhase | string | number | null = null;
   public isAdaptive: boolean;
 
-  // Jitter tracking & dynamic delay (RFC 3550 standard)
+  // Jitter tracking & dynamic delay (RFC 3550 standard) + Host clock synchronization
   public meanJitter: number = 0;
   public lastProcessedTick: number = 0;
   private lastArrival: number | null = null;
   private lastTick: number | null = null;
+  private clockOffsetMs: number | null = null;
 
   public static readonly MIN_DELAY_MS = 16;
   public static readonly MAX_DELAY_MS = 40;
   public static readonly DEFAULT_AUTO_EXTRAPOLATION_MS = 200;
   public static readonly MAX_AUTO_EXTRAPOLATION_MS = 200;
+  private static readonly TICK_MS = 1000 / 60;
 
   public autoExtrapolationMs: number = JitterBuffer.DEFAULT_AUTO_EXTRAPOLATION_MS;
-  public arenaBounds: { halfWidth: number; halfHeight: number; runOff?: number; goalHalfHeight?: number; goalDepth?: number } | null = null;
+  public arenaBounds: {
+    halfWidth: number;
+    halfHeight: number;
+    runOff?: number;
+    goalHalfHeight?: number;
+    goalDepth?: number;
+    ballRadius?: number;
+    playerRadius?: number;
+  } | null = null;
 
   constructor(interpolationDelayMs: number = 25, maxBufferSize: number = 30, isAdaptive: boolean = false) {
     this.interpolationDelayMs = interpolationDelayMs;
@@ -66,10 +78,20 @@ export class JitterBuffer<T extends AnySnapshot = any> {
     halfHeight: number,
     runOff: number = 0,
     goalHalfHeight: number = 0,
-    goalDepth: number = 0
+    goalDepth: number = 0,
+    ballRadius?: number,
+    playerRadius?: number
   ): void {
     this.arenaBounds = halfWidth > 0 && halfHeight > 0
-      ? { halfWidth, halfHeight, runOff, goalHalfHeight, goalDepth }
+      ? {
+          halfWidth,
+          halfHeight,
+          runOff,
+          goalHalfHeight,
+          goalDepth,
+          ...(ballRadius !== undefined ? { ballRadius } : {}),
+          ...(playerRadius !== undefined ? { playerRadius } : {})
+        }
       : null;
   }
 
@@ -94,6 +116,7 @@ export class JitterBuffer<T extends AnySnapshot = any> {
     this.buffer = [];
     this.lastArrival = null;
     this.lastTick = null;
+    this.clockOffsetMs = null;
   }
 
   public push(
@@ -158,18 +181,46 @@ export class JitterBuffer<T extends AnySnapshot = any> {
     this.lastArrival = now;
     this.lastTick = snapshot.tick;
 
-    const item: BufferedSnapshot<T> = { snapshot, receivedAt: now };
+    // Sincronización suave del reloj lógico del Host (inmune a ráfagas UDP/WebRTC)
+    const logicalMs = snapshot.tick * JitterBuffer.TICK_MS;
+    const measuredOffset = now - logicalMs;
+    if (this.clockOffsetMs === null || Math.abs(measuredOffset - this.clockOffsetMs) > 500) {
+      this.clockOffsetMs = measuredOffset;
+    } else if (measuredOffset < this.clockOffsetMs) {
+      // Un paquete llegó más rápido (menor cola): ajustar más rápido el offset mínimo
+      this.clockOffsetMs = this.clockOffsetMs * 0.75 + measuredOffset * 0.25;
+    } else {
+      // Un paquete llegó atrasado por ráfaga/jitter: absorber lentamente para no comprimir el timeline
+      this.clockOffsetMs = this.clockOffsetMs * 0.98 + measuredOffset * 0.02;
+    }
+
+    const item: BufferedSnapshot<T> = {
+      snapshot,
+      receivedAt: now,
+      timelineAt: logicalMs + this.clockOffsetMs
+    };
 
     if (this.lastProcessedTick > 0 && this.buffer.length > 0) {
       const latest = this.buffer[this.buffer.length - 1];
-      if (snapshot.tick <= latest.snapshot.tick) {
-        if (snapshot.tick < latest.snapshot.tick - 100) {
-          this.clear();
-        } else {
-          return;
+      if (snapshot.tick < latest.snapshot.tick - 100) {
+        this.clear();
+        this.clockOffsetMs = now - logicalMs;
+        item.timelineAt = now;
+        this.buffer.push(item);
+      } else {
+        // Insertar ordenado por tick (acepta paquetes desordenados si tick >= lastProcessedTick)
+        let inserted = false;
+        for (let i = this.buffer.length - 1; i >= 0; i--) {
+          if (snapshot.tick > this.buffer[i].snapshot.tick) {
+            this.buffer.splice(i + 1, 0, item);
+            inserted = true;
+            break;
+          }
+        }
+        if (!inserted) {
+          this.buffer.unshift(item);
         }
       }
-      this.buffer.push(item);
     } else {
       // Inserción ordenada por número de tick cuando aún no ha corrido reproducción
       let inserted = false;
@@ -250,8 +301,10 @@ export class JitterBuffer<T extends AnySnapshot = any> {
     }
 
     const renderTime = now - this.interpolationDelayMs;
+    const getTime = (b: BufferedSnapshot<T>): number =>
+      b.timelineAt !== undefined ? b.timelineAt : b.receivedAt;
 
-    if (renderTime <= this.buffer[0].receivedAt) {
+    if (renderTime <= getTime(this.buffer[0])) {
       this.lastProcessedTick = Math.max(this.lastProcessedTick, this.buffer[0].snapshot.tick);
       return this.buffer[0].snapshot;
     }
@@ -260,7 +313,9 @@ export class JitterBuffer<T extends AnySnapshot = any> {
     let s1: BufferedSnapshot<T> | null = null;
 
     for (let i = 0; i < this.buffer.length - 1; i++) {
-      if (this.buffer[i].receivedAt <= renderTime && this.buffer[i + 1].receivedAt >= renderTime) {
+      const t0 = getTime(this.buffer[i]);
+      const t1 = getTime(this.buffer[i + 1]);
+      if (t0 <= renderTime && t1 >= renderTime) {
         s0 = this.buffer[i];
         s1 = this.buffer[i + 1];
         break;
@@ -270,7 +325,7 @@ export class JitterBuffer<T extends AnySnapshot = any> {
     if (!s0 || !s1) {
       const latest = this.buffer[this.buffer.length - 1];
       this.lastProcessedTick = Math.max(this.lastProcessedTick, latest.snapshot.tick);
-      const rawDeltaSec = Math.max(0, (renderTime - latest.receivedAt) / 1000);
+      const rawDeltaSec = Math.max(0, (renderTime - getTime(latest)) / 1000);
       if (rawDeltaSec === 0) return latest.snapshot;
 
       // Extrapolación cinemática suave hasta autoExtrapolationMs (máx 200 ms) con decaimiento continuo de velocidad
@@ -295,6 +350,8 @@ export class JitterBuffer<T extends AnySnapshot = any> {
       }
 
       const bounds = arenaBounds !== undefined ? arenaBounds : this.arenaBounds;
+      const defaultBallR = (bounds as any)?.ballRadius ?? DEFAULT_GAMEPLAY_CONFIG.ballRadius;
+      const defaultPlayerR = (bounds as any)?.playerRadius ?? DEFAULT_GAMEPLAY_CONFIG.playerRadius;
       const extrapolatedDiscs = (latest.snapshot as any).discs.map((d: any) => {
         const vx = d.vx || 0;
         const vy = d.vy || 0;
@@ -306,7 +363,7 @@ export class JitterBuffer<T extends AnySnapshot = any> {
         if (bounds && bounds.halfWidth > 0 && bounds.halfHeight > 0) {
           const r = typeof d.radius === 'number' && d.radius > 0
             ? d.radius
-            : (d.id === 0 || d.team === 0 ? 10 : 15);
+            : (d.id === 0 || d.team === 0 ? defaultBallR : defaultPlayerR);
           const isPlayer = d.id !== 0 && d.team !== 0;
           const runOff = isPlayer ? (bounds.runOff ?? 0) : 0;
           const goalHalfHeight = bounds.goalHalfHeight ?? 0;
@@ -335,8 +392,10 @@ export class JitterBuffer<T extends AnySnapshot = any> {
       } as T;
     }
 
-    const timeSpan = s1.receivedAt - s0.receivedAt;
-    const alpha = timeSpan > 0 ? Math.max(0, Math.min(1, (renderTime - s0.receivedAt) / timeSpan)) : 0;
+    const t0 = getTime(s0);
+    const t1 = getTime(s1);
+    const timeSpan = t1 - t0;
+    const alpha = timeSpan > 0 ? Math.max(0, Math.min(1, (renderTime - t0) / timeSpan)) : 0;
     const dtSec = Math.max(0.001, timeSpan / 1000);
 
     this.lastProcessedTick = Math.max(this.lastProcessedTick, s0.snapshot.tick);

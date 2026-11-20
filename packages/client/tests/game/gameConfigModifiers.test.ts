@@ -265,17 +265,18 @@ describe('Gameplay Modifiers & Continuous A/D Magnus Physics Suite', () => {
       expect(inst.players.get(1)!.radius).toBe(19.0);
     });
 
-    it('calibrates HBS AF 3v3 Official defaults and applies kickingAcceleration (0.108/0.14) while holding kick', () => {
-      expect(DEFAULT_GAMEPLAY_CONFIG.ballRadius).toBe(5.8);
+    it('calibrates Agile Competitive defaults and preserves full acceleration while holding kick', () => {
+      expect(DEFAULT_GAMEPLAY_CONFIG.ballRadius).toBe(8.0);
       expect(DEFAULT_GAMEPLAY_CONFIG.playerRadius).toBe(15.0);
-      expect(DEFAULT_GAMEPLAY_CONFIG.ballRestitution).toBe(0.412);
-      expect(DEFAULT_GAMEPLAY_CONFIG.ballMass).toBe(0.67);
+      expect(DEFAULT_GAMEPLAY_CONFIG.ballRestitution).toBe(0.58);
+      expect(DEFAULT_GAMEPLAY_CONFIG.ballMass).toBe(0.7);
       expect(DEFAULT_GAMEPLAY_CONFIG.playerMass).toBe(2.0);
-      expect(DEFAULT_GAMEPLAY_CONFIG.playerFriction).toBe(0.96);
-      expect(DEFAULT_GAMEPLAY_CONFIG.ballFriction).toBe(0.99);
-      expect(DEFAULT_GAMEPLAY_CONFIG.playerMaxSpeed).toBe(3.5);
-      expect(DEFAULT_GAMEPLAY_CONFIG.playerAcceleration).toBe(0.14);
-      expect(DEFAULT_GAMEPLAY_CONFIG.kickStrength).toBe(4.545);
+      expect(DEFAULT_GAMEPLAY_CONFIG.playerFriction).toBe(0.95);
+      expect(DEFAULT_GAMEPLAY_CONFIG.ballFriction).toBe(0.988);
+      expect(DEFAULT_GAMEPLAY_CONFIG.playerMaxSpeed).toBe(3.9);
+      expect(DEFAULT_GAMEPLAY_CONFIG.playerAcceleration).toBe(0.16);
+      expect(DEFAULT_GAMEPLAY_CONFIG.kickStrength).toBe(5.2);
+      expect(DEFAULT_GAMEPLAY_CONFIG.staminaRechargeDelay).toBe(1.0);
 
       const disc = engine.playerDiscs.get('p1')!;
       disc.pos.set(-200, 0);
@@ -288,7 +289,7 @@ describe('Gameplay Modifiers & Continuous A/D Magnus Physics Suite', () => {
       engine.tick(new Map([['p1', INPUT_RIGHT | INPUT_KICK]]));
       const kickingVelX = disc.vel.x;
 
-      expect(kickingVelX).toBeCloseTo(normalVelX * (0.108 / 0.14), 4);
+      expect(kickingVelX).toBeCloseTo(normalVelX, 6);
     });
 
     it('activates Power Shot on running/turbo/dash kick and keeps standing normal kick as non-power shot', () => {
@@ -302,6 +303,9 @@ describe('Gameplay Modifiers & Continuous A/D Magnus Physics Suite', () => {
       engine.tick(new Map([['p1', INPUT_KICK]]));
       expect(engine.ball.isPowerShot).toBe(false);
       expect(engine.ball.spin).toBe(0);
+
+      // Release INPUT_KICK for 1 tick (single-shot latch reset)
+      engine.tick(new Map([['p1', 0]]));
 
       // Running + Turbo kick -> Power Shot
       disc.pos.set(-22, 0);

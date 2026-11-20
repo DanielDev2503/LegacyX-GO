@@ -11,15 +11,15 @@ export const INPUT_TYPING = 1 << 9;      // Bit 9: Chat typing status
 export const INPUT_MOUSE_AIM = 1 << 10;  // Bit 10: Continuous 360° mouse pointer movement
 export const INPUT_MOUSE_ACTIVE = 1 << 10; // Explicit alias for active mouse movement
 
-// Parámetros Cinemáticos del Dash (Zero-GC)
-export function getDashStaminaCost(dashesPerFullBar: number = 4): number {
+  // Parámetros Cinemáticos del Dash (Zero-GC)
+export function getDashStaminaCost(dashesPerFullBar: number = 3): number {
   const dashes = Math.max(1, Math.min(6, dashesPerFullBar));
   return 100 / dashes;
 }
 
-export const DASH_STAMINA_COST = 25; // 100 / 4 dashes default
+export const DASH_STAMINA_COST = 100 / 3; // 100 / 3 dashes default
 export const DASH_TICKS = 7;         // Desplazamiento ultrarrápido continuo durante ~7 ticks
-export const DEFAULT_DASH_DISTANCE = 37.5;
+export const DEFAULT_DASH_DISTANCE = 48.0;
 
 export type TeamType = 'red' | 'blue' | 'spec';
 
@@ -57,6 +57,8 @@ export class Player {
 
   // Sistema de Estamina, Turbo, Dash con Cooldown y Dirección 360° (Ponytail: escalares puros)
   public stamina: number = 100;
+  public staminaIdleTimer: number = 0;
+  public staminaRegenUnlocked: boolean = false;
   public isDashing: boolean = false;
   public dashTicksRemaining: number = 0;
   public dashCooldownTimer: number = 0;
@@ -69,6 +71,7 @@ export class Player {
   public curveInput: number = 0;
   public triggerDash: boolean = false;
   public prevDashState: boolean = false;
+  public kickConsumed: boolean = false;
   public lastProcessedInputSeq: number = 0;
 
   // Dirección continua 360° (Modo Ratón)

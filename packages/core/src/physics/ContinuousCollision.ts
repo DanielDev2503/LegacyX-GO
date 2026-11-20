@@ -2,6 +2,7 @@ import { Vec2 } from '../math/Vec2';
 import { closestPointOnSegment } from '../math/MathUtils';
 import { Disc, COLLISION_GROUP_RED, COLLISION_GROUP_BLUE } from '../entities/Disc';
 import { Segment } from '../entities/Segment';
+import { DEFAULT_GAMEPLAY_CONFIG } from '../game/GameConfig';
 
 export interface KickoffPhysicsContext {
   active: boolean;
@@ -194,6 +195,7 @@ export interface StadiumBoundariesConfig {
   goalHalfHeight?: number;  // default 85
   goalDepth?: number;       // default 35 (fondo de red X = ±635)
   runOff?: number;          // default 45 (zona de escape para jugadores)
+  postRadius?: number;      // default 8 (radio de postes)
 }
 
 /**
@@ -214,6 +216,7 @@ export function resolveGoalAndPitchBoundaries(
   const gh = config.goalHalfHeight ?? 85;
   const gd = config.goalDepth ?? 35;
   const netX = pitchHw + gd;
+  const postR = config.postRadius ?? 8;
 
   // 1. Paredes perimetrales superior e inferior del campo exterior (y = ±extHh)
   if (pos.y < -extHh + radius) {
@@ -264,8 +267,7 @@ export function resolveGoalAndPitchBoundaries(
     }
   }
 
-  // 4. Colisión analítica de los 4 postes en (±pitchHw, ±gh) con radio = 8
-  const postR = 8;
+  // 4. Colisión analítica de los 4 postes en (±pitchHw, ±gh) con radio configurado
   const minPostDist = radius + postR;
   const minPostDistSq = minPostDist * minPostDist;
 
@@ -340,8 +342,26 @@ export function resolvePredictivePlayerCollision(
 }
 
 /**
+ * Calcula la fracción posicional que absorbe el jugador frente al balón a partir de sus masas inversas reales.
+ * Si no se pasan masas, conserva el reparto histórico 0.25 / 0.75 por compatibilidad.
+ */
+function computePlayerShareFromMasses(playerMass?: number, ballMass?: number): number {
+  if (
+    typeof playerMass === 'number' &&
+    typeof ballMass === 'number' &&
+    playerMass > 0 &&
+    ballMass > 0
+  ) {
+    const invPlayer = 1 / playerMass;
+    const invBall = 1 / ballMass;
+    return invPlayer / (invPlayer + invBall);
+  }
+  return 0.25;
+}
+
+/**
  * Resuelve la colisión predictiva analítica entre el jugador local y el balón (No-Host anti-clipping).
- * Aplica ponderación estricta por masa inversa (ratio jugador = 0.25) y atenuación elástica del impulso (e = 0.2)
+ * Aplica ponderación estricta por masa inversa real y atenuación elástica del impulso (e = 0.2)
  * para erradicar el efecto flash/strobing y evitar discrepancias oscilatorias con el Host.
  * Zero GC: utiliza únicamente primitivas escalares.
  */
@@ -350,7 +370,9 @@ export function resolvePredictiveBallCollision(
   localVel: { x: number; y: number },
   playerRadius: number,
   ballPos: { x: number; y: number },
-  ballRadius: number = 10
+  ballRadius: number = DEFAULT_GAMEPLAY_CONFIG.ballRadius,
+  playerMass?: number,
+  ballMass?: number
 ): boolean {
   const dx = localPos.x - ballPos.x;
   const dy = localPos.y - ballPos.y;
@@ -368,16 +390,16 @@ export function resolvePredictiveBallCollision(
     ny = dy / dist;
   }
 
-  // Ponderación estricta por masa relativa: ratio_player = 0.25 (el 75% restante lo absorbe la pelota en el Host)
+  const playerShare = computePlayerShareFromMasses(playerMass, ballMass);
   const overlap = minDist - dist;
-  const playerDisplacement = overlap * 0.25;
+  const playerDisplacement = overlap * playerShare;
   localPos.x += nx * playerDisplacement;
   localPos.y += ny * playerDisplacement;
 
-  // Atenuación elástica amortiguada del impulso normal (e = 0.2, ratio = 0.25)
+  // Atenuación elástica amortiguada del impulso normal (e = 0.2)
   const vn = localVel.x * nx + localVel.y * ny;
   if (vn < 0) {
-    const impulse = (1 + 0.2) * vn * 0.25;
+    const impulse = (1 + 0.2) * vn * playerShare;
     localVel.x -= impulse * nx;
     localVel.y -= impulse * ny;
   }
@@ -399,7 +421,8 @@ export function clampDiscToGoalAwareBounds(
   arenaHalfH: number,
   goalHalfHeight: number = 0,
   goalDepth: number = 0,
-  runOff: number = 0
+  runOff: number = 0,
+  postRadius: number = 8
 ): void {
   const r = disc.radius;
 
@@ -435,7 +458,7 @@ export function clampDiscToGoalAwareBounds(
 
       if (goalHalfHeight > 0) {
         const postHalfH = arenaHalfH > 0 ? Math.min(goalHalfHeight, arenaHalfH) : goalHalfHeight;
-        const minPostDist = r + 8;
+        const minPostDist = r + postRadius;
         const minPostDistSq = minPostDist * minPostDist;
         for (let p = 0; p < 4; p++) {
           const px = p < 2 ? -arenaHalfW : arenaHalfW;
@@ -528,7 +551,7 @@ export function clampDiscToGoalAwareBounds(
         }
       }
 
-      const minPostDist = r + 8;
+      const minPostDist = r + postRadius;
       const minPostDistSq = minPostDist * minPostDist;
       for (let p = 0; p < 4; p++) {
         const px = p < 2 ? -arenaHalfW : arenaHalfW;
@@ -579,7 +602,10 @@ function separateBallAndDisc(
   goalHalfHeight: number,
   goalDepth: number,
   localVelForImpulse: { x: number; y: number } | null,
-  discRunOff: number = 0
+  discRunOff: number = 0,
+  postRadius: number = 8,
+  playerMass?: number,
+  ballMass?: number
 ): void {
   const dx = ball.x - disc.x;
   const dy = ball.y - disc.y;
@@ -593,18 +619,21 @@ function separateBallAndDisc(
   const ny = dist > 1e-9 ? dy / dist : 0;
   const overlap = minDist - dist;
 
+  const playerShare = computePlayerShareFromMasses(playerMass, ballMass);
+  const ballShareFraction = 1 - playerShare;
+
   const prevBallX = ball.x;
   const prevBallY = ball.y;
-  const ballShare = overlap * 0.75;
+  const ballShare = overlap * ballShareFraction;
   ball.x += nx * ballShare;
   ball.y += ny * ballShare;
-  clampDiscToGoalAwareBounds(ball, arenaHalfW, arenaHalfH, goalHalfHeight, goalDepth, 0);
+  clampDiscToGoalAwareBounds(ball, arenaHalfW, arenaHalfH, goalHalfHeight, goalDepth, 0, postRadius);
 
   const actualBallShift = Math.max(0, (ball.x - prevBallX) * nx + (ball.y - prevBallY) * ny);
   const discShare = Math.max(0, overlap - actualBallShift);
   disc.x -= nx * discShare;
   disc.y -= ny * discShare;
-  clampDiscToGoalAwareBounds(disc, arenaHalfW, arenaHalfH, goalHalfHeight, goalDepth, discRunOff);
+  clampDiscToGoalAwareBounds(disc, arenaHalfW, arenaHalfH, goalHalfHeight, goalDepth, discRunOff, postRadius);
 
   // If clamping either disc left residual overlap, push the unconstrained side out to ensure 100% separation
   const remDx = ball.x - disc.x;
@@ -619,20 +648,20 @@ function separateBallAndDisc(
     const prevBY2 = ball.y;
     ball.x += rNx * remOverlap;
     ball.y += rNy * remOverlap;
-    clampDiscToGoalAwareBounds(ball, arenaHalfW, arenaHalfH, goalHalfHeight, goalDepth, 0);
+    clampDiscToGoalAwareBounds(ball, arenaHalfW, arenaHalfH, goalHalfHeight, goalDepth, 0, postRadius);
     const ballMoved2 = Math.max(0, (ball.x - prevBX2) * rNx + (ball.y - prevBY2) * rNy);
     const discRem = Math.max(0, remOverlap - ballMoved2);
     if (discRem > 1e-6) {
       disc.x -= rNx * discRem;
       disc.y -= rNy * discRem;
-      clampDiscToGoalAwareBounds(disc, arenaHalfW, arenaHalfH, goalHalfHeight, goalDepth, discRunOff);
+      clampDiscToGoalAwareBounds(disc, arenaHalfW, arenaHalfH, goalHalfHeight, goalDepth, discRunOff, postRadius);
     }
   }
 
   if (localVelForImpulse) {
     const vn = localVelForImpulse.x * nx + localVelForImpulse.y * ny;
     if (vn > 0) {
-      const impulse = (1 + 0.2) * vn * 0.25;
+      const impulse = (1 + 0.2) * vn * playerShare;
       localVelForImpulse.x -= impulse * nx;
       localVelForImpulse.y -= impulse * ny;
     }
@@ -651,12 +680,15 @@ export function applyPredictiveRenderSeparation(
   arenaHalfH: number,
   goalHalfHeight?: number,
   goalDepth?: number,
-  runOff: number = 0
+  runOff: number = 0,
+  postRadius: number = 8,
+  playerMass?: number,
+  ballMass?: number
 ): void {
   const effectiveGoalHalfH =
     goalHalfHeight !== undefined ? goalHalfHeight : (arenaHalfH > 0 ? Math.min(85, arenaHalfH * 0.4) : 0);
   const effectiveGoalDepth =
-    goalDepth !== undefined ? goalDepth : (arenaHalfW > 0 ? 36 : 0);
+    goalDepth !== undefined ? goalDepth : (arenaHalfW > 0 ? 35 : 0);
 
   _sepLocalVel.x = localDisc.vx;
   _sepLocalVel.y = localDisc.vy;
@@ -675,11 +707,23 @@ export function applyPredictiveRenderSeparation(
     for (let i = 0; i < otherDiscs.length; i++) {
       const other = otherDiscs[i]!;
       if (other === ballDisc || other.id === 0 || other.team === 0) continue;
-      separateBallAndDisc(other, ballDisc, arenaHalfW, arenaHalfH, effectiveGoalHalfH, effectiveGoalDepth, null, runOff);
+      separateBallAndDisc(
+        other,
+        ballDisc,
+        arenaHalfW,
+        arenaHalfH,
+        effectiveGoalHalfH,
+        effectiveGoalDepth,
+        null,
+        runOff,
+        postRadius,
+        playerMass,
+        ballMass
+      );
     }
   }
 
-  // Pass 2: Separate localDisc vs ball (75/25 clamped 100%) and localDisc vs remote players
+  // Pass 2: Separate localDisc vs ball (mass-weighted, clamped 100%) and localDisc vs remote players
   for (let i = 0; i < otherDiscs.length; i++) {
     const other = otherDiscs[i]!;
     if (other.id === 0 || other.team === 0) {
@@ -691,7 +735,10 @@ export function applyPredictiveRenderSeparation(
         effectiveGoalHalfH,
         effectiveGoalDepth,
         _sepLocalVel,
-        runOff
+        runOff,
+        postRadius,
+        playerMass,
+        ballMass
       );
     } else {
       _sepOtherVel.x = other.vx;
@@ -704,20 +751,32 @@ export function applyPredictiveRenderSeparation(
         _sepOtherVel,
         other.radius
       );
-      clampDiscToGoalAwareBounds(other, arenaHalfW, arenaHalfH, effectiveGoalHalfH, effectiveGoalDepth, runOff);
+      clampDiscToGoalAwareBounds(other, arenaHalfW, arenaHalfH, effectiveGoalHalfH, effectiveGoalDepth, runOff, postRadius);
     }
   }
 
   localDisc.vx = _sepLocalVel.x;
   localDisc.vy = _sepLocalVel.y;
-  clampDiscToGoalAwareBounds(localDisc, arenaHalfW, arenaHalfH, effectiveGoalHalfH, effectiveGoalDepth, runOff);
+  clampDiscToGoalAwareBounds(localDisc, arenaHalfW, arenaHalfH, effectiveGoalHalfH, effectiveGoalDepth, runOff, postRadius);
 
   // Pass 3: Reconcile any residual overlap with ball induced by player-player separation or wall clamping
   if (ballDisc) {
     for (let i = 0; i < otherDiscs.length; i++) {
       const other = otherDiscs[i]!;
       if (other === ballDisc || other.id === 0 || other.team === 0) continue;
-      separateBallAndDisc(other, ballDisc, arenaHalfW, arenaHalfH, effectiveGoalHalfH, effectiveGoalDepth, null, runOff);
+      separateBallAndDisc(
+        other,
+        ballDisc,
+        arenaHalfW,
+        arenaHalfH,
+        effectiveGoalHalfH,
+        effectiveGoalDepth,
+        null,
+        runOff,
+        postRadius,
+        playerMass,
+        ballMass
+      );
     }
 
     const dx = ballDisc.x - localDisc.x;
@@ -732,7 +791,10 @@ export function applyPredictiveRenderSeparation(
         effectiveGoalHalfH,
         effectiveGoalDepth,
         null,
-        runOff
+        runOff,
+        postRadius,
+        playerMass,
+        ballMass
       );
     }
   }

@@ -7,6 +7,7 @@ import {
   COLLISION_GROUP_ALL
 } from '../entities/Disc';
 import { Segment } from '../entities/Segment';
+import { DEFAULT_GAMEPLAY_CONFIG } from '../game/GameConfig';
 
 export interface GoalDefinition {
   team: 'red' | 'blue';
@@ -305,20 +306,24 @@ export class Stadium {
   }
 
   /**
-   * Checks if a point (ball position) crossed a goal line.
+   * Checks if the ball has crossed completely over a goal line (regla FIFA).
    * Returns 'red' if Red scored (ball crossed blue goal on the right),
    * 'blue' if Blue scored (ball crossed red goal on the left),
    * or null if no goal.
    */
-  public checkGoal(ballX: number, ballY: number): 'red' | 'blue' | null {
+  public checkGoal(
+    ballX: number,
+    ballY: number,
+    ballRadius: number = DEFAULT_GAMEPLAY_CONFIG.ballRadius
+  ): 'red' | 'blue' | null {
     const hw = this.halfWidth;
     const gh = this.goalHalfHeight;
 
-    if (ballY > -gh && ballY < gh) {
-      if (ballX < -hw) {
+    if (Math.abs(ballY) <= gh) {
+      if (ballX < -hw - ballRadius) {
         return 'blue'; // Left goal conceded by red, point for blue
       }
-      if (ballX > hw) {
+      if (ballX > hw + ballRadius) {
         return 'red'; // Right goal conceded by blue, point for red
       }
     }

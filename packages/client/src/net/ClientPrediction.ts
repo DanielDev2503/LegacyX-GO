@@ -81,6 +81,19 @@ export class ClientPredictionReconciler {
     return this.visualOffset;
   }
 
+  /**
+   * Avanza el contador monotónico de secuencia incluso durante fases no movibles
+   * (GOAL_REPLAY, conteos) para que al volver a KICKOFF el Host nunca descarte inputs.
+   */
+  public allocateNextSeq(candidate?: number): number {
+    const safeCandidate =
+      typeof candidate === 'number' && Number.isFinite(candidate) ? Math.floor(candidate) : 0;
+    const next = Math.max(this.lastRecordedSeq + 1, this.inputSeq + 1, safeCandidate) >>> 0;
+    this.lastRecordedSeq = next;
+    this.inputSeq = next;
+    return next;
+  }
+
   public recordInput(input: BufferedClientInput): number;
   public recordInput(tickOrSeq: number, mask: number, aimAngle?: number | null, aimThrottle?: number): number;
   public recordInput(
@@ -293,7 +306,12 @@ export class ClientPredictionReconciler {
         this.inputBuffer = this.inputBuffer.slice(-ClientPredictionReconciler.MAX_REPLAY_TICKS);
       }
 
-      // Rewind to authoritative snapshot
+      // Rewind to authoritative snapshot preservando el estado temporal local de recarga de estamina
+      const prevRt = (engine as any).getRuntime?.(localDiscId);
+      const prevIdleTimer = prevRt?.staminaIdleTimer ?? 0;
+      const prevRegenUnlocked = prevRt?.staminaRegenUnlocked ?? false;
+      const prevPredStamina = localDisc.stamina;
+
       engine.setState(authSnapshot);
       const rawCd = (authDisc as any).dashCooldown ?? 0;
       const cdSec = rawCd > 60 ? rawCd / 1000 : rawCd;
@@ -304,6 +322,17 @@ export class ClientPredictionReconciler {
         }
         rt.cooldownTimer = cdSec;
         rt.prevDashDown = Boolean((authDisc.flags ?? 0) & (1 << 1));
+        const authStamina = authDisc.stamina ?? 100;
+        if (authStamina >= 100 || (authDisc.flags ?? 0) & ((1 << 1) | (1 << 4))) {
+          rt.staminaIdleTimer = 0;
+          rt.staminaRegenUnlocked = false;
+        } else if (authStamina > prevPredStamina + 0.01) {
+          rt.staminaRegenUnlocked = true;
+          rt.staminaIdleTimer = prevIdleTimer;
+        } else {
+          rt.staminaIdleTimer = prevIdleTimer;
+          rt.staminaRegenUnlocked = prevRegenUnlocked;
+        }
         const p = engine.players.get(localDiscId);
         if (p && p.isDashing) {
           const spd = Math.hypot(authDisc.vx, authDisc.vy);

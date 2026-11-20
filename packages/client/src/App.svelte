@@ -21,7 +21,8 @@
     INPUT_FLAG_MOUSE_AIM,
     INPUT_FLAG_MOUSE_ACTIVE,
     applyPredictiveRenderSeparation,
-    lerp
+    lerp,
+    DEFAULT_GAMEPLAY_CONFIG
   } from '@legacyx/core';
 
   import { GameRenderer, triggerPitchEmote } from './renderer/GameRenderer.js';
@@ -59,7 +60,9 @@
   import SettingsModal from './ui/modals/SettingsModal.svelte';
   import KeybindModal from './ui/modals/KeybindModal.svelte';
   import ReplayViewerModal from './ui/modals/ReplayViewerModal.svelte';
+  import LegalModal from './ui/modals/LegalModal.svelte';
   import GlobalTooltip from './ui/components/GlobalTooltip.svelte';
+  import { parseLegalDocFromLocation } from './legal/legalContent.js';
 
   let canvasRef = $state<HTMLCanvasElement | null>(null);
 
@@ -68,8 +71,12 @@
 
   function applyModifiersToEngine(modifiers: PhysicsModifiers): void {
     if (rendererInstance) {
-      rendererInstance.discRenderer.ballRadius = modifiers.ballRadius ?? gameUI.gameplayConfig.ballRadius ?? 5.8;
-      rendererInstance.discRenderer.playerRadius = modifiers.playerRadius ?? gameUI.gameplayConfig.playerRadius ?? 15.0;
+      rendererInstance.discRenderer.ballRadius =
+        modifiers.ballRadius ?? gameUI.gameplayConfig.ballRadius ?? DEFAULT_GAMEPLAY_CONFIG.ballRadius;
+      rendererInstance.discRenderer.playerRadius =
+        modifiers.playerRadius ?? gameUI.gameplayConfig.playerRadius ?? DEFAULT_GAMEPLAY_CONFIG.playerRadius;
+      rendererInstance.discRenderer.kickMargin =
+        modifiers.kickMargin ?? gameUI.gameplayConfig.kickMargin ?? DEFAULT_GAMEPLAY_CONFIG.kickMargin;
     }
     if (!testEngine) return;
     testEngine.applyModifiers(modifiers);
@@ -88,6 +95,13 @@
   gameUI.registerUserRoleReader(() =>
     userProfile?.isAuthenticated && !userProfile?.isGuest ? userProfile.role : 'jugador'
   );
+
+  if (typeof window !== 'undefined') {
+    const deepLinkedLegal = parseLegalDocFromLocation(window.location.search, window.location.pathname);
+    if (deepLinkedLegal && !gameUI.activeLegalDoc) {
+      gameUI.activeLegalDoc = deepLinkedLegal;
+    }
+  }
 
   let prevTrackedBallRadius = gameUI.physicsModifiers.ballRadius;
   let prevTrackedPlayerRadius = gameUI.physicsModifiers.playerRadius;
@@ -1127,12 +1141,10 @@
 
       const currentPhase = gameUI.isHost && engine ? engine.fsm.state : (currSnapshot?.phase ?? gameUI.matchPhase);
       if (currentPhase === MatchPhase.GOAL_REPLAY) {
-        keyState.clear();
+        // Mantener teclas/joystick activos para evitar bloqueo del non-host en la transición al KICKOFF
         dashTriggered = false;
         gameUI.isFocusingBall = false;
-        if (mobileTouchController.hasActiveInput() || mobileTouchController.isEmoteMenuOpen) {
-          mobileTouchController.resetAll();
-        }
+        renderer.focusBallOnly = false;
         return { inputMask: 0, aimAngle: null, aimThrottle: 0 };
       }
 
@@ -1200,8 +1212,10 @@
       if (gameUI.isHost || !gameApp.networkClient) return;
       const phase = predEngine ? predEngine.fsm.state : gameUI.matchPhase;
       if (!isMovablePhase(phase)) return;
+      if (reconciler.lastRecordedSeq <= 0) return;
       const pkt = computeLocalPlayerInput(false);
-      const tick = (reconciler.lastRecordedSeq + 1) >>> 0;
+      // Reusar la última secuencia registrada evita colisión con nextSeq del siguiente tick a 60 Hz
+      const tick = reconciler.lastRecordedSeq >>> 0;
       gameApp.networkClient.sendInput(pkt.inputMask ?? 0, tick, pkt.aimAngle, pkt.aimThrottle);
     }
 
@@ -1427,6 +1441,8 @@
     let animFrameId: number;
 
     let clientTick = 0;
+    let lastAppliedExtrapMs = Number.NaN;
+    const hostSnapshotBuffers = new Map<number, ArrayBuffer>();
 
     function isMovablePhase(phase: number): boolean {
       return (
@@ -1501,7 +1517,9 @@
           s.halfHeight,
           s.runOff ?? 0,
           s.goalHalfHeight ?? 0,
-          s.goalDepth ?? 0
+          s.goalDepth ?? 0,
+          gameUI.gameplayConfig.ballRadius,
+          gameUI.gameplayConfig.playerRadius
         );
       }
       if (predEngine && gameUI.localPlayerId > 0) {
@@ -1619,7 +1637,7 @@
             hasPredBallPos = true;
             clientTick = seq;
           } else {
-            const seq = Math.max(reconciler.lastRecordedSeq + 1, ++clientTick) >>> 0;
+            const seq = reconciler.allocateNextSeq();
             clientTick = seq;
             gameApp.networkClient.sendInput(
               localPkt.inputMask ?? 0,
@@ -1659,8 +1677,16 @@
         gameApp.consumeRemoteImpulses();
         currSnapshot = engine.getState();
 
-        // Broadcast snapshot autoritativo a todos los peers conectados
-        const snapBuffer = BinaryProtocol.encodeSnapshot(currSnapshot);
+        // Broadcast snapshot autoritativo a todos los peers conectados reutilizando buffer por tamaño
+        const totalLen =
+          BinaryProtocol.SNAPSHOT_HEADER_SIZE +
+          currSnapshot.discs.length * BinaryProtocol.DISC_RECORD_SIZE;
+        let cachedSnapBuf = hostSnapshotBuffers.get(totalLen);
+        if (!cachedSnapBuf) {
+          cachedSnapBuf = new ArrayBuffer(totalLen);
+          hostSnapshotBuffers.set(totalLen, cachedSnapBuf);
+        }
+        const snapBuffer = BinaryProtocol.encodeSnapshot(currSnapshot, cachedSnapBuf);
         gameApp.networkHost?.broadcastSnapshot(snapBuffer);
       }
     });
@@ -1839,7 +1865,8 @@
       renderer.screenShakeEnabled = gameUI.screenShake;
       const effExtrapMs = gameUI.effectiveExtrapolationMs;
       renderer.setExtrapolation(effExtrapMs);
-      if (!gameUI.isHost && gameApp.networkClient) {
+      if (!gameUI.isHost && gameApp.networkClient && lastAppliedExtrapMs !== effExtrapMs) {
+        lastAppliedExtrapMs = effExtrapMs;
         gameApp.networkClient.setAutoExtrapolationMs(effExtrapMs);
       }
       renderer.discRenderer.dampingBall = gameUI.modifiers.ballFriction ?? gameUI.modifiers.pitchFriction ?? 0.99;
@@ -1850,8 +1877,12 @@
       const redActiveKit = gameUI.redCaptainKit;
       const blueActiveKit = gameUI.blueCaptainKit;
       renderer.setTeamKits(redActiveKit, blueActiveKit);
-      renderer.discRenderer.ballRadius = gameUI.gameplayConfig.ballRadius || gameUI.modifiers.ballRadius || 5.8;
-      renderer.discRenderer.playerRadius = gameUI.gameplayConfig.playerRadius || gameUI.modifiers.playerRadius || 15.0;
+      renderer.discRenderer.ballRadius =
+        gameUI.gameplayConfig.ballRadius || gameUI.modifiers.ballRadius || DEFAULT_GAMEPLAY_CONFIG.ballRadius;
+      renderer.discRenderer.playerRadius =
+        gameUI.gameplayConfig.playerRadius || gameUI.modifiers.playerRadius || DEFAULT_GAMEPLAY_CONFIG.playerRadius;
+      renderer.discRenderer.kickMargin =
+        gameUI.gameplayConfig.kickMargin ?? gameUI.modifiers.kickMargin ?? DEFAULT_GAMEPLAY_CONFIG.kickMargin;
       renderer.discRenderer.ballSkin = gameUI.effectiveBallSkin as any;
       renderer.discRenderer.ballMode = gameUI.effectiveBallMode;
       renderer.discRenderer.ballCustomColor = gameUI.effectiveBallCustomColor;
@@ -1924,8 +1955,8 @@
             sepOtherDiscs.length = 0;
             const inDiscs = interpSnap.discs;
             sepOtherIndexByDisc.length = inDiscs.length;
-            const ballRad = renderer.discRenderer.ballRadius || 5.8;
-            const playerRad = renderer.discRenderer.playerRadius || 15.0;
+            const ballRad = renderer.discRenderer.ballRadius || DEFAULT_GAMEPLAY_CONFIG.ballRadius;
+            const playerRad = renderer.discRenderer.playerRadius || DEFAULT_GAMEPLAY_CONFIG.playerRadius;
             sepLocalDisc.x = predX;
             sepLocalDisc.y = predY;
             sepLocalDisc.vx = predDisc.vel.x;
@@ -1934,7 +1965,8 @@
 
             let nonLocalCount = 0;
             renderer.discRenderer.isPaused = false;
-            const usePredictedBall = Boolean(predEngine && hasPredBallPos);
+            // Predicción local exclusiva del jugador; balón y rivales vienen suavizados desde snapshots del Host
+            const usePredictedBall = false;
             const predBallX = usePredictedBall
               ? lerp(prevPredBallPos.x, currPredBallPos.x, alpha) + reconciler.ballVisualOffset.x
               : 0;
@@ -1993,7 +2025,10 @@
               renderer.stadium.halfHeight,
               renderer.stadium.goalHalfHeight,
               renderer.stadium.goalDepth,
-              renderer.stadium.runOff ?? 45
+              renderer.stadium.runOff ?? 45,
+              renderer.stadium.postRadius ?? 8,
+              gameUI.gameplayConfig.playerMass,
+              gameUI.gameplayConfig.ballMass
             );
 
             for (let i = 0; i < inDiscs.length; i++) {
@@ -2219,7 +2254,9 @@
         gameUI.recordTelemetrySample(gameUI.isHost ? 0 : gameUI.pingMs, currentFps);
         frameCount = 0;
         lastFpsCalculation = now;
-        syncChatBounds();
+        if (!observedChatEl) {
+          syncChatBounds();
+        }
 
         if (matchRecorder.isRecording) {
           syncRecorderMetadata();
@@ -2354,6 +2391,9 @@
         <ReplayViewerModal />
       {/if}
     {/if}
+
+    <!-- Modal Legal Global (accesible desde Gatekeeper, Lobby, Ajustes y enlaces directos ?legal=*) -->
+    <LegalModal />
 
     <!-- Tooltip Global Singleton (Portal) -->
     <GlobalTooltip />

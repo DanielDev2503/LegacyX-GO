@@ -1293,8 +1293,9 @@
   /* ===== Mobile Landscape & Touch Adaptation ===== */
   @media (max-height: 520px), (max-width: 960px) {
     .creator-root {
-      padding: 6px 10px;
-      gap: 6px;
+      padding: max(8px, env(safe-area-inset-top, 8px)) max(12px, env(safe-area-inset-right, 12px))
+        max(10px, env(safe-area-inset-bottom, 10px)) max(12px, env(safe-area-inset-left, 12px));
+      gap: 8px;
       justify-content: flex-start;
       overflow-y: auto;
       touch-action: pan-y;
@@ -1345,24 +1346,24 @@
     }
 
     .type-btn {
-      height: 32px;
-      font-size: 11px;
+      height: 38px;
+      font-size: 11.5px;
     }
 
     .styled-input,
     .styled-sub-input,
     .rule-select-box {
-      height: 34px;
-      font-size: 12px;
+      height: 40px;
+      font-size: 12.5px;
     }
 
     .rule-btn {
-      height: 36px;
-      padding: 3px 8px;
+      height: 40px;
+      padding: 4px 10px;
     }
 
     .stadium-preview-box {
-      height: 96px;
+      height: 102px;
     }
 
     .captcha-section {
@@ -1372,22 +1373,22 @@
 
     .captcha-canvas {
       width: 148px;
-      height: 40px;
+      height: 42px;
     }
 
     .captcha-refresh-btn {
-      width: 36px;
-      height: 40px;
+      width: 40px;
+      height: 42px;
     }
 
     .captcha-input {
-      height: 40px;
+      height: 42px;
       font-size: 15px;
     }
 
     .launch-btn {
-      height: 38px;
-      font-size: 12.5px;
+      height: 42px;
+      font-size: 13px;
     }
   }
 

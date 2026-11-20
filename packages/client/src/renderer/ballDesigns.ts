@@ -1185,11 +1185,12 @@ export function drawBallDesign(ctx: CanvasRenderingContext2D, opts: DrawBallDesi
 
   ctx.restore(); // remove clip
 
-  // 5. Outer perimeter stroke
+  // 5. Outer perimeter stroke (inward so visual edge equals physical hitbox)
+  const rimWidth = 1.4;
   ctx.strokeStyle = getRimColor(skin);
-  ctx.lineWidth = 1.4;
+  ctx.lineWidth = rimWidth;
   ctx.beginPath();
-  ctx.arc(x, y, radius, 0, Math.PI * 2);
+  ctx.arc(x, y, Math.max(1, radius - rimWidth * 0.5), 0, Math.PI * 2);
   ctx.stroke();
 
   ctx.restore();

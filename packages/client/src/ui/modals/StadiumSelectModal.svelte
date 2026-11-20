@@ -891,8 +891,8 @@
 
     .stadium-modal-card {
       width: min(98vw, 920px);
-      height: calc(100vh - 0.8rem);
-      max-height: 96vh;
+      height: calc(100dvh - 0.8rem);
+      max-height: 96dvh;
     }
 
     .modal-header-ribbon {
@@ -934,18 +934,19 @@
     }
 
     .arena-card {
-      padding: 0.5rem 0.5rem;
-      min-height: 38px;
+      padding: 0.55rem 0.6rem;
+      min-height: 42px;
       gap: 0.55rem;
     }
 
     .arena-name {
-      font-size: 0.8rem;
+      font-size: 0.82rem;
     }
 
     .stadium-detail-panel {
-      padding: 0.65rem 0.85rem;
-      gap: 0.6rem;
+      padding: 0.7rem 0.9rem;
+      gap: 0.65rem;
+      overflow-y: auto;
     }
 
     .tactical-pitch-surface {
@@ -972,24 +973,36 @@
     }
 
     .modal-footer {
-      padding: 0.5rem 0.9rem;
+      padding: 0.55rem 0.9rem;
     }
 
     .confirm-selection-btn {
-      padding: 0.55rem 1.35rem;
-      min-height: 38px;
-      font-size: 0.8rem;
+      padding: 0.6rem 1.45rem;
+      min-height: 42px;
+      font-size: 0.82rem;
     }
   }
 
-  @media (max-width: 680px) and (min-height: 521px) {
+  @media (max-width: 720px) {
     .stadium-content-grid {
       flex-direction: column;
     }
     .stadium-sidebar {
       width: 100%;
+      max-height: 36dvh;
       border-right: none;
       border-bottom: 1px solid rgba(0, 229, 255, 0.15);
+    }
+    .stadium-scroll-list {
+      flex-direction: row;
+      overflow-x: auto;
+      overflow-y: hidden;
+      gap: 0.45rem;
+      padding-bottom: 0.25rem;
+    }
+    .arena-card {
+      flex: 0 0 auto;
+      min-width: 155px;
     }
     .specs-list {
       grid-template-columns: 1fr;

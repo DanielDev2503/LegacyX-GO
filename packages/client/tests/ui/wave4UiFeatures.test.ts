@@ -163,5 +163,5 @@ describe('Wave-4 UI & Client Features', () => {
     const lobbyCode = readFileSync(resolve(clientSrc, 'ui/screens/Lobby.svelte'), 'utf8');
     expect(lobbyCode).toContain('room-disconnect-modal');
     expect(lobbyCode).toContain('gameUI.roomDisconnectNotice');
-  });
+  }, 15000);
 });

@@ -2,6 +2,8 @@ import { OP_SNAPSHOT } from './BinaryProtocol';
 import { GameSnapshot, DiscSnapshot } from '../game/GameState';
 import { MatchPhase, toMatchPhase } from '../game/GameFSM';
 
+import { DEFAULT_GAMEPLAY_CONFIG } from '../game/GameConfig';
+
 export interface ActiveRadiusConfig {
   ballRadius?: number;
   playerRadius?: number;
@@ -190,7 +192,10 @@ export class SnapshotPacket {
         dashCooldown = view.getUint8(offset + 25) / 100;
       }
 
-      const dynamicRadius = team === 0 ? (activeCfg?.ballRadius ?? 5.8) : (activeCfg?.playerRadius ?? 15.0);
+      const dynamicRadius =
+        team === 0
+          ? (activeCfg?.ballRadius ?? DEFAULT_GAMEPLAY_CONFIG.ballRadius)
+          : (activeCfg?.playerRadius ?? DEFAULT_GAMEPLAY_CONFIG.playerRadius);
 
       discs.push({
         id,

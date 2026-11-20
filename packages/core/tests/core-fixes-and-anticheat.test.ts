@@ -86,18 +86,26 @@ describe('Core Task 1 Fixes & Anti-Cheat Hardening', () => {
 
       const pStationary = createKinematicsPlayer({ stamina: 50 });
       for (let i = 0; i < 60; i++) {
-        stepPlayerKinematics(pStationary, { inputMask: 0 }, null, null, undefined, CORE_DT, { skipSubsteps: true });
+        stepPlayerKinematics(
+          pStationary,
+          { inputMask: 0 },
+          null,
+          null,
+          { staminaRechargeDelay: 0, staminaRechargeRate: 25 },
+          CORE_DT,
+          { skipSubsteps: true }
+        );
       }
       expect(pStationary.stamina).toBeCloseTo(75, 5);
 
-      const pEnabledRateOmitted = createKinematicsPlayer({ stamina: 50 });
+      const pEnabledRateOmitted = createKinematicsPlayer({ stamina: 50, staminaRegenUnlocked: true });
       for (let i = 0; i < 60; i++) {
         stepPlayerKinematics(
           pEnabledRateOmitted,
           { inputMask: INPUT_RIGHT },
           null,
           null,
-          { staminaRegenMoving: true },
+          { staminaRechargeDelay: 0, staminaRechargeRate: 25, staminaRegenMoving: true },
           CORE_DT,
           { skipSubsteps: true }
         );

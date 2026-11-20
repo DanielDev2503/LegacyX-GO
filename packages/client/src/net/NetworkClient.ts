@@ -536,8 +536,14 @@ export class NetworkClient {
     });
   }
 
+  private hasConfiguredExtrap: boolean = false;
+
   public setAutoExtrapolationMs(ms: number): void {
     const clamped = Number.isFinite(ms) ? Math.max(0, Math.min(250, Math.round(ms))) : 0;
+    if (this.hasConfiguredExtrap && clamped === this.autoExtrapolationMs) {
+      return;
+    }
+    this.hasConfiguredExtrap = true;
     this.autoExtrapolationMs = clamped;
     const jb = this.jitterBuffer as unknown as {
       autoExtrapolationMs?: number;

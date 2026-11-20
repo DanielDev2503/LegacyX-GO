@@ -18,12 +18,14 @@
   import { drawBallDesign, type BallSkin } from '../../renderer/ballDesigns.js';
   import MatchScoreboard from '../components/MatchScoreboard.svelte';
   import KitPatternBadge from '../components/KitPatternBadge.svelte';
+  import SocialLinksSection from '../components/SocialLinksSection.svelte';
+  import { LEGAL_DOCUMENTS, LEGAL_OPERATOR } from '../../legal/legalContent.js';
 
-  type SettingsTab = 'controls' | 'audio' | 'video' | 'visual' | 'kits' | 'avatar' | 'account';
+  type SettingsTab = 'controls' | 'audio' | 'video' | 'visual' | 'kits' | 'avatar' | 'account' | 'social' | 'legal';
   let activeTab = $state<SettingsTab>(
     (gameUI.activeSettingsTab as string) === 'club'
       ? 'avatar'
-      : ((['controls', 'audio', 'video', 'visual', 'kits', 'avatar', 'account'] as const).includes(
+      : ((['controls', 'audio', 'video', 'visual', 'kits', 'avatar', 'account', 'social', 'legal'] as const).includes(
             gameUI.activeSettingsTab as SettingsTab
           )
           ? (gameUI.activeSettingsTab as SettingsTab)
@@ -431,6 +433,31 @@
       isSavingName = false;
     }
   }
+
+  let deleteConfirmText = $state('');
+  let isDeletingAccount = $state(false);
+  let deleteAccountError = $state<string | null>(null);
+
+  async function handleDeleteOwnAccount() {
+    if (deleteConfirmText.trim().toUpperCase() !== 'ELIMINAR' || isDeletingAccount) return;
+    isDeletingAccount = true;
+    deleteAccountError = null;
+    try {
+      const res = await userProfile.deleteAccount();
+      if (!res.ok) {
+        deleteAccountError = res.error || 'No se pudo eliminar la cuenta.';
+        return;
+      }
+      soundFX.playUIClick();
+      deleteConfirmText = '';
+      gameUI.closeModal();
+      gameUI.navigateTo('GATEKEEPER');
+    } catch (err: unknown) {
+      deleteAccountError = err instanceof Error ? err.message : 'Error al eliminar la cuenta.';
+    } finally {
+      isDeletingAccount = false;
+    }
+  }
 </script>
 
 <svelte:window
@@ -638,6 +665,40 @@
           {#if !userProfile.isAuthenticated}
             {@render lockBadge()}
           {/if}
+        </button>
+
+        <button
+          type="button"
+          class="tab-btn"
+          class:active={activeTab === 'social'}
+          onclick={() => switchTab('social')}
+        >
+          <span class="tab-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="18" cy="5" r="3" />
+              <circle cx="6" cy="12" r="3" />
+              <circle cx="18" cy="19" r="3" />
+              <line x1="8.59" y1="13.51" x2="15.42" y2="17.49" />
+              <line x1="15.41" y1="6.51" x2="8.59" y2="10.49" />
+            </svg>
+          </span>
+          <span class="tab-label">Comunidad y Redes</span>
+        </button>
+
+        <button
+          type="button"
+          class="tab-btn"
+          class:active={activeTab === 'legal'}
+          onclick={() => switchTab('legal')}
+        >
+          <span class="tab-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 2l7 4v6c0 5-3.5 8.5-7 10-3.5-1.5-7-5-7-10V6l7-4z" />
+              <line x1="12" y1="8" x2="12" y2="12" />
+              <line x1="12" y1="16" x2="12.01" y2="16" />
+            </svg>
+          </span>
+          <span class="tab-label">Legal y Privacidad</span>
         </button>
       </nav>
     </aside>
@@ -2562,6 +2623,7 @@
               )}
             </div>
           {:else}
+          <div class="settings-scroll-area kits-scroll-area">
           <!-- Bloque Superior de Identidad (Unificado) -->
           <div class="team-identity-block">
             <div class="input-group team-name-group">
@@ -2781,6 +2843,7 @@
                 </div>
               </div>
             </div>
+          </div>
           </div>
           {/if}
         </div>
@@ -3141,12 +3204,86 @@
                   </div>
                 {/if}
               </div>
+
+              <!-- Zona de Riesgo: Eliminación Permanente de Cuenta (GDPR/App Store/Play Compliance) -->
+              <div class="danger-delete-card">
+                <div class="card-header-flex">
+                  <div class="header-info-title">
+                    <h4 class="card-title danger-title">Eliminar cuenta permanentemente</h4>
+                    <small class="bind-hint">
+                      Borra definitivamente tu perfil, ELO, estadísticas, replays en la nube y credencial de autenticación. Esta acción no se puede revertir.
+                    </small>
+                  </div>
+                </div>
+
+                <div class="delete-confirm-row">
+                  <input
+                    type="text"
+                    class="initials-input-field delete-confirm-input"
+                    placeholder='Escribe "ELIMINAR" para confirmar'
+                    bind:value={deleteConfirmText}
+                    disabled={isDeletingAccount}
+                  />
+                  <button
+                    type="button"
+                    class="danger-delete-btn"
+                    disabled={isDeletingAccount || deleteConfirmText.trim().toUpperCase() !== 'ELIMINAR'}
+                    onclick={handleDeleteOwnAccount}
+                  >
+                    {isDeletingAccount ? 'Eliminando...' : 'Eliminar mi cuenta'}
+                  </button>
+                </div>
+
+                {#if deleteAccountError}
+                  <p class="error-msg">{deleteAccountError}</p>
+                {/if}
+              </div>
             {:else}
               {@render guestLockCard(
                 'Cuenta y Perfil Oficial',
                 'Inicia sesión o crea una cuenta para guardar tu ELO, estadísticas competitivas, repeticiones en la nube y nombre oficial único.'
               )}
             {/if}
+          </div>
+        </div>
+      {:else if activeTab === 'social'}
+        <div class="tab-pane">
+          <div class="section-header-row">
+            <h3 class="section-heading">Comunidad y Redes</h3>
+          </div>
+          <div class="settings-scroll-area">
+            <SocialLinksSection />
+          </div>
+        </div>
+      {:else if activeTab === 'legal'}
+        <div class="tab-pane">
+          <div class="section-header-row">
+            <h3 class="section-heading">Centro Legal y Privacidad</h3>
+          </div>
+          <div class="settings-scroll-area">
+            <div class="legal-overview-card">
+              <p class="legal-overview-copy">
+                Operado por <strong>{LEGAL_OPERATOR.owner}</strong> ({LEGAL_OPERATOR.country}). Consulta en cualquier momento nuestros documentos legales vigentes para Web, móvil y escritorio:
+              </p>
+              <div class="legal-docs-grid">
+                {#each LEGAL_DOCUMENTS as doc (doc.id)}
+                  <button
+                    type="button"
+                    class="legal-doc-open-btn"
+                    onclick={() => gameUI.openLegalDoc(doc.id)}
+                  >
+                    <div class="legal-doc-btn-top">
+                      <strong>{doc.title}</strong>
+                      <span class="legal-doc-arrow">Abrir →</span>
+                    </div>
+                    <span class="legal-doc-summary">{doc.summary}</span>
+                  </button>
+                {/each}
+              </div>
+              <p class="legal-support-note">
+                Soporte y ejercicio de derechos: <a href="mailto:{LEGAL_OPERATOR.supportEmail}">{LEGAL_OPERATOR.supportEmail}</a>
+              </p>
+            </div>
           </div>
         </div>
       {/if}
@@ -5803,6 +5940,149 @@
     .custom-slider,
     input[type='range'] {
       touch-action: pan-x;
+    }
+  }
+
+  .kits-scroll-area {
+    padding-right: 0.35rem;
+  }
+
+  .danger-delete-card {
+    display: flex;
+    flex-direction: column;
+    gap: 0.7rem;
+    padding: 0.95rem 1.05rem;
+    border-radius: 0.55rem;
+    background: rgba(127, 29, 29, 0.16);
+    border: 1px solid rgba(248, 113, 113, 0.38);
+  }
+
+  .danger-title {
+    color: #fca5a5 !important;
+  }
+
+  .delete-confirm-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.6rem;
+    align-items: center;
+  }
+
+  .delete-confirm-input {
+    flex: 1 1 200px;
+    min-width: 0;
+  }
+
+  .danger-delete-btn {
+    padding: 0.55rem 0.95rem;
+    min-height: 38px;
+    border-radius: 0.45rem;
+    border: 1px solid rgba(248, 113, 113, 0.65);
+    background: rgba(220, 38, 38, 0.25);
+    color: #fecaca;
+    font-size: 0.78rem;
+    font-weight: 800;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+
+  .danger-delete-btn:hover:not(:disabled) {
+    background: rgba(220, 38, 38, 0.42);
+    color: #ffffff;
+  }
+
+  .danger-delete-btn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+
+  .legal-overview-card {
+    display: flex;
+    flex-direction: column;
+    gap: 0.8rem;
+    padding: 1rem;
+    border-radius: 0.6rem;
+    background: rgba(15, 23, 42, 0.72);
+    border: 1px solid rgba(0, 229, 255, 0.24);
+  }
+
+  .legal-overview-copy {
+    margin: 0;
+    font-size: 0.82rem;
+    line-height: 1.45;
+    color: #cbd5e1;
+  }
+
+  .legal-docs-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.6rem;
+  }
+
+  .legal-doc-open-btn {
+    text-align: left;
+    display: flex;
+    flex-direction: column;
+    gap: 0.28rem;
+    padding: 0.75rem 0.85rem;
+    border-radius: 0.5rem;
+    border: 1px solid rgba(148, 163, 184, 0.22);
+    background: rgba(9, 14, 27, 0.88);
+    color: #f8fafc;
+    cursor: pointer;
+    transition: border-color 0.16s ease, background 0.16s ease;
+  }
+
+  .legal-doc-open-btn:hover {
+    border-color: rgba(0, 229, 255, 0.6);
+    background: rgba(15, 23, 42, 0.96);
+  }
+
+  .legal-doc-btn-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    font-size: 0.82rem;
+  }
+
+  .legal-doc-arrow {
+    font-size: 0.72rem;
+    color: #67e8f9;
+    font-weight: 700;
+  }
+
+  .legal-doc-summary {
+    font-size: 0.72rem;
+    line-height: 1.35;
+    color: #94a3b8;
+  }
+
+  .legal-support-note {
+    margin: 0;
+    font-size: 0.76rem;
+    color: #94a3b8;
+  }
+
+  .legal-support-note a {
+    color: #67e8f9;
+    font-weight: 700;
+    text-decoration: none;
+  }
+
+  @media (max-width: 820px) {
+    .kits-layout-grid,
+    .legal-docs-grid {
+      grid-template-columns: 1fr;
+    }
+    .sound-grid-2col {
+      grid-template-columns: 1fr;
+    }
+  }
+
+  @media (max-width: 560px) {
+    .form-row-3col {
+      grid-template-columns: 1fr;
     }
   }
 

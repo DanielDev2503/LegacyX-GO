@@ -787,7 +787,7 @@ export class NetworkHost {
 
   public broadcastSnapshot(buffer: ArrayBuffer): void {
     this.peers.forEach((peer) => {
-      if (peer.unreliableBufferedAmount > 16384) return;
+      if (peer.unreliableBufferedAmount > 32768) return;
       peer.sendUnreliable(buffer);
     });
   }

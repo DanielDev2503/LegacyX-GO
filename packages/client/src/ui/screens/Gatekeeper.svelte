@@ -7,6 +7,27 @@
   } from '../state/userProfile.svelte.js';
   import { soundFX } from '../../audio/SoundFX.js';
   import { EMOJI_CATALOG } from '../utils/constants.js';
+  import SocialLinksSection from '../components/SocialLinksSection.svelte';
+  import { CONSENT_STORAGE_KEY } from '../../legal/legalContent.js';
+
+  let acceptedLegalTerms = $state(false);
+  if (typeof localStorage !== 'undefined') {
+    try {
+      acceptedLegalTerms = Boolean(localStorage.getItem(CONSENT_STORAGE_KEY));
+    } catch {
+      acceptedLegalTerms = false;
+    }
+  }
+
+  function persistLegalConsent() {
+    if (typeof localStorage !== 'undefined') {
+      try {
+        localStorage.setItem(CONSENT_STORAGE_KEY, new Date().toISOString());
+      } catch {
+        // Ignore storage quota errors
+      }
+    }
+  }
 
   const emojiList: readonly string[] = EMOJI_CATALOG;
 
@@ -67,6 +88,8 @@
 
   async function handleAccountRegister(e: SubmitEvent) {
     e.preventDefault();
+    if (!acceptedLegalTerms) return;
+    persistLegalConsent();
     soundFX.ensureContext();
     soundFX.playUIClick();
     const res = await userProfile.register(regUsername, regEmail, regPassword);
@@ -519,11 +542,27 @@
                 />
               </div>
 
+              <label class="legal-consent-row">
+                <input type="checkbox" bind:checked={acceptedLegalTerms} />
+                <span>
+                  Confirmo ser mayor de 13 años (16 en EEE/UK) y acepto los
+                  <button type="button" class="inline-legal-link" onclick={() => gameUI.openLegalDoc('terms')}>
+                    Términos de Servicio
+                  </button>
+                  y la
+                  <button type="button" class="inline-legal-link" onclick={() => gameUI.openLegalDoc('privacy')}>
+                    Política de Privacidad
+                  </button>
+                  (incluye aviso de IP en WebRTC P2P).
+                </span>
+              </label>
+
               <button
                 type="submit"
                 class="primary-cyan-btn"
                 disabled={
                   userProfile.isLoading ||
+                  !acceptedLegalTerms ||
                   Boolean(regUsernameValidation && !regUsernameValidation.valid) ||
                   !regUsername.trim() ||
                   !regEmail.trim() ||
@@ -659,9 +698,29 @@
               />
             </svg>
           </button>
+
+          <p class="guest-legal-note">
+            Al jugar aceptas los
+            <button type="button" class="inline-legal-link" onclick={() => gameUI.openLegalDoc('terms')}>Términos</button>,
+            <button type="button" class="inline-legal-link" onclick={() => gameUI.openLegalDoc('privacy')}>Privacidad WebRTC/Datos</button>
+            y el
+            <button type="button" class="inline-legal-link" onclick={() => gameUI.openLegalDoc('legal')}>Aviso Legal</button>.
+          </p>
         </div>
       </section>
     </main>
+
+    <footer class="gatekeeper-bottom-strip">
+      <SocialLinksSection compact={true} title="COMUNIDAD Y DISCORD OFICIAL" />
+
+      <div class="legal-footer-links" aria-label="Información legal">
+        <button type="button" class="legal-pill-link" onclick={() => gameUI.openLegalDoc('privacy')}>Privacidad Global</button>
+        <button type="button" class="legal-pill-link" onclick={() => gameUI.openLegalDoc('terms')}>Términos y EULA</button>
+        <button type="button" class="legal-pill-link" onclick={() => gameUI.openLegalDoc('legal')}>Aviso Legal / IP</button>
+        <button type="button" class="legal-pill-link" onclick={() => gameUI.openLegalDoc('cookies')}>Cookies / Storage</button>
+        <button type="button" class="legal-pill-link" onclick={() => gameUI.openLegalDoc('rights')}>Derechos / Borrado</button>
+      </div>
+    </footer>
   </div>
 </div>
 
@@ -1592,6 +1651,75 @@
       height: 30px;
       font-size: 14px;
     }
+  }
+
+  .legal-consent-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    font-size: 11.5px;
+    line-height: 1.4;
+    color: #b4c2d9;
+    cursor: pointer;
+    user-select: text;
+  }
+
+  .legal-consent-row input {
+    margin-top: 2px;
+    accent-color: #00e5ff;
+    flex-shrink: 0;
+  }
+
+  .inline-legal-link {
+    background: none;
+    border: none;
+    padding: 0;
+    color: #67e8f9;
+    font: inherit;
+    font-weight: 700;
+    text-decoration: underline;
+    cursor: pointer;
+  }
+
+  .guest-legal-note {
+    margin: 2px 0 0;
+    text-align: center;
+    font-size: 11px;
+    line-height: 1.4;
+    color: #8b9bb6;
+  }
+
+  .gatekeeper-bottom-strip {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin-top: 12px;
+  }
+
+  .legal-footer-links {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding-bottom: env(safe-area-inset-bottom, 4px);
+  }
+
+  .legal-pill-link {
+    background: rgba(15, 23, 42, 0.72);
+    border: 1px solid rgba(148, 163, 184, 0.22);
+    border-radius: 999px;
+    padding: 4px 10px;
+    font-size: 11px;
+    font-weight: 600;
+    color: #94a3b8;
+    cursor: pointer;
+    transition: border-color 0.16s ease, color 0.16s ease;
+  }
+
+  .legal-pill-link:hover {
+    border-color: rgba(0, 229, 255, 0.55);
+    color: #67e8f9;
   }
 
   @media (max-height: 520px) and (orientation: landscape) and (min-width: 560px) {

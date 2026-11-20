@@ -146,6 +146,13 @@ export function createHttpServer(distPath: string = clientDistPath): http.Server
           return sendJson(res, result.success ? 200 : 403, result);
         }
 
+        if (parsedUrl.pathname === '/api/auth/delete-account' && req.method === 'POST') {
+          const authHeader = req.headers.authorization || '';
+          const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : '';
+          const result = await authService.deleteAccount(token);
+          return sendJson(res, result.success ? 200 : 401, result);
+        }
+
         if (parsedUrl.pathname === '/api/leaderboard' && req.method === 'GET') {
           const category = (parsedUrl.searchParams.get('category') || 'elo') as LeaderboardCategory;
           const limit = Number(parsedUrl.searchParams.get('limit') || 50);

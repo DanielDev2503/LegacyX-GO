@@ -20,6 +20,7 @@ import {
 import { PhysicsWorld } from './PhysicsWorld';
 import { Stadium } from '../stadiums/Stadium';
 import { Disc, COLLISION_GROUP_RED, COLLISION_GROUP_BLUE, COLLISION_GROUP_ALL } from '../entities/Disc';
+import { DEFAULT_GAMEPLAY_CONFIG } from '../game/GameConfig';
 
 export interface KinematicsConfig {
   playerAcceleration?: number;
@@ -31,6 +32,7 @@ export interface KinematicsConfig {
   dashCooldown?: number;
   dashesPerFullBar?: number;
   staminaRechargeRate?: number;
+  staminaRechargeDelay?: number;
   staminaRegenMoving?: boolean;
   staminaRegenMovingRate?: number;
   playerFriction?: number;
@@ -49,6 +51,8 @@ export interface PlayerKinematicsState {
   vel: { x: number; y: number };
   radius: number;
   stamina: number;
+  staminaIdleTimer?: number;
+  staminaRegenUnlocked?: boolean;
   isDashing: boolean;
   dashTicksRemaining: number;
   dashCooldownTimer: number;
@@ -122,10 +126,11 @@ export function stepPlayerKinematics(
   // 3. Dash evaluation (Rising edge trigger or triggerDash flag)
   const isDashKeyDown = (mask & INPUT_DASH) !== 0;
   const wantsDash = Boolean(player.triggerDash || (isDashKeyDown && !player.prevDashState));
-  const dashesPerFullBar = config?.dashesPerFullBar ?? 4;
+  const dashesPerFullBar = config?.dashesPerFullBar ?? DEFAULT_GAMEPLAY_CONFIG.dashesPerFullBar;
   const dashCost = 100 / Math.max(1, Math.min(6, dashesPerFullBar));
   const canDash = config?.dashEnabled !== false;
-  const dashCooldownCfg = config?.dashCooldown ?? 1.0;
+  const dashCooldownCfg = config?.dashCooldown ?? DEFAULT_GAMEPLAY_CONFIG.dashCooldown;
+  let spentStaminaThisTick = false;
 
   if (
     canDash &&
@@ -139,6 +144,7 @@ export function stepPlayerKinematics(
     player.isDashing = true;
     player.dashTicksRemaining = DASH_TICKS; // 7 ticks
     player.dashCooldownTimer = dashCooldownCfg;
+    spentStaminaThisTick = true;
 
     if (vSpeed > 0.05) {
       player.dashDirX = player.vel.x / vSpeed;
@@ -154,21 +160,20 @@ export function stepPlayerKinematics(
   player.prevDashState = isDashKeyDown;
   player.triggerDash = false;
 
-  // 4. Kicking state & Acceleration calculation
+  // 4. Kicking state & Acceleration calculation (patear NO altera velocidad ni aceleración)
   const isKicking = (mask & INPUT_KICK) !== 0;
   player.kicking = isKicking;
 
-  const pAccel = config?.playerAcceleration ?? 0.14;
-  const pKickAccel = config?.kickingAcceleration ?? (pAccel * (0.108 / 0.14));
+  const pAccel = config?.playerAcceleration ?? DEFAULT_GAMEPLAY_CONFIG.playerAcceleration;
   const accel = (pAccel / 0.11) * 7.5;
-  const kickAccelRatio = pAccel > 0 ? pKickAccel / pAccel : (0.108 / 0.14);
-  const effectiveAccel = (isKicking ? accel * kickAccelRatio : accel) * (hasMoveInput ? moveThrottle : 1.0);
+  const effectiveAccel = accel * (hasMoveInput ? moveThrottle : 1.0);
 
   const wasDashing = player.isDashing;
 
   if (player.isDashing) {
+    spentStaminaThisTick = true;
     player.dashTicksRemaining--;
-    const dashDistance = config?.dashDistance ?? 37.5;
+    const dashDistance = config?.dashDistance ?? DEFAULT_GAMEPLAY_CONFIG.dashDistance;
     const dashSpeed = (dashDistance / DASH_TICKS) * 60;
     player.vel.x = player.dashDirX * dashSpeed;
     player.vel.y = player.dashDirY * dashSpeed;
@@ -177,9 +182,9 @@ export function stepPlayerKinematics(
       player.isDashing = false;
     }
   } else {
-    const pMaxSpeed = config?.playerMaxSpeed ?? 3.5;
+    const pMaxSpeed = config?.playerMaxSpeed ?? DEFAULT_GAMEPLAY_CONFIG.playerMaxSpeed;
     const baseMaxSpeed = (pMaxSpeed / 2.8) * 168.0 * (hasMoveInput ? moveThrottle : 1.0);
-    const kSpeedTurbo = config?.boostMultiplier ?? config?.turboMultiplier ?? 2.0;
+    const kSpeedTurbo = config?.boostMultiplier ?? config?.turboMultiplier ?? DEFAULT_GAMEPLAY_CONFIG.boostMultiplier;
     const turboMaxSpeed = baseMaxSpeed * kSpeedTurbo;
     const kAccelTurbo = Math.max(2.8, kSpeedTurbo * 1.5);
     const turboAccel = effectiveAccel * kAccelTurbo;
@@ -188,6 +193,7 @@ export function stepPlayerKinematics(
     const wantsTurbo = canTurbo && ((mask & INPUT_TURBO) !== 0);
 
     if (wantsTurbo && hasMoveInput && player.stamina > 0) {
+      spentStaminaThisTick = true;
       player.isTurbo = true;
       player.stamina = Math.max(0, player.stamina - 40 * dt);
       if (player.stamina <= 0) {
@@ -214,24 +220,61 @@ export function stepPlayerKinematics(
             player.vel.x = (player.vel.x / postSpeed) * baseMaxSpeed;
             player.vel.y = (player.vel.y / postSpeed) * baseMaxSpeed;
           }
+        } else if (curSpeed > 1e-6) {
+          // Redirección fluida post-Turbo/Dash sin incrementar magnitud sobre curSpeed
+          player.vel.x += uMoveX * effectiveAccel;
+          player.vel.y += uMoveY * effectiveAccel;
+          const postSpeed = Math.hypot(player.vel.x, player.vel.y);
+          if (postSpeed > 1e-6) {
+            player.vel.x = (player.vel.x / postSpeed) * curSpeed;
+            player.vel.y = (player.vel.y / postSpeed) * curSpeed;
+          }
         }
       }
     }
   }
 
-  // 5. Stamina regeneration
-  if (!player.isDashing && !wasDashing && !player.isTurbo && player.stamina < 100) {
-    const staminaRechargeRate = config?.staminaRechargeRate ?? 25.0;
+  // 5. Stamina regeneration con retardo en reposo (staminaRechargeDelay)
+  const regenDelay = Math.max(0, config?.staminaRechargeDelay ?? DEFAULT_GAMEPLAY_CONFIG.staminaRechargeDelay);
+  const regenMoving = config?.staminaRegenMoving === true;
+  const isUsingStamina = spentStaminaThisTick || player.isDashing || wasDashing || player.isTurbo;
+
+  if (isUsingStamina) {
+    player.staminaIdleTimer = 0;
+    player.staminaRegenUnlocked = false;
+  } else {
+    const canRegenNow = regenDelay <= 1e-6 || Boolean(player.staminaRegenUnlocked);
+
     if (!hasMoveInput) {
-      player.stamina = Math.min(100, player.stamina + staminaRechargeRate * dt);
-    } else if (config?.staminaRegenMoving === true) {
-      const movingFactor = Math.max(0, Math.min(200, config?.staminaRegenMovingRate ?? 25)) / 100;
-      if (movingFactor > 0) {
-        player.stamina = Math.min(
-          100,
-          player.stamina + staminaRechargeRate * movingFactor * dt
-        );
+      if (canRegenNow) {
+        player.staminaRegenUnlocked = true;
+        if (player.stamina < 100) {
+          const staminaRechargeRate = config?.staminaRechargeRate ?? DEFAULT_GAMEPLAY_CONFIG.staminaRechargeRate;
+          player.stamina = Math.min(100, player.stamina + staminaRechargeRate * dt);
+        }
+      } else {
+        const nextIdle = (player.staminaIdleTimer ?? 0) + dt;
+        player.staminaIdleTimer = Math.min(regenDelay, nextIdle);
+        if (nextIdle + 1e-5 >= regenDelay) {
+          player.staminaRegenUnlocked = true;
+        }
       }
+    } else if (regenMoving) {
+      if (player.staminaRegenUnlocked || regenDelay <= 1e-6) {
+        player.staminaRegenUnlocked = true;
+        if (player.stamina < 100) {
+          const staminaRechargeRate = config?.staminaRechargeRate ?? DEFAULT_GAMEPLAY_CONFIG.staminaRechargeRate;
+          const movingFactor = Math.max(0, Math.min(200, config?.staminaRegenMovingRate ?? DEFAULT_GAMEPLAY_CONFIG.staminaRegenMovingRate)) / 100;
+          if (movingFactor > 0) {
+            player.stamina = Math.min(100, player.stamina + staminaRechargeRate * movingFactor * dt);
+          }
+        }
+      } else {
+        player.staminaIdleTimer = 0;
+      }
+    } else {
+      player.staminaIdleTimer = 0;
+      player.staminaRegenUnlocked = false;
     }
   }
 
@@ -243,7 +286,7 @@ export function stepPlayerKinematics(
   // 6. Substepping: Integration, stadium boundaries, kickoff barriers and friction damping
   const SUBSTEPS = 4;
   const subDt = dt / SUBSTEPS;
-  const playerFriction = config?.playerFriction ?? 0.96;
+  const playerFriction = config?.playerFriction ?? DEFAULT_GAMEPLAY_CONFIG.playerFriction;
   const subDamping = Math.pow(playerFriction, 1 / SUBSTEPS);
 
   const teamStr: 'red' | 'blue' = (player.team === 'blue' || player.team === 2) ? 'blue' : 'red';
@@ -252,7 +295,8 @@ export function stepPlayerKinematics(
     halfHeight: (stadium as any)?.halfHeight ?? 270,
     goalHalfHeight: (stadium as any)?.goalHalfHeight ?? 85,
     goalDepth: (stadium as any)?.goalDepth ?? 35,
-    runOff: (stadium as any)?.runOff ?? 0
+    runOff: (stadium as any)?.runOff ?? 0,
+    postRadius: (stadium as any)?.postRadius ?? 8
   };
 
   const centerRadius = kickoff?.centerRadius ?? ((stadium as any)?.centerRadius ?? 80);

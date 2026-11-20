@@ -2,7 +2,13 @@
   import { gameUI } from '../state/gameUI.svelte.js';
   import { soundFX } from '../../audio/SoundFX.js';
   import { tooltip } from '../actions/tooltip.js';
-  import type { GameplayConfig } from '@legacyx/core';
+  import {
+    DEFAULT_GAMEPLAY_CONFIG,
+    GAMEPLAY_PRESETS,
+    type GameplayConfig,
+    type GameplayPreset,
+    type GameplayPresetId
+  } from '@legacyx/core';
 
   interface ControlDef {
     key: keyof GameplayConfig;
@@ -24,7 +30,7 @@
       min: 0.7,
       max: 11.2,
       step: 0.1,
-      defaultVal: 3.5,
+      defaultVal: DEFAULT_GAMEPLAY_CONFIG.playerMaxSpeed,
       unit: 'px/tick'
     },
     {
@@ -34,7 +40,7 @@
       min: 0.03,
       max: 0.55,
       step: 0.01,
-      defaultVal: 0.14
+      defaultVal: DEFAULT_GAMEPLAY_CONFIG.playerAcceleration
     },
     {
       key: 'kickStrength',
@@ -43,7 +49,7 @@
       min: 0.9,
       max: 18.2,
       step: 0.05,
-      defaultVal: 4.545
+      defaultVal: DEFAULT_GAMEPLAY_CONFIG.kickStrength
     },
     {
       key: 'kickMargin',
@@ -52,7 +58,7 @@
       min: 0.0,
       max: 15.0,
       step: 0.5,
-      defaultVal: 4.0,
+      defaultVal: DEFAULT_GAMEPLAY_CONFIG.kickMargin,
       unit: 'px'
     },
     {
@@ -62,7 +68,7 @@
       min: 8.0,
       max: 30.0,
       step: 0.5,
-      defaultVal: 15.0,
+      defaultVal: DEFAULT_GAMEPLAY_CONFIG.playerRadius,
       unit: 'px'
     },
     {
@@ -72,7 +78,7 @@
       min: 0.1,
       max: 10.0,
       step: 0.1,
-      defaultVal: 2.0
+      defaultVal: DEFAULT_GAMEPLAY_CONFIG.playerMass
     },
     {
       key: 'playerFriction',
@@ -81,7 +87,7 @@
       min: 0.80,
       max: 0.999,
       step: 0.005,
-      defaultVal: 0.96
+      defaultVal: DEFAULT_GAMEPLAY_CONFIG.playerFriction
     }
   ];
 
@@ -93,7 +99,7 @@
       min: 3.0,
       max: 16.0,
       step: 0.2,
-      defaultVal: 5.8,
+      defaultVal: DEFAULT_GAMEPLAY_CONFIG.ballRadius,
       unit: 'px'
     },
     {
@@ -103,7 +109,7 @@
       min: 0.0,
       max: 1.8,
       step: 0.01,
-      defaultVal: 0.412
+      defaultVal: DEFAULT_GAMEPLAY_CONFIG.ballRestitution
     },
     {
       key: 'ballMass',
@@ -112,7 +118,7 @@
       min: 0.1,
       max: 10.0,
       step: 0.1,
-      defaultVal: 0.67
+      defaultVal: DEFAULT_GAMEPLAY_CONFIG.ballMass
     },
     {
       key: 'ballFriction',
@@ -121,7 +127,7 @@
       min: 0.80,
       max: 0.999,
       step: 0.005,
-      defaultVal: 0.99
+      defaultVal: DEFAULT_GAMEPLAY_CONFIG.ballFriction
     }
   ];
 
@@ -133,7 +139,7 @@
       min: 1.1,
       max: 4.0,
       step: 0.05,
-      defaultVal: 2.0,
+      defaultVal: DEFAULT_GAMEPLAY_CONFIG.boostMultiplier,
       parentToggle: 'turboEnabled'
     },
     {
@@ -143,20 +149,30 @@
       min: 3.75,
       max: 112.5,
       step: 0.25,
-      defaultVal: 37.5,
+      defaultVal: DEFAULT_GAMEPLAY_CONFIG.dashDistance,
       unit: 'px',
       parentToggle: 'dashEnabled'
     },
     {
       key: 'dashCooldown',
       label: 'Enfriamiento de Dash (Cooldown)',
-      sublabel: 'Tiempo mínimo de espera entre impulsos Dash (1.0s por defecto)',
+      sublabel: 'Tiempo mínimo de espera entre impulsos Dash',
       min: 0.0,
       max: 5.0,
       step: 0.25,
-      defaultVal: 1.0,
+      defaultVal: DEFAULT_GAMEPLAY_CONFIG.dashCooldown,
       unit: 's',
       parentToggle: 'dashEnabled'
+    },
+    {
+      key: 'staminaRechargeDelay',
+      label: 'Espera inmóvil para recarga',
+      sublabel: 'Segundos sin movimiento, Turbo ni Dash antes de empezar a recargar estamina (patear no reinicia esta espera)',
+      min: 0.0,
+      max: 5.0,
+      step: 0.1,
+      defaultVal: DEFAULT_GAMEPLAY_CONFIG.staminaRechargeDelay,
+      unit: 's'
     },
     {
       key: 'staminaRechargeRate',
@@ -165,7 +181,7 @@
       min: 5.0,
       max: 100.0,
       step: 1.0,
-      defaultVal: 25.0,
+      defaultVal: DEFAULT_GAMEPLAY_CONFIG.staminaRechargeRate,
       unit: '%/s'
     },
     {
@@ -186,17 +202,17 @@
       min: 0.0,
       max: 5.0,
       step: 0.05,
-      defaultVal: 1.05,
+      defaultVal: DEFAULT_GAMEPLAY_CONFIG.magnusCurveStrength,
       parentToggle: 'magnusEnabled'
     },
     {
       key: 'dashesPerFullBar',
       label: 'Cantidad de dashes por barra llena',
-      sublabel: 'Consumo de estamina por dash (por defecto 2 dashes = 50% por uso)',
+      sublabel: 'Dashes totales posibles con 100% de estamina',
       min: 1,
       max: 6,
       step: 1,
-      defaultVal: 2,
+      defaultVal: DEFAULT_GAMEPLAY_CONFIG.dashesPerFullBar,
       unit: 'dashes',
       parentToggle: 'dashEnabled'
     }
@@ -219,7 +235,30 @@
     return Math.max(0.8, Math.abs(pVal - pDef));
   }
 
-  function handleTabClick(tab: 'player' | 'ball' | 'mechanics') {
+  function isPresetActive(preset: GameplayPreset): boolean {
+    const cfg = gameUI.gameplayConfig;
+    return (Object.keys(preset.config) as Array<keyof GameplayConfig>).every((k) => {
+      const a = cfg[k];
+      const b = preset.config[k];
+      if (typeof a === 'number' && typeof b === 'number') {
+        return Math.abs(a - b) < 1e-4;
+      }
+      return a === b;
+    });
+  }
+
+  const PRESET_LIST: readonly GameplayPreset[] = Object.values(GAMEPLAY_PRESETS);
+
+  let activePresetId = $derived<GameplayPresetId | 'custom'>(
+    PRESET_LIST.find((p) => isPresetActive(p))?.id ?? 'custom'
+  );
+
+  function handleApplyPreset(presetId: GameplayPresetId) {
+    if (!gameUI.isHost) return;
+    gameUI.applyGameplayPreset(presetId);
+  }
+
+  function handleTabClick(tab: 'presets' | 'player' | 'ball' | 'mechanics') {
     soundFX.playUIClick();
     gameUI.activeModifiersTab = tab;
   }
@@ -340,8 +379,25 @@
           </div>
         </div>
 
-        <!-- 3 Vertical Navigation Tabs -->
+        <!-- 4 Vertical Navigation Tabs -->
         <nav class="nav-tabs" aria-label="Categorías de modificadores">
+          <button
+            type="button"
+            class="tab-btn"
+            class:active={gameUI.activeModifiersTab === 'presets'}
+            onclick={() => handleTabClick('presets')}
+          >
+            <span class="tab-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="3" y="3" width="7" height="7" rx="1" />
+                <rect x="14" y="3" width="7" height="7" rx="1" />
+                <rect x="3" y="14" width="7" height="7" rx="1" />
+                <rect x="14" y="14" width="7" height="7" rx="1" />
+              </svg>
+            </span>
+            <span>Presets de Física</span>
+          </button>
+
           <button
             type="button"
             class="tab-btn"
@@ -411,7 +467,9 @@
           <div class="panel-title-group">
             <span class="cyan-dot"></span>
             <h3 class="panel-title">
-              {#if gameUI.activeModifiersTab === 'player'}
+              {#if gameUI.activeModifiersTab === 'presets'}
+                PRESETS DE JUGABILIDAD
+              {:else if gameUI.activeModifiersTab === 'player'}
                 VARIABLES DEL JUGADOR
               {:else if gameUI.activeModifiersTab === 'ball'}
                 VARIABLES DEL BALÓN
@@ -420,6 +478,9 @@
               {/if}
             </h3>
           </div>
+          {#if activePresetId === 'custom'}
+            <span class="preset-status-chip is-custom">Configuración Personalizada</span>
+          {/if}
         </div>
 
         {#if !gameUI.isHost}
@@ -431,6 +492,39 @@
 
       <!-- Scrollable Modifiers List -->
       <div class="sliders-container">
+        {#if gameUI.activeModifiersTab === 'presets'}
+          <div class="presets-grid">
+            {#each PRESET_LIST as preset (preset.id)}
+              {@const selected = activePresetId === preset.id}
+              <button
+                type="button"
+                class="preset-card"
+                class:is-selected={selected}
+                disabled={!gameUI.isHost}
+                onclick={() => handleApplyPreset(preset.id)}
+              >
+                <div class="preset-card-top">
+                  <div class="preset-title-wrap">
+                    <strong class="preset-title">{preset.name}</strong>
+                    <span class="preset-badge">{preset.badge}</span>
+                  </div>
+                  {#if selected}
+                    <span class="preset-active-pill">ACTIVO</span>
+                  {/if}
+                </div>
+                <p class="preset-desc">{preset.description}</p>
+                <div class="preset-metrics">
+                  <span>Vel: {preset.config.playerMaxSpeed}</span>
+                  <span>Patada: {preset.config.kickStrength}</span>
+                  <span>Balón: {preset.config.ballRadius}px</span>
+                  <span>Dash: {preset.config.dashDistance}px</span>
+                  <span>Espera estamina: {preset.config.staminaRechargeDelay}s</span>
+                </div>
+              </button>
+            {/each}
+          </div>
+        {/if}
+
         <!-- CATEGORY 1: PLAYER -->
         {#if gameUI.activeModifiersTab === 'player'}
           <div class="grid-controls-2col">
@@ -1647,6 +1741,130 @@
     }
   }
 
+  .preset-status-chip {
+    font-size: 0.68rem;
+    font-weight: 700;
+    padding: 0.22rem 0.6rem;
+    border-radius: 999px;
+    background: rgba(245, 158, 11, 0.16);
+    color: #fbbf24;
+    border: 1px solid rgba(251, 191, 36, 0.35);
+    white-space: nowrap;
+  }
+
+  .presets-grid {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 0.75rem;
+  }
+
+  .preset-card {
+    text-align: left;
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+    padding: 0.9rem 1rem;
+    border-radius: 0.6rem;
+    background: rgba(15, 23, 42, 0.72);
+    border: 1px solid rgba(148, 163, 184, 0.2);
+    color: #e2e8f0;
+    cursor: pointer;
+    transition: all 0.18s ease;
+  }
+
+  .preset-card:hover:not(:disabled) {
+    border-color: rgba(0, 229, 255, 0.55);
+    background: rgba(15, 23, 42, 0.95);
+    transform: translateY(-1px);
+  }
+
+  .preset-card.is-selected {
+    border-color: #00e5ff;
+    background: linear-gradient(135deg, rgba(0, 229, 255, 0.14), rgba(15, 23, 42, 0.96));
+    box-shadow: 0 0 18px rgba(0, 229, 255, 0.22);
+  }
+
+  .preset-card:disabled {
+    opacity: 0.75;
+    cursor: not-allowed;
+  }
+
+  .preset-card-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.6rem;
+    flex-wrap: wrap;
+  }
+
+  .preset-title-wrap {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+  }
+
+  .preset-title {
+    font-size: 0.95rem;
+    font-weight: 800;
+    color: #ffffff;
+  }
+
+  .preset-badge {
+    font-size: 0.64rem;
+    font-weight: 700;
+    padding: 0.14rem 0.45rem;
+    border-radius: 999px;
+    background: rgba(0, 229, 255, 0.14);
+    color: #67e8f9;
+    border: 1px solid rgba(0, 229, 255, 0.3);
+  }
+
+  .preset-active-pill {
+    font-size: 0.64rem;
+    font-weight: 800;
+    letter-spacing: 0.05em;
+    padding: 0.18rem 0.52rem;
+    border-radius: 6px;
+    background: rgba(34, 197, 94, 0.2);
+    color: #4ade80;
+    border: 1px solid rgba(74, 222, 128, 0.45);
+  }
+
+  .preset-desc {
+    margin: 0;
+    font-size: 0.78rem;
+    line-height: 1.45;
+    color: #94a3b8;
+  }
+
+  .preset-metrics {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    font-size: 0.7rem;
+    color: #cbd5e1;
+  }
+
+  .preset-metrics span {
+    padding: 0.16rem 0.45rem;
+    border-radius: 6px;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+  }
+
+  @media (max-width: 720px) {
+    .grid-controls-2col {
+      grid-template-columns: 1fr;
+    }
+    .toggles-panel-card {
+      grid-column: span 1;
+    }
+    .toggles-row {
+      grid-template-columns: 1fr;
+    }
+  }
+
   @media (max-width: 680px) and (min-height: 521px) {
     .modal-card {
       flex-direction: column;
@@ -1656,6 +1874,16 @@
       height: auto;
       border-right: none;
       border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+      padding: 0.55rem 0.65rem;
+    }
+    .nav-tabs {
+      flex-direction: row;
+      overflow-x: auto;
+      margin-top: 0.45rem;
+    }
+    .tab-btn {
+      white-space: nowrap;
+      flex-shrink: 0;
     }
     .toggles-row {
       grid-template-columns: 1fr;

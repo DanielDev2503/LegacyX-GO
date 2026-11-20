@@ -558,7 +558,7 @@ export class PeerConnection {
     const channel =
       this.reliableChannel && this.reliableChannel.readyState === 'open'
         ? this.reliableChannel
-        : this.dataChannel && this.dataChannel.readyState === 'open'
+        : this.options?.unreliableOnly && this.dataChannel && this.dataChannel.readyState === 'open'
           ? this.dataChannel
           : null;
     if (!channel) return;
@@ -567,6 +567,7 @@ export class PeerConnection {
       try {
         channel.send(msg);
       } catch {
+        this.reliableOutbox.unshift(msg);
         break;
       }
     }
@@ -579,16 +580,18 @@ export class PeerConnection {
         this.reliableChannel.send(payload);
         return;
       } catch {
-        // Fallback to dataChannel if reliable fails
+        // Fall through to bounded queue on transient send failure
       }
-    }
-    if (this.dataChannel && this.dataChannel.readyState === 'open') {
+    } else if (this.options?.unreliableOnly && this.dataChannel && this.dataChannel.readyState === 'open') {
       try {
         this.dataChannel.send(payload);
         return;
       } catch {
-        // Ignore transient buffer overflow
+        // Fall through to bounded queue
       }
+    }
+    if (this.reliableOutbox.length >= 64) {
+      this.reliableOutbox.shift();
     }
     this.reliableOutbox.push(payload);
   }
@@ -602,7 +605,7 @@ export class PeerConnection {
     const target = this.unreliableChannel || this.dataChannel;
     if (target && target.readyState === 'open') {
       try {
-        if ((target.bufferedAmount ?? 0) <= 16384) {
+        if ((target.bufferedAmount ?? 0) <= 32768) {
           target.send(buffer);
         }
       } catch {
@@ -615,7 +618,7 @@ export class PeerConnection {
     const target = this.unreliableChannel || this.dataChannel;
     if (target && target.readyState === 'open') {
       try {
-        if ((target.bufferedAmount ?? 0) <= 16384) {
+        if ((target.bufferedAmount ?? 0) <= 32768) {
           target.send(typeof msg === 'string' ? msg : JSON.stringify(msg));
         }
       } catch {

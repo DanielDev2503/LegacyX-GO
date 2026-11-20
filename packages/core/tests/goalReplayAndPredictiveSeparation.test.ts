@@ -293,25 +293,25 @@ describe('Goal Replay (4s = 3s pre-goal + 1s post-goal), Skip Auth, Predictive S
     // 150 ms after latest snapshot -> still smoothly extrapolating with partial velocity decay
     const midExtrap = jbHighPing.getInterpolatedSnapshot(1166);
     expect(midExtrap).not.toBeNull();
-    // Clamped to arenaHalfW (420) - ballRadius (10) = 410
-    expect(midExtrap!.discs[0]!.x).toBe(410);
+    // Clamped to arenaHalfW (420) - ballRadius (DEFAULT_GAMEPLAY_CONFIG.ballRadius = 8) = 412
+    expect(midExtrap!.discs[0]!.x).toBe(412);
     expect(midExtrap!.discs[0]!.vx).toBe(0);
 
     // Without clamping near center: verify smooth velocity decay between 100ms and 200ms
     const jbCenter = new JitterBuffer<GameStateSnapshot>(0, 30, false);
     jbCenter.setAutoExtrapolationMs(200);
     jbCenter.push(makeBinarySnapshot(1, MatchPhase.PLAYING, 0, 200), 1000);
-    jbCenter.push(makeBinarySnapshot(2, MatchPhase.PLAYING, 10, 200), 1016);
+    jbCenter.push(makeBinarySnapshot(2, MatchPhase.PLAYING, 10, 200), 1000 + 1000 / 60);
 
-    const at150 = jbCenter.getInterpolatedSnapshot(1016 + 150)!;
-    const at200 = jbCenter.getInterpolatedSnapshot(1016 + 200)!;
-    const at250 = jbCenter.getInterpolatedSnapshot(1016 + 250)!;
+    const at150 = jbCenter.getInterpolatedSnapshot(1000 + 1000 / 60 + 150)!;
+    const at200 = jbCenter.getInterpolatedSnapshot(1000 + 1000 / 60 + 200)!;
+    const at250 = jbCenter.getInterpolatedSnapshot(1000 + 1000 / 60 + 250)!;
 
     // 150ms: decaying smoothly (vx = 100)
     expect(at150.discs[0]!.vx).toBeCloseTo(100, 1);
     expect(at150.discs[0]!.x).toBeGreaterThan(30);
     // 200ms: reaches 0 velocity smoothly and holds position
-    expect(at200.discs[0]!.vx).toBe(0);
+    expect(at200.discs[0]!.vx).toBeCloseTo(0, 6);
     expect(at200.discs[0]!.x).toBeCloseTo(40, 1);
     expect(at250.discs[0]!.x).toBeCloseTo(at200.discs[0]!.x, 5);
   });

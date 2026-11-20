@@ -65,10 +65,10 @@ describe('Mission Engineering Suite: Continuous Vector Dash, Stadiums, Camera & 
       inputs.set('p1', INPUT_DASH);
       engine.tick(inputs);
 
-      // Dash direction should match v / |v| = (0.6, 0.8)
+      // Dash direction should match v / |v| = (0.6, 0.8) and deduct 1/3 bar (3 dashes/bar default)
       expect(player.dashDirX).toBeCloseTo(0.6, 3);
       expect(player.dashDirY).toBeCloseTo(0.8, 3);
-      expect(player.stamina).toBe(75);
+      expect(player.stamina).toBeCloseTo(100 - 100 / 3, 4);
       expect(player.isDashing).toBe(true);
     });
 
@@ -89,7 +89,7 @@ describe('Mission Engineering Suite: Continuous Vector Dash, Stadiums, Camera & 
 
       expect(player.dashDirX).toBeCloseTo(Math.SQRT1_2, 3);
       expect(player.dashDirY).toBeCloseTo(-Math.SQRT1_2, 3);
-      expect(player.stamina).toBe(75);
+      expect(player.stamina).toBeCloseTo(100 - 100 / 3, 4);
     });
 
     it('orients dash towards rival goal when disc is stationary and no keys are pressed', () => {
@@ -119,7 +119,7 @@ describe('Mission Engineering Suite: Continuous Vector Dash, Stadiums, Camera & 
       expect(bluePlayer.dashDirY).toBe(0);
     });
 
-    it('applies calibrated 37.5 px displacement with at least 4 substeps in PhysicsWorld during dash', () => {
+    it('applies calibrated dash displacement (~47 px for dashDistance=48) with at least 4 substeps in PhysicsWorld during dash', () => {
       const engine = new GameEngine();
       engine.fsm.currentState = MatchPhase.PLAYING;
       const player = new Player({ id: 'p1', name: 'Tester', team: 'red', isHost: true });
@@ -152,8 +152,8 @@ describe('Mission Engineering Suite: Continuous Vector Dash, Stadiums, Camera & 
       }
 
       expect(player.isDashing).toBe(false);
-      expect(disc.pos.x).toBeGreaterThanOrEqual(36.0);
-      expect(disc.pos.x).toBeLessThanOrEqual(38.4);
+      expect(disc.pos.x).toBeGreaterThanOrEqual(44.0);
+      expect(disc.pos.x).toBeLessThanOrEqual(49.0);
     });
   });
 

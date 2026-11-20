@@ -187,10 +187,10 @@ describe('Comprehensive Validation: Controls, Rope Net, Universal Extrapolation 
   });
 
   describe('Stamina and Dash Calibration', () => {
-    it('defaults to 4 dashes per full bar with 25% cost', () => {
-      expect(DASH_STAMINA_COST).toBe(25);
-      expect(getDashStaminaCost(4)).toBe(25);
-      expect(Player.getDashStaminaCost(4)).toBe(25);
+    it('defaults to 3 dashes per full bar with 33.33% cost', () => {
+      expect(DASH_STAMINA_COST).toBeCloseTo(100 / 3, 5);
+      expect(getDashStaminaCost(3)).toBeCloseTo(100 / 3, 5);
+      expect(Player.getDashStaminaCost(3)).toBeCloseTo(100 / 3, 5);
     });
 
     it('calculates dynamic dash stamina cost accurately for 1 to 6 dashes', () => {

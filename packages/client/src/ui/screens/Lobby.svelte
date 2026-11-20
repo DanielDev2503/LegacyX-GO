@@ -5,6 +5,7 @@
   import { sharedSignaling } from '../../net/SignalingClient.js';
   import { gameApp } from '../../net/GameApp.js';
   import CountryFlagSvg from '../components/CountryFlagSvg.svelte';
+  import SocialLinksSection from '../components/SocialLinksSection.svelte';
 
   let passwordInput = $state('');
   let passwordError = $state('');
@@ -675,6 +676,20 @@
           {/if}
         </footer>
       </section>
+
+      <!-- Comunidad Oficial y Centro Legal -->
+      <div class="lobby-community-legal">
+        <SocialLinksSection compact={true} title="COMUNIDAD DISCORD Y REDES" />
+        <nav class="lobby-legal-links" aria-label="Enlaces legales">
+          <button type="button" class="lobby-legal-link" onclick={() => gameUI.openLegalDoc('privacy')}>Privacidad</button>
+          <span class="legal-dot" aria-hidden="true">·</span>
+          <button type="button" class="lobby-legal-link" onclick={() => gameUI.openLegalDoc('terms')}>Términos</button>
+          <span class="legal-dot" aria-hidden="true">·</span>
+          <button type="button" class="lobby-legal-link" onclick={() => gameUI.openLegalDoc('legal')}>Aviso Legal</button>
+          <span class="legal-dot" aria-hidden="true">·</span>
+          <button type="button" class="lobby-legal-link" onclick={() => gameUI.openLegalDoc('rights')}>Soporte y Borrado</button>
+        </nav>
+      </div>
     </aside>
   </div>
 
@@ -2042,5 +2057,41 @@
     .train-copy span {
       display: none;
     }
+  }
+
+  .lobby-community-legal {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    flex-shrink: 0;
+  }
+
+  .lobby-legal-links {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 2px 4px;
+  }
+
+  .lobby-legal-link {
+    background: none;
+    border: none;
+    padding: 2px 4px;
+    color: #94a3b8;
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  .lobby-legal-link:hover {
+    color: #67e8f9;
+    text-decoration: underline;
+  }
+
+  .legal-dot {
+    color: #475569;
+    font-size: 11px;
   }
 </style>

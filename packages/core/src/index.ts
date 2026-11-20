@@ -146,7 +146,10 @@ import {
   GameplayConfig,
   DEFAULT_GAMEPLAY_CONFIG,
   GAMEPLAY_CONFIG_LIMITS,
+  GAMEPLAY_PRESETS,
   ConfigLimits,
+  GameplayPreset,
+  GameplayPresetId,
   sanitizeGameplayConfig,
   defaultStadium
 } from './game/GameConfig';
@@ -215,6 +218,9 @@ interface EngineDashState {
   dirX: number;
   dirY: number;
   prevDashDown: boolean;
+  staminaIdleTimer: number;
+  staminaRegenUnlocked: boolean;
+  kickConsumed: boolean;
   lastShotTick: number;
   lastPassTick: number;
   lastTouchTick: number;
@@ -266,7 +272,7 @@ export class EngineInstance {
   private replayNetBall: NetBall = {
     pos: { x: 0, y: 0 },
     vel: { x: 0, y: 0 },
-    radius: 5.8
+    radius: DEFAULT_GAMEPLAY_CONFIG.ballRadius
   };
   private frozenVictoryStats: PlayerMatchStats[] | null = null;
   private frozenVictoryMvp: PlayerMatchStats | null = null;
@@ -319,6 +325,9 @@ export class EngineInstance {
 
     this.world.addDisc(this.ball);
     this.world.loadStadium(this.stadium);
+    this.world.onSubstep = () => {
+      this.enforceEngineKickoffBarriers();
+    };
 
     this.world.onCollision = (e) => {
       const isCompetitivePhase =
@@ -462,6 +471,82 @@ export class EngineInstance {
     });
   }
 
+  private enforceKickoffBarrierForPlayer(id: number, player: Disc): void {
+    const team = this.playerTeams.get(id);
+    if (team !== 'red' && team !== 'blue') return;
+    const centerR = this.stadium.centerRadius ?? 80;
+
+    if (this.isNeutralKickoff) {
+      this.world.enforceMidfieldBarrier(player, team);
+      return;
+    }
+
+    if (team === this.kickoffPossessingTeam) {
+      this.world.enforceKickoffPossessionBarrier(player, team, centerR);
+      return;
+    }
+
+    const r = player.radius;
+    if (team === 'red') {
+      if (player.pos.x > -r) {
+        player.pos.x = -r;
+        if (player.vel.x > 0) player.vel.x = 0;
+      }
+    } else {
+      if (player.pos.x < r) {
+        player.pos.x = r;
+        if (player.vel.x < 0) player.vel.x = 0;
+      }
+    }
+
+    const limitR = centerR + r;
+    const px = player.pos.x;
+    const py = player.pos.y;
+    const distSq = px * px + py * py;
+    if (distSq < limitR * limitR) {
+      const dist = Math.sqrt(distSq);
+      if (dist > 1e-6) {
+        const nx = px / dist;
+        const ny = py / dist;
+        player.pos.x = nx * limitR;
+        player.pos.y = ny * limitR;
+        const vDotN = player.vel.x * nx + player.vel.y * ny;
+        if (vDotN < 0) {
+          player.vel.x -= vDotN * nx;
+          player.vel.y -= vDotN * ny;
+        }
+      } else {
+        const dirX = team === 'red' ? -1 : 1;
+        player.pos.x = dirX * limitR;
+        player.pos.y = 0;
+      }
+      if (team === 'red' && player.pos.x > -r) {
+        player.pos.x = -r;
+        if (player.vel.x > 0) player.vel.x = 0;
+      } else if (team === 'blue' && player.pos.x < r) {
+        player.pos.x = r;
+        if (player.vel.x < 0) player.vel.x = 0;
+      }
+    }
+  }
+
+  private enforceEngineKickoffBarriers(): void {
+    if (this.fsm.state !== MatchPhase.KICKOFF || this.shouldBypassKickoffBarriers()) {
+      this.world.kickoffContext = null;
+      return;
+    }
+    this.world.kickoffContext = this.isNeutralKickoff
+      ? null
+      : {
+          active: true,
+          possessingTeam: this.kickoffPossessingTeam,
+          centerRadius: this.stadium.centerRadius ?? 80
+        };
+    for (const [id, player] of this.players.entries()) {
+      this.enforceKickoffBarrierForPlayer(id, player);
+    }
+  }
+
   public canAwardMatchPoints(): boolean {
     return this.fsm.state === MatchPhase.PLAYING;
   }
@@ -475,6 +560,9 @@ export class EngineInstance {
         dirX: 0,
         dirY: 0,
         prevDashDown: false,
+        staminaIdleTimer: 0,
+        staminaRegenUnlocked: false,
+        kickConsumed: false,
         lastShotTick: -9999,
         lastPassTick: -9999,
         lastTouchTick: -9999,
@@ -629,6 +717,9 @@ export class EngineInstance {
       rt.ticksRemaining = 0;
       rt.cooldownTimer = 0;
       rt.prevDashDown = false;
+      rt.staminaIdleTimer = 0;
+      rt.staminaRegenUnlocked = false;
+      rt.kickConsumed = false;
       if (isRed) redIndex++; else blueIndex++;
     }
 
@@ -738,6 +829,8 @@ export class EngineInstance {
           vel: player.vel,
           radius: player.radius,
           stamina: player.stamina,
+          staminaIdleTimer: rt.staminaIdleTimer,
+          staminaRegenUnlocked: rt.staminaRegenUnlocked,
           isDashing: player.isDashing,
           dashTicksRemaining: rt.ticksRemaining,
           dashCooldownTimer: rt.cooldownTimer,
@@ -764,6 +857,8 @@ export class EngineInstance {
         );
 
         player.stamina = pState.stamina;
+        rt.staminaIdleTimer = pState.staminaIdleTimer ?? 0;
+        rt.staminaRegenUnlocked = pState.staminaRegenUnlocked ?? false;
         player.isDashing = pState.isDashing;
         player.isTurbo = pState.isTurbo;
         player.kicking = pState.kicking ?? false;
@@ -774,8 +869,11 @@ export class EngineInstance {
         rt.prevDashDown = pState.prevDashState ?? false;
 
         const isKickRequested = player.kicking;
+        if (!isKickRequested) {
+          rt.kickConsumed = false;
+        }
 
-        if (isKickRequested && this.world.isWithinKickDistance(player, this.ball)) {
+        if (isKickRequested && !rt.kickConsumed && this.world.isWithinKickDistance(player, this.ball)) {
             const dx = this.ball.pos.x - player.pos.x;
             const dy = this.ball.pos.y - player.pos.y;
             const dist = Math.hypot(dx, dy) || 1;
@@ -798,7 +896,17 @@ export class EngineInstance {
             if (dist < minKickDist) {
               this.ball.pos.x = player.pos.x + nx * minKickDist;
               this.ball.pos.y = player.pos.y + ny * minKickDist;
+              resolveGoalAndPitchBoundaries(this.ball.pos, this.ball.vel, this.ball.radius, {
+                halfWidth: this.stadium.halfWidth,
+                halfHeight: this.stadium.halfHeight,
+                goalHalfHeight: this.stadium.goalHalfHeight,
+                goalDepth: this.stadium.goalDepth,
+                runOff: 0,
+                postRadius: this.stadium.postRadius
+              });
             }
+
+            rt.kickConsumed = true;
 
             const bSpeedAfterKick = Math.hypot(this.ball.vel.x, this.ball.vel.y);
             this.ball.isPowerShot = bSpeedAfterKick >= baseKickCfg * 1.12;
@@ -839,56 +947,9 @@ export class EngineInstance {
           }
         }
 
-        // Restricciones de saque central (desactivadas automáticamente en Modo Entrenamiento o equipo rival vacío)
+        // Restricciones de saque central antes del substepping (reforzadas por substep en world.onSubstep)
         if (this.fsm.state === MatchPhase.KICKOFF && !this.shouldBypassKickoffBarriers()) {
-          const team = this.playerTeams.get(id);
-          const centerR = this.stadium.centerRadius ?? 80;
-          if (this.isNeutralKickoff) {
-            if (team === 'red' || team === 'blue') {
-              this.world.enforceMidfieldBarrier(player, team);
-            }
-          } else if (team === this.kickoffPossessingTeam) {
-            this.world.enforceKickoffPossessionBarrier(player, team, centerR);
-          } else if (team === 'red' || team === 'blue') {
-            const r = player.radius;
-            if (team === 'red') {
-              if (player.pos.x > -r) {
-                player.pos.x = -r;
-                if (player.vel.x > 0) player.vel.x = 0;
-              }
-            } else if (team === 'blue') {
-              if (player.pos.x < r) {
-                player.pos.x = r;
-                if (player.vel.x < 0) player.vel.x = 0;
-              }
-            }
-
-            const limitR = centerR + r;
-            const px = player.pos.x;
-            const py = player.pos.y;
-            const distSq = px * px + py * py;
-            if (distSq < limitR * limitR) {
-              const dist = Math.sqrt(distSq);
-              if (dist > 1e-6) {
-                const nx = px / dist;
-                const ny = py / dist;
-                player.pos.x = nx * limitR;
-                player.pos.y = ny * limitR;
-                const vDotN = player.vel.x * nx + player.vel.y * ny;
-                if (vDotN < 0) {
-                  player.vel.x -= vDotN * nx;
-                  player.vel.y -= vDotN * ny;
-                }
-              }
-              if (team === 'red' && player.pos.x > -r) {
-                player.pos.x = -r;
-                if (player.vel.x > 0) player.vel.x = 0;
-              } else if (team === 'blue' && player.pos.x < r) {
-                player.pos.x = r;
-                if (player.vel.x < 0) player.vel.x = 0;
-              }
-            }
-          }
+          this.enforceKickoffBarrierForPlayer(id, player);
         }
       }
 
@@ -1791,6 +1852,7 @@ export {
   DEFAULT_GAME_CONFIG,
   DEFAULT_GAMEPLAY_CONFIG,
   GAMEPLAY_CONFIG_LIMITS,
+  GAMEPLAY_PRESETS,
   sanitizeGameplayConfig,
   defaultStadium,
   stepPlayerKinematics
@@ -1832,6 +1894,8 @@ export type {
   GameConfig,
   GameplayConfig,
   ConfigLimits,
+  GameplayPreset,
+  GameplayPresetId,
   KinematicsConfig,
   PlayerKinematicsInput,
   PlayerKinematicsState,

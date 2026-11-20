@@ -58,8 +58,8 @@ describe('Directed 2D Magnus Effect', () => {
     const vyAfterRelease = engine.ball.vel.y;
     engine.tick(new Map());
 
-    // In Euler physics: vy_next = vy * damping (0.99)
-    expect(engine.ball.vel.y).toBeCloseTo(vyAfterRelease * 0.99, 4);
+    // In Euler physics: vy_next = vy * ballFriction
+    expect(engine.ball.vel.y).toBeCloseTo(vyAfterRelease * (engine.gameplayConfig.ballFriction ?? 0.988), 4);
     expect(engine.ball.isCurving).toBe(false);
     expect(engine.ball.curvePerp).toBe(0);
   });

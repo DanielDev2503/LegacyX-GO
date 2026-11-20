@@ -1416,6 +1416,80 @@ class UserProfileStore {
       if (item) item.name = clean;
     }
   }
+
+  public async deleteAccount(): Promise<{ ok: boolean; error?: string }> {
+    if (!this.isAuthenticated || this.isGuest) {
+      return { ok: false, error: 'Solo las cuentas registradas pueden eliminarse.' };
+    }
+
+    let token = await this.ensureValidAccessToken();
+    if (!token) {
+      return { ok: false, error: this.authError || 'Tu sesión expiró. Vuelve a iniciar sesión.' };
+    }
+
+    this.authError = null;
+    try {
+      // Limpiar repeticiones del usuario en Storage antes de revocar el perfil/auth
+      await this.fetchUserReplays().catch(() => []);
+      const replaysToRemove = [...this.userReplays];
+      await Promise.allSettled(
+        replaysToRemove.map((r) => this.deleteUserReplay(r.id, r.storage_path))
+      );
+
+      let rpcRes = await fetch(`${this.supabaseUrl}/rest/v1/rpc/delete_own_account`, {
+        method: 'POST',
+        headers: this.supabaseHeaders(token),
+        body: JSON.stringify({})
+      });
+
+      if (rpcRes.status === 401) {
+        const refreshed = await this.ensureValidAccessToken(true);
+        if (!refreshed) {
+          return { ok: false, error: 'Tu sesión expiró. Vuelve a iniciar sesión.' };
+        }
+        token = refreshed;
+        rpcRes = await fetch(`${this.supabaseUrl}/rest/v1/rpc/delete_own_account`, {
+          method: 'POST',
+          headers: this.supabaseHeaders(token),
+          body: JSON.stringify({})
+        });
+      }
+
+      if (rpcRes.ok) {
+        const raw = await rpcRes.json().catch(() => null);
+        const result = Array.isArray(raw) ? raw[0] : raw;
+        if (result && result.success === false) {
+          return { ok: false, error: String(result.error || 'No se pudo eliminar la cuenta.') };
+        }
+      } else {
+        const fallbackRes = await fetch('/api/auth/delete-account', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`
+          }
+        }).catch(() => null);
+
+        if (!fallbackRes || !fallbackRes.ok) {
+          const errBody = fallbackRes ? await fallbackRes.json().catch(() => null) : null;
+          return {
+            ok: false,
+            error: String(errBody?.error || 'No se pudo completar la eliminación de la cuenta.')
+          };
+        }
+      }
+
+      this.userReplays = [];
+      this.resetSessionFields();
+      this.authNotice = 'Tu cuenta ha sido eliminada permanentemente.';
+      gameUI.setPlayerNickname('');
+      return { ok: true };
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Error al eliminar la cuenta.';
+      this.authError = msg;
+      return { ok: false, error: msg };
+    }
+  }
 }
 
 export const userProfile = new UserProfileStore();

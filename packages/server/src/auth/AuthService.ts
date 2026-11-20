@@ -944,6 +944,49 @@ export class AuthService {
       return { success: false, error: err?.message || 'Error al actualizar rol.' };
     }
   }
+
+  public async deleteAccount(accessToken?: string | null): Promise<{ success: boolean; error?: string }> {
+    const cleanToken = String(accessToken ?? '').trim();
+    if (!cleanToken) {
+      return { success: false, error: 'Token de sesión requerido para eliminar la cuenta.' };
+    }
+    try {
+      const userRes = await fetch(`${this.supabaseUrl}/auth/v1/user`, {
+        headers: this.buildHeaders(cleanToken)
+      });
+      if (!userRes.ok) {
+        return { success: false, error: 'Sesión expirada o no válida.' };
+      }
+      const user = (await userRes.json().catch(() => null)) as { id?: string } | null;
+      if (!user?.id) {
+        return { success: false, error: 'No se pudo verificar la identidad del usuario.' };
+      }
+
+      const rpcRes = await this.callRpc<{ success: boolean; error?: string }>(
+        'delete_own_account',
+        {},
+        cleanToken,
+        false
+      );
+      if (rpcRes?.success) {
+        return { success: true };
+      }
+
+      if (this.serviceRoleKey) {
+        const adminDelRes = await fetch(`${this.supabaseUrl}/auth/v1/admin/users/${encodeURIComponent(user.id)}`, {
+          method: 'DELETE',
+          headers: this.buildHeaders(this.serviceRoleKey, true)
+        });
+        if (adminDelRes.ok) {
+          return { success: true };
+        }
+      }
+
+      return { success: false, error: rpcRes?.error || 'No se pudo completar la eliminación de la cuenta.' };
+    } catch (err: any) {
+      return { success: false, error: err?.message || 'Error interno al eliminar la cuenta.' };
+    }
+  }
 }
 
 export const authService = new AuthService();

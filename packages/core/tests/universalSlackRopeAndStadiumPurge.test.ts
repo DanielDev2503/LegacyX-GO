@@ -44,7 +44,7 @@ describe('Universal Slack Rope Net Physics & Goal Boundary Purge', () => {
         });
       });
 
-      it(`instantiates two GoalNet instances with adaptive depth (Xback = xPost Â± 36) for "${stadium.name}"`, () => {
+      it(`instantiates two GoalNet instances with adaptive depth (Xback = xPost ± stadium.goalDepth) for "${stadium.name}"`, () => {
         const world = new PhysicsWorld();
         world.loadStadium(stadium);
 
@@ -63,13 +63,14 @@ describe('Universal Slack Rope Net Physics & Goal Boundary Purge', () => {
 
         const leftPostX = redGoal.p0.x;
         const rightPostX = blueGoal.p0.x;
+        const expectedDepth = stadium.goalDepth ?? 35;
 
-        // Depth should be mouthX + (sign * 36)
+        // Depth should match stadium.goalDepth
         expect(netLeft.mouthX).toBe(leftPostX);
-        expect(netLeft.backX).toBe(leftPostX - 36);
+        expect(netLeft.backX).toBe(leftPostX - expectedDepth);
 
         expect(netRight.mouthX).toBe(rightPostX);
-        expect(netRight.backX).toBe(rightPostX + 36);
+        expect(netRight.backX).toBe(rightPostX + expectedDepth);
       });
     });
   });
