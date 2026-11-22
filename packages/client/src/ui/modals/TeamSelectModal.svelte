@@ -6,6 +6,7 @@
     type MatchStatsSnapshot,
     type PlayerStatEntry
   } from '../state/gameUI.svelte';
+  import { type PlayerPosition, PLAYER_POSITIONS } from '@legacyx/core';
   import { soundFX } from '../../audio/SoundFX';
   import { gameApp } from '../../net/GameApp';
   import StadiumPreviewCanvas from '../components/StadiumPreviewCanvas.svelte';
@@ -25,38 +26,71 @@
     onTeamChange?: (playerId: number, team: TeamSlot) => void;
   } = $props();
 
+  const RED_ZONE_ORDER: readonly PlayerPosition[] = ['GK', 'DFC', 'MC', 'ST'];
+  const BLUE_ZONE_ORDER: readonly PlayerPosition[] = ['ST', 'MC', 'DFC', 'GK'];
+
+  const POSITION_META: Record<PlayerPosition, { label: string; title: string }> = {
+    GK: { label: 'GK', title: 'Portero' },
+    DFC: { label: 'DFC', title: 'Defensa' },
+    MC: { label: 'MC', title: 'Mediocampista' },
+    ST: { label: 'ST', title: 'Delantero' }
+  };
+
   // Solo se puede mostrar STATS en escritorio si el partido está detenido y hay estadísticas de un partido concluido
   let canShowStats = $derived(
     gameUI.matchPhase === 0 && gameUI.hasCompletedMatch === true && gameUI.lastMatchStats !== null
   );
 
-  // En móvil existe 3ra vista a la derecha: 0 = STATS, 1 = MENÚ DE SALA (centro), 2 = CHAT DE SALA
-  let mobileActiveSlide = $state<0 | 1 | 2>(
+  // Ajustes de Sala es visible y deslizable siempre, PERO únicamente para Admins y Host
+  let canSeeRoomSettings = $derived(gameUI.isAdmin || gameUI.isHost);
+
+  // Slides: 0 = STATS, 1 = LISTA DE JUGADORES, 2 = AJUSTES DE SALA (Solo Admins), 3 = CHAT (Móvil)
+  let desktopActiveSlide = $state<0 | 1 | 2>(
+    gameUI.activeSlide === 'STATS' ? 0 : 1
+  );
+  let mobileActiveSlide = $state<0 | 1 | 2 | 3>(
     gameUI.activeSlide === 'STATS' ? 0 : 1
   );
 
   $effect(() => {
-    if (!gameUI.isMobileLayout) return;
-    if (gameUI.activeSlide === 'STATS' && mobileActiveSlide !== 0) {
-      mobileActiveSlide = 0;
-    } else if (gameUI.activeSlide === 'MENU' && mobileActiveSlide === 0) {
-      mobileActiveSlide = 1;
+    if (gameUI.isMobileLayout) {
+      if (gameUI.activeSlide === 'STATS' && mobileActiveSlide !== 0) {
+        mobileActiveSlide = 0;
+      } else if (gameUI.activeSlide === 'MENU' && mobileActiveSlide === 0) {
+        mobileActiveSlide = 1;
+      }
+      if (!canSeeRoomSettings && mobileActiveSlide === 2) {
+        mobileActiveSlide = 1;
+      }
+    } else {
+      if (gameUI.activeSlide === 'STATS' && canShowStats) {
+        desktopActiveSlide = 0;
+      } else if (desktopActiveSlide === 0 && (!canShowStats || gameUI.activeSlide === 'MENU')) {
+        desktopActiveSlide = 1;
+      }
+      if (!canSeeRoomSettings && desktopActiveSlide === 2) {
+        desktopActiveSlide = 1;
+      }
     }
   });
 
-  let currentSlide = $derived<0 | 1 | 2>(
+  let chatSlideIndex = $derived<2 | 3>(canSeeRoomSettings ? 3 : 2);
+
+  let currentSlide = $derived<0 | 1 | 2 | 3>(
     gameUI.isMobileLayout
       ? mobileActiveSlide
-      : canShowStats && gameUI.activeSlide === 'STATS'
+      : canShowStats && desktopActiveSlide === 0
         ? 0
-        : 1
+        : canSeeRoomSettings && desktopActiveSlide === 2
+          ? 2
+          : 1
   );
 
   let menuChatInput = $state('');
   let menuChatScrollEl = $state<HTMLDivElement | null>(null);
   let lastSeenChatCount = $state(gameUI.chatMessages.length);
   let unreadChatCount = $derived(
-    currentSlide === 2 ? 0 : Math.max(0, gameUI.chatMessages.length - lastSeenChatCount)
+    currentSlide === chatSlideIndex ? 0 : Math.max(0, gameUI.chatMessages.length - lastSeenChatCount)
   );
   let mobilePingClass = $derived(
     gameUI.pingMs < 60 ? 'is-good' : gameUI.pingMs <= 120 ? 'is-mid' : 'is-high'
@@ -64,7 +98,7 @@
 
   $effect(() => {
     const count = gameUI.chatMessages.length;
-    if (currentSlide === 2) {
+    if (gameUI.isMobileLayout && currentSlide === chatSlideIndex) {
       lastSeenChatCount = count;
       if (menuChatScrollEl) {
         menuChatScrollEl.scrollTop = menuChatScrollEl.scrollHeight;
@@ -72,13 +106,21 @@
     }
   });
 
-  function goToSlide(slide: 0 | 1 | 2) {
-    if (!gameUI.isMobileLayout && slide === 2) return;
-    if (!gameUI.isMobileLayout && slide === 0 && !canShowStats) return;
-    soundFX.playUIClick();
-    if (gameUI.isMobileLayout) {
+  function goToSlide(slide: 0 | 1 | 2 | 3) {
+    if (slide === 2 && !canSeeRoomSettings) {
+      if (gameUI.isMobileLayout) {
+        goToSlide(chatSlideIndex);
+      }
+      return;
+    }
+    if (!gameUI.isMobileLayout) {
+      if (slide === 3) return;
+      if (slide === 0 && !canShowStats) return;
+      desktopActiveSlide = slide as 0 | 1 | 2;
+    } else {
       mobileActiveSlide = slide;
     }
+    soundFX.playUIClick();
     if (slide === 0) {
       gameUI.activeSlide = 'STATS';
       gameUI.activeModal = 'STATS';
@@ -86,7 +128,7 @@
       gameUI.activeSlide = 'MENU';
       gameUI.activeModal = 'TEAM_SELECT';
     }
-    if (slide === 2) {
+    if (gameUI.isMobileLayout && slide === chatSlideIndex) {
       lastSeenChatCount = gameUI.chatMessages.length;
     }
   }
@@ -99,7 +141,7 @@
     if (!gameUI.isMobileLayout || e.touches.length !== 1) return;
     if (draggedPlayerId !== null || pointerDragPlayerId !== null) return;
     const target = e.target as HTMLElement | null;
-    if (target?.closest('input, select, textarea, .room-slider, .player-slot-card')) {
+    if (target?.closest('input, select, textarea, .room-slider, .player-slot-card, .pitch-player-token, .bench-seat-slot')) {
       swipeTracking = false;
       return;
     }
@@ -118,10 +160,14 @@
     const dx = t.clientX - swipeStartX;
     const dy = t.clientY - swipeStartY;
     if (Math.abs(dx) < 48 || Math.abs(dx) <= Math.abs(dy) * 1.25) return;
-    if (dx < 0 && currentSlide < 2) {
-      goToSlide((currentSlide + 1) as 0 | 1 | 2);
-    } else if (dx > 0 && currentSlide > 0) {
-      goToSlide((currentSlide - 1) as 0 | 1 | 2);
+
+    const validOrder: Array<0 | 1 | 2 | 3> = canSeeRoomSettings ? [0, 1, 2, 3] : [0, 1, 2];
+    const curIdx = validOrder.indexOf(currentSlide);
+    if (curIdx === -1) return;
+    if (dx < 0 && curIdx < validOrder.length - 1) {
+      goToSlide(validOrder[curIdx + 1]!);
+    } else if (dx > 0 && curIdx > 0) {
+      goToSlide(validOrder[curIdx - 1]!);
     }
   }
 
@@ -171,13 +217,28 @@
 
   let copyStatus = $state<'idle' | 'copied'>('idle');
 
-  let redPlayers = $derived(gameUI.players.filter((p) => p.team === 'red'));
-  let specPlayers = $derived(gameUI.players.filter((p) => p.team === 'spectator'));
-  let bluePlayers = $derived(gameUI.players.filter((p) => p.team === 'blue'));
+  // Orden estricta por orden de unión al equipo (primero que se unió = índice 0 = Capitán)
+  let redPlayers = $derived(gameUI.getTeamPlayers('red'));
+  let specPlayers = $derived(gameUI.getTeamPlayers('spectator'));
+  let bluePlayers = $derived(gameUI.getTeamPlayers('blue'));
 
   let localPlayer = $derived(gameUI.players.find((p) => p.id === gameUI.localPlayerId));
   let localTeam = $derived<TeamSlot>(localPlayer?.team ?? gameUI.myTeam);
   let canSwitchOwnTeam = $derived(!gameUI.teamsLocked || gameUI.isAdmin || gameUI.isHost);
+
+  function resolvePlayerZone(p: RosterPlayer, idxInTeam: number): PlayerPosition {
+    if (p.position && PLAYER_POSITIONS.includes(p.position)) {
+      return p.position;
+    }
+    if (idxInTeam === 0) return 'GK';
+    if (idxInTeam === 1) return 'DFC';
+    if (idxInTeam === 2) return 'MC';
+    return 'ST';
+  }
+
+  function getZonePlayers(players: RosterPlayer[], zone: PlayerPosition): RosterPlayer[] {
+    return players.filter((p, idx) => resolvePlayerZone(p, idx) === zone);
+  }
 
   function handleQuickJoinTeam(targetTeam: TeamSlot) {
     if (localTeam === targetTeam || !canSwitchOwnTeam) return;
@@ -187,8 +248,8 @@
     }
   }
 
-  let redCaptain = $derived(redPlayers[0]);
-  let blueCaptain = $derived(bluePlayers[0]);
+  let redCaptain = $derived(redPlayers[0] ?? null);
+  let blueCaptain = $derived(bluePlayers[0] ?? null);
   let redActiveKit = $derived(gameUI.redCaptainKit);
   let blueActiveKit = $derived(gameUI.blueCaptainKit);
 
@@ -197,7 +258,6 @@
   let redPrimaryColor = $derived(redActiveKit?.primaryColor || gameUI.redTeamKit?.primaryColor || '#e74c3c');
   let redSecondaryColor = $derived(redActiveKit?.secondaryColor || gameUI.redTeamKit?.secondaryColor || '#b02a1c');
   let redKitTertiary = $derived(redActiveKit?.tertiaryColor || gameUI.redTeamKit?.tertiaryColor || '#ffffff');
-  let redOutlineColor = $derived(redActiveKit?.outlineColor || gameUI.redTeamKit?.outlineColor || '#000000');
   let redHasOutline = $derived(
     Boolean(redActiveKit?.outline === true || redActiveKit?.hasOutline === true)
   );
@@ -207,7 +267,6 @@
   let bluePrimaryColor = $derived(blueActiveKit?.primaryColor || gameUI.blueTeamKit?.primaryColor || '#3498db');
   let blueSecondaryColor = $derived(blueActiveKit?.secondaryColor || gameUI.blueTeamKit?.secondaryColor || '#217dbb');
   let blueKitTertiary = $derived(blueActiveKit?.tertiaryColor || gameUI.blueTeamKit?.tertiaryColor || '#ffffff');
-  let blueOutlineColor = $derived(blueActiveKit?.outlineColor || gameUI.blueTeamKit?.outlineColor || '#000000');
   let blueHasOutline = $derived(
     Boolean(blueActiveKit?.outline === true || blueActiveKit?.hasOutline === true)
   );
@@ -276,10 +335,11 @@
   let roomPassword = $state(gameUI.activeRoom?.password || '');
 
   // ==========================================
-  // DRAG & DROP Y MENÚ CONTEXTUAL DE ADMIN
+  // DRAG & DROP DE EQUIPOS / ZONAS Y PERMISOS DE CAPITÁN
   // ==========================================
   let draggedPlayerId = $state<number | null>(null);
   let dragOverTeam = $state<TeamSlot | null>(null);
+  let dragOverZone = $state<{ team: 'red' | 'blue'; pos: PlayerPosition } | null>(null);
   let wasDragged = $state(false);
   let dragStartTime = 0;
 
@@ -291,23 +351,65 @@
   let pointerHasMoved = false;
   const POINTER_DRAG_THRESHOLD_PX = 10;
 
+  function isLocalCaptainOf(team: TeamSlot): boolean {
+    if (team !== 'red' && team !== 'blue') return false;
+    const cap = team === 'red' ? redCaptain : blueCaptain;
+    return Boolean(cap && cap.id === gameUI.localPlayerId);
+  }
+
   function canDragPlayer(player: RosterPlayer): boolean {
     if (gameUI.isAdmin || gameUI.isHost) return true;
+    // El capitán puede organizar jugadores que YA estén dentro de su propio equipo (entre las 4 zonas)
+    if ((player.team === 'red' || player.team === 'blue') && isLocalCaptainOf(player.team)) {
+      return true;
+    }
     if (!gameUI.teamsLocked && player.id === gameUI.localPlayerId) return true;
     return false;
   }
 
-  function resolveTeamColumnAtPoint(clientX: number, clientY: number): TeamSlot | null {
+  function resolveDropTargetAtPoint(
+    clientX: number,
+    clientY: number
+  ): { team: TeamSlot | null; zone: PlayerPosition | null } {
     if (typeof document === 'undefined' || typeof document.elementFromPoint !== 'function') {
-      return null;
+      return { team: null, zone: null };
     }
     const hitEl = document.elementFromPoint(clientX, clientY);
+    const zoneEl = hitEl?.closest?.('[data-zone-team]') as HTMLElement | null;
+    if (zoneEl) {
+      const zTeam = zoneEl.dataset.zoneTeam;
+      const zPos = zoneEl.dataset.zonePos as PlayerPosition | undefined;
+      if ((zTeam === 'red' || zTeam === 'blue') && zPos && PLAYER_POSITIONS.includes(zPos)) {
+        return { team: zTeam, zone: zPos };
+      }
+    }
     const colEl = hitEl?.closest?.('[data-team-column]') as HTMLElement | null;
     const raw = colEl?.dataset?.teamColumn;
     if (raw === 'red' || raw === 'spectator' || raw === 'blue') {
-      return raw;
+      return { team: raw, zone: null };
     }
-    return null;
+    return { team: null, zone: null };
+  }
+
+  function applyDropMove(player: RosterPlayer, targetTeam: TeamSlot | null, targetZone: PlayerPosition | null) {
+    if (!targetTeam) return;
+    if (targetTeam === player.team && targetZone && (targetTeam === 'red' || targetTeam === 'blue')) {
+      gameUI.changePlayerPosition(player.id, targetZone);
+      return;
+    }
+    if (targetTeam !== player.team) {
+      // Un capitán no-admin NO puede cambiar de equipo ni meter espectadores ni tocar rivales
+      if (!gameUI.isAdmin && !gameUI.isHost && player.id !== gameUI.localPlayerId) {
+        return;
+      }
+      soundFX.playUIClick();
+      if (gameUI.changeTeam(player.id, targetTeam)) {
+        onTeamChange(player.id, targetTeam);
+        if (targetZone && (targetTeam === 'red' || targetTeam === 'blue')) {
+          gameUI.changePlayerPosition(player.id, targetZone);
+        }
+      }
+    }
   }
 
   function handlePlayerPointerDown(e: PointerEvent, player: RosterPlayer) {
@@ -341,7 +443,11 @@
       (e.currentTarget as HTMLElement | null)?.setPointerCapture?.(e.pointerId);
     }
 
-    dragOverTeam = resolveTeamColumnAtPoint(e.clientX, e.clientY);
+    const hit = resolveDropTargetAtPoint(e.clientX, e.clientY);
+    dragOverTeam = hit.team;
+    dragOverZone = hit.zone && (hit.team === 'red' || hit.team === 'blue')
+      ? { team: hit.team, pos: hit.zone }
+      : null;
   }
 
   function handlePlayerPointerUp(e: PointerEvent, player: RosterPlayer) {
@@ -349,15 +455,13 @@
     if (pointerDragId !== null && e.pointerId !== pointerDragId) return;
 
     if (pointerHasMoved) {
-      const targetTeam = resolveTeamColumnAtPoint(e.clientX, e.clientY) ?? dragOverTeam;
+      const hit = resolveDropTargetAtPoint(e.clientX, e.clientY);
+      const targetTeam = hit.team ?? dragOverTeam;
+      const targetZone = hit.zone ?? dragOverZone?.pos ?? null;
       dragOverTeam = null;
+      dragOverZone = null;
       draggedPlayerId = null;
-      if (targetTeam && targetTeam !== player.team) {
-        soundFX.playUIClick();
-        if (gameUI.changeTeam(player.id, targetTeam)) {
-          onTeamChange(player.id, targetTeam);
-        }
-      }
+      applyDropMove(player, targetTeam, targetZone);
       dragStartTime = Date.now();
       setTimeout(() => {
         wasDragged = false;
@@ -376,6 +480,7 @@
     pointerDragId = null;
     pointerHasMoved = false;
     dragOverTeam = null;
+    dragOverZone = null;
     draggedPlayerId = null;
     setTimeout(() => {
       wasDragged = false;
@@ -399,6 +504,7 @@
   function handleDragEnd() {
     draggedPlayerId = null;
     dragOverTeam = null;
+    dragOverZone = null;
     setTimeout(() => {
       wasDragged = false;
     }, 150);
@@ -412,22 +518,34 @@
     dragOverTeam = team;
   }
 
-  function handleDragLeave(e: DragEvent, team: TeamSlot) {
+  function handleZoneDragOver(e: DragEvent, team: 'red' | 'blue', pos: PlayerPosition) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.dataTransfer) {
+      e.dataTransfer.dropEffect = 'move';
+    }
+    dragOverTeam = team;
+    dragOverZone = { team, pos };
+  }
+
+  function handleDragLeave(team: TeamSlot) {
     if (dragOverTeam === team) {
       dragOverTeam = null;
     }
   }
 
-  function handleDrop(e: DragEvent, targetTeam: TeamSlot) {
+  function handleZoneDrop(e: DragEvent, targetTeam: 'red' | 'blue', targetPos: PlayerPosition) {
     e.preventDefault();
+    e.stopPropagation();
     const idStr = e.dataTransfer?.getData('text/plain');
     const playerId = idStr ? Number(idStr) : draggedPlayerId;
     dragOverTeam = null;
+    dragOverZone = null;
     draggedPlayerId = null;
     if (playerId !== null && !isNaN(playerId)) {
-      soundFX.playUIClick();
-      if (gameUI.changeTeam(playerId, targetTeam)) {
-        onTeamChange(playerId, targetTeam);
+      const p = gameUI.players.find((item) => item.id === playerId);
+      if (p) {
+        applyDropMove(p, targetTeam, targetPos);
       }
     }
     setTimeout(() => {
@@ -435,7 +553,25 @@
     }, 150);
   }
 
-  // Menú contextual flotante
+  function handleDrop(e: DragEvent, targetTeam: TeamSlot) {
+    e.preventDefault();
+    const idStr = e.dataTransfer?.getData('text/plain');
+    const playerId = idStr ? Number(idStr) : draggedPlayerId;
+    dragOverTeam = null;
+    dragOverZone = null;
+    draggedPlayerId = null;
+    if (playerId !== null && !isNaN(playerId)) {
+      const p = gameUI.players.find((item) => item.id === playerId);
+      if (p) {
+        applyDropMove(p, targetTeam, null);
+      }
+    }
+    setTimeout(() => {
+      wasDragged = false;
+    }, 150);
+  }
+
+  // Menú contextual (Admin completo o Capitán para organizar posiciones dentro de su equipo)
   let contextMenu = $state<{
     visible: boolean;
     x: number;
@@ -448,15 +584,23 @@
     player: null
   });
 
+  function canOpenContextMenuFor(player: RosterPlayer): boolean {
+    if (gameUI.isAdmin || gameUI.isHost) return true;
+    if ((player.team === 'red' || player.team === 'blue') && isLocalCaptainOf(player.team)) {
+      return true;
+    }
+    return false;
+  }
+
   function handlePlayerCardClick(e: MouseEvent, player: RosterPlayer) {
     if (wasDragged || Date.now() - dragStartTime < 200) return;
-    if (!gameUI.isAdmin && !gameUI.isHost) return;
+    if (!canOpenContextMenuFor(player)) return;
 
     e.stopPropagation();
     soundFX.playUIClick();
 
-    const menuWidth = 190;
-    const menuHeight = 235;
+    const menuWidth = 210;
+    const menuHeight = 290;
     let x = e.clientX;
     let y = e.clientY;
 
@@ -483,11 +627,18 @@
 
   function handleContextMoveTeam(targetTeam: TeamSlot) {
     if (!contextMenu.player) return;
+    if (!gameUI.isAdmin && !gameUI.isHost) return;
     const targetId = contextMenu.player.id;
     soundFX.playUIClick();
     if (gameUI.changeTeam(targetId, targetTeam)) {
       onTeamChange(targetId, targetTeam);
     }
+    closeContextMenu();
+  }
+
+  function handleContextAssignPosition(pos: PlayerPosition) {
+    if (!contextMenu.player) return;
+    gameUI.changePlayerPosition(contextMenu.player.id, pos);
     closeContextMenu();
   }
 
@@ -514,14 +665,6 @@
       gameUI.openOverlay('TEAM_MANAGEMENT');
     }
     onStopMatch();
-  }
-
-  function handleMatchToggle() {
-    if (isMatchStopped) {
-      handleStartMatch();
-    } else {
-      handleStopMatch();
-    }
   }
 
   function handlePauseToggle() {
@@ -554,6 +697,10 @@
       roomCapacity = gameUI.activeRoom.maxPlayers;
     }
   });
+
+  let benchSeats = $derived(
+    Array.from({ length: Math.max(2, Math.min(30, roomCapacity)) }, (_, i) => specPlayers[i] ?? null)
+  );
 
   function handleCopyLink() {
     soundFX.playUIClick();
@@ -606,7 +753,6 @@
     }
   }}
 >
-  <!-- Viewport del Corredor Deslizante -->
   <div class="corridor-viewport">
     <div
       class="corridor-container"
@@ -617,29 +763,27 @@
       ontouchend={handleCorridorTouchEnd}
     >
       <!-- ======================================================== -->
-      <!-- DIAPOSITIVA 0: ESTADÍSTICAS Y MVP (CORREDOR DESLIZANTE)  -->
+      <!-- DIAPOSITIVA 0: ESTADÍSTICAS Y MVP                        -->
       <!-- ======================================================== -->
       <div
         class="corridor-slide slide-stats"
         class:is-active={currentSlide === 0}
-        class:slide-out-left={currentSlide !== 0}
+        class:slide-out-left={currentSlide > 0}
         id="slide-stats"
       >
-        <!-- Pestaña exterior lateral DERECHA (solo escritorio): MENÚ > -->
         {#if !gameUI.isMobileLayout}
           <button
             type="button"
             id="btn-goto-menu"
             class="external-nav-tab right-tab"
-            aria-label="Ir a Menú de Sala"
+            aria-label="Ir a Lista de Jugadores"
             onclick={() => goToSlide(1)}
           >
-            <span id="stats-to-menu-btn">MENÚ</span>
+            <span id="stats-to-menu-btn">JUGADORES</span>
             <span class="nav-chevron">&gt;</span>
           </button>
         {/if}
 
-        <!-- Tarjeta Central de Estadísticas (Competitive Match Hero + Dual Tables) -->
         {#snippet statsBreakdownDrawer(player: PlayerStatEntry)}
           {@const goalsPts = (player.goals ?? 0) * 100}
           {@const powerGoalsPts = ((player as any).powerGoals ?? 0) * 30}
@@ -701,7 +845,7 @@
           team: 'red' | 'blue',
           teamName: string,
           primaryColor: string,
-          secondaryColor: string,
+          _secondaryColor: string,
           tertiaryColor: string,
           hasOutline: boolean,
           statsList: ReadonlyArray<PlayerStatEntry>
@@ -815,82 +959,78 @@
                 Las estadísticas detalladas, MVP y desglose por jugador aparecerán aquí al finalizar el partido.
               </p>
               <button type="button" class="stats-empty-back-btn" onclick={() => goToSlide(1)}>
-                Volver al Menú de Sala &gt;
+                Volver a Lista de Jugadores &gt;
               </button>
             </div>
           {:else}
-            <!-- Hero Header Competitivo del Partido -->
-          <header class="stats-header-row">
-            <div class="stats-hero-matchup">
-              <div class="hero-team-side hero-red">
-                <div
-                  class="stats-acronym-badge red-acronym"
-                  style="
-                    background: {redKitBg};
-                    border: {redHasOutline ? '1.5px solid #000000' : 'none'};
-                    box-shadow: {redHasOutline ? '0 0 0 1.5px #000000' : 'none'};
-                    color: {redKitTertiary};
-                    {redHasOutline ? '-webkit-text-stroke: 3px #000000; paint-order: stroke fill; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);' : '-webkit-text-stroke: 0px transparent; text-shadow: none;'}
-                  "
-                >
-                  {redTeamTag}
+            <header class="stats-header-row">
+              <div class="stats-hero-matchup">
+                <div class="hero-team-side hero-red">
+                  <div
+                    class="stats-acronym-badge red-acronym"
+                    style="
+                      background: {redKitBg};
+                      border: {redHasOutline ? '1.5px solid #000000' : 'none'};
+                      box-shadow: {redHasOutline ? '0 0 0 1.5px #000000' : 'none'};
+                      color: {redKitTertiary};
+                      {redHasOutline ? '-webkit-text-stroke: 3px #000000; paint-order: stroke fill; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);' : '-webkit-text-stroke: 0px transparent; text-shadow: none;'}
+                    "
+                  >
+                    {redTeamTag}
+                  </div>
+                  <span class="hero-team-label">{redTeamName}</span>
                 </div>
-                <span class="hero-team-label">{redTeamName}</span>
+
+                <div class="stats-hero-score">
+                  <span class="stats-score-num" id="post-score-red">{matchRedScore}</span>
+                  <span class="stats-score-sep">-</span>
+                  <span class="stats-score-num" id="post-score-blue">{matchBlueScore}</span>
+                </div>
+
+                <div class="hero-team-side hero-blue">
+                  <span class="hero-team-label">{blueTeamName}</span>
+                  <div
+                    class="stats-acronym-badge blue-acronym"
+                    style="
+                      background: {blueKitBg};
+                      border: {blueHasOutline ? '1.5px solid #000000' : 'none'};
+                      box-shadow: {blueHasOutline ? '0 0 0 1.5px #000000' : 'none'};
+                      color: {blueKitTertiary};
+                      {blueHasOutline ? '-webkit-text-stroke: 3px #000000; paint-order: stroke fill; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);' : '-webkit-text-stroke: 0px transparent; text-shadow: none;'}
+                    "
+                  >
+                    {blueTeamTag}
+                  </div>
+                </div>
               </div>
 
-              <div class="stats-hero-score">
-                <span class="stats-score-num" id="post-score-red">{matchRedScore}</span>
-                <span class="stats-score-sep">-</span>
-                <span class="stats-score-num" id="post-score-blue">{matchBlueScore}</span>
+              <div class="stats-center-zone">
+                {#if gameUI.mvp}
+                  <div class="mvp-golden-plaque">
+                    <svg class="crown-svg" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                      <path d="M3 18h18v2H3v-2zm0-2l2-9 5 4 2-6 2 6 5-4 2 9H3z"></path>
+                    </svg>
+                    <span class="mvp-title">MVP: {gameUI.mvp.nickname}</span>
+                    <span class="mvp-points-chip">({gameUI.mvp.points} pts)</span>
+                    <span class="mvp-mini-line">
+                      {gameUI.mvp.goals}G · {gameUI.mvp.assists}A · {(gameUI.mvp as any).saves ?? 0}S
+                    </span>
+                  </div>
+                {/if}
               </div>
 
-              <div class="hero-team-side hero-blue">
-                <span class="hero-team-label">{blueTeamName}</span>
-                <div
-                  class="stats-acronym-badge blue-acronym"
-                  style="
-                    background: {blueKitBg};
-                    border: {blueHasOutline ? '1.5px solid #000000' : 'none'};
-                    box-shadow: {blueHasOutline ? '0 0 0 1.5px #000000' : 'none'};
-                    color: {blueKitTertiary};
-                    {blueHasOutline ? '-webkit-text-stroke: 3px #000000; paint-order: stroke fill; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);' : '-webkit-text-stroke: 0px transparent; text-shadow: none;'}
-                  "
-                >
-                  {blueTeamTag}
-                </div>
+              <div class="match-status-meta">
+                <span class="match-result-chip">
+                  {matchRedScore > matchBlueScore
+                    ? `VICTORIA ${redTeamTag}`
+                    : matchBlueScore > matchRedScore
+                      ? `VICTORIA ${blueTeamTag}`
+                      : 'EMPATE'}
+                </span>
+                <span class="match-time-chip">{matchDurationFormatted}</span>
               </div>
-            </div>
+            </header>
 
-            <!-- Centro: MVP Spotlight -->
-            <div class="stats-center-zone">
-              {#if gameUI.mvp}
-                <div class="mvp-golden-plaque">
-                  <svg class="crown-svg" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-                    <path d="M3 18h18v2H3v-2zm0-2l2-9 5 4 2-6 2 6 5-4 2 9H3z"></path>
-                  </svg>
-                  <span class="mvp-title">MVP: {gameUI.mvp.nickname}</span>
-                  <span class="mvp-points-chip">({gameUI.mvp.points} pts)</span>
-                  <span class="mvp-mini-line">
-                    {gameUI.mvp.goals}G · {gameUI.mvp.assists}A · {(gameUI.mvp as any).saves ?? 0}S
-                  </span>
-                </div>
-              {/if}
-            </div>
-
-            <!-- Derecha: Duración y Resultado -->
-            <div class="match-status-meta">
-              <span class="match-result-chip">
-                {matchRedScore > matchBlueScore
-                  ? `VICTORIA ${redTeamTag}`
-                  : matchBlueScore > matchRedScore
-                    ? `VICTORIA ${blueTeamTag}`
-                    : 'EMPATE'}
-              </span>
-              <span class="match-time-chip">{matchDurationFormatted}</span>
-            </div>
-          </header>
-
-            <!-- Tablas Duales Paralelas RED y BLUE con columnas PTS | G | A | S | P | T -->
             <div class="tables-parallel-grid">
               {@render statsTeamTable('red', redTeamName, redPrimaryColor, redSecondaryColor, redKitTertiary, redHasOutline, gameUI.redTeamStats)}
               {@render statsTeamTable('blue', blueTeamName, bluePrimaryColor, blueSecondaryColor, blueKitTertiary, blueHasOutline, gameUI.blueTeamStats)}
@@ -900,16 +1040,15 @@
       </div>
 
       <!-- ======================================================== -->
-      <!-- SLIDE 1: MENÚ DE SALA (CORREDOR DESLIZANTE)              -->
+      <!-- SLIDE 1: LISTA DE JUGADORES TEMÁTICA (CANCHA + BANQUILLO)-->
       <!-- ======================================================== -->
       <div
         class="corridor-slide slide-menu"
         class:is-active={currentSlide === 1}
         class:slide-out-right={currentSlide === 0}
-        class:slide-out-left={currentSlide === 2}
+        class:slide-out-left={currentSlide > 1}
         id="slide-lobby"
       >
-        <!-- Pestaña exterior lateral IZQUIERDA (solo escritorio): < STATS -->
         {#if canShowStats && !gameUI.isMobileLayout}
           <button
             type="button"
@@ -923,67 +1062,429 @@
           </button>
         {/if}
 
-        <!-- Tarjeta Central del Menú de Sala -->
+        {#if canSeeRoomSettings && !gameUI.isMobileLayout}
+          <button
+            type="button"
+            id="btn-goto-settings"
+            class="external-nav-tab right-tab"
+            aria-label="Ir a Ajustes de Sala"
+            onclick={() => goToSlide(2)}
+          >
+            <span id="lobby-to-settings-btn">AJUSTES</span>
+            <span class="nav-chevron">&gt;</span>
+          </button>
+        {/if}
+
+        {#snippet playerPitchToken(p: RosterPlayer, team: 'red' | 'blue')}
+          {@const isCaptain = team === 'red' ? p.id === redCaptain?.id : p.id === blueCaptain?.id}
+          {@const isDraggable = canDragPlayer(p)}
+          {@const tertiary = team === 'red' ? redKitTertiary : blueKitTertiary}
+          {@const primary = team === 'red' ? redPrimaryColor : bluePrimaryColor}
+          <div
+            class="pitch-player-token {team}-token"
+            class:is-captain={isCaptain}
+            class:cursor-grab={isDraggable}
+            class:cursor-not-allowed={!isDraggable}
+            class:is-dragging={draggedPlayerId === p.id}
+            role="button"
+            tabindex="0"
+            draggable={isDraggable}
+            ondragstart={(e) => handleDragStart(e, p)}
+            ondragend={handleDragEnd}
+            onpointerdown={(e) => handlePlayerPointerDown(e, p)}
+            onpointermove={(e) => handlePlayerPointerMove(e, p)}
+            onpointerup={(e) => handlePlayerPointerUp(e, p)}
+            onpointercancel={handlePlayerPointerCancel}
+            onclick={(e) => handlePlayerCardClick(e, p)}
+            onkeydown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                handlePlayerCardClick(e as unknown as MouseEvent, p);
+              }
+            }}
+            title={canOpenContextMenuFor(p) ? 'Haz clic o arrastra para organizar posición' : (p.name || p.nickname)}
+          >
+            <div class="token-avatar-wrap">
+              <div class="slot-avatar {team}" style="color: {tertiary};">{p.avatar || p.number || '1'}</div>
+              {#if p.isAdmin || p.isHost}
+                <span class="token-crown" title={p.isHost ? 'Anfitrión de la sala' : 'Administrador'}>👑</span>
+              {/if}
+              {#if isCaptain}
+                <span
+                  class="token-captain-c"
+                  style="background-color: {primary}; color: {tertiary};"
+                  title="Capitán del equipo"
+                >C</span>
+              {/if}
+            </div>
+            <span class="token-nickname">{p.name || p.nickname}</span>
+          </div>
+        {/snippet}
+
         <div class="team-modal-card lobby-modal-card">
-            <!-- 1. Cabecera Limpia -->
-            <header class="modal-header">
-              <div class="room-identity">
-                <h2 class="room-title">{gameUI.activeRoomName || 'TORNEO NOCTURNO #12'}</h2>
-                <span class="header-divider">|</span>
-                {#if gameUI.isPracticeMode}
-                  <span class="practice-offline-badge" id="practice-offline-badge">
-                    MODO ENTRENAMIENTO (OFFLINE) — Sala local individual (nadie externo puede unirse)
-                  </span>
-                {:else}
-                  <span class="room-id-badge">ID: {gameUI.matchId || gameUI.activeRoom?.id || 'CTNYRS'}</span>
-                {/if}
-                {#if gameUI.isMobileLayout}
-                  <span class="mobile-menu-telemetry {mobilePingClass}" aria-label="Ping y FPS en vivo">
-                    <span class="m-tel-dot" aria-hidden="true"></span>
-                    <span>{gameUI.pingMs} ms</span>
-                    <span class="m-tel-sep">·</span>
-                    <span>{gameUI.fps} FPS</span>
-                  </span>
-                {/if}
+          <!-- Cabecera + Mini Tarjeta Goles/Minutos -->
+          <header class="modal-header">
+            <div class="room-identity">
+              <h2 class="room-title">{gameUI.activeRoomName || 'TORNEO NOCTURNO #12'}</h2>
+              <span class="header-divider">|</span>
+              {#if gameUI.isPracticeMode}
+                <span class="practice-offline-badge" id="practice-offline-badge">
+                  MODO ENTRENAMIENTO (OFFLINE)
+                </span>
+              {:else}
+                <span class="room-id-badge">ID: {gameUI.matchId || gameUI.activeRoom?.id || 'CTNYRS'}</span>
+              {/if}
+
+              <!-- Mini tarjeta de Goles y Minutos configurados -->
+              <div class="match-rules-minicard" data-testid="match-rules-minicard" title="Reglas configuradas para el partido">
+                <span class="minicard-item">
+                  <span aria-hidden="true">⚽</span>
+                  <span>{gameUI.scoreLimitGoals === 0 ? '∞ Goles' : `${gameUI.scoreLimitGoals} ${gameUI.scoreLimitGoals === 1 ? 'Gol' : 'Goles'}`}</span>
+                </span>
+                <span class="minicard-sep">·</span>
+                <span class="minicard-item">
+                  <span aria-hidden="true">⏱️</span>
+                  <span>{gameUI.timeLimitMinutes === 0 ? '∞ Min' : `${gameUI.timeLimitMinutes} Min`}</span>
+                </span>
               </div>
 
-              <div class="header-actions">
-                {#if !gameUI.isPracticeMode}
-                  <button
-                    type="button"
-                    id="btn-header-copy-link"
-                    class="btn-copy-link"
-                    onclick={handleCopyLink}
-                    title="Copiar enlace directo a la sala"
-                  >
-                    <svg class="header-btn-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                      <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
-                      <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
-                    </svg>
-                    <span>{copyStatus === 'copied' ? '¡COPIADO!' : 'COPIAR LINK'}</span>
-                  </button>
-                {/if}
+              {#if gameUI.isMobileLayout}
+                <span class="mobile-menu-telemetry {mobilePingClass}" aria-label="Ping y FPS en vivo">
+                  <span class="m-tel-dot" aria-hidden="true"></span>
+                  <span>{gameUI.pingMs} ms</span>
+                  <span class="m-tel-sep">·</span>
+                  <span>{gameUI.fps} FPS</span>
+                </span>
+              {/if}
+            </div>
 
-                <!-- Botón Abandonar -->
+            <div class="header-actions">
+              {#if canSeeRoomSettings}
                 <button
                   type="button"
-                  id="btn-quick-close"
-                  class="btn-leave"
-                  onclick={handleLeave}
-                  title="Abandonar la sala"
+                  id="btn-header-room-settings"
+                  class="btn-settings-quick"
+                  onclick={() => goToSlide(2)}
+                  title="Ir a Ajustes de Sala y Control de Partido"
+                >
+                  <span aria-hidden="true">⚙️</span>
+                  <span>Ajustes</span>
+                </button>
+              {/if}
+
+              {#if !gameUI.isPracticeMode}
+                <button
+                  type="button"
+                  id="btn-header-copy-link"
+                  class="btn-copy-link"
+                  onclick={handleCopyLink}
+                  title="Copiar enlace directo a la sala"
                 >
                   <svg class="header-btn-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path>
-                    <polyline points="16 17 21 12 16 7"></polyline>
-                    <line x1="21" y1="12" x2="9" y2="12"></line>
+                    <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
+                    <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
                   </svg>
-                  <span>ABANDONAR</span>
+                  <span>{copyStatus === 'copied' ? '¡COPIADO!' : 'COPIAR LINK'}</span>
                 </button>
+              {/if}
 
+              <button
+                type="button"
+                id="btn-quick-close"
+                class="btn-leave"
+                onclick={handleLeave}
+                title="Abandonar la sala"
+              >
+                <svg class="header-btn-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path>
+                  <polyline points="16 17 21 12 16 7"></polyline>
+                  <line x1="21" y1="12" x2="9" y2="12"></line>
+                </svg>
+                <span>ABANDONAR</span>
+              </button>
+
+              {#if canClose}
+                <button
+                  type="button"
+                  id="menu-close-btn"
+                  class="btn-close-x"
+                  onclick={handleClose}
+                  aria-label="Cerrar menú"
+                >
+                  ✕
+                </button>
+              {/if}
+            </div>
+          </header>
+
+          <!-- Cuerpo Temático: Campo Táctico (Rojo vs Azul en 4 Zonas) + Banquillo de Espectadores -->
+          <div class="pitch-lineup-workspace">
+            <div class="pitch-team-headers-row">
+              <!-- Barra Equipo Rojo -->
+              <div
+                class="pitch-team-bar red-bar captain-bicolor-header"
+                style="--captain-local-primary: {redPrimaryColor}; background: {redKitBg}; border: {redHasOutline ? '1.5px solid #000000' : 'none'};"
+              >
+                <span
+                  class="team-name"
+                  style="color: {redKitTertiary}; {redHasOutline ? '-webkit-text-stroke: 2px #000000; paint-order: stroke fill;' : 'text-shadow: 0 1px 2px rgba(0, 0, 0, 0.75);'}"
+                >{redTeamName} ({redPlayers.length})</span>
+                <div class="bench-header-actions">
+                  <div class="kit-variant-toggles" role="group" aria-label="Equipación del equipo rojo">
+                    <button
+                      type="button"
+                      class="kit-variant-btn"
+                      class:active={gameUI.redKitVariant === 'home'}
+                      disabled={!isRedCaptainOrAdmin}
+                      onclick={() => handleSetRedKitVariant('home')}
+                    >Local</button>
+                    <button
+                      type="button"
+                      class="kit-variant-btn"
+                      class:active={gameUI.redKitVariant === 'away'}
+                      disabled={!isRedCaptainOrAdmin}
+                      onclick={() => handleSetRedKitVariant('away')}
+                    >Visitante</button>
+                  </div>
+                  <button
+                    type="button"
+                    class="bench-join-btn"
+                    disabled={localTeam === 'red' || !canSwitchOwnTeam}
+                    onclick={() => handleQuickJoinTeam('red')}
+                  >+ Unirse</button>
+                </div>
+              </div>
+
+              <!-- Barra Equipo Azul -->
+              <div
+                class="pitch-team-bar blue-bar captain-bicolor-header"
+                style="--captain-visitor-primary: {bluePrimaryColor}; background: {blueKitBg}; border: {blueHasOutline ? '1.5px solid #000000' : 'none'};"
+              >
+                <span
+                  class="team-name"
+                  style="color: {blueKitTertiary}; {blueHasOutline ? '-webkit-text-stroke: 2px #000000; paint-order: stroke fill;' : 'text-shadow: 0 1px 2px rgba(0, 0, 0, 0.75);'}"
+                >{blueTeamName} ({bluePlayers.length})</span>
+                <div class="bench-header-actions">
+                  <div class="kit-variant-toggles" role="group" aria-label="Equipación del equipo azul">
+                    <button
+                      type="button"
+                      class="kit-variant-btn"
+                      class:active={gameUI.blueKitVariant === 'home'}
+                      disabled={!isBlueCaptainOrAdmin}
+                      onclick={() => handleSetBlueKitVariant('home')}
+                    >Local</button>
+                    <button
+                      type="button"
+                      class="kit-variant-btn"
+                      class:active={gameUI.blueKitVariant === 'away'}
+                      disabled={!isBlueCaptainOrAdmin}
+                      onclick={() => handleSetBlueKitVariant('away')}
+                    >Visitante</button>
+                  </div>
+                  <button
+                    type="button"
+                    class="bench-join-btn"
+                    disabled={localTeam === 'blue' || !canSwitchOwnTeam}
+                    onclick={() => handleQuickJoinTeam('blue')}
+                  >+ Unirse</button>
+                </div>
+              </div>
+            </div>
+
+            <!-- Cancha Táctica en 4 Zonas por Equipo -->
+            <div class="tactical-pitch-arena">
+              <!-- Marcas decorativas del campo -->
+              <div class="pitch-halfway-line" aria-hidden="true"></div>
+              <div class="pitch-center-circle" aria-hidden="true"></div>
+              <div class="pitch-goal-box left-goal" aria-hidden="true"></div>
+              <div class="pitch-goal-box right-goal" aria-hidden="true"></div>
+
+              <!-- Mitad Roja (Izquierda): GK | DFC | MC | ST -->
+              <div
+                id="redPlayersList"
+                class="pitch-half red-half"
+                data-team-column="red"
+                class:is-drag-over={dragOverTeam === 'red'}
+                ondragover={(e) => handleDragOver(e, 'red')}
+                ondragleave={() => handleDragLeave('red')}
+                ondrop={(e) => handleDrop(e, 'red')}
+                role="region"
+                aria-label="Alineación Equipo Rojo"
+              >
+                {#each RED_ZONE_ORDER as zonePos (zonePos)}
+                  {@const zoneMembers = getZonePlayers(redPlayers, zonePos)}
+                  <div
+                    class="pitch-zone-col zone-{zonePos.toLowerCase()}"
+                    data-zone-team="red"
+                    data-zone-pos={zonePos}
+                    role="region"
+                    aria-label="Zona {POSITION_META[zonePos].title} Rojo"
+                    class:is-zone-hover={dragOverZone?.team === 'red' && dragOverZone?.pos === zonePos}
+                    ondragover={(e) => handleZoneDragOver(e, 'red', zonePos)}
+                    ondrop={(e) => handleZoneDrop(e, 'red', zonePos)}
+                  >
+                    <div class="zone-header-pill role-{zonePos.toLowerCase()}" title={POSITION_META[zonePos].title}>
+                      {POSITION_META[zonePos].label}
+                    </div>
+                    <div class="zone-players-stack custom-scrollbar-red">
+                      {#each zoneMembers as p (p.id)}
+                        {@render playerPitchToken(p, 'red')}
+                      {/each}
+                    </div>
+                  </div>
+                {/each}
+              </div>
+
+              <!-- Mitad Azul (Derecha): ST | MC | DFC | GK -->
+              <div
+                id="bluePlayersList"
+                class="pitch-half blue-half"
+                data-team-column="blue"
+                class:is-drag-over={dragOverTeam === 'blue'}
+                ondragover={(e) => handleDragOver(e, 'blue')}
+                ondragleave={() => handleDragLeave('blue')}
+                ondrop={(e) => handleDrop(e, 'blue')}
+                role="region"
+                aria-label="Alineación Equipo Azul"
+              >
+                {#each BLUE_ZONE_ORDER as zonePos (zonePos)}
+                  {@const zoneMembers = getZonePlayers(bluePlayers, zonePos)}
+                  <div
+                    class="pitch-zone-col zone-{zonePos.toLowerCase()}"
+                    data-zone-team="blue"
+                    data-zone-pos={zonePos}
+                    role="region"
+                    aria-label="Zona {POSITION_META[zonePos].title} Azul"
+                    class:is-zone-hover={dragOverZone?.team === 'blue' && dragOverZone?.pos === zonePos}
+                    ondragover={(e) => handleZoneDragOver(e, 'blue', zonePos)}
+                    ondrop={(e) => handleZoneDrop(e, 'blue', zonePos)}
+                  >
+                    <div class="zone-header-pill role-{zonePos.toLowerCase()}" title={POSITION_META[zonePos].title}>
+                      {POSITION_META[zonePos].label}
+                    </div>
+                    <div class="zone-players-stack custom-scrollbar">
+                      {#each zoneMembers as p (p.id)}
+                        {@render playerPitchToken(p, 'blue')}
+                      {/each}
+                    </div>
+                  </div>
+                {/each}
+              </div>
+            </div>
+
+            <!-- Banquillo de Espectadores con N sillas según capacidad -->
+            <div
+              class="banquillo-dugout"
+              data-team-column="spectator"
+              class:is-drag-over={dragOverTeam === 'spectator'}
+              ondragover={(e) => handleDragOver(e, 'spectator')}
+              ondragleave={() => handleDragLeave('spectator')}
+              ondrop={(e) => handleDrop(e, 'spectator')}
+              role="region"
+              aria-label="Banquillo Espectadores"
+            >
+              <div class="banquillo-header">
+                <div class="banquillo-title-group">
+                  <span class="banquillo-title">BANQUILLO DE ESPECTADORES</span>
+                  <span class="banquillo-cap-badge">{specPlayers.length} / {roomCapacity} sillas</span>
+                </div>
+                <button
+                  type="button"
+                  class="bench-join-btn"
+                  disabled={localTeam === 'spectator' || !canSwitchOwnTeam}
+                  onclick={() => handleQuickJoinTeam('spectator')}
+                >+ Ir al Banquillo</button>
+              </div>
+
+              <div id="specPlayersList" class="banquillo-chairs-grid custom-scrollbar">
+                {#each benchSeats as chairPlayer, seatIdx (seatIdx)}
+                  {#if chairPlayer}
+                    {@const isDraggable = canDragPlayer(chairPlayer)}
+                    <div
+                      class="bench-seat-slot is-occupied"
+                      class:cursor-grab={isDraggable}
+                      class:is-dragging={draggedPlayerId === chairPlayer.id}
+                      role="button"
+                      tabindex="0"
+                      draggable={isDraggable}
+                      ondragstart={(e) => handleDragStart(e, chairPlayer)}
+                      ondragend={handleDragEnd}
+                      onpointerdown={(e) => handlePlayerPointerDown(e, chairPlayer)}
+                      onpointermove={(e) => handlePlayerPointerMove(e, chairPlayer)}
+                      onpointerup={(e) => handlePlayerPointerUp(e, chairPlayer)}
+                      onpointercancel={handlePlayerPointerCancel}
+                      onclick={(e) => handlePlayerCardClick(e, chairPlayer)}
+                      onkeydown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault();
+                          handlePlayerCardClick(e as unknown as MouseEvent, chairPlayer);
+                        }
+                      }}
+                    >
+                      <div class="seat-backrest" aria-hidden="true"></div>
+                      <div class="seat-avatar-wrap">
+                        <div class="slot-avatar spec">{chairPlayer.avatar || chairPlayer.number || 'S'}</div>
+                        {#if chairPlayer.isAdmin || chairPlayer.isHost}
+                          <span class="seat-crown" title={chairPlayer.isHost ? 'Anfitrión' : 'Admin'}>👑</span>
+                        {/if}
+                      </div>
+                      <span class="seat-player-name">{chairPlayer.name || chairPlayer.nickname}</span>
+                    </div>
+                  {:else}
+                    <div class="bench-seat-slot is-empty" aria-label="Silla vacía {seatIdx + 1}">
+                      <div class="seat-backrest empty-chair" aria-hidden="true"></div>
+                      <span class="seat-empty-num">#{seatIdx + 1}</span>
+                    </div>
+                  {/if}
+                {/each}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ======================================================== -->
+      <!-- SLIDE 2: AJUSTES DE SALA & CONTROL DE PARTIDO (SOLO ADMIN)-->
+      <!-- ======================================================== -->
+      {#if canSeeRoomSettings}
+        <div
+          class="corridor-slide slide-settings"
+          class:is-active={currentSlide === 2}
+          class:slide-out-left={currentSlide > 2}
+          class:slide-out-right={currentSlide < 2}
+          id="slide-settings"
+        >
+          {#if !gameUI.isMobileLayout}
+            <button
+              type="button"
+              id="btn-settings-to-players"
+              class="external-nav-tab left-tab"
+              aria-label="Volver a Lista de Jugadores"
+              onclick={() => goToSlide(1)}
+            >
+              <span class="nav-chevron">&lt;</span>
+              <span>JUGADORES</span>
+            </button>
+          {/if}
+
+          <div class="team-modal-card settings-slide-card">
+            <header class="modal-header">
+              <div class="room-identity">
+                <h2 class="room-title">AJUSTES DE SALA & CONTROL</h2>
+                <span class="header-divider">|</span>
+                <span class="room-id-badge">{gameUI.isHost ? 'ANFITRIÓN' : 'ADMIN'}</span>
+              </div>
+              <div class="header-actions">
+                <button
+                  type="button"
+                  class="btn-copy-link"
+                  onclick={() => goToSlide(1)}
+                >
+                  &lt; Ver Cancha
+                </button>
                 {#if canClose}
                   <button
                     type="button"
-                    id="menu-close-btn"
                     class="btn-close-x"
                     onclick={handleClose}
                     aria-label="Cerrar menú"
@@ -994,14 +1495,12 @@
               </div>
             </header>
 
-            <!-- 2. Cuerpo en 4 Columnas: Panel Izquierdo (Reglas/Ajustes/FSM) + 3 Banquillos -->
-            <div class="modal-body-layout">
-              <!-- ======================================== -->
-              <!-- COLUMNA 1 (1/3: AJUSTES, REGLAS Y FSM)   -->
-              <!-- ======================================== -->
-              <aside class="col-settings-panel">
-                <div class="col-settings-scroll custom-scrollbar">
-                  <!-- Reglas 2x2 Grid con altura 40px y 100% Hitbox -->
+            <div class="settings-slide-body custom-scrollbar">
+              <div class="settings-2col-grid">
+                <!-- Columna Izquierda: Reglas de Partido & Estadio -->
+                <div class="settings-panel-box">
+                  <span class="card-micro-title">REGLAS DEL PARTIDO Y ESTADIO</span>
+
                   <div class="rules-4btn-grid">
                     <!-- Tiempo -->
                     <div class="rule-cartouche" title="Tiempo de partido">
@@ -1071,14 +1570,12 @@
                     </div>
 
                     {#if !gameUI.isPracticeMode}
-                      <!-- Bloqueo de Equipos -->
                       <button
                         type="button"
                         id="btn-lock-teams"
                         class="rule-cartouche-btn lock-teams-btn"
                         class:active-locked={gameUI.teamsLocked}
                         disabled={(!gameUI.isAdmin && !gameUI.isHost) || gameUI.isMatchActive}
-                        title="Bloquear equipos para que solo los administradores puedan mover jugadores"
                         onclick={() => {
                           soundFX.playUIClick();
                           gameUI.toggleTeamsLock();
@@ -1089,14 +1586,12 @@
                         <span class="lock-tag">{gameUI.teamsLocked ? 'ADMINS' : 'TODOS'}</span>
                       </button>
 
-                      <!-- Bloqueo de Equipaciones por Capitanes -->
                       <button
                         type="button"
                         id="btn-lock-captain-kits"
                         class="rule-cartouche-btn lock-teams-btn"
                         class:active-locked={!gameUI.allowCaptainKitSwitch}
                         disabled={(!gameUI.isAdmin && !gameUI.isHost) || gameUI.isMatchActive}
-                        title="Permitir o bloquear el cambio de camisetas para capitanes"
                         onclick={() => {
                           soundFX.playUIClick();
                           gameUI.allowCaptainKitSwitch = !gameUI.allowCaptainKitSwitch;
@@ -1112,17 +1607,13 @@
                       </button>
                     {/if}
 
-                    <!-- Balanceo Automático y Reset de Equipos -->
                     <div class="grid grid-cols-2 gap-1.5 w-full h-10 auto-reset-container">
                       <button
                         type="button"
                         id="btn-auto-balance"
                         class="rule-cartouche-btn btn-auto-balance h-full w-full flex items-center justify-center"
                         disabled={(!gameUI.isAdmin && !gameUI.isHost) || specPlayers.length === 0}
-                        title="Balancear automáticamente espectadores a Rojo y Azul"
-                        onclick={() => {
-                          gameUI.autoBalanceSpectators();
-                        }}
+                        onclick={() => gameUI.autoBalanceSpectators()}
                       >
                         <span class="lock-label">Auto</span>
                       </button>
@@ -1132,16 +1623,12 @@
                         id="btn-reset-teams"
                         class="rule-cartouche-btn btn-reset-teams h-full w-full flex items-center justify-center"
                         disabled={(!gameUI.isAdmin && !gameUI.isHost) || (redPlayers.length === 0 && bluePlayers.length === 0)}
-                        title="Mover a todos los jugadores a Espectadores"
-                        onclick={() => {
-                          gameUI.resetTeamsToSpectators();
-                        }}
+                        onclick={() => gameUI.resetTeamsToSpectators()}
                       >
                         <span class="lock-label">Reset</span>
                       </button>
                     </div>
 
-                    <!-- Modifiers (Exclusivo Host) -->
                     <button
                       type="button"
                       id="btn-open-physics-modifiers"
@@ -1151,7 +1638,6 @@
                         if (!gameUI.isHost) return;
                         gameUI.openOverlay('MODIFIERS');
                       }}
-                      title="Abrir panel de modificadores de física (Solo Host)"
                     >
                       <svg class="rule-svg" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
                         <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
@@ -1160,12 +1646,10 @@
                     </button>
                   </div>
 
-                  <!-- Escoger estadio -->
                   <div class="stadium-section w-full">
                     <div class="param-label-row">
                       <span class="param-name">Escoger estadio</span>
                     </div>
-
                     <div
                       class="stadium-preview-box"
                       tabindex="0"
@@ -1184,23 +1668,23 @@
                           gameUI.openOverlay('STADIUM_SELECT');
                         }
                       }}
-                      title="Dar click para cambiar de estadio"
                     >
                       <div class="stadium-canvas-wrap">
                         <StadiumPreviewCanvas stadiumId={gameUI.selectedStadiumId || 'mediano'} compact={true} />
                       </div>
-
                       <div class="stadium-overlay">
                         <span class="stadium-name">{gameUI.activeStadiumName || 'Mediano'}</span>
                         <span class="stadium-action-text">Dar click para cambiar de estadio</span>
                       </div>
                     </div>
                   </div>
+                </div>
 
+                <!-- Columna Derecha: Ajustes Avanzados (Host) + Botones FSM Exclusivos -->
+                <div class="settings-panel-box">
                   {#if !gameUI.isPracticeMode}
-                    <!-- Ajustes Avanzados de Sala con Toggle Pública/Privada y Contraseña Condicional (Exclusivo Host) -->
                     <div class="advanced-settings-card w-full">
-                      <span class="card-micro-title">AJUSTES DE SALA {#if !gameUI.isHost}<span class="text-xs text-muted">(Solo Host)</span>{/if}</span>
+                      <span class="card-micro-title">CONFIGURACIÓN DE LA SALA {#if !gameUI.isHost}<span class="text-xs text-muted">(Solo Host)</span>{/if}</span>
 
                       <div class="adv-row">
                         <label for="room-name-input">Nombre de Sala</label>
@@ -1216,7 +1700,7 @@
                       </div>
 
                       <div class="adv-capacity-row">
-                        <span class="adv-label">Capacidad Jugadores (Máx 30):</span>
+                        <span class="adv-label">Capacidad (Sillas Banquillo):</span>
                         <div class="cap-stepper">
                           <button
                             type="button"
@@ -1224,9 +1708,7 @@
                             class="cap-step-btn"
                             disabled={!gameUI.isHost || gameUI.isMatchActive}
                             onclick={() => changeCapacity(-1)}
-                          >
-                            -
-                          </button>
+                          >-</button>
                           <span id="capacity-value" class="cap-num-val">{roomCapacity}</span>
                           <button
                             type="button"
@@ -1234,9 +1716,7 @@
                             class="cap-step-btn"
                             disabled={!gameUI.isHost || gameUI.isMatchActive}
                             onclick={() => changeCapacity(1)}
-                          >
-                            +
-                          </button>
+                          >+</button>
                         </div>
                       </div>
 
@@ -1295,347 +1775,60 @@
                       {/if}
                     </div>
                   {/if}
-                </div>
 
-                <!-- Footer FSM -->
-                <div class="fsm-footer-controls">
-                  {#if isMatchStopped}
-                    <button
-                      type="button"
-                      id="btn-match-toggle"
-                      class="btn-start-match btn btn-success btn-match-toggle"
-                      disabled={!gameUI.isAdmin && !gameUI.isHost}
-                      onclick={handleStartMatch}
-                    >
-                      <span>INICIAR PARTIDO</span>
-                    </button>
-                  {:else}
-                    <div class="fsm-running-grid">
+                  <!-- Control de Partido (Exclusivo dentro de Ajustes de Sala) -->
+                  <div class="fsm-footer-controls settings-fsm-box">
+                    <span class="card-micro-title">CONTROL DEL PARTIDO</span>
+                    {#if isMatchStopped}
                       <button
                         type="button"
                         id="btn-match-toggle"
-                        class="btn-stop-match btn btn-danger btn-match-toggle"
+                        class="btn-start-match btn btn-success btn-match-toggle"
                         disabled={!gameUI.isAdmin && !gameUI.isHost}
-                        onclick={handleStopMatch}
+                        onclick={handleStartMatch}
                       >
-                        <span>DETENER PARTIDO</span>
+                        <span>INICIAR PARTIDO</span>
                       </button>
-
-                      <button
-                        type="button"
-                        id="btn-fsm-pause"
-                        class="btn-pause-match btn btn-warning"
-                        class:is-resuming={isMatchPaused}
-                        disabled={(!gameUI.isAdmin && !gameUI.isHost) || isPauseLocked}
-                        onclick={handlePauseToggle}
-                      >
-                        <span>{isResumeCountdown ? 'REANUDANDO...' : isMatchPaused ? 'REANUDAR' : 'PAUSAR'}</span>
-                      </button>
-                    </div>
-                  {/if}
-                </div>
-              </aside>
-
-              <!-- ======================================== -->
-              <!-- COLUMNAS 2, 3, 4 (2/3: BANQUILLOS)       -->
-              <!-- ======================================== -->
-              <main class="col-benches-grid">
-                <!-- 1. EQUIPO ROJO (LOCAL) -->
-                <div
-                  class="bench-card red-bench"
-                  data-team-column="red"
-                  role="region"
-                  aria-label="Banquillo Equipo Rojo"
-                  style="--captain-local-primary: {redPrimaryColor}; --captain-local-glow: {redPrimaryColor}40; --bench-team-primary: {redPrimaryColor}; --captain-local-tertiary: {redKitTertiary};"
-                  class:is-drag-over={dragOverTeam === 'red'}
-                  ondragover={(e) => handleDragOver(e, 'red')}
-                  ondragleave={(e) => handleDragLeave(e, 'red')}
-                  ondrop={(e) => handleDrop(e, 'red')}
-                >
-                  <div
-                    class="bench-card-header red-header captain-bicolor-header"
-                    style="background: {redKitBg}; border: {redHasOutline ? '1.5px solid #000000' : 'none'};"
-                  >
-                    <span
-                      class="team-name"
-                      style="color: {redKitTertiary}; {redHasOutline ? '-webkit-text-stroke: 2px #000000; paint-order: stroke fill; text-shadow: -1px -1px 0 #000000, 1px -1px 0 #000000, -1px 1px 0 #000000, 1px 1px 0 #000000;' : 'text-shadow: 0 1px 2px rgba(0, 0, 0, 0.65);'}"
-                    >{redTeamName}</span>
-                    <div class="bench-header-actions">
-                      <div class="kit-variant-toggles" role="group" aria-label="Equipación del equipo rojo">
+                    {:else}
+                      <div class="fsm-running-grid">
                         <button
                           type="button"
-                          class="kit-variant-btn"
-                          class:active={gameUI.redKitVariant === 'home'}
-                          disabled={!isRedCaptainOrAdmin}
-                          title={isRedCaptainOrAdmin ? 'Equipación Local' : 'Solo capitán o admin'}
-                          onclick={() => handleSetRedKitVariant('home')}
+                          id="btn-match-toggle"
+                          class="btn-stop-match btn btn-danger btn-match-toggle"
+                          disabled={!gameUI.isAdmin && !gameUI.isHost}
+                          onclick={handleStopMatch}
                         >
-                          Local
+                          <span>DETENER PARTIDO</span>
                         </button>
+
                         <button
                           type="button"
-                          class="kit-variant-btn"
-                          class:active={gameUI.redKitVariant === 'away'}
-                          disabled={!isRedCaptainOrAdmin}
-                          title={isRedCaptainOrAdmin ? 'Equipación Visitante' : 'Solo capitán o admin'}
-                          onclick={() => handleSetRedKitVariant('away')}
+                          id="btn-fsm-pause"
+                          class="btn-pause-match btn btn-warning"
+                          class:is-resuming={isMatchPaused}
+                          disabled={(!gameUI.isAdmin && !gameUI.isHost) || isPauseLocked}
+                          onclick={handlePauseToggle}
                         >
-                          Visitante
+                          <span>{isResumeCountdown ? 'REANUDANDO...' : isMatchPaused ? 'REANUDAR' : 'PAUSAR'}</span>
                         </button>
                       </div>
-                      <button
-                        type="button"
-                        class="bench-join-btn"
-                        disabled={localTeam === 'red' || !canSwitchOwnTeam}
-                        onclick={() => handleQuickJoinTeam('red')}
-                        title="Unirse al equipo Rojo"
-                      >
-                        + Unirse
-                      </button>
-                    </div>
-                  </div>
-
-                  <div id="redPlayersList" class="bench-players-list custom-scrollbar-red">
-                    {#each redPlayers as p (p.id)}
-                      {@const isCaptain = p.id === redCaptain?.id}
-                      {@const isDraggable = canDragPlayer(p)}
-                      <div
-                        class="player-slot-card red-slot"
-                        role="button"
-                        tabindex="0"
-                        class:cursor-grab={isDraggable}
-                        class:cursor-not-allowed={!isDraggable}
-                        class:is-dragging={draggedPlayerId === p.id}
-                        draggable={isDraggable}
-                        ondragstart={(e) => handleDragStart(e, p)}
-                        ondragend={handleDragEnd}
-                        onpointerdown={(e) => handlePlayerPointerDown(e, p)}
-                        onpointermove={(e) => handlePlayerPointerMove(e, p)}
-                        onpointerup={(e) => handlePlayerPointerUp(e, p)}
-                        onpointercancel={handlePlayerPointerCancel}
-                        onclick={(e) => handlePlayerCardClick(e, p)}
-                        onkeydown={(e) => {
-                          if (e.key === 'Enter' || e.key === ' ') {
-                            e.preventDefault();
-                            handlePlayerCardClick(e as unknown as MouseEvent, p);
-                          }
-                        }}
-                      >
-                        <!-- 1. Avatar Circular de 32px -->
-                        <div class="slot-avatar red" style="color: {redKitTertiary};">{p.avatar || p.number || '1'}</div>
-                        <!-- 2. Nombre del Jugador en Chivo -->
-                        <span class="slot-nickname">{p.name || p.nickname}</span>
-                        <!-- 3. Insignias: Corona Admin y Cintilla de Capitán -->
-                        {#if p.isAdmin || p.isHost || isCaptain}
-                          <div class="card-badges-cluster">
-                            {#if p.isAdmin || p.isHost}
-                              <span class="admin-crown-badge" title={p.isHost ? 'Anfitrión de la sala' : 'Administrador'}>
-                                <svg class="crown-svg-sm" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-                                  <path d="M3 18h18v2H3v-2zm0-2l2-9 5 4 2-6 2 6 5-4 2 9H3z"></path>
-                                </svg>
-                              </span>
-                            {/if}
-                            {#if isCaptain}
-                              <span
-                                class="captain-ribbon"
-                                style="background-color: {redPrimaryColor}; color: {redKitTertiary}; font-weight: 800;"
-                                title="Capitán del equipo"
-                              >
-                                C
-                              </span>
-                            {/if}
-                          </div>
-                        {/if}
-                      </div>
-                    {/each}
+                    {/if}
                   </div>
                 </div>
-
-                <!-- 2. ESPECTADORES (SPEC) -->
-                <div
-                  class="bench-card spec-bench"
-                  data-team-column="spectator"
-                  role="region"
-                  aria-label="Banquillo Espectadores"
-                  class:is-drag-over={dragOverTeam === 'spectator'}
-                  ondragover={(e) => handleDragOver(e, 'spectator')}
-                  ondragleave={(e) => handleDragLeave(e, 'spectator')}
-                  ondrop={(e) => handleDrop(e, 'spectator')}
-                >
-                  <div class="bench-card-header spec-header">
-                    <span class="team-name">Espectadores</span>
-                    <button
-                      type="button"
-                      class="bench-join-btn"
-                      disabled={localTeam === 'spectator' || !canSwitchOwnTeam}
-                      onclick={() => handleQuickJoinTeam('spectator')}
-                      title="Unirse a Espectadores"
-                    >
-                      + Unirse
-                    </button>
-                  </div>
-
-                  <div id="specPlayersList" class="bench-players-list custom-scrollbar">
-                    {#each specPlayers as p (p.id)}
-                      {@const isDraggable = canDragPlayer(p)}
-                      <div
-                        class="player-slot-card spec-slot"
-                        role="button"
-                        tabindex="0"
-                        class:cursor-grab={isDraggable}
-                        class:cursor-not-allowed={!isDraggable}
-                        class:is-dragging={draggedPlayerId === p.id}
-                        draggable={isDraggable}
-                        ondragstart={(e) => handleDragStart(e, p)}
-                        ondragend={handleDragEnd}
-                        onpointerdown={(e) => handlePlayerPointerDown(e, p)}
-                        onpointermove={(e) => handlePlayerPointerMove(e, p)}
-                        onpointerup={(e) => handlePlayerPointerUp(e, p)}
-                        onpointercancel={handlePlayerPointerCancel}
-                        onclick={(e) => handlePlayerCardClick(e, p)}
-                        onkeydown={(e) => {
-                          if (e.key === 'Enter' || e.key === ' ') {
-                            e.preventDefault();
-                            handlePlayerCardClick(e as unknown as MouseEvent, p);
-                          }
-                        }}
-                      >
-                        <div class="slot-avatar spec">{p.avatar || p.number || 'S'}</div>
-                        <span class="slot-nickname">{p.name || p.nickname}</span>
-                        {#if p.isAdmin || p.isHost}
-                          <div class="card-badges-cluster">
-                            <span class="admin-crown-badge" title={p.isHost ? 'Anfitrión de la sala' : 'Administrador'}>
-                              <svg class="crown-svg-sm" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-                                <path d="M3 18h18v2H3v-2zm0-2l2-9 5 4 2-6 2 6 5-4 2 9H3z"></path>
-                              </svg>
-                            </span>
-                          </div>
-                        {/if}
-                      </div>
-                    {/each}
-                  </div>
-                </div>
-
-                <!-- 3. EQUIPO AZUL (VISITANTE) -->
-                <div
-                  class="bench-card blue-bench"
-                  data-team-column="blue"
-                  role="region"
-                  aria-label="Banquillo Equipo Azul"
-                  style="--captain-visitor-primary: {bluePrimaryColor}; --captain-visitor-glow: {bluePrimaryColor}40; --bench-team-primary: {bluePrimaryColor}; --captain-visitor-tertiary: {blueKitTertiary};"
-                  class:is-drag-over={dragOverTeam === 'blue'}
-                  ondragover={(e) => handleDragOver(e, 'blue')}
-                  ondragleave={(e) => handleDragLeave(e, 'blue')}
-                  ondrop={(e) => handleDrop(e, 'blue')}
-                >
-                  <div
-                    class="bench-card-header blue-header captain-bicolor-header"
-                    style="background: {blueKitBg}; border: {blueHasOutline ? '1.5px solid #000000' : 'none'};"
-                  >
-                    <span
-                      class="team-name"
-                      style="color: {blueKitTertiary}; {blueHasOutline ? '-webkit-text-stroke: 2px #000000; paint-order: stroke fill; text-shadow: -1px -1px 0 #000000, 1px -1px 0 #000000, -1px 1px 0 #000000, 1px 1px 0 #000000;' : 'text-shadow: 0 1px 2px rgba(0, 0, 0, 0.65);'}"
-                    >{blueTeamName}</span>
-                    <div class="bench-header-actions">
-                      <div class="kit-variant-toggles" role="group" aria-label="Equipación del equipo azul">
-                        <button
-                          type="button"
-                          class="kit-variant-btn"
-                          class:active={gameUI.blueKitVariant === 'home'}
-                          disabled={!isBlueCaptainOrAdmin}
-                          title={isBlueCaptainOrAdmin ? 'Equipación Local' : 'Solo capitán o admin'}
-                          onclick={() => handleSetBlueKitVariant('home')}
-                        >
-                          Local
-                        </button>
-                        <button
-                          type="button"
-                          class="kit-variant-btn"
-                          class:active={gameUI.blueKitVariant === 'away'}
-                          disabled={!isBlueCaptainOrAdmin}
-                          title={isBlueCaptainOrAdmin ? 'Equipación Visitante' : 'Solo capitán o admin'}
-                          onclick={() => handleSetBlueKitVariant('away')}
-                        >
-                          Visitante
-                        </button>
-                      </div>
-                      <button
-                        type="button"
-                        class="bench-join-btn"
-                        disabled={localTeam === 'blue' || !canSwitchOwnTeam}
-                        onclick={() => handleQuickJoinTeam('blue')}
-                        title="Unirse al equipo Azul"
-                      >
-                        + Unirse
-                      </button>
-                    </div>
-                  </div>
-
-                  <div id="bluePlayersList" class="bench-players-list custom-scrollbar">
-                    {#each bluePlayers as p (p.id)}
-                      {@const isCaptain = p.id === blueCaptain?.id}
-                      {@const isDraggable = canDragPlayer(p)}
-                      <div
-                        class="player-slot-card blue-slot"
-                        role="button"
-                        tabindex="0"
-                        class:cursor-grab={isDraggable}
-                        class:cursor-not-allowed={!isDraggable}
-                        class:is-dragging={draggedPlayerId === p.id}
-                        draggable={isDraggable}
-                        ondragstart={(e) => handleDragStart(e, p)}
-                        ondragend={handleDragEnd}
-                        onpointerdown={(e) => handlePlayerPointerDown(e, p)}
-                        onpointermove={(e) => handlePlayerPointerMove(e, p)}
-                        onpointerup={(e) => handlePlayerPointerUp(e, p)}
-                        onpointercancel={handlePlayerPointerCancel}
-                        onclick={(e) => handlePlayerCardClick(e, p)}
-                        onkeydown={(e) => {
-                          if (e.key === 'Enter' || e.key === ' ') {
-                            e.preventDefault();
-                            handlePlayerCardClick(e as unknown as MouseEvent, p);
-                          }
-                        }}
-                      >
-                        <div class="slot-avatar blue" style="color: {blueKitTertiary};">{p.avatar || p.number || '2'}</div>
-                        <span class="slot-nickname">{p.name || p.nickname}</span>
-                        {#if p.isAdmin || p.isHost || isCaptain}
-                          <div class="card-badges-cluster">
-                            {#if p.isAdmin || p.isHost}
-                              <span class="admin-crown-badge" title={p.isHost ? 'Anfitrión de la sala' : 'Administrador'}>
-                                <svg class="crown-svg-sm" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-                                  <path d="M3 18h18v2H3v-2zm0-2l2-9 5 4 2-6 2 6 5-4 2 9H3z"></path>
-                                </svg>
-                              </span>
-                            {/if}
-                            {#if isCaptain}
-                              <span
-                                class="captain-ribbon"
-                                style="background-color: {bluePrimaryColor}; color: {blueKitTertiary}; font-weight: 800;"
-                                title="Capitán del equipo"
-                              >
-                                C
-                              </span>
-                            {/if}
-                          </div>
-                        {/if}
-                      </div>
-                    {/each}
-                  </div>
-                </div>
-              </main>
+              </div>
             </div>
           </div>
         </div>
+      {/if}
 
       <!-- ======================================================== -->
-      <!-- SLIDE 2: CHAT EN VIVO EN MENÚ (MÓVIL)                    -->
+      <!-- SLIDE FINAL MÓVIL: CHAT EN VIVO                          -->
       <!-- ======================================================== -->
       {#if gameUI.isMobileLayout}
         <div
           class="corridor-slide slide-chat"
-          class:is-active={currentSlide === 2}
-          class:slide-out-right={currentSlide !== 2}
+          class:is-active={currentSlide === chatSlideIndex}
+          class:slide-out-right={currentSlide !== chatSlideIndex}
           id="slide-chat"
         >
           <div class="team-modal-card chat-modal-card">
@@ -1654,9 +1847,9 @@
                 type="button"
                 class="btn-close-x"
                 onclick={() => goToSlide(1)}
-                aria-label="Volver al Menú de Sala"
+                aria-label="Volver a Lista de Jugadores"
               >
-                &lt; Menú
+                &lt; Jugadores
               </button>
             </header>
 
@@ -1704,7 +1897,7 @@
       {/if}
     </div>
 
-    <!-- Indicador inferior reactivo del carrusel móvil (Stats ← Menú → Chat) -->
+    <!-- Indicador inferior reactivo del carrusel móvil -->
     {#if gameUI.isMobileLayout}
       <nav class="mobile-carousel-indicator" aria-label="Indicador de vistas del menú">
         <button
@@ -1725,14 +1918,26 @@
           onclick={() => goToSlide(1)}
         >
           <span class="pill-dot" aria-hidden="true"></span>
-          <span class="pill-label">Menú</span>
+          <span class="pill-label">Jugadores</span>
         </button>
+
+        {#if canSeeRoomSettings}
+          <button
+            type="button"
+            class="carousel-pill is-settings"
+            class:is-active={currentSlide === 2}
+            onclick={() => goToSlide(2)}
+          >
+            <span class="pill-dot" aria-hidden="true"></span>
+            <span class="pill-label">Ajustes</span>
+          </button>
+        {/if}
 
         <button
           type="button"
           class="carousel-pill is-chat"
-          class:is-active={currentSlide === 2}
-          onclick={() => goToSlide(2)}
+          class:is-active={currentSlide === chatSlideIndex}
+          onclick={() => goToSlide(chatSlideIndex)}
         >
           <span class="pill-dot" aria-hidden="true"></span>
           <span class="pill-label">Chat</span>
@@ -1745,8 +1950,11 @@
     {/if}
   </div>
 
-  <!-- Menú Contextual de Administrador (Clic Directo con Disociación de Drag) -->
+  <!-- Menú Contextual: Organización de Posición (Capitán en su equipo) + Moderación (Admin/Host) -->
   {#if contextMenu.visible && contextMenu.player}
+    {@const ctxPlayer = contextMenu.player}
+    {@const canAssignPos = (ctxPlayer.team === 'red' || ctxPlayer.team === 'blue') && gameUI.canManageTeamPositions(ctxPlayer.team)}
+    {@const canModerate = gameUI.isAdmin || gameUI.isHost}
     <div
       class="context-menu-backdrop"
       role="button"
@@ -1761,75 +1969,96 @@
       style="left: {contextMenu.x}px; top: {contextMenu.y}px;"
     >
       <div class="menu-target-header">
-        <span class="target-name">{contextMenu.player.name || contextMenu.player.nickname}</span>
+        <span class="target-name">{ctxPlayer.name || ctxPlayer.nickname}</span>
       </div>
-      {#if contextMenu.player.team !== 'red'}
-        <button
-          type="button"
-          class="context-menu-item item-move-red"
-          onclick={() => handleContextMoveTeam('red')}
-        >
-          <span>Mover a Rojo</span>
-        </button>
+
+      {#if canAssignPos}
+        <div class="ctx-position-section">
+          <span class="ctx-pos-label">Posición en cancha:</span>
+          <div class="ctx-pos-grid">
+            {#each PLAYER_POSITIONS as posOpt (posOpt)}
+              <button
+                type="button"
+                class="ctx-pos-btn role-{posOpt.toLowerCase()}"
+                class:is-current={ctxPlayer.position === posOpt}
+                onclick={() => handleContextAssignPosition(posOpt)}
+              >
+                {posOpt}
+              </button>
+            {/each}
+          </div>
+        </div>
       {/if}
-      {#if contextMenu.player.team !== 'spectator'}
-        <button
-          type="button"
-          class="context-menu-item item-move-spec"
-          onclick={() => handleContextMoveTeam('spectator')}
-        >
-          <span>Mover a Espectadores</span>
-        </button>
-      {/if}
-      {#if contextMenu.player.team !== 'blue'}
-        <button
-          type="button"
-          class="context-menu-item item-move-blue"
-          onclick={() => handleContextMoveTeam('blue')}
-        >
-          <span>Mover a Azul</span>
-        </button>
-      {/if}
-      {#if !contextMenu.player.isHost}
-        <button
-          type="button"
-          class="context-menu-item"
-          onclick={() => {
-            soundFX.playUIClick();
-            gameUI.togglePlayerAdmin(contextMenu.player!.id);
-            closeContextMenu();
-          }}
-        >
-          <span>{contextMenu.player.isAdmin ? '✕ Quitar Admin' : '★ Dar Admin'}</span>
-        </button>
-        {#if contextMenu.player.id !== gameUI.localPlayerId}
+
+      {#if canModerate}
+        {#if ctxPlayer.team !== 'red'}
           <button
             type="button"
-            class="context-menu-item item-danger"
-            onclick={() => {
-              soundFX.playUIClick();
-              gameUI.kickPlayer(contextMenu.player!.id);
-              closeContextMenu();
-            }}
+            class="context-menu-item item-move-red"
+            onclick={() => handleContextMoveTeam('red')}
           >
-            <span>Expulsar (Kick)</span>
-          </button>
-          <button
-            type="button"
-            class="context-menu-item item-danger"
-            onclick={() => {
-              soundFX.playUIClick();
-              gameUI.banPlayer(contextMenu.player!.id);
-              closeContextMenu();
-            }}
-          >
-            <span>Banear (Ban)</span>
+            <span>Mover a Rojo</span>
           </button>
         {/if}
-      {:else}
-        <div class="context-menu-item disabled">
-          <span>Anfitrión (Inmutable)</span>
-        </div>
+        {#if ctxPlayer.team !== 'spectator'}
+          <button
+            type="button"
+            class="context-menu-item item-move-spec"
+            onclick={() => handleContextMoveTeam('spectator')}
+          >
+            <span>Mover al Banquillo</span>
+          </button>
+        {/if}
+        {#if ctxPlayer.team !== 'blue'}
+          <button
+            type="button"
+            class="context-menu-item item-move-blue"
+            onclick={() => handleContextMoveTeam('blue')}
+          >
+            <span>Mover a Azul</span>
+          </button>
+        {/if}
+        {#if !ctxPlayer.isHost}
+          <button
+            type="button"
+            class="context-menu-item"
+            onclick={() => {
+              soundFX.playUIClick();
+              gameUI.togglePlayerAdmin(ctxPlayer.id);
+              closeContextMenu();
+            }}
+          >
+            <span>{ctxPlayer.isAdmin ? '✕ Quitar Admin' : '★ Dar Admin'}</span>
+          </button>
+          {#if ctxPlayer.id !== gameUI.localPlayerId}
+            <button
+              type="button"
+              class="context-menu-item item-danger"
+              onclick={() => {
+                soundFX.playUIClick();
+                gameUI.kickPlayer(ctxPlayer.id);
+                closeContextMenu();
+              }}
+            >
+              <span>Expulsar (Kick)</span>
+            </button>
+            <button
+              type="button"
+              class="context-menu-item item-danger"
+              onclick={() => {
+                soundFX.playUIClick();
+                gameUI.banPlayer(ctxPlayer.id);
+                closeContextMenu();
+              }}
+            >
+              <span>Banear (Ban)</span>
+            </button>
+          {/if}
+        {:else}
+          <div class="context-menu-item disabled">
+            <span>Anfitrión (Inmutable)</span>
+          </div>
+        {/if}
       {/if}
     </div>
   {/if}
@@ -1849,7 +2078,6 @@
     user-select: none;
   }
 
-  /* Viewport y Contenedor Centralizado del Corredor */
   .corridor-viewport {
     position: fixed;
     inset: 0;
@@ -1860,12 +2088,12 @@
 
   .corridor-container {
     position: fixed;
-    top: 50px;
-    bottom: calc(var(--chat-height, 160px) + 16px);
+    top: 48px;
+    bottom: calc(var(--chat-height, 148px) + 12px);
     left: 50%;
     transform: translateX(-50%);
-    width: min(96vw, 1140px);
-    max-height: calc(100vh - var(--chat-height, 160px) - 72px);
+    width: min(95vw, 1140px);
+    max-height: calc(100dvh - var(--chat-height, 148px) - 62px);
     pointer-events: none;
   }
 
@@ -1881,55 +2109,27 @@
     transition: transform 0.35s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.25s ease;
   }
 
-  /* Diapositiva Activa MENU */
-  .slide-menu.is-active {
+  .corridor-slide.is-active {
     transform: translateX(0);
     opacity: 1;
     pointer-events: auto;
     z-index: 30;
   }
-  .slide-menu.slide-out-left {
-    transform: translateX(-115%);
-    opacity: 0;
-    pointer-events: none;
-    z-index: 20;
-  }
-  .slide-stats.slide-out-left {
+
+  .corridor-slide.slide-out-left {
     transform: translateX(-115%);
     opacity: 0;
     pointer-events: none;
     z-index: 20;
   }
 
-  /* Diapositiva Activa STATS */
-  .slide-stats.is-active {
-    transform: translateX(0);
-    opacity: 1;
-    pointer-events: auto;
-    z-index: 30;
-  }
-  .slide-menu.slide-out-right {
+  .corridor-slide.slide-out-right {
     transform: translateX(115%);
     opacity: 0;
     pointer-events: none;
     z-index: 20;
   }
 
-  /* Diapositiva Activa CHAT (Móvil) */
-  .slide-chat.is-active {
-    transform: translateX(0);
-    opacity: 1;
-    pointer-events: auto;
-    z-index: 30;
-  }
-  .slide-chat.slide-out-right {
-    transform: translateX(115%);
-    opacity: 0;
-    pointer-events: none;
-    z-index: 20;
-  }
-
-  /* Tarjeta Central Ampliada a min(96vw, 1140px) */
   .team-modal-card {
     width: 100%;
     height: 100%;
@@ -1939,21 +2139,19 @@
     border-radius: 1rem;
     display: flex;
     flex-direction: column;
-    overflow-y: auto;
-    overflow-x: hidden;
+    overflow: hidden;
     color: #dde2f1;
     box-shadow: 0 0 35px rgba(0, 229, 255, 0.22), 0 10px 30px rgba(0, 0, 0, 0.8);
     font-family: 'Chivo', system-ui, sans-serif;
     pointer-events: auto;
   }
 
-  /* Pestañas Flotantes Exteriores Sólidas Desacopladas */
   .external-nav-tab {
     border-radius: 8px;
-    padding: 14px 14px;
+    padding: 12px 13px;
     font-family: 'Space Grotesk', system-ui, sans-serif;
     font-weight: 800;
-    font-size: 13px;
+    font-size: 12px;
     letter-spacing: 0.05em;
     transition: all 0.2s ease;
     cursor: pointer;
@@ -1961,46 +2159,40 @@
     white-space: nowrap;
     display: flex;
     align-items: center;
-    gap: 0.45rem;
+    gap: 0.4rem;
     z-index: 40;
     outline: none;
   }
 
-  .external-nav-tab:active {
-    transform: translateY(-50%) scale(0.96);
-  }
-
   .right-tab {
     position: absolute;
-    right: -85px;
+    right: -84px;
     top: 50%;
     transform: translateY(-50%);
     background: #00e5ff;
     color: #0a101a;
     border: 2px solid #a5f3fc;
-    box-shadow: 0 0 20px rgba(0, 229, 255, 0.65), 0 0 40px rgba(0, 229, 255, 0.35);
+    box-shadow: 0 0 20px rgba(0, 229, 255, 0.55);
   }
 
   .right-tab:hover {
     background: #38bdf8;
-    box-shadow: 0 0 25px rgba(0, 229, 255, 0.85), 0 0 50px rgba(0, 229, 255, 0.5);
     transform: translateY(-50%) scale(1.05);
   }
 
   .left-tab {
     position: absolute;
-    left: -85px;
+    left: -84px;
     top: 50%;
     transform: translateY(-50%);
     background: #ffd700;
     color: #0a101a;
     border: 2px solid #fff275;
-    box-shadow: 0 0 20px rgba(255, 215, 0, 0.65), 0 0 40px rgba(255, 215, 0, 0.35);
+    box-shadow: 0 0 20px rgba(255, 215, 0, 0.55);
   }
 
   .left-tab:hover {
     background: #ffe033;
-    box-shadow: 0 0 25px rgba(255, 215, 0, 0.85), 0 0 50px rgba(255, 215, 0, 0.5);
     transform: translateY(-50%) scale(1.05);
   }
 
@@ -2011,31 +2203,34 @@
 
   /* HEADER GENERAL DE SALA */
   .modal-header {
-    height: 52px;
-    padding: 0 1.25rem;
-    background: rgba(8, 14, 24, 0.85);
+    height: 48px;
+    padding: 0 1rem;
+    background: rgba(8, 14, 24, 0.9);
     border-bottom: 1px solid rgba(0, 229, 255, 0.2);
     display: flex;
     align-items: center;
     justify-content: space-between;
+    gap: 0.6rem;
     flex-shrink: 0;
   }
 
   .room-identity {
     display: flex;
     align-items: center;
-    gap: 0.65rem;
+    gap: 0.55rem;
+    min-width: 0;
+    flex: 1;
   }
 
   .room-title {
     font-family: 'Space Grotesk', system-ui, sans-serif;
-    font-size: 1.1rem;
+    font-size: 1rem;
     font-weight: 700;
-    letter-spacing: 0.05em;
+    letter-spacing: 0.04em;
     color: #ffffff;
     text-transform: uppercase;
     margin: 0;
-    max-width: 480px;
+    max-width: 280px;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -2048,78 +2243,90 @@
 
   .room-id-badge {
     font-family: 'JetBrains Mono', monospace;
-    font-size: 0.75rem;
+    font-size: 0.72rem;
     font-weight: 700;
     color: #00e5ff;
     background: rgba(0, 229, 255, 0.12);
-    padding: 0.2rem 0.55rem;
+    padding: 0.18rem 0.5rem;
     border-radius: 0.25rem;
     border: 1px solid rgba(0, 229, 255, 0.35);
+    white-space: nowrap;
+  }
+
+  .match-rules-minicard {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+    padding: 0.2rem 0.6rem;
+    border-radius: 999px;
+    background: rgba(15, 23, 42, 0.95);
+    border: 1px solid rgba(251, 191, 36, 0.45);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.72rem;
+    font-weight: 800;
+    color: #fde68a;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+
+  .minicard-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+  }
+
+  .minicard-sep {
+    opacity: 0.45;
   }
 
   .practice-offline-badge {
     font-family: 'JetBrains Mono', monospace;
-    font-size: 0.68rem;
+    font-size: 0.66rem;
     font-weight: 800;
     color: #ffd700;
     background: rgba(255, 215, 0, 0.12);
-    padding: 0.22rem 0.65rem;
-    border-radius: 0.28rem;
+    padding: 0.18rem 0.5rem;
+    border-radius: 0.25rem;
     border: 1px solid rgba(255, 215, 0, 0.45);
-    letter-spacing: 0.03em;
-  }
-
-  .rule-svg {
-    width: 0.85rem;
-    height: 0.85rem;
-    color: #00e5ff;
-    flex-shrink: 0;
-  }
-
-  .stadium-canvas-wrap {
-    position: absolute;
-    inset: 0;
-    width: 100%;
-    height: 100%;
-    pointer-events: none;
-  }
-
-  .crown-svg {
-    width: 1.05rem;
-    height: 1.05rem;
-    color: #ffe16d;
-    flex-shrink: 0;
-  }
-
-  .crown-svg-sm {
-    width: 0.85rem;
-    height: 0.85rem;
-    color: #ffe16d;
-    flex-shrink: 0;
+    white-space: nowrap;
   }
 
   .header-actions {
     display: flex;
     align-items: center;
-    gap: 0.5rem;
+    gap: 0.4rem;
+    flex-shrink: 0;
   }
 
+  .btn-settings-quick,
   .btn-copy-link,
   .btn-leave,
   .btn-close-x {
-    padding: 0.35rem 0.75rem;
+    padding: 0.32rem 0.65rem;
     border-radius: 0.375rem;
     font-family: 'Chivo', system-ui, sans-serif;
-    font-size: 0.72rem;
+    font-size: 0.7rem;
     font-weight: 800;
     letter-spacing: 0.04em;
     text-transform: uppercase;
     cursor: pointer;
-    display: flex;
+    display: inline-flex;
     align-items: center;
-    gap: 0.4rem;
+    gap: 0.35rem;
     transition: all 0.15s ease;
     outline: none;
+    white-space: nowrap;
+  }
+
+  .btn-settings-quick {
+    background: rgba(250, 204, 21, 0.12);
+    border: 1px solid rgba(250, 204, 21, 0.45);
+    color: #fde047;
+  }
+
+  .btn-settings-quick:hover {
+    background: rgba(250, 204, 21, 0.25);
+    border-color: #fde047;
   }
 
   .header-btn-svg {
@@ -2136,7 +2343,6 @@
   .btn-copy-link:hover {
     background: rgba(0, 229, 255, 0.15);
     border-color: #00e5ff;
-    box-shadow: 0 0 10px rgba(0, 229, 255, 0.3);
   }
 
   .btn-leave {
@@ -2148,14 +2354,13 @@
   .btn-leave:hover {
     background: #ff3366;
     color: #ffffff;
-    box-shadow: 0 0 12px rgba(255, 51, 102, 0.4);
   }
 
   .btn-close-x {
     background: transparent;
     border: 1px solid rgba(132, 147, 150, 0.3);
     color: #bac9cc;
-    padding: 0.35rem 0.55rem;
+    padding: 0.32rem 0.55rem;
   }
 
   .btn-close-x:hover {
@@ -2164,54 +2369,459 @@
     border-color: #ffffff;
   }
 
-  /* BODY LAYOUT (4 Columnas Holgadas) */
-  .modal-body-layout {
-    display: flex;
+  /* ======================================================== */
+  /* SLIDE 1: CANCHA TÁCTICA EN 4 ZONAS + BANQUILLO           */
+  /* ======================================================== */
+  .pitch-lineup-workspace {
     flex: 1;
     min-height: 0;
-  }
-
-  /* COLUMNA 1 (REGLAS Y AJUSTES) */
-  .col-settings-panel {
-    width: 330px;
-    min-width: 320px;
-    max-width: 350px;
-    height: 100%;
-    background: rgba(8, 14, 24, 0.55);
-    border-right: 1px solid rgba(0, 229, 255, 0.2);
     display: flex;
     flex-direction: column;
-    padding: 0.85rem;
-    box-sizing: border-box;
-    overflow-x: hidden;
+    gap: 0.45rem;
+    padding: 0.55rem 0.75rem 0.65rem 0.75rem;
+    overflow: hidden;
+  }
+
+  .pitch-team-headers-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.5rem;
     flex-shrink: 0;
   }
 
-  .col-settings-scroll {
-    flex: 1;
-    overflow-y: auto;
-    overflow-x: hidden;
-    width: 100%;
-    box-sizing: border-box;
-    padding-right: 0.4rem;
+  .pitch-team-bar {
+    height: 36px;
+    border-radius: 0.45rem;
+    padding: 0 0.55rem;
     display: flex;
-    flex-direction: column;
-    gap: 0.8rem;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.4rem;
   }
 
-  /* 2x2 GRID CON ALTURA FIJA 40px Y 100% HITBOX */
+  .tactical-pitch-arena {
+    position: relative;
+    flex: 1;
+    min-height: 0;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    border-radius: 0.65rem;
+    border: 2px solid rgba(16, 185, 129, 0.45);
+    background:
+      repeating-linear-gradient(
+        90deg,
+        #0c3322 0px,
+        #0c3322 44px,
+        #0f3d29 44px,
+        #0f3d29 88px
+      );
+    box-shadow: inset 0 0 28px rgba(0, 0, 0, 0.55);
+    overflow: hidden;
+  }
+
+  .pitch-halfway-line {
+    position: absolute;
+    left: 50%;
+    top: 0;
+    bottom: 0;
+    width: 2px;
+    background: rgba(255, 255, 255, 0.25);
+    transform: translateX(-50%);
+    pointer-events: none;
+  }
+
+  .pitch-center-circle {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 84px;
+    height: 84px;
+    border-radius: 50%;
+    border: 2px solid rgba(255, 255, 255, 0.22);
+    transform: translate(-50%, -50%);
+    pointer-events: none;
+  }
+
+  .pitch-goal-box {
+    position: absolute;
+    top: 22%;
+    bottom: 22%;
+    width: 48px;
+    border: 2px solid rgba(255, 255, 255, 0.2);
+    pointer-events: none;
+  }
+
+  .pitch-goal-box.left-goal {
+    left: 0;
+    border-left: none;
+    border-radius: 0 8px 8px 0;
+  }
+
+  .pitch-goal-box.right-goal {
+    right: 0;
+    border-right: none;
+    border-radius: 8px 0 0 8px;
+  }
+
+  .pitch-half {
+    position: relative;
+    z-index: 2;
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    height: 100%;
+    min-height: 0;
+    transition: background 0.15s ease;
+  }
+
+  .red-half.is-drag-over {
+    background: rgba(231, 76, 60, 0.14);
+  }
+
+  .blue-half.is-drag-over {
+    background: rgba(0, 229, 255, 0.14);
+  }
+
+  .pitch-zone-col {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 0.35rem 0.2rem;
+    border-right: 1px dashed rgba(255, 255, 255, 0.08);
+    min-height: 0;
+    transition: background 0.14s ease;
+  }
+
+  .pitch-zone-col:last-child {
+    border-right: none;
+  }
+
+  .pitch-zone-col.is-zone-hover {
+    background: rgba(0, 229, 255, 0.2);
+    box-shadow: inset 0 0 12px rgba(0, 229, 255, 0.35);
+  }
+
+  .zone-header-pill {
+    font-family: 'Space Grotesk', system-ui, sans-serif;
+    font-size: 0.65rem;
+    font-weight: 800;
+    letter-spacing: 0.06em;
+    padding: 0.12rem 0.42rem;
+    border-radius: 999px;
+    background: rgba(8, 13, 23, 0.85);
+    border: 1px solid currentColor;
+    margin-bottom: 0.35rem;
+    flex-shrink: 0;
+  }
+
+  .role-gk { color: #fbbf24; }
+  .role-dfc { color: #38bdf8; }
+  .role-mc { color: #34d399; }
+  .role-st { color: #ff6b81; }
+
+  .zone-players-stack {
+    flex: 1;
+    width: 100%;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.4rem;
+    padding: 0.15rem 0;
+    min-height: 0;
+  }
+
+  .pitch-player-token {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.18rem;
+    padding: 0.22rem 0.28rem;
+    border-radius: 0.45rem;
+    background: rgba(8, 14, 24, 0.72);
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    max-width: 100%;
+    transition: transform 0.12s ease, border-color 0.12s ease, background 0.12s ease;
+  }
+
+  .pitch-player-token:hover {
+    background: rgba(15, 23, 42, 0.94);
+    border-color: rgba(0, 229, 255, 0.6);
+    transform: translateY(-1px);
+  }
+
+  .pitch-player-token.is-captain {
+    border-color: rgba(251, 191, 36, 0.65);
+  }
+
+  .pitch-player-token.is-dragging {
+    opacity: 0.4;
+  }
+
+  .token-avatar-wrap {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .token-crown {
+    position: absolute;
+    top: -6px;
+    right: -6px;
+    font-size: 0.65rem;
+    line-height: 1;
+  }
+
+  .token-captain-c {
+    position: absolute;
+    bottom: -3px;
+    right: -4px;
+    width: 14px;
+    height: 14px;
+    border-radius: 999px;
+    font-size: 0.56rem;
+    font-weight: 900;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid rgba(0, 0, 0, 0.85);
+  }
+
+  .token-nickname {
+    font-family: 'Chivo', system-ui, sans-serif;
+    font-size: 0.66rem;
+    font-weight: 700;
+    color: #f8fafc;
+    max-width: 82px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    text-align: center;
+  }
+
+  /* Banquillo de Espectadores con Sillas Temáticas */
+  .banquillo-dugout {
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    background: rgba(11, 17, 29, 0.94);
+    border: 1px solid rgba(148, 163, 184, 0.32);
+    border-radius: 0.6rem;
+    padding: 0.42rem 0.6rem;
+    transition: border-color 0.15s ease, background 0.15s ease;
+  }
+
+  .banquillo-dugout.is-drag-over {
+    border-color: #00e5ff;
+    background: rgba(0, 229, 255, 0.1);
+  }
+
+  .banquillo-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+  }
+
+  .banquillo-title-group {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .banquillo-title {
+    font-family: 'Space Grotesk', system-ui, sans-serif;
+    font-size: 0.72rem;
+    font-weight: 800;
+    letter-spacing: 0.05em;
+    color: #e2e8f0;
+  }
+
+  .banquillo-cap-badge {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.66rem;
+    font-weight: 700;
+    color: #94a3b8;
+    background: rgba(255, 255, 255, 0.06);
+    padding: 0.1rem 0.42rem;
+    border-radius: 999px;
+  }
+
+  .banquillo-chairs-grid {
+    display: flex;
+    align-items: stretch;
+    gap: 0.38rem;
+    overflow-x: auto;
+    padding-bottom: 0.15rem;
+  }
+
+  .bench-seat-slot {
+    position: relative;
+    min-width: 60px;
+    width: 64px;
+    height: 62px;
+    flex-shrink: 0;
+    border-radius: 0.45rem;
+    background: rgba(19, 28, 44, 0.92);
+    border: 1px solid rgba(148, 163, 184, 0.22);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.2rem;
+    padding: 0.2rem;
+    box-sizing: border-box;
+  }
+
+  .bench-seat-slot.is-occupied {
+    border-color: rgba(0, 229, 255, 0.4);
+    background: rgba(24, 34, 54, 0.96);
+  }
+
+  .bench-seat-slot.is-empty {
+    opacity: 0.45;
+  }
+
+  .seat-backrest {
+    position: absolute;
+    top: 3px;
+    left: 10px;
+    right: 10px;
+    height: 4px;
+    border-radius: 3px;
+    background: #00e5ff;
+    opacity: 0.65;
+  }
+
+  .seat-backrest.empty-chair {
+    background: #64748b;
+    opacity: 0.4;
+  }
+
+  .seat-avatar-wrap {
+    position: relative;
+    margin-top: 4px;
+  }
+
+  .seat-crown {
+    position: absolute;
+    top: -5px;
+    right: -5px;
+    font-size: 0.58rem;
+    line-height: 1;
+  }
+
+  .seat-player-name {
+    font-family: 'Chivo', system-ui, sans-serif;
+    font-size: 0.62rem;
+    font-weight: 700;
+    color: #f1f5f9;
+    max-width: 58px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    text-align: center;
+  }
+
+  .seat-empty-num {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.6rem;
+    color: #64748b;
+    margin-top: 6px;
+  }
+
+  /* ======================================================== */
+  /* SLIDE 2: AJUSTES DE SALA (SOLO ADMINS)                   */
+  /* ======================================================== */
+  .settings-slide-body {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 0.85rem 1rem;
+  }
+
+  .settings-2col-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.85rem;
+    align-items: start;
+  }
+
+  .settings-panel-box {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    background: rgba(15, 23, 42, 0.72);
+    border: 1px solid rgba(0, 229, 255, 0.22);
+    border-radius: 0.65rem;
+    padding: 0.8rem;
+  }
+
+  .settings-fsm-box {
+    margin-top: 0.2rem;
+  }
+
+  /* Avatars & Reusable Controls */
+  .slot-avatar {
+    width: 30px;
+    height: 30px;
+    min-width: 30px;
+    border-radius: 9999px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: 'Space Grotesk', system-ui, sans-serif;
+    font-size: 0.72rem;
+    font-weight: 800;
+    flex-shrink: 0;
+  }
+
+  .slot-avatar.red {
+    background: var(--captain-local-primary, #e74c3c);
+    color: var(--captain-local-tertiary, #ffffff);
+    box-shadow: 0 0 8px var(--captain-local-primary, rgba(231, 76, 60, 0.5));
+  }
+
+  .slot-avatar.spec {
+    width: 26px;
+    height: 26px;
+    min-width: 26px;
+    font-size: 0.66rem;
+    background: #2f3540;
+    color: #dde2f1;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+  }
+
+  .slot-avatar.blue {
+    background: var(--captain-visitor-primary, #00e5ff);
+    color: var(--captain-visitor-tertiary, #ffffff);
+    box-shadow: 0 0 8px var(--captain-visitor-primary, rgba(0, 229, 255, 0.5));
+  }
+
+  .cursor-grab { cursor: grab; }
+  .cursor-grab:active { cursor: grabbing; }
+  .cursor-not-allowed { cursor: default; }
+
   .rules-4btn-grid {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 0.5rem;
     width: 100%;
-    box-sizing: border-box;
+  }
+
+  .rule-svg {
+    width: 0.85rem;
+    height: 0.85rem;
+    color: #00e5ff;
+    flex-shrink: 0;
   }
 
   .rule-cartouche,
   .rule-cartouche-btn {
     position: relative;
-    height: 40px;
+    height: 38px;
     width: 100%;
     box-sizing: border-box;
     display: flex;
@@ -2229,7 +2839,6 @@
   .rule-cartouche:hover,
   .rule-cartouche-btn:hover:not(:disabled) {
     border-color: #00e5ff;
-    box-shadow: 0 0 10px rgba(0, 229, 255, 0.25);
   }
 
   .rule-cartouche-btn:disabled {
@@ -2251,8 +2860,6 @@
     font-weight: 700;
     color: #ffffff;
     white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
   }
 
   .rule-arrow {
@@ -2269,16 +2876,11 @@
     opacity: 0;
     cursor: pointer;
     z-index: 10;
-    background: transparent;
-    border: none;
-    color: transparent;
   }
 
   .rule-select-overlay option {
     background: #080e18;
     color: #dde2f1;
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 12px;
   }
 
   .lock-teams-btn {
@@ -2289,15 +2891,12 @@
     border-color: rgba(251, 191, 36, 0.6);
     background: rgba(251, 191, 36, 0.12);
     color: #fbbf24;
-    box-shadow: 0 0 10px rgba(251, 191, 36, 0.2);
   }
 
   .lock-label {
     font-size: 11px;
     font-weight: 700;
     white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
   }
 
   .lock-tag {
@@ -2310,41 +2909,41 @@
     font-weight: 800;
   }
 
-  .lock-teams-btn.active-locked .lock-tag {
-    background: rgba(251, 191, 36, 0.2);
-    color: #fbbf24;
+  .auto-reset-container {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+    width: 100%;
+    height: 38px;
+  }
+
+  .btn-auto-balance {
+    background: rgba(0, 229, 255, 0.1);
+    border-color: rgba(0, 229, 255, 0.4);
+    color: #00e5ff;
+    justify-content: center;
+  }
+
+  .btn-reset-teams {
+    background: rgba(255, 71, 87, 0.1);
+    border-color: rgba(255, 71, 87, 0.4);
+    color: #ff6b81;
+    justify-content: center;
   }
 
   .btn-modifiers {
     background: rgba(251, 191, 36, 0.1);
     border-color: rgba(251, 191, 36, 0.4);
     color: #fcd34d;
-    box-shadow: 0 0 12px rgba(251, 191, 36, 0.15);
     justify-content: center;
-    font-family: 'Space Grotesk', system-ui, sans-serif;
     font-size: 11px;
     font-weight: 700;
   }
 
-  .btn-modifiers:hover:not(:disabled) {
-    background: rgba(251, 191, 36, 0.2);
-    border-color: #fbbf24;
-    color: #ffffff;
-    box-shadow: 0 0 16px rgba(251, 191, 36, 0.3);
-  }
-
-  /* ESTADIO (2:1 Proporción) */
   .stadium-section {
     display: flex;
     flex-direction: column;
     gap: 6px;
-    margin-top: 2px;
-  }
-
-  .param-label-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
   }
 
   .param-name {
@@ -2353,15 +2952,14 @@
     font-weight: 700;
     text-transform: uppercase;
     color: #849396;
-    letter-spacing: 0.05em;
   }
 
   .stadium-preview-box {
     position: relative;
     width: 100%;
     aspect-ratio: 2 / 1;
-    min-height: 110px;
-    max-height: 140px;
+    min-height: 105px;
+    max-height: 145px;
     border-radius: 0.5rem;
     overflow: hidden;
     background: #07170e;
@@ -2370,13 +2968,12 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    box-sizing: border-box;
-    transition: border-color 0.15s, box-shadow 0.15s, transform 0.1s;
   }
 
-  .stadium-preview-box:hover {
-    border-color: #00e5ff;
-    box-shadow: 0 0 16px rgba(0, 229, 255, 0.45);
+  .stadium-canvas-wrap {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
   }
 
   .stadium-overlay {
@@ -2385,50 +2982,105 @@
     display: flex;
     flex-direction: column;
     align-items: center;
-    justify-content: center;
-    gap: 6px;
-    background: rgba(10, 16, 26, 0.95);
+    gap: 5px;
+    background: rgba(10, 16, 26, 0.94);
     border: 1px solid rgba(0, 229, 255, 0.4);
     padding: 6px 14px;
     border-radius: 0.5rem;
-    pointer-events: none;
-    box-shadow: 0 0 14px rgba(0, 0, 0, 0.6);
   }
 
   .stadium-name {
-    font-family: 'Space Grotesk', system-ui, sans-serif;
     font-size: 13px;
     font-weight: 800;
     color: #ffffff;
-    letter-spacing: 0.04em;
-    text-shadow: 0 0 8px rgba(0, 229, 255, 0.6);
   }
 
   .stadium-action-text {
-    font-family: 'Chivo', system-ui, sans-serif;
     font-size: 10px;
     font-weight: 600;
     color: #00e5ff;
-    background: rgba(0, 229, 255, 0.15);
-    border: 1px solid rgba(0, 229, 255, 0.35);
-    padding: 2px 8px;
-    border-radius: 4px;
-    white-space: nowrap;
   }
 
-  /* TOGGLE SWITCH SALA PÚBLICA / PRIVADA */
+  .advanced-settings-card {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .card-micro-title {
+    font-size: 0.68rem;
+    font-weight: 800;
+    color: #00e5ff;
+    letter-spacing: 0.05em;
+  }
+
+  .adv-row {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+  }
+
+  .adv-row label {
+    font-size: 0.65rem;
+    color: #94a3b8;
+    text-transform: uppercase;
+  }
+
+  .styled-adv-input {
+    background: #080e18;
+    border: 1px solid rgba(59, 73, 76, 0.6);
+    border-radius: 0.25rem;
+    padding: 0.34rem 0.5rem;
+    font-size: 0.78rem;
+    color: #ffffff;
+    outline: none;
+  }
+
+  .adv-capacity-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.72rem;
+  }
+
+  .adv-label { color: #cbd5e1; }
+
+  .cap-stepper {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    background: #080e18;
+    border: 1px solid rgba(59, 73, 76, 0.5);
+    border-radius: 0.25rem;
+    padding: 0.15rem 0.35rem;
+  }
+
+  .cap-step-btn {
+    width: 1.35rem;
+    height: 1.35rem;
+    border-radius: 0.25rem;
+    background: #1a202a;
+    border: none;
+    color: #00e5ff;
+    font-weight: 700;
+    cursor: pointer;
+  }
+
+  .cap-num-val {
+    min-width: 1.3rem;
+    text-align: center;
+    font-weight: 700;
+    color: #ffffff;
+  }
+
   .toggle-row {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding-top: 0.2rem;
   }
 
-  .toggle-label {
-    font-size: 11px;
-    font-weight: 600;
-    color: #dde2f1;
-  }
+  .toggle-label { font-size: 11px; font-weight: 600; color: #dde2f1; }
 
   .switch {
     position: relative;
@@ -2437,11 +3089,7 @@
     height: 18px;
   }
 
-  .switch input {
-    opacity: 0;
-    width: 0;
-    height: 0;
-  }
+  .switch input { opacity: 0; width: 0; height: 0; }
 
   .slider {
     position: absolute;
@@ -2473,141 +3121,31 @@
   input:checked + .slider:before {
     transform: translateX(18px);
     background-color: #00e5ff;
-    box-shadow: 0 0 8px #00e5ff;
   }
 
-  /* AJUSTES AVANZADOS */
-  .advanced-settings-card {
-    background: rgba(22, 28, 38, 0.65);
-    border: 1px solid rgba(0, 229, 255, 0.2);
-    border-radius: 0.5rem;
-    padding: 0.6rem;
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
-  }
-
-  .card-micro-title {
-    font-size: 0.65rem;
-    font-weight: 800;
-    color: #00e5ff;
-    letter-spacing: 0.05em;
-  }
-
-  .adv-row {
-    display: flex;
-    flex-direction: column;
-    gap: 0.2rem;
-  }
-
-  .adv-row label {
-    font-size: 0.62rem;
-    color: #849396;
-    text-transform: uppercase;
-  }
-
-  .styled-adv-input {
-    background: #080e18;
-    border: 1px solid rgba(59, 73, 76, 0.6);
-    border-radius: 0.25rem;
-    padding: 0.3rem 0.5rem;
-    font-family: 'Chivo', system-ui, sans-serif;
-    font-size: 0.75rem;
-    color: #ffffff;
-    outline: none;
-  }
-
-  .styled-adv-input:focus {
-    border-color: #00e5ff;
-  }
-
-  .adv-capacity-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 0.72rem;
-  }
-
-  .adv-label {
-    color: #849396;
-    font-size: 0.65rem;
-  }
-
-  .cap-stepper {
-    display: flex;
-    align-items: center;
-    gap: 0.4rem;
-    background: #080e18;
-    border: 1px solid rgba(59, 73, 76, 0.5);
-    border-radius: 0.25rem;
-    padding: 0.15rem 0.35rem;
-  }
-
-  .cap-step-btn {
-    width: 1.25rem;
-    height: 1.25rem;
-    border-radius: 0.25rem;
-    background: #1a202a;
-    border: none;
-    color: #00e5ff;
-    font-weight: 700;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    line-height: 1;
-  }
-
-  .cap-step-btn:hover:not(:disabled) {
-    background: #00e5ff;
-    color: #050811;
-  }
-
-  .cap-num-val {
-    min-width: 1.2rem;
-    text-align: center;
-    font-weight: 700;
-    color: #ffffff;
-  }
-
-  /* FOOTER FSM */
   .fsm-footer-controls {
     padding-top: 0.65rem;
     border-top: 1px solid rgba(0, 229, 255, 0.25);
     display: flex;
     flex-direction: column;
-    gap: 0.4rem;
-    flex-shrink: 0;
+    gap: 0.45rem;
   }
 
   .btn-start-match {
     width: 100%;
-    padding: 0.65rem;
+    padding: 0.72rem;
     background: #2ecc71;
     border: none;
     border-radius: 0.5rem;
     font-family: 'Space Grotesk', system-ui, sans-serif;
-    font-size: 0.85rem;
+    font-size: 0.9rem;
     font-weight: 900;
     color: #050811;
     letter-spacing: 0.08em;
     cursor: pointer;
-    box-shadow: 0 0 16px rgba(46, 204, 113, 0.4);
-    transition: all 0.15s ease;
   }
 
-  .btn-start-match:hover:not(:disabled) {
-    background: #27ae60;
-    transform: translateY(-1px);
-    box-shadow: 0 0 20px rgba(46, 204, 113, 0.6);
-  }
-
-  .btn-start-match:disabled {
-    opacity: 0.4;
-    cursor: not-allowed;
-    box-shadow: none;
-  }
+  .btn-start-match:disabled { opacity: 0.4; cursor: not-allowed; }
 
   .fsm-running-grid {
     display: grid;
@@ -2616,116 +3154,37 @@
   }
 
   .btn-stop-match {
-    padding: 0.6rem;
+    padding: 0.65rem;
     background: #ff3366;
     border: none;
     border-radius: 0.5rem;
-    font-family: 'Space Grotesk', system-ui, sans-serif;
-    font-size: 0.75rem;
+    font-size: 0.78rem;
     font-weight: 900;
     color: #ffffff;
-    letter-spacing: 0.05em;
     cursor: pointer;
-    box-shadow: 0 0 12px rgba(255, 51, 102, 0.4);
-    transition: all 0.15s ease;
-  }
-
-  .btn-stop-match:hover:not(:disabled) {
-    background: #e02657;
   }
 
   .btn-pause-match {
-    padding: 0.6rem;
+    padding: 0.65rem;
     border: 1.5px solid #38bdf8;
     background: #0284c7;
     color: #ffffff;
     border-radius: 0.5rem;
-    font-family: 'Space Grotesk', system-ui, sans-serif;
-    font-size: 0.75rem;
+    font-size: 0.78rem;
     font-weight: bold;
-    letter-spacing: 0.05em;
     cursor: pointer;
-    box-shadow: 0 0 16px rgba(14, 165, 233, 0.45);
-    transition: all 0.15s ease;
   }
 
-  .btn-pause-match:hover:not(:disabled) {
-    background: #0369a1;
-    border-color: #7dd3fc;
-    box-shadow: 0 0 20px rgba(14, 165, 233, 0.65);
-    color: #ffffff;
-  }
-
-  .btn-pause-match.is-resuming {
-    background: #0284c7;
-    border-color: #38bdf8;
-    box-shadow: 0 0 16px rgba(14, 165, 233, 0.45);
-    color: #ffffff;
-  }
-
-  /* COLUMNAS 2, 3, 4: BANQUILLOS HOLGADOS */
-  .col-benches-grid {
-    flex: 1;
-    height: 100%;
-    padding: 0.85rem;
-    box-sizing: border-box;
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 0.75rem;
-    min-height: 0;
-    background: rgba(10, 16, 26, 0.7);
-  }
-
-  .bench-card {
-    height: 100%;
-    background: rgba(8, 14, 24, 0.9);
-    border-radius: 0.75rem;
-    overflow: hidden;
-    display: flex;
-    flex-direction: column;
-    min-height: 0;
-    transition: border-color 0.15s, box-shadow 0.15s, background 0.15s;
-  }
-
-  .red-bench {
-    border: 1px solid var(--captain-local-primary, #e74c3c);
-    box-shadow: 0 0 16px var(--captain-local-glow, rgba(231, 76, 60, 0.25));
-  }
-
-  .spec-bench {
-    border: 1px solid rgba(132, 147, 150, 0.4);
-    box-shadow: 0 0 14px rgba(0, 0, 0, 0.3);
-  }
-
-  .blue-bench {
-    border: 1px solid var(--captain-visitor-primary, #3498db);
-    box-shadow: 0 0 16px var(--captain-visitor-glow, rgba(52, 152, 219, 0.25));
-  }
-
-  .bench-card.is-drag-over {
-    border-color: #00e5ff !important;
-    box-shadow: 0 0 20px rgba(0, 229, 255, 0.4) !important;
-    background: rgba(0, 229, 255, 0.08) !important;
-  }
-
-  /* Bench Headers */
-  .bench-card-header {
-    height: 40px;
-    padding: 0 0.75rem;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    flex-shrink: 0;
-  }
-
+  /* Kit toggles & Headers */
   .captain-bicolor-header {
+    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9), 0 0 6px rgba(0, 0, 0, 0.8);
+  }
+
+  .bench-header-actions {
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    gap: 0.5rem;
-    padding: 0 0.6rem;
-    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9), 0 0 6px rgba(0, 0, 0, 0.8);
-    border-bottom: 1px solid rgba(255, 255, 255, 0.15);
+    gap: 4px;
+    flex-shrink: 0;
   }
 
   .kit-variant-toggles {
@@ -2736,27 +3195,18 @@
     border: 1px solid rgba(255, 255, 255, 0.2);
     border-radius: 4px;
     padding: 1px;
-    flex-shrink: 0;
   }
 
   .kit-variant-btn {
     border: none;
     background: transparent;
-    color: rgba(255, 255, 255, 0.7);
-    font-family: 'Space Grotesk', system-ui, sans-serif;
-    font-size: 0.62rem;
+    color: rgba(255, 255, 255, 0.75);
+    font-size: 0.6rem;
     font-weight: 700;
     text-transform: uppercase;
-    letter-spacing: 0.04em;
     padding: 2px 5px;
     border-radius: 3px;
     cursor: pointer;
-    transition: all 0.15s ease;
-  }
-
-  .kit-variant-btn:hover:not(:disabled) {
-    color: #ffffff;
-    background: rgba(255, 255, 255, 0.2);
   }
 
   .kit-variant-btn.active {
@@ -2765,166 +3215,41 @@
     font-weight: 800;
   }
 
-  .kit-variant-btn:disabled {
-    opacity: 0.4;
-    cursor: not-allowed;
-  }
-
-  .spec-header {
-    background: rgba(30, 38, 50, 0.85);
-    border-bottom: 1px solid rgba(132, 147, 150, 0.4);
-  }
+  .kit-variant-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
   .team-name {
     font-family: 'Space Grotesk', system-ui, sans-serif;
-    font-size: 0.8rem;
+    font-size: 0.78rem;
     font-weight: 800;
-    letter-spacing: 0.06em;
+    letter-spacing: 0.04em;
     text-transform: uppercase;
     color: #ffffff;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    text-align: center;
   }
 
-  /* Lista de Jugadores */
-  .bench-players-list {
-    flex: 1;
-    overflow-y: auto;
-    padding: 0.5rem;
-    display: flex;
-    flex-direction: column;
-    gap: 0.45rem;
-    min-height: 0;
-  }
-
-  /* TARJETA DE JUGADOR (3 ELEMENTOS: AVATAR, NOMBRE, CINTILLA C) */
-  .player-slot-card {
-    background: rgba(19, 27, 40, 0.85);
-    border-radius: 0.5rem;
-    padding: 0.45rem 0.65rem;
-    display: flex;
-    align-items: center;
-    gap: 0.65rem;
-    transition: all 0.15s ease;
-    user-select: none;
-    border: 1px solid transparent;
-  }
-
-  .player-slot-card.cursor-grab {
-    cursor: grab;
-  }
-
-  .player-slot-card.cursor-grab:active {
-    cursor: grabbing;
-  }
-
-  .player-slot-card.cursor-not-allowed {
-    cursor: not-allowed;
-  }
-
-  .player-slot-card.is-dragging {
-    opacity: 0.4;
-    transform: scale(0.98);
-  }
-
-  .player-slot-card.red-slot {
-    border-left: 3.5px solid var(--bench-team-primary, #e74c3c);
-  }
-
-  .player-slot-card.spec-slot {
-    border-left: 3px solid #849396;
-  }
-
-  .player-slot-card.blue-slot {
-    border-left: 3.5px solid var(--bench-team-primary, #00e5ff);
-  }
-
-  .player-slot-card:hover {
-    background: rgba(30, 42, 60, 0.9);
-    border-color: rgba(0, 229, 255, 0.3);
-  }
-
-  /* 1. Avatar Circular de 32px */
-  .slot-avatar {
-    width: 32px;
-    height: 32px;
-    min-width: 32px;
-    border-radius: 9999px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-family: 'Space Grotesk', system-ui, sans-serif;
-    font-size: 0.75rem;
-    font-weight: 800;
-    flex-shrink: 0;
-  }
-
-  .slot-avatar.red {
-    background: var(--bench-team-primary, #e74c3c);
-    color: var(--captain-local-tertiary, #ffffff);
-    box-shadow: 0 0 8px var(--bench-team-primary, rgba(231, 76, 60, 0.5));
-  }
-
-  .slot-avatar.spec {
-    background: #2f3540;
-    color: #dde2f1;
-  }
-
-  .slot-avatar.blue {
-    background: var(--bench-team-primary, #00e5ff);
-    color: var(--captain-visitor-tertiary, #ffffff);
-    box-shadow: 0 0 8px var(--bench-team-primary, rgba(0, 229, 255, 0.5));
-  }
-
-  /* 2. Nombre del Jugador en Chivo */
-  .slot-nickname {
-    font-family: 'Chivo', system-ui, sans-serif;
-    font-size: 0.85rem;
-    font-weight: 500;
+  .bench-join-btn {
+    border: 1px solid rgba(255, 255, 255, 0.38);
+    background: rgba(8, 14, 24, 0.78);
     color: #ffffff;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    flex: 1;
-  }
-
-  /* 3. Insignias: Corona Admin y Cintilla de Capitán */
-  .card-badges-cluster {
-    display: flex;
-    align-items: center;
-    gap: 0.35rem;
-    margin-left: auto;
-    flex-shrink: 0;
-  }
-
-  .admin-crown-badge {
-    font-size: 0.85rem;
-    line-height: 1;
-    filter: drop-shadow(0 0 6px rgba(255, 215, 0, 0.6));
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    cursor: default;
-    user-select: none;
-  }
-
-  .captain-ribbon {
-    padding: 0.15rem 0.5rem;
-    border-radius: 0.25rem;
-    font-family: 'Space Grotesk', system-ui, sans-serif;
-    font-size: 0.75rem;
+    font-size: 0.62rem;
     font-weight: 800;
-    letter-spacing: 0.05em;
-    box-shadow: 0 0 8px rgba(0, 0, 0, 0.6);
-    flex-shrink: 0;
-    line-height: 1;
+    padding: 3px 7px;
+    border-radius: 4px;
+    cursor: pointer;
+    white-space: nowrap;
   }
 
-  /* ======================================================== */
-  /* MENÚ CONTEXTUAL DE ADMINISTRADOR (CLIC DIRECTO)          */
-  /* ======================================================== */
+  .bench-join-btn:hover:not(:disabled) {
+    background: #00e5ff;
+    color: #050811;
+    border-color: #00e5ff;
+  }
+
+  .bench-join-btn:disabled { opacity: 0.38; cursor: not-allowed; }
+
+  /* Context Menu */
   .context-menu-backdrop {
     position: fixed;
     inset: 0;
@@ -2937,46 +3262,75 @@
     position: fixed;
     z-index: 9999;
     background: rgba(10, 16, 26, 0.98);
-    border: 1px solid rgba(0, 229, 255, 0.4);
-    border-radius: 0.5rem;
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.8), 0 0 16px rgba(0, 229, 255, 0.25);
-    min-width: 170px;
-    padding: 0.4rem;
+    border: 1px solid rgba(0, 229, 255, 0.45);
+    border-radius: 0.55rem;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.85), 0 0 16px rgba(0, 229, 255, 0.25);
+    min-width: 195px;
+    padding: 0.45rem;
     display: flex;
     flex-direction: column;
     gap: 0.25rem;
-    font-family: 'Chivo', system-ui, sans-serif;
     pointer-events: auto;
   }
 
   .menu-target-header {
-    padding: 0.35rem 0.5rem;
+    padding: 0.3rem 0.5rem;
     border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-    font-family: 'Space Grotesk', system-ui, sans-serif;
-    font-size: 0.75rem;
+    font-size: 0.78rem;
     font-weight: 800;
     color: #00e5ff;
-    letter-spacing: 0.05em;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+  }
+
+  .ctx-position-section {
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+    padding: 0.3rem 0.4rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  }
+
+  .ctx-pos-label {
+    font-size: 0.64rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    color: #94a3b8;
+  }
+
+  .ctx-pos-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 0.25rem;
+  }
+
+  .ctx-pos-btn {
+    padding: 0.28rem 0.2rem;
+    border-radius: 0.32rem;
+    border: 1px solid currentColor;
+    background: rgba(15, 23, 42, 0.9);
+    font-size: 0.68rem;
+    font-weight: 800;
+    cursor: pointer;
+    text-align: center;
+  }
+
+  .ctx-pos-btn.is-current {
+    background: rgba(255, 255, 255, 0.18);
+    box-shadow: 0 0 8px currentColor;
   }
 
   .context-menu-item {
     display: flex;
     align-items: center;
     gap: 0.5rem;
-    padding: 0.45rem 0.65rem;
+    padding: 0.42rem 0.6rem;
     border-radius: 0.35rem;
     background: transparent;
     border: none;
     color: #dde2f1;
-    font-family: 'Chivo', system-ui, sans-serif;
-    font-size: 0.75rem;
+    font-size: 0.74rem;
     font-weight: 700;
     cursor: pointer;
     text-align: left;
-    transition: all 0.12s ease;
   }
 
   .context-menu-item:hover:not(.disabled) {
@@ -2984,25 +3338,15 @@
     color: #00e5ff;
   }
 
-  .context-menu-item.item-danger {
-    color: #ff4757;
-  }
+  .context-menu-item.item-move-red { color: #ff6b81; }
+  .context-menu-item.item-move-spec { color: #cbd5e1; }
+  .context-menu-item.item-move-blue { color: #38bdf8; }
+  .context-menu-item.item-danger { color: #ff4757; }
+  .context-menu-item.disabled { opacity: 0.5; cursor: not-allowed; }
 
-  .context-menu-item.item-danger:hover {
-    background: rgba(255, 71, 87, 0.18);
-    color: #ff6b81;
-  }
-
-  .context-menu-item.disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-  }
-
-  /* ======================================================== */
-  /* VISTA DE ESTADÍSTICAS POST-PARTIDO                       */
-  /* ======================================================== */
+  /* Stats Slide */
   .stats-header-row {
-    padding: 0.9rem 1.25rem;
+    padding: 0.8rem 1.15rem;
     background: #080e18;
     border-bottom: 1px solid rgba(0, 229, 255, 0.28);
     display: grid;
@@ -3016,26 +3360,19 @@
     justify-self: start;
     display: flex;
     align-items: center;
-    gap: 0.7rem;
+    gap: 0.65rem;
     background: #0d1626;
     border: 1px solid rgba(0, 229, 255, 0.35);
     border-radius: 0.65rem;
-    padding: 0.38rem 0.75rem;
-    box-shadow: 0 0 14px rgba(0, 229, 255, 0.14);
+    padding: 0.35rem 0.7rem;
   }
 
-  .hero-team-side {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-  }
+  .hero-team-side { display: flex; align-items: center; gap: 0.45rem; }
 
   .hero-team-label {
-    font-family: 'Space Grotesk', system-ui, sans-serif;
-    font-size: 0.84rem;
+    font-size: 0.82rem;
     font-weight: 800;
     color: #e2e8f0;
-    letter-spacing: 0.04em;
     max-width: 115px;
     white-space: nowrap;
     overflow: hidden;
@@ -3046,115 +3383,58 @@
     display: inline-flex;
     align-items: center;
     gap: 0.35rem;
-    padding: 0.22rem 0.65rem;
+    padding: 0.2rem 0.6rem;
     border-radius: 0.45rem;
     background: #070c16;
-    border: 1px solid rgba(255, 255, 255, 0.12);
-  }
-
-  .stats-center-zone {
-    justify-self: center;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-  }
-
-  .stats-acronym-badge {
-    min-width: 68px;
-    height: 36px;
-    padding: 0 14px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    border-radius: 0.375rem;
-    font-family: 'Space Grotesk', system-ui, sans-serif;
-    font-size: 0.95rem;
-    font-weight: 900;
-    letter-spacing: 0.08em;
-    user-select: none;
-    line-height: 1;
-    paint-order: stroke fill;
-    box-shadow: 0 0 8px rgba(0, 0, 0, 0.6);
-    box-sizing: border-box;
-  }
-
-  .auto-reset-container {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 6px;
-    width: 100%;
-    height: 38px;
-  }
-
-  .btn-reset-teams {
-    background: rgba(255, 71, 87, 0.1);
-    border-color: rgba(255, 71, 87, 0.4);
-    color: #ff6b81;
-    box-shadow: 0 0 10px rgba(255, 71, 87, 0.15);
-  }
-
-  .btn-reset-teams:hover:not(:disabled) {
-    background: rgba(255, 71, 87, 0.2);
-    border-color: #ff4757;
-  }
-
-  .btn-auto-balance {
-    background: rgba(0, 229, 255, 0.1);
-    border-color: rgba(0, 229, 255, 0.4);
-    color: #00e5ff;
-    box-shadow: 0 0 10px rgba(0, 229, 255, 0.15);
-  }
-
-  .btn-auto-balance:hover:not(:disabled) {
-    background: rgba(0, 229, 255, 0.2);
-    border-color: #00e5ff;
   }
 
   .stats-score-num {
     font-family: 'JetBrains Mono', monospace;
-    font-size: 1.7rem;
+    font-size: 1.55rem;
     font-weight: 900;
     color: #ffffff;
-    min-width: 1.35rem;
-    text-align: center;
-    line-height: 1;
   }
 
-  .stats-score-sep {
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 1.15rem;
-    font-weight: 700;
-    color: #849396;
-    line-height: 1;
+  .stats-score-sep { color: #849396; font-weight: 700; }
+
+  .stats-center-zone { justify-self: center; display: flex; align-items: center; }
+
+  .stats-acronym-badge {
+    min-width: 64px;
+    height: 34px;
+    padding: 0 12px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 0.375rem;
+    font-size: 0.9rem;
+    font-weight: 900;
   }
 
   .match-status-meta {
     justify-self: end;
     display: flex;
     align-items: center;
-    justify-content: flex-end;
-    gap: 0.5rem;
+    gap: 0.45rem;
     flex-wrap: wrap;
   }
 
   .match-result-chip {
-    font-family: 'Space Grotesk', system-ui, sans-serif;
-    font-size: 0.74rem;
+    font-size: 0.72rem;
     font-weight: 800;
-    letter-spacing: 0.05em;
     color: #00e5ff;
     background: #0d1626;
     border: 1px solid rgba(0, 229, 255, 0.35);
-    padding: 0.24rem 0.58rem;
+    padding: 0.22rem 0.55rem;
     border-radius: 0.32rem;
   }
 
   .match-time-chip {
     font-family: 'JetBrains Mono', monospace;
-    font-size: 0.82rem;
+    font-size: 0.8rem;
     color: #ffe16d;
     background: #080e18;
-    padding: 0.24rem 0.55rem;
+    padding: 0.22rem 0.5rem;
     border-radius: 0.32rem;
     border: 1px solid rgba(255, 219, 60, 0.3);
   }
@@ -3162,53 +3442,26 @@
   .mvp-golden-plaque {
     display: flex;
     align-items: center;
-    gap: 0.45rem;
+    gap: 0.4rem;
     background: #17140a;
     border: 1px solid #ffe16d;
-    padding: 0.34rem 0.8rem;
+    padding: 0.3rem 0.7rem;
     border-radius: 0.42rem;
-    box-shadow: 0 0 16px rgba(255, 215, 0, 0.32);
-    flex-wrap: wrap;
   }
 
-  .mvp-mini-line {
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 0.72rem;
-    font-weight: 700;
-    color: #f8fafc;
-    background: rgba(255, 255, 255, 0.06);
-    padding: 0.1rem 0.4rem;
-    border-radius: 0.25rem;
-  }
+  .crown-svg { width: 1rem; height: 1rem; color: #ffe16d; }
+  .crown-svg-sm { width: 0.85rem; height: 0.85rem; color: #ffe16d; }
+  .mvp-title { font-size: 0.82rem; font-weight: 800; color: #ffe16d; }
+  .mvp-points-chip { font-size: 0.72rem; font-weight: 700; color: #ffe16d; }
+  .mvp-mini-line { font-size: 0.7rem; font-weight: 700; color: #f8fafc; }
 
-  .mvp-title {
-    font-family: 'Space Grotesk', system-ui, sans-serif;
-    font-size: 0.85rem;
-    font-weight: 800;
-    color: #ffe16d;
-    letter-spacing: 0.05em;
-    text-transform: uppercase;
-  }
-
-  .mvp-points-chip {
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 0.75rem;
-    font-weight: 700;
-    color: #ffe16d;
-    background: rgba(255, 219, 60, 0.2);
-    padding: 0.1rem 0.35rem;
-    border-radius: 0.2rem;
-  }
-
-  /* Tablas Duales */
   .tables-parallel-grid {
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: 0.75rem;
     flex: 1;
     min-height: 0;
-    padding: 0.75rem 1.25rem 1.25rem 1.25rem;
-    box-sizing: border-box;
+    padding: 0.75rem 1rem 1rem 1rem;
   }
 
   .team-table-box {
@@ -3219,97 +3472,37 @@
     overflow: hidden;
   }
 
-  .team-table-box.red-box {
-    border: 1px solid var(--captain-local-primary, #e74c3c);
-    box-shadow: 0 0 16px var(--captain-local-glow, rgba(231, 76, 60, 0.25));
-  }
-
-  .team-table-box.blue-box {
-    border: 1px solid var(--captain-visitor-primary, #3498db);
-    box-shadow: 0 0 16px var(--captain-visitor-glow, rgba(52, 152, 219, 0.25));
-  }
+  .team-table-box.red-box { border: 1px solid var(--captain-local-primary, #e74c3c); }
+  .team-table-box.blue-box { border: 1px solid var(--captain-visitor-primary, #3498db); }
 
   .table-header {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 0.5rem;
-    padding: 0.5rem 0.65rem;
-    font-family: 'Chivo', system-ui, sans-serif;
-    font-size: 0.75rem;
+    padding: 0.45rem 0.6rem;
+    font-size: 0.74rem;
     font-weight: 800;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-    flex-shrink: 0;
   }
 
-  .table-header-left {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    flex: 1;
-    min-width: 0;
-  }
-
-  .col-team-name-hdr {
-    font-family: 'Space Grotesk', system-ui, sans-serif;
-    font-size: 0.8rem;
-    font-weight: 800;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-    color: #ffffff;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
+  .table-header-left { display: flex; align-items: center; gap: 0.45rem; }
+  .col-team-name-hdr { font-size: 0.78rem; font-weight: 800; }
 
   .team-expand-all-btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.25rem;
-    padding: 0.16rem 0.48rem;
+    padding: 0.14rem 0.45rem;
     border-radius: 0.3rem;
     background: rgba(8, 14, 24, 0.78);
     border: 1px solid rgba(255, 255, 255, 0.28);
     color: #f8fafc;
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 0.64rem;
+    font-size: 0.62rem;
     font-weight: 700;
-    letter-spacing: 0.02em;
-    text-transform: none;
     cursor: pointer;
-    flex-shrink: 0;
-    transition: all 0.15s ease;
   }
 
-  .team-expand-all-btn:hover:not(:disabled) {
-    background: #080e18;
-    border-color: #00e5ff;
-    color: #00e5ff;
-  }
-
-  .team-expand-all-btn:disabled {
-    opacity: 0.45;
-    cursor: not-allowed;
-  }
-
-  .col-headers-right {
-    display: flex;
-    align-items: center;
-  }
-
-  .red-header .col-headers-right {
-    color: var(--captain-local-tertiary, #ffffff);
-  }
-
-  .blue-header .col-headers-right {
-    color: var(--captain-visitor-tertiary, #ffffff);
-  }
-
+  .col-headers-right { display: flex; align-items: center; }
   .col-player { flex: 1; text-align: left; }
-  .col-pts { width: 46px; text-align: right; font-variant-numeric: tabular-nums; }
-  .col-stat { width: 28px; text-align: center; font-variant-numeric: tabular-nums; }
-  .col-arrow { width: 22px; text-align: center; }
+  .col-pts { width: 44px; text-align: right; }
+  .col-stat { width: 26px; text-align: center; }
+  .col-arrow { width: 20px; text-align: center; }
 
   .table-scroll-body {
     flex: 1;
@@ -3317,73 +3510,35 @@
     padding: 0.4rem;
     display: flex;
     flex-direction: column;
-    gap: 0.35rem;
+    gap: 0.32rem;
   }
 
   .player-stat-row {
-    background: rgba(22, 28, 38, 0.7);
+    background: rgba(22, 28, 38, 0.75);
     border-radius: 0.375rem;
-    border: 1px solid transparent;
-    transition: all 0.15s ease;
     overflow: hidden;
-  }
-
-  .player-stat-row:hover {
-    border-color: rgba(0, 229, 255, 0.3);
-    background: rgba(30, 38, 50, 0.8);
-  }
-
-  .player-stat-row.is-mvp {
-    border-color: rgba(255, 219, 60, 0.5);
-    background: rgba(255, 219, 60, 0.08);
-    box-shadow: 0 0 10px rgba(255, 219, 60, 0.15);
   }
 
   .row-summary {
     display: flex;
     align-items: center;
-    padding: 0.45rem 0.65rem;
+    padding: 0.42rem 0.6rem;
     font-family: 'JetBrains Mono', monospace;
-    font-size: 0.75rem;
+    font-size: 0.74rem;
     cursor: pointer;
   }
 
-  .col-player.bold {
-    font-weight: 700;
-    color: #ffffff;
-    display: flex;
-    align-items: center;
-    gap: 0.3rem;
-  }
-
-  .col-player.gold-player {
-    color: #ffe16d;
-    font-weight: 800;
-  }
-
-  .badge-cap {
-    font-weight: 900;
-    font-size: 0.7rem;
-  }
-
-  .badge-cap.red { color: #ff4757; }
-  .badge-cap.blue { color: #00e5ff; }
-
-  .host-tag { font-size: 0.65rem; color: #849396; font-weight: normal; }
-
+  .col-player.bold { font-weight: 700; color: #ffffff; display: flex; align-items: center; gap: 0.3rem; }
+  .col-player.gold-player { color: #ffe16d; }
+  .badge-cap.red { color: #ff4757; font-weight: 900; }
+  .badge-cap.blue { color: #00e5ff; font-weight: 900; }
+  .host-tag { font-size: 0.64rem; color: #849396; }
   .col-pts.red-txt { color: #ff4757; font-weight: 800; }
   .col-pts.blue-txt { color: #00e5ff; font-weight: 800; }
   .col-pts.gold-txt { color: #ffe16d; font-weight: 900; }
 
-  .gold-stat { color: #ffe16d; font-weight: 800; }
-
-  .chevron-icon {
-    font-size: 0.65rem;
-    color: #849396;
-  }
-
   .accordion-drawer {
-    padding: 0.45rem 0.65rem;
+    padding: 0.4rem 0.6rem;
     background: rgba(8, 14, 24, 0.95);
     border-top: 1px solid rgba(255, 255, 255, 0.08);
   }
@@ -3391,161 +3546,46 @@
   .drawer-grid {
     display: grid;
     grid-template-columns: repeat(5, 1fr);
-    gap: 0.35rem;
+    gap: 0.3rem;
     text-align: center;
   }
 
   .drawer-chip {
     background: #161c26;
-    padding: 0.25rem 0.2rem;
+    padding: 0.22rem;
     border-radius: 0.25rem;
     display: flex;
     flex-direction: column;
-    gap: 0.15rem;
   }
 
-  .chip-label {
-    font-family: 'Chivo', system-ui, sans-serif;
-    font-size: 0.65rem;
-    color: #849396;
-  }
-
-  .chip-val {
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 0.75rem;
-    font-weight: 800;
-  }
-
+  .chip-label { font-size: 0.62rem; color: #849396; }
+  .chip-val { font-size: 0.72rem; font-weight: 800; }
   .text-cyan { color: #00e5ff; }
   .text-green { color: #2ecc71; }
   .text-gold { color: #ffe16d; }
   .text-error { color: #ff4757; }
   .text-muted { color: #849396; }
 
-  /* SCROLLBARS */
-  .custom-scrollbar::-webkit-scrollbar {
-    width: 4px;
-  }
-  .custom-scrollbar::-webkit-scrollbar-track {
-    background: rgba(8, 14, 24, 0.6);
-  }
-  .custom-scrollbar::-webkit-scrollbar-thumb {
-    background: rgba(0, 229, 255, 0.3);
-    border-radius: 4px;
-  }
-  .custom-scrollbar::-webkit-scrollbar-thumb:hover {
-    background: #00e5ff;
-  }
-
-  .custom-scrollbar-red::-webkit-scrollbar {
-    width: 4px;
-  }
-  .custom-scrollbar-red::-webkit-scrollbar-track {
-    background: rgba(8, 14, 24, 0.6);
-  }
-  .custom-scrollbar-red::-webkit-scrollbar-thumb {
-    background: rgba(255, 51, 102, 0.3);
-    border-radius: 4px;
-  }
-  .custom-scrollbar-red::-webkit-scrollbar-thumb:hover {
-    background: #ff3366;
-  }
-
-  /* Quick + Unirse bench actions & context menu team moves */
-  .bench-header-actions {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    flex-shrink: 0;
-  }
-
-  .spec-header {
-    justify-content: space-between;
-    gap: 0.5rem;
-    padding: 0 0.6rem;
-  }
-
-  .bench-join-btn {
-    border: 1px solid rgba(255, 255, 255, 0.38);
-    background: rgba(8, 14, 24, 0.72);
-    color: #ffffff;
-    font-family: 'Space Grotesk', system-ui, sans-serif;
-    font-size: 0.64rem;
-    font-weight: 800;
-    letter-spacing: 0.04em;
-    padding: 3px 7px;
-    border-radius: 4px;
-    cursor: pointer;
-    white-space: nowrap;
-    flex-shrink: 0;
-    transition: all 0.14s ease;
-  }
-
-  .bench-join-btn:hover:not(:disabled) {
-    background: #00e5ff;
-    border-color: #00e5ff;
-    color: #050811;
-    box-shadow: 0 0 10px rgba(0, 229, 255, 0.45);
-  }
-
-  .bench-join-btn:disabled {
-    opacity: 0.38;
-    cursor: not-allowed;
-  }
-
-  .context-menu-item.item-move-red {
-    color: #ff6b81;
-  }
-
-  .context-menu-item.item-move-spec {
-    color: #cbd5e1;
-  }
-
-  .context-menu-item.item-move-blue {
-    color: #38bdf8;
-  }
-
-  /* ======================================================== */
-  /* MOBILE LANDSCAPE & TOUCH ADAPTATION                      */
-  /* ======================================================== */
+  /* Mobile Carousel & Chat */
   .mobile-menu-telemetry {
     display: inline-flex;
     align-items: center;
     gap: 0.28rem;
     font-family: 'JetBrains Mono', monospace;
-    font-size: 0.68rem;
+    font-size: 0.66rem;
     font-weight: 700;
-    padding: 0.18rem 0.48rem;
+    padding: 0.16rem 0.44rem;
     border-radius: 999px;
     background: rgba(8, 14, 24, 0.92);
     border: 1px solid rgba(0, 229, 255, 0.35);
     color: #67e8f9;
-    white-space: nowrap;
   }
 
-  .mobile-menu-telemetry.is-good {
-    color: #4ade80;
-    border-color: rgba(74, 222, 128, 0.4);
-  }
-  .mobile-menu-telemetry.is-mid {
-    color: #fbbf24;
-    border-color: rgba(251, 191, 36, 0.45);
-  }
-  .mobile-menu-telemetry.is-high {
-    color: #f87171;
-    border-color: rgba(248, 113, 113, 0.5);
-  }
+  .mobile-menu-telemetry.is-good { color: #4ade80; }
+  .mobile-menu-telemetry.is-mid { color: #fbbf24; }
+  .mobile-menu-telemetry.is-high { color: #f87171; }
 
-  .m-tel-dot {
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
-    background: currentColor;
-  }
-
-  .m-tel-sep {
-    opacity: 0.45;
-  }
+  .m-tel-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
 
   .mobile-carousel-indicator {
     position: fixed;
@@ -3555,32 +3595,37 @@
     z-index: 45;
     display: inline-flex;
     align-items: center;
-    gap: 0.45rem;
-    padding: 0.28rem 0.65rem;
+    gap: 0.4rem;
+    padding: 0.26rem 0.6rem;
     border-radius: 999px;
-    background: rgba(8, 14, 24, 0.9);
+    background: rgba(8, 14, 24, 0.94);
     border: 1px solid rgba(0, 229, 255, 0.32);
-    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.55);
     pointer-events: auto;
   }
 
   .carousel-pill {
     display: inline-flex;
     align-items: center;
-    gap: 0.3rem;
-    padding: 0.22rem 0.52rem;
+    gap: 0.26rem;
+    padding: 0.2rem 0.48rem;
     border-radius: 999px;
     border: 1px solid transparent;
     background: transparent;
     color: #94a3b8;
-    font-family: 'Space Grotesk', system-ui, sans-serif;
-    font-size: 0.68rem;
+    font-size: 0.66rem;
     font-weight: 700;
-    opacity: 0.52;
-    transform: scale(0.9);
-    transition: transform 0.2s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.2s ease, background 0.2s ease,
-      color 0.2s ease, box-shadow 0.2s ease;
+    opacity: 0.65;
     cursor: pointer;
+  }
+
+  .carousel-pill.is-active {
+    opacity: 1;
+    color: #06101c;
+    background: #00e5ff;
+  }
+
+  .carousel-pill.is-stats.is-active {
+    background: #ffd700;
   }
 
   .carousel-pill .pill-dot {
@@ -3588,438 +3633,139 @@
     height: 6px;
     border-radius: 999px;
     background: currentColor;
-    transition: width 0.2s ease, height 0.2s ease;
-  }
-
-  .carousel-pill.is-active {
-    opacity: 1;
-    transform: scale(1.12);
-    color: #06101c;
-    background: #00e5ff;
-    border-color: #a5f3fc;
-    box-shadow: 0 0 14px rgba(0, 229, 255, 0.55);
-  }
-
-  .carousel-pill.is-stats.is-active {
-    background: #ffd700;
-    border-color: #fef08a;
-    box-shadow: 0 0 14px rgba(255, 215, 0, 0.5);
-  }
-
-  .carousel-pill.is-active .pill-dot {
-    width: 8px;
-    height: 8px;
-  }
-
-  .pill-arrow {
-    font-size: 0.8rem;
-    line-height: 1;
-    opacity: 0.75;
   }
 
   .pill-unread-badge {
-    padding: 0 0.34rem;
+    padding: 0 0.32rem;
     border-radius: 999px;
     background: #ff4757;
     color: #ffffff;
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 0.6rem;
+    font-size: 0.58rem;
     font-weight: 800;
-    line-height: 1.35;
-  }
-
-  .chat-modal-card {
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
   }
 
   .mobile-menu-chat-messages {
     flex: 1;
-    min-height: 0;
     overflow-y: auto;
     padding: 0.65rem 0.85rem;
     display: flex;
     flex-direction: column;
-    gap: 0.38rem;
-    user-select: text;
-    -webkit-user-select: text;
+    gap: 0.35rem;
   }
 
-  .mobile-chat-empty {
-    margin: auto;
-    text-align: center;
-    font-size: 0.82rem;
-    color: #94a3b8;
-    padding: 1rem;
-  }
-
-  .mobile-chat-row {
-    font-size: 0.78rem;
-    line-height: 1.38;
-    padding: 0.28rem 0.5rem;
-    border-radius: 6px;
-    background: rgba(15, 23, 42, 0.65);
-    word-break: break-word;
-  }
-
-  .mobile-chat-row.is-system {
-    background: rgba(250, 204, 21, 0.1);
-    color: #fde68a;
-  }
-
-  .mchat-sender {
-    font-family: 'JetBrains Mono', monospace;
-    font-weight: 800;
-    margin-right: 0.35rem;
-  }
+  .mobile-chat-empty { margin: auto; text-align: center; font-size: 0.8rem; color: #94a3b8; }
+  .mobile-chat-row { font-size: 0.78rem; padding: 0.26rem 0.5rem; border-radius: 6px; background: rgba(15, 23, 42, 0.65); }
+  .mchat-sender { font-weight: 800; margin-right: 0.35rem; }
   .mchat-sender.is-red { color: #ff6b81; }
   .mchat-sender.is-blue { color: #38bdf8; }
   .mchat-sender.is-spec { color: #cbd5e1; }
   .mchat-sender.is-sys { color: #facc15; }
+  .mobile-menu-chat-form { display: flex; gap: 0.45rem; padding: 0.5rem 0.7rem; background: rgba(8, 14, 24, 0.92); }
+  .mobile-chat-input { flex: 1; height: 34px; padding: 0 0.65rem; border-radius: 8px; border: 1px solid rgba(0, 229, 255, 0.35); background: rgba(15, 23, 42, 0.9); color: #ffffff; font-size: 0.8rem; }
+  .mobile-chat-send-btn { height: 34px; padding: 0 0.8rem; border-radius: 8px; border: 1px solid rgba(0, 229, 255, 0.65); background: rgba(0, 229, 255, 0.2); color: #e0f2fe; font-size: 0.75rem; font-weight: 800; cursor: pointer; }
 
-  .mchat-text {
-    color: #f1f5f9;
-  }
+  .stats-empty-mobile { margin: auto; max-width: 360px; padding: 1.25rem; text-align: center; display: flex; flex-direction: column; align-items: center; gap: 0.7rem; }
+  .stats-empty-badge { font-size: 0.68rem; font-weight: 800; color: #ffd700; }
+  .stats-empty-desc { margin: 0; font-size: 0.8rem; color: #94a3b8; }
+  .stats-empty-back-btn { padding: 0.45rem 0.9rem; border-radius: 8px; border: 1px solid rgba(0, 229, 255, 0.55); background: rgba(0, 229, 255, 0.16); color: #67e8f9; font-weight: 700; cursor: pointer; }
 
-  .mobile-menu-chat-form {
-    display: flex;
-    gap: 0.45rem;
-    padding: 0.55rem 0.75rem;
-    border-top: 1px solid rgba(0, 229, 255, 0.18);
-    background: rgba(8, 14, 24, 0.92);
-  }
+  .custom-scrollbar::-webkit-scrollbar,
+  .custom-scrollbar-red::-webkit-scrollbar { width: 4px; height: 4px; }
+  .custom-scrollbar::-webkit-scrollbar-thumb { background: rgba(0, 229, 255, 0.35); border-radius: 4px; }
+  .custom-scrollbar-red::-webkit-scrollbar-thumb { background: rgba(255, 51, 102, 0.35); border-radius: 4px; }
 
-  .mobile-chat-input {
-    flex: 1;
-    min-width: 0;
-    height: 36px;
-    padding: 0 0.7rem;
-    border-radius: 8px;
-    border: 1px solid rgba(0, 229, 255, 0.35);
-    background: rgba(15, 23, 42, 0.9);
-    color: #ffffff;
-    font-size: 0.8rem;
-  }
-
-  .mobile-chat-send-btn {
-    height: 36px;
-    padding: 0 0.85rem;
-    border-radius: 8px;
-    border: 1px solid rgba(0, 229, 255, 0.65);
-    background: rgba(0, 229, 255, 0.2);
-    color: #e0f2fe;
-    font-size: 0.76rem;
-    font-weight: 800;
-    cursor: pointer;
-    flex-shrink: 0;
-  }
-
-  .mobile-chat-send-btn:disabled {
-    opacity: 0.45;
-    cursor: not-allowed;
-  }
-
-  .stats-empty-mobile {
-    margin: auto;
-    max-width: 380px;
-    padding: 1.5rem 1.25rem;
-    text-align: center;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 0.75rem;
-  }
-
-  .stats-empty-badge {
-    font-size: 0.7rem;
-    font-weight: 800;
-    letter-spacing: 0.08em;
-    color: #ffd700;
-    padding: 0.22rem 0.65rem;
-    border-radius: 999px;
-    border: 1px solid rgba(255, 215, 0, 0.45);
-    background: rgba(255, 215, 0, 0.1);
-  }
-
-  .stats-empty-desc {
-    margin: 0;
-    font-size: 0.82rem;
-    line-height: 1.45;
-    color: #94a3b8;
-  }
-
-  .stats-empty-back-btn {
-    padding: 0.5rem 1rem;
-    border-radius: 8px;
-    border: 1px solid rgba(0, 229, 255, 0.55);
-    background: rgba(0, 229, 255, 0.16);
-    color: #67e8f9;
-    font-size: 0.78rem;
-    font-weight: 700;
-    cursor: pointer;
-  }
-
+  /* Responsive Mobile Landscape & Compact Touch Viewports */
   @media (max-height: 520px), (max-width: 960px) {
     .corridor-container,
     .corridor-container.is-mobile-carousel {
       top: calc(36px + env(safe-area-inset-top, 0px));
-      bottom: calc(40px + env(safe-area-inset-bottom, 0px));
+      bottom: calc(38px + env(safe-area-inset-bottom, 0px));
       width: min(98vw, 1140px);
-      max-height: calc(100dvh - 80px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px));
-    }
-
-    .team-modal-card,
-    .col-settings-scroll,
-    .bench-players-list,
-    .table-scroll-body,
-    .admin-context-menu {
-      touch-action: pan-y;
-      -webkit-overflow-scrolling: touch;
-      overscroll-behavior: contain;
-    }
-
-    .admin-context-menu {
-      max-height: calc(100dvh - 16px);
-      overflow-y: auto;
-    }
-
-    .external-nav-tab {
-      padding: 6px 10px;
-      font-size: 11px;
-    }
-
-    .right-tab {
-      right: 6px;
-      top: 6px;
-      transform: none;
-    }
-
-    .left-tab {
-      left: 6px;
-      top: 6px;
-      transform: none;
+      max-height: calc(100dvh - 76px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px));
     }
 
     .modal-header {
-      height: 38px;
-      padding: 0 0.65rem;
+      height: 36px;
+      padding: 0 0.55rem;
     }
 
     .room-title {
-      font-size: 0.86rem;
-      max-width: 220px;
+      font-size: 0.78rem;
+      max-width: 140px;
     }
 
-    .practice-offline-badge {
-      font-size: 0.58rem;
-      padding: 0.14rem 0.4rem;
-      max-width: 240px;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
+    .match-rules-minicard {
+      padding: 0.12rem 0.42rem;
+      font-size: 0.62rem;
+      gap: 0.3rem;
     }
 
+    .btn-settings-quick,
     .btn-copy-link,
     .btn-leave,
     .btn-close-x {
-      padding: 0.25rem 0.5rem;
-      font-size: 0.65rem;
-      min-height: 28px;
+      padding: 0.2rem 0.45rem;
+      font-size: 0.62rem;
+      min-height: 24px;
     }
 
-    /* Compact 4-column layout for Slide 1 (Settings + 3 Benches) */
-    .col-settings-panel {
-      width: 210px;
-      min-width: 195px;
-      max-width: 225px;
-      padding: 0.45rem;
-    }
-
-    .col-settings-scroll {
-      gap: 0.45rem;
-      padding-right: 0.2rem;
-    }
-
-    .rules-4btn-grid {
-      gap: 0.3rem;
-    }
-
-    .rule-cartouche,
-    .rule-cartouche-btn {
-      height: 32px;
-      padding: 0 0.4rem;
-    }
-
-    .rule-value,
-    .lock-label {
-      font-size: 10px;
-    }
-
-    .auto-reset-container {
-      height: 32px;
-      gap: 4px;
-    }
-
-    .stadium-preview-box {
-      min-height: 64px;
-      max-height: 82px;
-    }
-
-    .stadium-overlay {
-      padding: 3px 8px;
-      gap: 2px;
-    }
-
-    .stadium-name {
-      font-size: 11px;
-    }
-
-    .stadium-action-text {
-      font-size: 9px;
-      padding: 1px 5px;
-    }
-
-    .advanced-settings-card {
-      padding: 0.4rem;
-      gap: 0.35rem;
-    }
-
-    .fsm-footer-controls {
-      padding-top: 0.4rem;
-    }
-
-    .btn-start-match,
-    .btn-stop-match,
-    .btn-pause-match {
-      padding: 0.45rem;
-      font-size: 0.72rem;
-    }
-
-    .col-benches-grid {
-      padding: 0.45rem;
-      gap: 0.4rem;
-      grid-template-columns: repeat(3, minmax(0, 1fr));
-    }
-
-    .bench-card-header {
-      height: 32px;
-      padding: 0 0.4rem;
-    }
-
-    .team-name {
-      font-size: 0.68rem;
-    }
-
-    .kit-variant-btn {
-      font-size: 0.55rem;
-      padding: 2px 4px;
-    }
-
-    .bench-join-btn {
-      font-size: 0.58rem;
-      padding: 2px 5px;
-    }
-
-    .bench-players-list {
-      padding: 0.32rem;
-      gap: 0.3rem;
-    }
-
-    .player-slot-card {
-      padding: 0.3rem 0.42rem;
-      gap: 0.4rem;
-      touch-action: pan-y;
-    }
-
-    .slot-avatar {
-      width: 24px;
-      height: 24px;
-      min-width: 24px;
-      font-size: 0.65rem;
-    }
-
-    .slot-nickname {
-      font-size: 0.74rem;
-    }
-
-    /* Slide 0 (Stats) dual tables compact landscape fit & zero overlaps */
-    .stats-header-row {
-      padding: 0.45rem 0.65rem;
-      gap: 0.4rem;
-      display: flex;
-      flex-wrap: wrap;
-      align-items: center;
-      justify-content: space-between;
-    }
-
-    .stats-hero-matchup {
-      padding: 0.28rem 0.5rem;
-      gap: 0.45rem;
-    }
-
-    .hero-team-label {
-      max-width: 72px;
-      font-size: 0.72rem;
-    }
-
-    .stats-acronym-badge {
-      min-width: 44px;
-      height: 26px;
-      padding: 0 7px;
-      font-size: 0.74rem;
-    }
-
-    .stats-score-num {
-      font-size: 1.2rem;
-    }
-
-    .mvp-golden-plaque {
-      padding: 0.22rem 0.55rem;
-      gap: 0.35rem;
-    }
-
-    .mvp-title {
-      font-size: 0.72rem;
-    }
-
-    .tables-parallel-grid {
-      padding: 0.45rem 0.65rem 0.65rem 0.65rem;
-      gap: 0.45rem;
-    }
-
-    .drawer-grid {
-      grid-template-columns: repeat(auto-fit, minmax(76px, 1fr));
+    .pitch-lineup-workspace {
+      padding: 0.32rem 0.45rem;
       gap: 0.28rem;
     }
 
-    .table-header {
-      padding: 0.35rem 0.45rem;
-      font-size: 0.68rem;
+    .pitch-team-bar {
+      height: 28px;
+      padding: 0 0.4rem;
     }
 
-    .row-summary {
-      padding: 0.32rem 0.45rem;
-      font-size: 0.68rem;
+    .team-name { font-size: 0.65rem; }
+
+    .zone-header-pill {
+      font-size: 0.56rem;
+      padding: 0.08rem 0.3rem;
+      margin-bottom: 0.2rem;
+    }
+
+    .slot-avatar { width: 22px; height: 22px; min-width: 22px; font-size: 0.62rem; }
+    .token-nickname { font-size: 0.58rem; max-width: 58px; }
+
+    .banquillo-dugout {
+      padding: 0.26rem 0.45rem;
+      gap: 0.22rem;
+    }
+
+    .bench-seat-slot {
+      min-width: 48px;
+      width: 52px;
+      height: 46px;
+      gap: 0.1rem;
+    }
+
+    .slot-avatar.spec { width: 20px; height: 20px; min-width: 20px; font-size: 0.56rem; }
+    .seat-player-name { font-size: 0.54rem; max-width: 46px; }
+
+    .settings-2col-grid {
+      grid-template-columns: 1fr 1fr;
+      gap: 0.5rem;
+    }
+
+    .settings-panel-box {
+      padding: 0.5rem;
+      gap: 0.45rem;
     }
   }
 
-  @media (max-width: 720px) {
+  @media (max-width: 680px) {
+    .pitch-team-headers-row,
+    .tactical-pitch-arena,
+    .settings-2col-grid,
     .tables-parallel-grid {
       grid-template-columns: 1fr;
     }
-    .modal-body-layout {
-      flex-direction: column;
-      overflow-y: auto;
-    }
-    .col-settings-panel {
-      width: 100%;
-      max-width: none;
-      border-right: none;
-      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-    }
-    .col-benches-grid {
-      grid-template-columns: 1fr;
+    .pitch-halfway-line,
+    .pitch-center-circle {
+      display: none;
     }
   }
 </style>

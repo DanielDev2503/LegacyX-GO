@@ -21,6 +21,8 @@ RUN npm ci
 COPY packages/core ./packages/core
 COPY packages/server ./packages/server
 COPY packages/client ./packages/client
+COPY ["video intro", "./video intro"]
+COPY ["musica", "./musica"]
 
 # Compilar core primero y luego server (y cliente si aplica)
 RUN npm run build -w @legacyx/core
@@ -51,6 +53,8 @@ RUN npm ci --omit=dev
 COPY --from=builder /app/packages/core/dist ./packages/core/dist
 COPY --from=builder /app/packages/server/dist ./packages/server/dist
 COPY --from=builder /app/packages/client/dist ./packages/client/dist
+COPY --from=builder ["/app/video intro", "./video intro"]
+COPY --from=builder ["/app/musica", "./musica"]
 
 # Si server utiliza archivos de configuración json o estáticos adicionales, copiarlos:
 COPY packages/server/room.config.json* ./packages/server/

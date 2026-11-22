@@ -65,10 +65,10 @@ describe('Mission Engineering Suite: Continuous Vector Dash, Stadiums, Camera & 
       inputs.set('p1', INPUT_DASH);
       engine.tick(inputs);
 
-      // Dash direction should match v / |v| = (0.6, 0.8) and deduct 1/3 bar (3 dashes/bar default)
+      // Dash direction should match v / |v| = (0.6, 0.8) and deduct default 33% stamina cost
       expect(player.dashDirX).toBeCloseTo(0.6, 3);
       expect(player.dashDirY).toBeCloseTo(0.8, 3);
-      expect(player.stamina).toBeCloseTo(100 - 100 / 3, 4);
+      expect(player.stamina).toBeCloseTo(100 - 33, 4);
       expect(player.isDashing).toBe(true);
     });
 
@@ -89,7 +89,7 @@ describe('Mission Engineering Suite: Continuous Vector Dash, Stadiums, Camera & 
 
       expect(player.dashDirX).toBeCloseTo(Math.SQRT1_2, 3);
       expect(player.dashDirY).toBeCloseTo(-Math.SQRT1_2, 3);
-      expect(player.stamina).toBeCloseTo(100 - 100 / 3, 4);
+      expect(player.stamina).toBeCloseTo(100 - 33, 4);
     });
 
     it('orients dash towards rival goal when disc is stationary and no keys are pressed', () => {

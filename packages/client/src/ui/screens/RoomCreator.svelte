@@ -656,14 +656,15 @@
     inset: 0;
     z-index: 10;
     width: 100%;
-    height: 100%;
+    height: 100dvh;
     overflow-y: auto;
     background-color: #0b111e;
     background: radial-gradient(circle at 50% 20%, #111a2e 0%, #070b14 100%);
     display: flex;
     flex-direction: column;
-    justify-content: space-between;
-    padding: 18px 24px;
+    justify-content: flex-start;
+    gap: 10px;
+    padding: 12px 18px;
     box-sizing: border-box;
     pointer-events: auto;
     user-select: none;
@@ -672,19 +673,20 @@
   .top-header {
     display: flex;
     align-items: center;
+    flex-shrink: 0;
   }
 
   .nav-pill-btn {
     display: inline-flex;
     align-items: center;
     gap: 0.5rem;
-    padding: 0.55rem 1.05rem;
+    padding: 0.45rem 0.95rem;
     background: #0a101a;
     border: 1px solid rgba(0, 229, 255, 0.35);
     border-radius: 9999px;
     color: #67e8f9;
     font-family: 'Chivo', sans-serif;
-    font-size: 0.85rem;
+    font-size: 0.82rem;
     font-weight: 700;
     cursor: pointer;
   }
@@ -701,17 +703,17 @@
 
   .creator-card {
     width: min(94vw, 820px);
-    max-height: 90vh;
+    max-height: calc(100dvh - 68px);
     overflow-y: auto;
     background: #0a101a;
     border: 1px solid #00e5ff;
     border-radius: 8px;
     box-shadow: 0 18px 44px rgba(0, 0, 0, 0.65);
-    padding: 20px;
+    padding: 16px 18px;
     margin: auto;
     display: flex;
     flex-direction: column;
-    gap: 14px;
+    gap: 12px;
     box-sizing: border-box;
   }
 

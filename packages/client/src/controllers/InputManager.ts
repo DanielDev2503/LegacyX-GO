@@ -13,6 +13,141 @@ import {
 import { MatchPhase } from '../../../core/src/game/GameFSM';
 import { UIStateMachine } from './UIStateMachine';
 import { $matchPhase } from './stores/gameStore';
+import { DEFAULT_GAMEPAD_BINDS, type GamepadBindConfig } from '../ui/state/gameUI.svelte';
+
+export interface GamepadPollResult {
+  connected: boolean;
+  gamepadName: string;
+  mask: number;
+  dashRisingEdge: boolean;
+  menuRisingEdge: boolean;
+  pauseRisingEdge: boolean;
+  focusBall: boolean;
+  stickActive: boolean;
+  aimAngle: number | null;
+  aimThrottle: number;
+}
+
+export function pollGamepadInput(
+  binds: GamepadBindConfig = DEFAULT_GAMEPAD_BINDS,
+  deadzone: number = 0.18,
+  prevButtons: Set<string> = new Set()
+): GamepadPollResult {
+  const empty: GamepadPollResult = {
+    connected: false,
+    gamepadName: '',
+    mask: 0,
+    dashRisingEdge: false,
+    menuRisingEdge: false,
+    pauseRisingEdge: false,
+    focusBall: false,
+    stickActive: false,
+    aimAngle: null,
+    aimThrottle: 0
+  };
+  if (typeof navigator === 'undefined' || typeof navigator.getGamepads !== 'function') {
+    prevButtons.clear();
+    return empty;
+  }
+
+  let pads: ArrayLike<Gamepad | null>;
+  try {
+    pads = navigator.getGamepads();
+  } catch {
+    prevButtons.clear();
+    return empty;
+  }
+
+  let gp: Gamepad | null = null;
+  for (let i = 0; i < pads.length; i++) {
+    const candidate = pads[i];
+    if (candidate && candidate.connected) {
+      gp = candidate;
+      break;
+    }
+  }
+  if (!gp) {
+    prevButtons.clear();
+    return empty;
+  }
+
+  const down = new Set<string>();
+  const buttons = gp.buttons || [];
+  for (let i = 0; i < buttons.length; i++) {
+    const btn = buttons[i];
+    if (btn && (btn.pressed || btn.value > 0.5)) {
+      down.add(`Gamepad${i}`);
+    }
+  }
+
+  const hasAny = (codes?: string[]): boolean => {
+    if (!codes) return false;
+    for (let i = 0; i < codes.length; i++) {
+      if (down.has(codes[i]!)) return true;
+    }
+    return false;
+  };
+  const hasRisingEdge = (codes?: string[]): boolean => {
+    if (!codes) return false;
+    for (let i = 0; i < codes.length; i++) {
+      const c = codes[i]!;
+      if (down.has(c) && !prevButtons.has(c)) return true;
+    }
+    return false;
+  };
+
+  let mask = 0;
+  // Standard W3C D-Pad mapping (buttons 12..15)
+  if (down.has('Gamepad12')) mask |= INPUT_UP;
+  if (down.has('Gamepad13')) mask |= INPUT_DOWN;
+  if (down.has('Gamepad14')) mask |= INPUT_LEFT;
+  if (down.has('Gamepad15')) mask |= INPUT_RIGHT;
+
+  if (hasAny(binds.kick)) mask |= INPUT_KICK;
+  if (hasAny(binds.turbo)) mask |= INPUT_TURBO;
+  if (hasAny(binds.curveLeft)) mask |= INPUT_MAGNUS_LEFT;
+  if (hasAny(binds.curveRight)) mask |= INPUT_MAGNUS_RIGHT;
+
+  const dashRisingEdge = hasRisingEdge(binds.dash);
+  if (dashRisingEdge) mask |= INPUT_DASH;
+  const menuRisingEdge = hasRisingEdge(binds.menu);
+  const pauseRisingEdge = hasRisingEdge(binds.pause);
+  const focusBall = hasAny(binds.focusBall);
+
+  // Left Analog Stick (axes 0, 1) -> 360 continuous movement
+  const ax = Number(gp.axes?.[0] ?? 0);
+  const ay = Number(gp.axes?.[1] ?? 0);
+  const clampedDeadzone = Math.max(0.05, Math.min(0.45, deadzone));
+  const mag = Math.hypot(ax, ay);
+  let stickActive = false;
+  let aimAngle: number | null = null;
+  let aimThrottle = 0;
+
+  if (Number.isFinite(mag) && mag > clampedDeadzone) {
+    stickActive = true;
+    aimAngle = Math.atan2(ay, ax);
+    aimThrottle = Math.min(1, (mag - clampedDeadzone) / Math.max(0.01, 1 - clampedDeadzone));
+    mask |= INPUT_MOUSE_AIM;
+  }
+
+  prevButtons.clear();
+  for (const b of down) {
+    prevButtons.add(b);
+  }
+
+  return {
+    connected: true,
+    gamepadName: gp.id || 'Mando USB/Bluetooth',
+    mask,
+    dashRisingEdge,
+    menuRisingEdge,
+    pauseRisingEdge,
+    focusBall,
+    stickActive,
+    aimAngle,
+    aimThrottle
+  };
+}
 
 export const MOUSE_DEADZONE_PX = 6;
 export const MOUSE_FINE_CONTROL_RADIUS_PX = 42;
@@ -92,6 +227,9 @@ export class InputManager {
   public isFocusingBall: boolean = false;
   private dashTriggered: boolean = false;
   private curveVec = { x: 0, y: 0 };
+  private prevGamepadButtons = new Set<string>();
+  public gamepadBinds: GamepadBindConfig = DEFAULT_GAMEPAD_BINDS;
+  public gamepadDeadzone: number = 0.18;
 
   public chatInput: HTMLElement | null = null;
   public gameApp?: any = null;
@@ -455,5 +593,28 @@ export class InputManager {
     const triggered = this.dashTriggered;
     this.dashTriggered = false;
     return triggered;
+  }
+
+  public pollGamepad(): GamepadPollResult {
+    const res = pollGamepadInput(this.gamepadBinds, this.gamepadDeadzone, this.prevGamepadButtons);
+    if (res.dashRisingEdge) {
+      this.dashTriggered = true;
+    }
+    if (res.stickActive && res.aimAngle !== null) {
+      this.currentAimAngle = res.aimAngle;
+      this.currentAimThrottle = res.aimThrottle;
+    } else if (this.movementMode !== 'mouse') {
+      this.currentAimAngle = 0;
+      this.currentAimThrottle = 0;
+    }
+    const kbMask = this.currentMask;
+    const combinedMask = kbMask | res.mask;
+    if (res.focusBall) {
+      this.isFocusingBall = true;
+    }
+    return {
+      ...res,
+      mask: combinedMask
+    };
   }
 }

@@ -28,9 +28,11 @@ export interface KinematicsConfig {
   playerMaxSpeed?: number;
   boostMultiplier?: number;
   turboMultiplier?: number;
+  turboStaminaDrain?: number;
   dashDistance?: number;
   dashCooldown?: number;
   dashesPerFullBar?: number;
+  dashStaminaCost?: number;
   staminaRechargeRate?: number;
   staminaRechargeDelay?: number;
   staminaRegenMoving?: boolean;
@@ -127,7 +129,13 @@ export function stepPlayerKinematics(
   const isDashKeyDown = (mask & INPUT_DASH) !== 0;
   const wantsDash = Boolean(player.triggerDash || (isDashKeyDown && !player.prevDashState));
   const dashesPerFullBar = config?.dashesPerFullBar ?? DEFAULT_GAMEPLAY_CONFIG.dashesPerFullBar;
-  const dashCost = 100 / Math.max(1, Math.min(6, dashesPerFullBar));
+  const hasExplicitDashCost =
+    typeof config?.dashStaminaCost === 'number' && Number.isFinite(config.dashStaminaCost);
+  const dashCost = hasExplicitDashCost
+    ? (config!.dashStaminaCost !== DEFAULT_GAMEPLAY_CONFIG.dashStaminaCost || dashesPerFullBar === DEFAULT_GAMEPLAY_CONFIG.dashesPerFullBar
+      ? Math.max(10, Math.min(100, config!.dashStaminaCost!))
+      : 100 / Math.max(1, Math.min(6, dashesPerFullBar)))
+    : 100 / Math.max(1, Math.min(6, dashesPerFullBar));
   const canDash = config?.dashEnabled !== false;
   const dashCooldownCfg = config?.dashCooldown ?? DEFAULT_GAMEPLAY_CONFIG.dashCooldown;
   let spentStaminaThisTick = false;
@@ -195,7 +203,10 @@ export function stepPlayerKinematics(
     if (wantsTurbo && hasMoveInput && player.stamina > 0) {
       spentStaminaThisTick = true;
       player.isTurbo = true;
-      player.stamina = Math.max(0, player.stamina - 40 * dt);
+      const turboDrain = (typeof config?.turboStaminaDrain === 'number' && Number.isFinite(config.turboStaminaDrain))
+        ? Math.max(5, Math.min(100, config.turboStaminaDrain))
+        : DEFAULT_GAMEPLAY_CONFIG.turboStaminaDrain;
+      player.stamina = Math.max(0, player.stamina - turboDrain * dt);
       if (player.stamina <= 0) {
         player.isTurbo = false;
       }

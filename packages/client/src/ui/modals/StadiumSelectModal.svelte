@@ -148,21 +148,6 @@
 
 <svelte:window onkeydown={handleKeyDown} />
 
-<!-- Botón flotante exterior minimalista (Top-Left) -->
-<button
-  type="button"
-  class="floating-back-btn"
-  onclick={handleClose}
-  aria-label="Volver a la pantalla anterior"
-  title="Volver [Esc]"
->
-  <svg class="back-arrow-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-    <line x1="19" y1="12" x2="5" y2="12"></line>
-    <polyline points="12 19 5 12 12 5"></polyline>
-  </svg>
-  <span>Volver</span>
-</button>
-
 <!-- OVERLAY BACKDROP (Condición #) -->
 <div
   class="modal-backdrop"
@@ -171,9 +156,24 @@
 >
   <!-- MODAL CONTAINER -->
   <div class="stadium-modal-card" role="dialog" aria-modal="true" aria-labelledby="stadium-dialog-title">
-    <!-- Top Ribbon & Header Limpio (Sin etiquetas mock) -->
+    <!-- Top Ribbon & Header Limpio con Volver integrado (zero overlap) -->
     <header class="modal-header-ribbon">
       <div class="header-left">
+        <button
+          type="button"
+          class="header-back-btn"
+          data-testid="stadium-back-btn"
+          onclick={handleClose}
+          aria-label="Volver a la pantalla anterior"
+          title="Volver [Esc]"
+        >
+          <svg class="back-arrow-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="19" y1="12" x2="5" y2="12"></line>
+            <polyline points="12 19 5 12 12 5"></polyline>
+          </svg>
+          <span>Volver</span>
+        </button>
+
         <!-- Glifo reglamentario de cancha / estadio de fútbol -->
         <div class="stadium-icon-box" aria-hidden="true">
           <svg viewBox="0 0 24 24" class="stadium-pitch-glyph" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
@@ -336,46 +336,33 @@
 </div>
 
 <style>
-  /* Floating back button outside modal card (top-left) */
-  .floating-back-btn {
-    position: fixed;
-    top: 1.5rem;
-    left: 1.5rem;
-    z-index: 60;
+  .header-back-btn {
     display: inline-flex;
     align-items: center;
-    gap: 0.5rem;
-    padding: 0.6rem 1.15rem;
-    background: rgba(10, 16, 26, 0.9);
-    border: 1px solid rgba(0, 229, 255, 0.3);
+    gap: 0.4rem;
+    padding: 0.4rem 0.85rem;
+    background: rgba(10, 16, 26, 0.92);
+    border: 1px solid rgba(0, 229, 255, 0.35);
     border-radius: 9999px;
     color: #67e8f9;
     font-family: 'Chivo', system-ui, sans-serif;
-    font-size: 0.875rem;
+    font-size: 0.8rem;
     font-weight: 700;
-    letter-spacing: 0.02em;
     cursor: pointer;
-    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5), 0 0 12px rgba(0, 229, 255, 0.15);
-    transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+    flex-shrink: 0;
+    transition: all 0.16s ease;
     user-select: none;
-    pointer-events: auto;
   }
 
-  .floating-back-btn:hover {
+  .header-back-btn:hover {
     background: rgba(0, 229, 255, 0.15);
     border-color: #00e5ff;
     color: #ffffff;
-    box-shadow: 0 0 16px rgba(0, 229, 255, 0.45), 0 6px 24px rgba(0, 0, 0, 0.6);
-    transform: translateY(-1px);
-  }
-
-  .floating-back-btn:active {
-    transform: scale(0.95);
   }
 
   .back-arrow-svg {
-    width: 1.1rem;
-    height: 1.1rem;
+    width: 1rem;
+    height: 1rem;
     flex-shrink: 0;
   }
 
@@ -388,7 +375,7 @@
     align-items: center;
     justify-content: center;
     background: rgba(5, 8, 14, 0.85);
-    padding: 1.5rem;
+    padding: 0.75rem;
     box-sizing: border-box;
     pointer-events: auto;
     user-select: none;
@@ -398,8 +385,9 @@
   /* Main Modal Card */
   .stadium-modal-card {
     position: relative;
-    width: min(94vw, 920px);
-    height: 640px;
+    width: min(96vw, 920px);
+    height: min(640px, calc(100dvh - 1.5rem));
+    max-height: calc(100dvh - 1.5rem);
     background: rgba(10, 16, 26, 0.95);
     border: 1px solid rgba(0, 229, 255, 0.6);
     border-radius: 0.5rem;
@@ -878,21 +866,19 @@
 
   /* Responsive — Mobile Landscape & Compact Touch Viewports */
   @media (max-height: 520px), (max-width: 960px) {
-    .floating-back-btn {
-      top: 0.45rem;
-      left: 0.55rem;
-      padding: 0.35rem 0.75rem;
-      font-size: 0.75rem;
+    .header-back-btn {
+      padding: 0.32rem 0.7rem;
+      font-size: 0.74rem;
     }
 
     .modal-backdrop {
-      padding: 0.4rem 0.65rem;
+      padding: 0.35rem 0.5rem;
     }
 
     .stadium-modal-card {
       width: min(98vw, 920px);
-      height: calc(100dvh - 0.8rem);
-      max-height: 96dvh;
+      height: calc(100dvh - 0.7rem);
+      max-height: calc(100dvh - 0.7rem);
     }
 
     .modal-header-ribbon {

@@ -6,6 +6,7 @@
   import { gameApp } from '../../net/GameApp.js';
   import CountryFlagSvg from '../components/CountryFlagSvg.svelte';
   import SocialLinksSection from '../components/SocialLinksSection.svelte';
+  import { getLegalHref } from '../../legal/legalContent.js';
 
   let passwordInput = $state('');
   let passwordError = $state('');
@@ -676,22 +677,22 @@
           {/if}
         </footer>
       </section>
-
-      <!-- Comunidad Oficial y Centro Legal -->
-      <div class="lobby-community-legal">
-        <SocialLinksSection compact={true} title="COMUNIDAD DISCORD Y REDES" />
-        <nav class="lobby-legal-links" aria-label="Enlaces legales">
-          <button type="button" class="lobby-legal-link" onclick={() => gameUI.openLegalDoc('privacy')}>Privacidad</button>
-          <span class="legal-dot" aria-hidden="true">·</span>
-          <button type="button" class="lobby-legal-link" onclick={() => gameUI.openLegalDoc('terms')}>Términos</button>
-          <span class="legal-dot" aria-hidden="true">·</span>
-          <button type="button" class="lobby-legal-link" onclick={() => gameUI.openLegalDoc('legal')}>Aviso Legal</button>
-          <span class="legal-dot" aria-hidden="true">·</span>
-          <button type="button" class="lobby-legal-link" onclick={() => gameUI.openLegalDoc('rights')}>Soporte y Borrado</button>
-        </nav>
-      </div>
     </aside>
   </div>
+
+  <!-- Barra inferior dedicada para Comunidad y Centro Legal (sin solapar el Ranking) -->
+  <footer class="lobby-community-legal lobby-bottom-bar" data-testid="lobby-community-footer">
+    <SocialLinksSection compact={true} title="COMUNIDAD DISCORD Y REDES" />
+    <nav class="lobby-legal-links" aria-label="Enlaces legales">
+      <a href={getLegalHref('privacy')} target="_blank" rel="noopener noreferrer" class="lobby-legal-link">Privacidad</a>
+      <span class="legal-dot" aria-hidden="true">·</span>
+      <a href={getLegalHref('terms')} target="_blank" rel="noopener noreferrer" class="lobby-legal-link">Términos</a>
+      <span class="legal-dot" aria-hidden="true">·</span>
+      <a href={getLegalHref('legal')} target="_blank" rel="noopener noreferrer" class="lobby-legal-link">Aviso Legal</a>
+      <span class="legal-dot" aria-hidden="true">·</span>
+      <a href={getLegalHref('rights')} target="_blank" rel="noopener noreferrer" class="lobby-legal-link">Soporte y Borrado</a>
+    </nav>
+  </footer>
 
   <!-- PASSWORD PROMPT MODAL -->
   {#if gameUI.activeModal === 'PASSWORD_PROMPT' && gameUI.pendingPasswordRoom}
@@ -803,18 +804,23 @@
     inset: 0;
     z-index: 10;
     width: 100%;
-    height: 100%;
-    padding: 1rem;
+    height: 100dvh;
+    padding: 0.75rem 1rem;
     box-sizing: border-box;
     background-color: #0b111e;
     background: radial-gradient(circle at 50% 18%, #111a2e 0%, #070b14 100%);
     pointer-events: auto;
     user-select: none;
     overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
   }
 
   .lobby-workspace {
-    height: calc(100vh - 2rem);
+    flex: 1;
+    min-height: 0;
+    width: 100%;
     max-width: 1320px;
     margin: 0 auto;
     display: grid;
@@ -827,6 +833,7 @@
       overflow-y: auto;
     }
     .lobby-workspace {
+      flex: none;
       height: auto;
       grid-template-columns: 1fr;
     }
@@ -2022,10 +2029,13 @@
   @media (max-height: 520px) and (orientation: landscape) and (min-width: 560px) {
     .lobby-root {
       overflow: hidden;
+      padding: 6px 10px;
+      gap: 6px;
     }
 
     .lobby-workspace {
-      height: calc(100dvh - 12px);
+      flex: 1;
+      min-height: 0;
       grid-template-columns: minmax(0, 1.45fr) minmax(240px, 0.9fr);
       gap: 8px;
     }
@@ -2059,10 +2069,21 @@
     }
   }
 
-  .lobby-community-legal {
+  .lobby-bottom-bar {
+    width: 100%;
+    max-width: 1320px;
+    margin: 0 auto;
     display: flex;
-    flex-direction: column;
-    gap: 6px;
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 6px 12px;
+    border-radius: 8px;
+    background: rgba(8, 14, 24, 0.85);
+    border: 1px solid rgba(148, 163, 184, 0.16);
+    box-sizing: border-box;
     flex-shrink: 0;
   }
 
@@ -2082,6 +2103,7 @@
     color: #94a3b8;
     font-size: 11px;
     font-weight: 600;
+    text-decoration: none;
     cursor: pointer;
   }
 

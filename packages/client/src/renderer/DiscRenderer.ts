@@ -1,4 +1,4 @@
-import { clampDiscToGoalAwareBounds, DEFAULT_GAMEPLAY_CONFIG, type DiscSnapshot, type CompactDiscState } from '@legacyx/core';
+import { clampDiscToGoalAwareBounds, DEFAULT_GAMEPLAY_CONFIG, type DiscSnapshot, type CompactDiscState, type PlayerPosition } from '@legacyx/core';
 import {
   drawBallDesign,
   isBallSkin,
@@ -36,6 +36,7 @@ export interface PlayerVisualInfo {
   hasOutline?: boolean;
   tertiaryColor?: string;
   kit?: any;
+  position?: PlayerPosition;
   activeEmote?: { emoji: string; timer: number };
 }
 
@@ -140,6 +141,7 @@ export class DiscRenderer {
   public dampingPlayer: number = 0.96;
   public showTypingIndicator: boolean = true;
   public showPlayerAvatars: boolean = true;
+  public showPositionTags: boolean = true;
   public replayEmotes = new Map<number, { emoji: string; progress: number }>();
 
   // Reusable per-frame scratch buffers to avoid GC allocations during render()
@@ -997,6 +999,11 @@ export class DiscRenderer {
       this.renderStaminaBar(ctx, disc);
     }
 
+    // 3b. Etiqueta de posición táctica debajo del disco (GK / DFC / MC / ST)
+    if (this.showPositionTags !== false && visualInfo?.position) {
+      this.renderPositionBadge(ctx, x, y, radius, visualInfo.position);
+    }
+
     // Indicadores flotantes discretos de chat / emote
     if (disc.isTyping && this.showTypingIndicator !== false) {
       this.renderTypingBubble(ctx, disc);
@@ -1036,6 +1043,59 @@ export class DiscRenderer {
       }
     }
 
+    ctx.restore();
+  }
+
+  private renderPositionBadge(
+    ctx: CanvasRenderingContext2D,
+    x: number,
+    y: number,
+    radius: number,
+    position: PlayerPosition
+  ): void {
+    const colors: Record<PlayerPosition, { bg: string; border: string; text: string }> = {
+      GK: { bg: 'rgba(20, 14, 4, 0.9)', border: '#f59e0b', text: '#fbbf24' },
+      DFC: { bg: 'rgba(4, 18, 28, 0.9)', border: '#00e5ff', text: '#67e8f9' },
+      MC: { bg: 'rgba(4, 22, 16, 0.9)', border: '#10b981', text: '#34d399' },
+      ST: { bg: 'rgba(28, 8, 12, 0.9)', border: '#ff4757', text: '#ff6b81' }
+    };
+    const palette = colors[position] ?? colors.MC;
+    const pillW = 26;
+    const pillH = 13;
+    const px = x - pillW / 2;
+    const py = y + radius + 8;
+    const r = 3.5;
+
+    ctx.save();
+    ctx.fillStyle = palette.bg;
+    ctx.strokeStyle = palette.border;
+    ctx.lineWidth = 1.1;
+
+    if (typeof ctx.beginPath === 'function' && typeof ctx.quadraticCurveTo === 'function') {
+      ctx.beginPath();
+      ctx.moveTo(px + r, py);
+      ctx.lineTo(px + pillW - r, py);
+      ctx.quadraticCurveTo(px + pillW, py, px + pillW, py + r);
+      ctx.lineTo(px + pillW, py + pillH - r);
+      ctx.quadraticCurveTo(px + pillW, py + pillH, px + pillW - r, py + pillH);
+      ctx.lineTo(px + r, py + pillH);
+      ctx.quadraticCurveTo(px, py + pillH, px, py + pillH - r);
+      ctx.lineTo(px, py + r);
+      ctx.quadraticCurveTo(px, py, px + r, py);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+    } else if (typeof ctx.fillRect === 'function') {
+      ctx.fillRect(px, py, pillW, pillH);
+    }
+
+    if (typeof ctx.fillText === 'function') {
+      ctx.fillStyle = palette.text;
+      ctx.font = '800 8.5px "Plus Jakarta Sans", "Space Grotesk", sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(position, x, py + pillH / 2 + 0.4);
+    }
     ctx.restore();
   }
 

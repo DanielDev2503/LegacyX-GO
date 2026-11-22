@@ -151,7 +151,9 @@ import {
   GameplayPreset,
   GameplayPresetId,
   sanitizeGameplayConfig,
-  defaultStadium
+  defaultStadium,
+  PlayerPosition,
+  PLAYER_POSITIONS
 } from './game/GameConfig';
 
 export type * from './protocol/Signaling';
@@ -236,6 +238,7 @@ export class EngineInstance {
   public players: Map<number, Disc> = new Map();
   public playerTeams: Map<number, 'red' | 'blue' | 'spec'> = new Map();
   public playerNames: Map<number, string> = new Map();
+  public playerPositions: Map<number, PlayerPosition> = new Map();
   public matchStats: Map<number, PlayerMatchStats> = new Map();
   private playerRuntime: Map<number, EngineDashState> = new Map();
   private readonly seenPlayerIds: Set<number> = new Set();
@@ -627,12 +630,54 @@ export class EngineInstance {
     return playerDisc;
   }
 
+  public setPlayerPosition(id: number, pos: PlayerPosition | null | undefined): void {
+    if (!pos) {
+      this.playerPositions.delete(id);
+    } else {
+      this.playerPositions.set(id, pos);
+    }
+  }
+
+  public getZoneSpawnCoordinates(
+    team: 'red' | 'blue',
+    pos: PlayerPosition,
+    indexInZone: number,
+    totalInZone: number,
+    radius: number = 15
+  ): { x: number; y: number } {
+    const sign = team === 'red' ? -1 : 1;
+    const hw = this.stadium.halfWidth;
+    const hh = this.stadium.halfHeight;
+    const cr = this.stadium.centerRadius || 80;
+    const minForwardX = cr + radius + 18;
+
+    let zoneX: number;
+    if (pos === 'GK') {
+      zoneX = sign * Math.max(minForwardX, hw - radius - 16);
+    } else if (pos === 'DFC') {
+      zoneX = sign * Math.max(minForwardX, hw * 0.68);
+    } else if (pos === 'MC') {
+      zoneX = sign * Math.max(minForwardX, hw * 0.44);
+    } else {
+      zoneX = sign * Math.max(minForwardX, hw * 0.22);
+    }
+
+    let zoneY = 0;
+    if (totalInZone > 1) {
+      const spread = Math.min(hh - radius - 26, (totalInZone - 1) * 44);
+      zoneY = -spread + (2 * spread * indexInZone) / (totalInZone - 1);
+    }
+
+    return { x: zoneX, y: zoneY };
+  }
+
   public removePlayer(id: number): void {
     const player = this.players.get(id);
     if (player) {
       this.world.removeDisc(player);
       this.players.delete(id);
       this.playerTeams.delete(id);
+      this.playerPositions.delete(id);
       this.playerRuntime.delete(id);
     }
   }
@@ -656,6 +701,22 @@ export class EngineInstance {
       }
     } else {
       player = this.addPlayer(id, team);
+    }
+
+    const assignedPos = this.playerPositions.get(id);
+    if (assignedPos) {
+      let zonePeers = 0;
+      for (const [otherId] of this.players.entries()) {
+        if (otherId !== id && this.playerTeams.get(otherId) === team && this.playerPositions.get(otherId) === assignedPos) {
+          zonePeers++;
+        }
+      }
+      const coords = this.getZoneSpawnCoordinates(team, assignedPos, zonePeers, zonePeers + 1, player.radius);
+      player.pos.set(coords.x, coords.y);
+      player.prevPos.set(coords.x, coords.y);
+      player.vel.set(0, 0);
+      player.stamina = 100;
+      return;
     }
 
     const isMatchLive = this.fsm.state === MatchPhase.PLAYING;
@@ -699,18 +760,28 @@ export class EngineInstance {
     this.ball.vel.set(0, 0);
     this.ball.resetCurve();
 
-    let redIndex = 0;
-    let blueIndex = 0;
+    const zoneBuckets: Record<'red' | 'blue', Record<PlayerPosition, number[]>> = {
+      red: { GK: [], DFC: [], MC: [], ST: [] },
+      blue: { GK: [], DFC: [], MC: [], ST: [] }
+    };
+    const legacyRed: number[] = [];
+    const legacyBlue: number[] = [];
 
-    for (const [id, player] of this.players.entries()) {
+    for (const [id] of this.players.entries()) {
       const team = this.playerTeams.get(id);
       if (team !== 'red' && team !== 'blue') continue;
-      const isRed = team === 'red';
-      const spawnDist = this.stadium.spawnDistance ?? 250;
-      const spawnX = isRed ? -spawnDist : spawnDist;
-      const offset = (isRed ? redIndex : blueIndex) * 40 - 20 * (isRed ? redIndex : blueIndex);
-      player.pos.set(spawnX, offset);
-      player.prevPos.set(spawnX, offset);
+      const pos = this.playerPositions.get(id);
+      if (pos) {
+        zoneBuckets[team][pos].push(id);
+      } else {
+        if (team === 'red') legacyRed.push(id);
+        else legacyBlue.push(id);
+      }
+    }
+
+    const resetPlayerRuntime = (id: number, player: Disc, spawnX: number, spawnY: number) => {
+      player.pos.set(spawnX, spawnY);
+      player.prevPos.set(spawnX, spawnY);
       player.vel.set(0, 0);
       player.stamina = 100;
       player.isDashing = false;
@@ -722,8 +793,34 @@ export class EngineInstance {
       rt.staminaIdleTimer = 0;
       rt.staminaRegenUnlocked = false;
       rt.kickConsumed = false;
-      if (isRed) redIndex++; else blueIndex++;
+    };
+
+    for (const team of ['red', 'blue'] as const) {
+      for (const pos of PLAYER_POSITIONS) {
+        const ids = zoneBuckets[team][pos];
+        for (let i = 0; i < ids.length; i++) {
+          const id = ids[i]!;
+          const player = this.players.get(id);
+          if (!player) continue;
+          const coords = this.getZoneSpawnCoordinates(team, pos, i, ids.length, player.radius);
+          resetPlayerRuntime(id, player, coords.x, coords.y);
+        }
+      }
     }
+
+    const spawnDist = this.stadium.spawnDistance ?? 250;
+    legacyRed.forEach((id, idx) => {
+      const player = this.players.get(id);
+      if (!player) return;
+      const offset = idx * 40 - 20 * idx;
+      resetPlayerRuntime(id, player, -spawnDist, offset);
+    });
+    legacyBlue.forEach((id, idx) => {
+      const player = this.players.get(id);
+      if (!player) return;
+      const offset = idx * 40 - 20 * idx;
+      resetPlayerRuntime(id, player, spawnDist, offset);
+    });
 
     this.preNetCrossingSpeed = 0;
     this.preNetIsPower = false;
@@ -1864,6 +1961,7 @@ export {
   GAMEPLAY_PRESETS,
   sanitizeGameplayConfig,
   defaultStadium,
+  PLAYER_POSITIONS,
   stepPlayerKinematics
 };
 
@@ -1905,6 +2003,7 @@ export type {
   ConfigLimits,
   GameplayPreset,
   GameplayPresetId,
+  PlayerPosition,
   KinematicsConfig,
   PlayerKinematicsInput,
   PlayerKinematicsState,

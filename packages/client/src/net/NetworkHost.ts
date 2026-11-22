@@ -1,4 +1,4 @@
-import { BinaryProtocol } from '@legacyx/core';
+import { BinaryProtocol, PLAYER_POSITIONS, type PlayerPosition } from '@legacyx/core';
 import { PeerConnection } from './PeerConnection';
 import { SignalingClient } from './SignalingClient';
 import { canChangeTeam } from './ClientPrediction';
@@ -12,6 +12,8 @@ export interface PlayerInfo {
   nickname: string;
   name?: string;
   team: 'red' | 'blue' | 'spectator';
+  position?: PlayerPosition;
+  teamOrder?: number;
   number: number;
   isAdmin: boolean;
   isHost?: boolean;
@@ -39,6 +41,7 @@ export class NetworkHost {
   private lastChatAtByPlayerId = new Map<number, number>();
   private pendingClosePeers = new Map<ReturnType<typeof setTimeout>, PeerConnection>();
   private nextPlayerId = 2; // 1 is reserved for Host local player
+  private nextTeamOrder = 1;
   private iceServers: RTCIceServer[] = [];
   public teamsLocked = false;
   public allowCaptainKitSwitch = false;
@@ -69,6 +72,7 @@ export class NetworkHost {
   public onChatMessage?: (sender: string, text: string, team?: string, id?: string) => void;
   public onPlayerEmote?: (playerId: number, emoji: string) => void;
   public onTeamChangeRequest?: (playerId: number, team: 'red' | 'blue' | 'spectator') => void;
+  public onPositionChanged?: (playerId: number, position: PlayerPosition) => void;
   public onAdminMatchAction?: (action: string, payload?: Record<string, unknown>) => void;
   public onPlayerTyping?: (playerId: number, isTyping: boolean) => void;
   public onGoalReplaySkipped?: (playerId: number) => void;
@@ -123,7 +127,9 @@ export class NetworkHost {
     if (patch.avatar !== undefined) host.avatar = patch.avatar;
     if (patch.avatarType !== undefined) host.avatarType = patch.avatarType;
     if (patch.number !== undefined) host.number = patch.number;
-    if (patch.team !== undefined) host.team = patch.team;
+    if (patch.team !== undefined && patch.team !== host.team) {
+      this.applyTeamTransition(host, patch.team);
+    }
     if (patch.kit !== undefined) host.kit = patch.kit;
     if (patch.localKit !== undefined) host.localKit = patch.localKit;
     if (patch.visitorKit !== undefined) host.visitorKit = patch.visitorKit;
@@ -562,11 +568,17 @@ export class NetworkHost {
       ) {
         const targetPlayer = this.players.get(targetId);
         if (targetPlayer && (targetTeam === 'red' || targetTeam === 'blue' || targetTeam === 'spectator')) {
-          targetPlayer.team = targetTeam;
+          this.applyTeamTransition(targetPlayer, targetTeam);
           this.onTeamChangeRequest?.(targetId, targetTeam);
           this.onPlayersUpdated?.(this.getPlayers());
           this.broadcastRoomStateSync();
         }
+      }
+    } else if (msg.type === 'POSITION_CHANGE') {
+      const targetId = Number(msg.targetPlayerId ?? 0);
+      const pos = String(msg.position || '') as PlayerPosition;
+      if (targetId > 0 && PLAYER_POSITIONS.includes(pos)) {
+        this.setPlayerPosition(targetId, pos, playerId);
       }
     } else if (msg.type === 'ADMIN_ACTION') {
       if (!player.isAdmin && !player.isHost) return;
@@ -643,11 +655,83 @@ export class NetworkHost {
     return true;
   }
 
+  public assignDefaultPosition(team: 'red' | 'blue', excludePlayerId?: number): PlayerPosition {
+    const teammates = Array.from(this.players.values()).filter(
+      (p) => p.team === team && p.id !== excludePlayerId
+    );
+    const occupied = new Set(teammates.map((p) => p.position).filter(Boolean));
+    for (const pos of PLAYER_POSITIONS) {
+      if (!occupied.has(pos)) return pos;
+    }
+    const counts: Record<PlayerPosition, number> = { GK: 0, DFC: 0, MC: 0, ST: 0 };
+    for (const tm of teammates) {
+      if (tm.position && counts[tm.position] !== undefined) {
+        counts[tm.position]++;
+      }
+    }
+    const outfield: PlayerPosition[] = ['DFC', 'MC', 'ST'];
+    outfield.sort((a, b) => counts[a] - counts[b]);
+    return outfield[0] ?? 'MC';
+  }
+
+  private applyTeamTransition(player: PlayerInfo, nextTeam: 'red' | 'blue' | 'spectator'): void {
+    const prevTeam = player.team;
+    player.team = nextTeam;
+    if (nextTeam === 'spectator') {
+      player.teamOrder = 0;
+      player.position = undefined;
+      return;
+    }
+    if (prevTeam !== nextTeam) {
+      player.teamOrder = this.nextTeamOrder++;
+      player.position = this.assignDefaultPosition(nextTeam, player.id);
+    } else if (!player.position) {
+      player.position = this.assignDefaultPosition(nextTeam, player.id);
+    }
+  }
+
   public setPlayerTeam(targetPlayerId: number, team: 'red' | 'blue' | 'spectator'): boolean {
     const target = this.players.get(targetPlayerId);
     if (!target) return false;
-    target.team = team;
+    this.applyTeamTransition(target, team);
     this.onTeamChangeRequest?.(targetPlayerId, team);
+    this.onPlayersUpdated?.(this.getPlayers());
+    this.broadcastRoomStateSync();
+    return true;
+  }
+
+  public setPlayerPosition(
+    targetPlayerId: number,
+    position: PlayerPosition,
+    requesterId: number = 1
+  ): boolean {
+    if (!PLAYER_POSITIONS.includes(position)) return false;
+    const target = this.players.get(targetPlayerId);
+    const requester = this.players.get(requesterId);
+    if (!target || !requester) return false;
+    if (target.team !== 'red' && target.team !== 'blue') return false;
+
+    const captainId = target.team === 'red' ? this.getRedCaptainId() : this.getBlueCaptainId();
+    const isAdminOrHost = Boolean(requester.isHost || requester.isAdmin);
+    const isCaptainOfTargetTeam = captainId === requesterId && requester.team === target.team;
+    if (!isAdminOrHost && !isCaptainOfTargetTeam) {
+      return false;
+    }
+
+    const prevPos: PlayerPosition = target.position || 'DFC';
+    if (prevPos === position) return true;
+
+    if (position === 'GK') {
+      for (const other of this.players.values()) {
+        if (other.id !== targetPlayerId && other.team === target.team && other.position === 'GK') {
+          other.position = prevPos === 'GK' ? 'DFC' : prevPos;
+          this.onPositionChanged?.(other.id, other.position);
+        }
+      }
+    }
+
+    target.position = position;
+    this.onPositionChanged?.(targetPlayerId, position);
     this.onPlayersUpdated?.(this.getPlayers());
     this.broadcastRoomStateSync();
     return true;
@@ -661,24 +745,24 @@ export class NetworkHost {
 
     if (redCount < blueCount) {
       const first = spectators[0];
-      first.team = 'red';
+      this.applyTeamTransition(first, 'red');
       this.onTeamChangeRequest?.(first.id, 'red');
     } else if (blueCount < redCount) {
       const first = spectators[0];
-      first.team = 'blue';
+      this.applyTeamTransition(first, 'blue');
       this.onTeamChangeRequest?.(first.id, 'blue');
     } else {
       // redCount === blueCount
       if (spectators.length >= 2) {
         const first = spectators[0];
         const second = spectators[1];
-        first.team = 'red';
+        this.applyTeamTransition(first, 'red');
         this.onTeamChangeRequest?.(first.id, 'red');
-        second.team = 'blue';
+        this.applyTeamTransition(second, 'blue');
         this.onTeamChangeRequest?.(second.id, 'blue');
       } else {
         const first = spectators[0];
-        first.team = 'red';
+        this.applyTeamTransition(first, 'red');
         this.onTeamChangeRequest?.(first.id, 'red');
       }
     }
@@ -689,7 +773,7 @@ export class NetworkHost {
   public resetTeamsToSpectators(): void {
     for (const player of this.players.values()) {
       if (player.team === 'red' || player.team === 'blue') {
-        player.team = 'spectator';
+        this.applyTeamTransition(player, 'spectator');
         this.onTeamChangeRequest?.(player.id, 'spectator');
       }
     }
@@ -700,12 +784,12 @@ export class NetworkHost {
   }
 
   public getRedCaptainId(): number | null {
-    const p = Array.from(this.players.values()).find((item) => item.team === 'red');
+    const p = this.getPlayers().find((item) => item.team === 'red');
     return p ? p.id : null;
   }
 
   public getBlueCaptainId(): number | null {
-    const p = Array.from(this.players.values()).find((item) => item.team === 'blue');
+    const p = this.getPlayers().find((item) => item.team === 'blue');
     return p ? p.id : null;
   }
 
@@ -897,7 +981,16 @@ export class NetworkHost {
   }
 
   public getPlayers(): PlayerInfo[] {
-    return Array.from(this.players.values());
+    return Array.from(this.players.values()).sort((a, b) => {
+      const aActive = a.team === 'red' || a.team === 'blue';
+      const bActive = b.team === 'red' || b.team === 'blue';
+      if (aActive && bActive && a.team === b.team) {
+        const oa = a.teamOrder && a.teamOrder > 0 ? a.teamOrder : Number.MAX_SAFE_INTEGER;
+        const ob = b.teamOrder && b.teamOrder > 0 ? b.teamOrder : Number.MAX_SAFE_INTEGER;
+        if (oa !== ob) return oa - ob;
+      }
+      return a.id - b.id;
+    });
   }
 
   public closeRoomAndDestroy(): void {

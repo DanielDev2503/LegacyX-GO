@@ -1,4 +1,4 @@
-import { BinaryProtocol, type GameStateSnapshot } from '@legacyx/core';
+import { BinaryProtocol, type GameStateSnapshot, type PlayerPosition } from '@legacyx/core';
 import { PeerConnection } from './PeerConnection';
 import { SignalingClient } from './SignalingClient';
 import { JitterBuffer } from './JitterBuffer';
@@ -529,6 +529,14 @@ export class NetworkClient {
       type: 'TEAM_CHANGE',
       team,
       targetPlayerId: targetPlayerId ?? this.localPlayerId
+    });
+  }
+
+  public requestPositionChange(targetPlayerId: number, position: PlayerPosition): void {
+    this.peer?.sendReliable({
+      type: 'POSITION_CHANGE',
+      targetPlayerId,
+      position
     });
   }
 

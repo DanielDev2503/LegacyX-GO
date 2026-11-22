@@ -8,7 +8,7 @@
   import { soundFX } from '../../audio/SoundFX.js';
   import { EMOJI_CATALOG } from '../utils/constants.js';
   import SocialLinksSection from '../components/SocialLinksSection.svelte';
-  import { CONSENT_STORAGE_KEY } from '../../legal/legalContent.js';
+  import { CONSENT_STORAGE_KEY, getLegalHref } from '../../legal/legalContent.js';
 
   let acceptedLegalTerms = $state(false);
   if (typeof localStorage !== 'undefined') {
@@ -546,13 +546,13 @@
                 <input type="checkbox" bind:checked={acceptedLegalTerms} />
                 <span>
                   Confirmo ser mayor de 13 años (16 en EEE/UK) y acepto los
-                  <button type="button" class="inline-legal-link" onclick={() => gameUI.openLegalDoc('terms')}>
+                  <a href={getLegalHref('terms')} target="_blank" rel="noopener noreferrer" class="inline-legal-link">
                     Términos de Servicio
-                  </button>
+                  </a>
                   y la
-                  <button type="button" class="inline-legal-link" onclick={() => gameUI.openLegalDoc('privacy')}>
+                  <a href={getLegalHref('privacy')} target="_blank" rel="noopener noreferrer" class="inline-legal-link">
                     Política de Privacidad
-                  </button>
+                  </a>
                   (incluye aviso de IP en WebRTC P2P).
                 </span>
               </label>
@@ -701,10 +701,10 @@
 
           <p class="guest-legal-note">
             Al jugar aceptas los
-            <button type="button" class="inline-legal-link" onclick={() => gameUI.openLegalDoc('terms')}>Términos</button>,
-            <button type="button" class="inline-legal-link" onclick={() => gameUI.openLegalDoc('privacy')}>Privacidad WebRTC/Datos</button>
+            <a href={getLegalHref('terms')} target="_blank" rel="noopener noreferrer" class="inline-legal-link">Términos</a>,
+            <a href={getLegalHref('privacy')} target="_blank" rel="noopener noreferrer" class="inline-legal-link">Privacidad WebRTC/Datos</a>
             y el
-            <button type="button" class="inline-legal-link" onclick={() => gameUI.openLegalDoc('legal')}>Aviso Legal</button>.
+            <a href={getLegalHref('legal')} target="_blank" rel="noopener noreferrer" class="inline-legal-link">Aviso Legal</a>.
           </p>
         </div>
       </section>
@@ -714,11 +714,11 @@
       <SocialLinksSection compact={true} title="COMUNIDAD Y DISCORD OFICIAL" />
 
       <div class="legal-footer-links" aria-label="Información legal">
-        <button type="button" class="legal-pill-link" onclick={() => gameUI.openLegalDoc('privacy')}>Privacidad Global</button>
-        <button type="button" class="legal-pill-link" onclick={() => gameUI.openLegalDoc('terms')}>Términos y EULA</button>
-        <button type="button" class="legal-pill-link" onclick={() => gameUI.openLegalDoc('legal')}>Aviso Legal / IP</button>
-        <button type="button" class="legal-pill-link" onclick={() => gameUI.openLegalDoc('cookies')}>Cookies / Storage</button>
-        <button type="button" class="legal-pill-link" onclick={() => gameUI.openLegalDoc('rights')}>Derechos / Borrado</button>
+        <a href={getLegalHref('privacy')} target="_blank" rel="noopener noreferrer" class="legal-pill-link">Privacidad Global</a>
+        <a href={getLegalHref('terms')} target="_blank" rel="noopener noreferrer" class="legal-pill-link">Términos y EULA</a>
+        <a href={getLegalHref('legal')} target="_blank" rel="noopener noreferrer" class="legal-pill-link">Aviso Legal / IP</a>
+        <a href={getLegalHref('cookies')} target="_blank" rel="noopener noreferrer" class="legal-pill-link">Cookies / Storage</a>
+        <a href={getLegalHref('rights')} target="_blank" rel="noopener noreferrer" class="legal-pill-link">Derechos / Borrado</a>
       </div>
     </footer>
   </div>
@@ -730,14 +730,15 @@
     inset: 0;
     z-index: 10;
     width: 100%;
-    height: 100%;
+    height: 100dvh;
     overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
     background-color: #0e141e;
     background: radial-gradient(circle at 50% 20%, #152033 0%, #090e17 100%);
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     justify-content: center;
-    padding: 20px;
+    padding: clamp(10px, 2dvh, 22px) 16px;
     box-sizing: border-box;
     pointer-events: auto;
     user-select: none;
@@ -745,9 +746,10 @@
 
   .gatekeeper-shell {
     width: min(980px, 96vw);
+    margin: auto;
     display: flex;
     flex-direction: column;
-    gap: 16px;
+    gap: clamp(10px, 1.5dvh, 16px);
   }
 
   .brand-header {
@@ -755,20 +757,22 @@
     align-items: center;
     justify-content: center;
     gap: 14px;
+    padding: 4px 8px 0;
+    flex-shrink: 0;
   }
 
   .logo-badge {
-    width: 60px;
-    height: 60px;
+    width: 68px;
+    height: 68px;
     border-radius: 50%;
-    border: 1.5px solid #00e5ff;
+    border: 2px solid #00e5ff;
     background: #0a101a;
     display: flex;
     align-items: center;
     justify-content: center;
     overflow: hidden;
     flex-shrink: 0;
-    box-shadow: 0 0 16px rgba(0, 229, 255, 0.28);
+    box-shadow: 0 0 20px rgba(0, 229, 255, 0.34);
   }
 
   .logo-image {
@@ -1713,6 +1717,7 @@
     font-size: 11px;
     font-weight: 600;
     color: #94a3b8;
+    text-decoration: none;
     cursor: pointer;
     transition: border-color 0.16s ease, color 0.16s ease;
   }
@@ -1720,6 +1725,22 @@
   .legal-pill-link:hover {
     border-color: rgba(0, 229, 255, 0.55);
     color: #67e8f9;
+  }
+
+  @media (max-height: 760px) {
+    .logo-badge {
+      width: 56px;
+      height: 56px;
+    }
+
+    .game-title {
+      font-size: 22px;
+    }
+
+    .panel-card {
+      padding: 14px 16px;
+      gap: 10px;
+    }
   }
 
   @media (max-height: 520px) and (orientation: landscape) and (min-width: 560px) {

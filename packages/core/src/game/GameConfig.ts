@@ -1,5 +1,8 @@
 export const defaultStadium = 'mediano';
 
+export type PlayerPosition = 'GK' | 'DFC' | 'MC' | 'ST';
+export const PLAYER_POSITIONS: readonly PlayerPosition[] = ['GK', 'DFC', 'MC', 'ST'] as const;
+
 export interface GameplayConfig {
   playerMaxSpeed: number;          // min: 0.7, max: 11.2, def: 3.9 (px/tick)
   playerSpeed: number;             // min: 0.25, max: 4.0, def: 1.39 (multiplicador base de velocidad)
@@ -11,8 +14,10 @@ export interface GameplayConfig {
   ballRadius: number;              // min: 3.0, max: 16.0, def: 8.0 (px)
   ballRestitution: number;         // min: 0.0, max: 1.8, def: 0.58 (bCoef)
   boostMultiplier: number;         // min: 1.1, max: 4.0, def: 1.40 (Turbo Multiplier)
+  turboStaminaDrain: number;       // min: 5, max: 100, def: 40 (%/s consumo del Turbo)
   dashDistance: number;            // min: 3.75, max: 112.5, def: 48.0 (px, ~7 ticks continuos)
   dashCooldown: number;            // min: 0.0, max: 5.0, def: 1.25 (s)
+  dashStaminaCost: number;         // min: 10, max: 100, def: 33 (% estamina que consume el Dash)
   staminaRechargeRate: number;     // min: 5.0, max: 100.0, def: 30.0 (%/s)
   staminaRechargeDelay: number;    // min: 0.0, max: 5.0, def: 1.0 (s)
   staminaRegenMoving: boolean;     // default: false
@@ -133,6 +138,15 @@ export const GAMEPLAY_CONFIG_LIMITS: Record<
     label: 'Multiplicador de Turbo',
     description: 'Factor multiplicador de velocidad y aceleración en sprint (1.1x - 4.0x).'
   },
+  turboStaminaDrain: {
+    min: 5,
+    max: 100,
+    step: 5,
+    default: 40,
+    label: 'Consumo Estamina del Turbo',
+    unit: '%/s',
+    description: 'Porcentaje de estamina por segundo que consume mantener activo el Turbo.'
+  },
   dashDistance: {
     min: 3.75,
     max: 112.5,
@@ -150,6 +164,15 @@ export const GAMEPLAY_CONFIG_LIMITS: Record<
     label: 'Cooldown de Dash',
     unit: 's',
     description: 'Tiempo mínimo de espera entre impulsos de Dash consecutivos (0.0s - 5.0s).'
+  },
+  dashStaminaCost: {
+    min: 10,
+    max: 100,
+    step: 1,
+    default: 33,
+    label: 'Consumo Estamina del Dash',
+    unit: '%',
+    description: 'Porcentaje de barra de estamina consumido en cada impulso de Dash.'
   },
   staminaRechargeRate: {
     min: 5.0,
@@ -240,8 +263,10 @@ export const DEFAULT_GAMEPLAY_CONFIG: Readonly<GameplayConfig> = Object.freeze({
   ballRadius: 8.0,
   ballRestitution: 0.58,
   boostMultiplier: 1.4,
+  turboStaminaDrain: 40,
   dashDistance: 48.0,
   dashCooldown: 1.25,
+  dashStaminaCost: 33,
   staminaRechargeRate: 30.0,
   staminaRechargeDelay: 1.0,
   staminaRegenMoving: false,
@@ -347,6 +372,8 @@ export function sanitizeGameplayConfig(partial?: Partial<GameplayConfig> | null)
   const hasPlayerSpeed = typeof partial.playerSpeed === 'number' && Number.isFinite(partial.playerSpeed);
   const hasAccel = typeof partial.playerAcceleration === 'number' && Number.isFinite(partial.playerAcceleration);
   const hasKickAccel = typeof partial.kickingAcceleration === 'number' && Number.isFinite(partial.kickingAcceleration);
+  const hasDashCost = typeof partial.dashStaminaCost === 'number' && Number.isFinite(partial.dashStaminaCost);
+  const hasDashes = typeof partial.dashesPerFullBar === 'number' && Number.isFinite(partial.dashesPerFullBar);
 
   for (const key of Object.keys(DEFAULT_GAMEPLAY_CONFIG) as Array<keyof GameplayConfig>) {
     const val = partial[key];
@@ -385,6 +412,18 @@ export function sanitizeGameplayConfig(partial?: Partial<GameplayConfig> | null)
     result.kickingAcceleration = Math.max(
       GAMEPLAY_CONFIG_LIMITS.kickingAcceleration.min,
       Math.min(GAMEPLAY_CONFIG_LIMITS.kickingAcceleration.max, Number(result.playerAcceleration.toFixed(4)))
+    );
+  }
+
+  if (hasDashes && !hasDashCost && result.dashesPerFullBar !== DEFAULT_GAMEPLAY_CONFIG.dashesPerFullBar) {
+    result.dashStaminaCost = Math.max(
+      GAMEPLAY_CONFIG_LIMITS.dashStaminaCost.min,
+      Math.min(GAMEPLAY_CONFIG_LIMITS.dashStaminaCost.max, Math.round(100 / result.dashesPerFullBar))
+    );
+  } else if (hasDashCost && !hasDashes && result.dashStaminaCost !== DEFAULT_GAMEPLAY_CONFIG.dashStaminaCost) {
+    result.dashesPerFullBar = Math.max(
+      GAMEPLAY_CONFIG_LIMITS.dashesPerFullBar.min,
+      Math.min(GAMEPLAY_CONFIG_LIMITS.dashesPerFullBar.max, Math.round(100 / result.dashStaminaCost))
     );
   }
 

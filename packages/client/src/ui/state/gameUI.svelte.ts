@@ -8,6 +8,8 @@ import { soundFX } from '../../audio/SoundFX.js';
 import { sharedSignaling, type SignalingClient } from '../../net/SignalingClient.js';
 import {
   type GameplayConfig,
+  type PlayerPosition,
+  PLAYER_POSITIONS,
   DEFAULT_GAMEPLAY_CONFIG,
   GAMEPLAY_PRESETS,
   type GameplayPresetId
@@ -231,15 +233,40 @@ export interface RoomDisconnectNotice {
   roomName?: string;
 }
 
+export interface GamepadBindConfig {
+  kick: string[];
+  dash: string[];
+  turbo: string[];
+  curveLeft: string[];
+  curveRight: string[];
+  focusBall: string[];
+  pause: string[];
+  menu: string[];
+}
+
+export const DEFAULT_GAMEPAD_BINDS: GamepadBindConfig = {
+  kick: ['Gamepad0'],
+  dash: ['Gamepad1'],
+  turbo: ['Gamepad7'],
+  curveLeft: ['Gamepad4'],
+  curveRight: ['Gamepad5'],
+  focusBall: ['Gamepad3'],
+  pause: ['Gamepad9'],
+  menu: ['Gamepad8']
+};
+
 export interface SettingsConfig {
   theme: 'dark' | 'light';
 
-  // 4-Canal Audio Hierarchy
+  // 4-Canal Audio Hierarchy + Música
   masterVolume: number;
   chatVolume: number;
   sfxVolume: number;
   envVolume: number;
   crowdVolume: number;
+  musicVolume: number;
+  musicEnabled: boolean;
+  musicInMatch: boolean;
   isMuted: boolean;
 
   // Canal 2: Chat y Social
@@ -263,10 +290,13 @@ export interface SettingsConfig {
   chatOpacity: number;
   minimapOpacity: number;
 
-  // Controles — Modo de Movimiento
+  // Controles — Modo de Movimiento y Mando
   movementMode: 'keyboard' | 'mouse';
+  gamepadDeadzone: number;
+  gamepadBinds: GamepadBindConfig;
 
   // Togglers Visuales de Jugabilidad
+  showPositionTags: boolean;
   magnusTrailEnabled: boolean;
   ballTrailEnabled: boolean;
   fireShotEnabled: boolean;
@@ -333,6 +363,9 @@ export const DEFAULT_SETTINGS: SettingsConfig = {
   sfxVolume: 1.0,
   envVolume: 1.0,
   crowdVolume: 1.0,
+  musicVolume: 0.65,
+  musicEnabled: true,
+  musicInMatch: true,
   isMuted: false,
 
   chatNormalSoundEnabled: true,
@@ -353,7 +386,19 @@ export const DEFAULT_SETTINGS: SettingsConfig = {
   minimapOpacity: 90,
 
   movementMode: 'keyboard',
+  gamepadDeadzone: 0.18,
+  gamepadBinds: {
+    kick: [...DEFAULT_GAMEPAD_BINDS.kick],
+    dash: [...DEFAULT_GAMEPAD_BINDS.dash],
+    turbo: [...DEFAULT_GAMEPAD_BINDS.turbo],
+    curveLeft: [...DEFAULT_GAMEPAD_BINDS.curveLeft],
+    curveRight: [...DEFAULT_GAMEPAD_BINDS.curveRight],
+    focusBall: [...DEFAULT_GAMEPAD_BINDS.focusBall],
+    pause: [...DEFAULT_GAMEPAD_BINDS.pause],
+    menu: [...DEFAULT_GAMEPAD_BINDS.menu]
+  },
 
+  showPositionTags: true,
   magnusTrailEnabled: true,
   ballTrailEnabled: true,
   fireShotEnabled: true,
@@ -420,7 +465,20 @@ export const DEFAULT_SETTINGS: SettingsConfig = {
     { trigger: 'gg', emoji: '👑' },
     { trigger: 'wow', emoji: '😮' },
     { trigger: 'fire', emoji: '🔥' },
-    { trigger: 'fuego', emoji: '🔥' }
+    { trigger: 'fuego', emoji: '🔥' },
+    { trigger: 'gk', emoji: '🧤' },
+    { trigger: 'mano', emoji: '✋' },
+    { trigger: 'pase', emoji: '👟' },
+    { trigger: 'arco', emoji: '🥅' },
+    { trigger: 'amarilla', emoji: '🟨' },
+    { trigger: 'roja', emoji: '🟥' },
+    { trigger: 'defensa', emoji: '🛡️' },
+    { trigger: 'dash', emoji: '💨' },
+    { trigger: 'comba', emoji: '🌀' },
+    { trigger: 'goat', emoji: '🐐' },
+    { trigger: 'frio', emoji: '🥶' },
+    { trigger: 'shh', emoji: '🤫' },
+    { trigger: 'aplauso', emoji: '👏' }
   ],
 
   mobileControlsEnabled: 'auto',
@@ -465,8 +523,29 @@ export const DEFAULT_KEYBINDS: KeybindConfig = {
   chat: ['Enter']
 };
 
+const GAMEPAD_BUTTON_LABELS: Record<string, string> = {
+  Gamepad0: 'Mando A / ✕',
+  Gamepad1: 'Mando B / ○',
+  Gamepad2: 'Mando X / □',
+  Gamepad3: 'Mando Y / △',
+  Gamepad4: 'LB / L1',
+  Gamepad5: 'RB / R1',
+  Gamepad6: 'LT / L2',
+  Gamepad7: 'RT / R2',
+  Gamepad8: 'Select / Share',
+  Gamepad9: 'Start / Options',
+  Gamepad10: 'L3',
+  Gamepad11: 'R3',
+  Gamepad12: 'D-Pad ↑',
+  Gamepad13: 'D-Pad ↓',
+  Gamepad14: 'D-Pad ←',
+  Gamepad15: 'D-Pad →',
+  Gamepad16: 'Botón Guía'
+};
+
 export function formatKeybindCode(code: string): string {
   if (!code) return '---';
+  if (GAMEPAD_BUTTON_LABELS[code]) return GAMEPAD_BUTTON_LABELS[code]!;
   if (code === 'Mouse0') return 'Click Izquierdo';
   if (code === 'Mouse1') return 'Click Central';
   if (code === 'Mouse2') return 'Click Derecho';
@@ -818,6 +897,8 @@ export interface RosterPlayer {
   avatar: string;
   avatarType?: 'letters' | 'emoji' | string;
   team: TeamSlot;
+  position?: PlayerPosition;
+  teamOrder?: number;
   isAdmin: boolean;
   isHost: boolean;
   isGuest?: boolean;
@@ -908,8 +989,10 @@ export interface PhysicsModifiers {
   kickStrength?: number;
   kickMargin?: number;
   boostMultiplier?: number;
+  turboStaminaDrain?: number;
   dashDistance?: number;
   dashesPerFullBar?: number;
+  dashStaminaCost?: number;
   staminaRechargeRate?: number;
   staminaRechargeDelay?: number;
   staminaRegenMoving?: boolean;
@@ -950,8 +1033,10 @@ export const DEFAULT_PHYSICS_MODIFIERS: Readonly<PhysicsModifiers> = {
   kickStrength: DEFAULT_GAMEPLAY_CONFIG.kickStrength,
   kickMargin: DEFAULT_GAMEPLAY_CONFIG.kickMargin,
   boostMultiplier: DEFAULT_GAMEPLAY_CONFIG.boostMultiplier,
+  turboStaminaDrain: DEFAULT_GAMEPLAY_CONFIG.turboStaminaDrain,
   dashDistance: DEFAULT_GAMEPLAY_CONFIG.dashDistance,
   dashesPerFullBar: DEFAULT_GAMEPLAY_CONFIG.dashesPerFullBar,
+  dashStaminaCost: DEFAULT_GAMEPLAY_CONFIG.dashStaminaCost,
   staminaRechargeRate: DEFAULT_GAMEPLAY_CONFIG.staminaRechargeRate,
   staminaRechargeDelay: DEFAULT_GAMEPLAY_CONFIG.staminaRechargeDelay,
   staminaRegenMoving: DEFAULT_GAMEPLAY_CONFIG.staminaRegenMoving,
@@ -1090,6 +1175,16 @@ class GameUIStore {
   // Settings & Keybinds
   public settings = $state<SettingsConfig>({
     ...DEFAULT_SETTINGS,
+    gamepadBinds: {
+      kick: [...DEFAULT_GAMEPAD_BINDS.kick],
+      dash: [...DEFAULT_GAMEPAD_BINDS.dash],
+      turbo: [...DEFAULT_GAMEPAD_BINDS.turbo],
+      curveLeft: [...DEFAULT_GAMEPAD_BINDS.curveLeft],
+      curveRight: [...DEFAULT_GAMEPAD_BINDS.curveRight],
+      focusBall: [...DEFAULT_GAMEPAD_BINDS.focusBall],
+      pause: [...DEFAULT_GAMEPAD_BINDS.pause],
+      menu: [...DEFAULT_GAMEPAD_BINDS.menu]
+    },
     mobileCustomLayout: { ...DEFAULT_SETTINGS.mobileCustomLayout }
   });
 
@@ -1503,6 +1598,7 @@ class GameUIStore {
   public onSettingsChanged: ((settings: SettingsConfig) => void) | null = null;
   public onChatSent: ((text: string) => void) | null = null;
   public onTeamChanged: ((playerId: number, team: 'red' | 'blue' | 'spectator') => void) | null = null;
+  public onPositionChange: ((playerId: number, position: PlayerPosition) => void) | null = null;
   public onPlayerEmote: ((playerId: number, emoji: string) => void) | null = null;
   public onLeaveRoom: (() => void) | null = null;
   public onAdminAction: ((action: string, payload?: any) => void) | null = null;
@@ -1674,6 +1770,8 @@ class GameUIStore {
     for (const p of this.rosterPlayers) {
       if (p.team === 'red' || p.team === 'blue') {
         p.team = 'spectator';
+        p.teamOrder = 0;
+        p.position = undefined;
         this.onTeamChanged?.(p.id, 'spectator');
         changed = true;
       }
@@ -1925,9 +2023,43 @@ class GameUIStore {
             ? (parsed.scoreboardDesign as ScoreboardDesignType)
             : DEFAULT_SETTINGS.scoreboardDesign;
 
+          const parsedGamepad = isPlainObject(parsed.gamepadBinds) ? parsed.gamepadBinds : {};
+          const gamepadBinds: GamepadBindConfig = {
+            kick: Array.isArray(parsedGamepad.kick) && parsedGamepad.kick.length > 0 ? [...parsedGamepad.kick] : [...DEFAULT_GAMEPAD_BINDS.kick],
+            dash: Array.isArray(parsedGamepad.dash) && parsedGamepad.dash.length > 0 ? [...parsedGamepad.dash] : [...DEFAULT_GAMEPAD_BINDS.dash],
+            turbo: Array.isArray(parsedGamepad.turbo) && parsedGamepad.turbo.length > 0 ? [...parsedGamepad.turbo] : [...DEFAULT_GAMEPAD_BINDS.turbo],
+            curveLeft: Array.isArray(parsedGamepad.curveLeft) && parsedGamepad.curveLeft.length > 0 ? [...parsedGamepad.curveLeft] : [...DEFAULT_GAMEPAD_BINDS.curveLeft],
+            curveRight: Array.isArray(parsedGamepad.curveRight) && parsedGamepad.curveRight.length > 0 ? [...parsedGamepad.curveRight] : [...DEFAULT_GAMEPAD_BINDS.curveRight],
+            focusBall: Array.isArray(parsedGamepad.focusBall) && parsedGamepad.focusBall.length > 0 ? [...parsedGamepad.focusBall] : [...DEFAULT_GAMEPAD_BINDS.focusBall],
+            pause: Array.isArray(parsedGamepad.pause) && parsedGamepad.pause.length > 0 ? [...parsedGamepad.pause] : [...DEFAULT_GAMEPAD_BINDS.pause],
+            menu: Array.isArray(parsedGamepad.menu) && parsedGamepad.menu.length > 0 ? [...parsedGamepad.menu] : [...DEFAULT_GAMEPAD_BINDS.menu]
+          };
+          const gamepadDeadzone =
+            typeof parsed.gamepadDeadzone === 'number' && Number.isFinite(parsed.gamepadDeadzone)
+              ? Math.max(0.05, Math.min(0.45, parsed.gamepadDeadzone))
+              : DEFAULT_SETTINGS.gamepadDeadzone;
+
           this.settings = {
             ...DEFAULT_SETTINGS,
             ...parsed,
+            gamepadDeadzone,
+            gamepadBinds,
+            showPositionTags:
+              typeof parsed.showPositionTags === 'boolean'
+                ? parsed.showPositionTags
+                : DEFAULT_SETTINGS.showPositionTags,
+            musicVolume:
+              typeof parsed.musicVolume === 'number' && Number.isFinite(parsed.musicVolume)
+                ? Math.max(0, Math.min(1, parsed.musicVolume))
+                : DEFAULT_SETTINGS.musicVolume,
+            musicEnabled:
+              typeof parsed.musicEnabled === 'boolean'
+                ? parsed.musicEnabled
+                : DEFAULT_SETTINGS.musicEnabled,
+            musicInMatch:
+              typeof parsed.musicInMatch === 'boolean'
+                ? parsed.musicInMatch
+                : DEFAULT_SETTINGS.musicInMatch,
             ballMode: normalizedBall.ballMode,
             ballSkin: normalizedBall.ballSkin,
             ballCustomColor: normalizedBall.ballCustomColor,
@@ -2245,6 +2377,7 @@ class GameUIStore {
     this.settings.fpsCap = DEFAULT_SETTINGS.fpsCap;
     this.settings.showTypingIndicator = DEFAULT_SETTINGS.showTypingIndicator;
     this.settings.showPlayerAvatars = DEFAULT_SETTINGS.showPlayerAvatars;
+    this.settings.showPositionTags = DEFAULT_SETTINGS.showPositionTags;
     this.settings.extrapolationMs = DEFAULT_SETTINGS.extrapolationMs;
     this.settings.autoExtrapolation = DEFAULT_SETTINGS.autoExtrapolation;
     this.extrapolationMs = DEFAULT_SETTINGS.extrapolationMs;
@@ -2293,6 +2426,42 @@ class GameUIStore {
         // Ignore storage error
       }
     }
+  }
+
+  public remapGamepadButton(action: keyof GamepadBindConfig, code: string): void {
+    const nextBinds: GamepadBindConfig = {
+      kick: [...this.settings.gamepadBinds.kick],
+      dash: [...this.settings.gamepadBinds.dash],
+      turbo: [...this.settings.gamepadBinds.turbo],
+      curveLeft: [...this.settings.gamepadBinds.curveLeft],
+      curveRight: [...this.settings.gamepadBinds.curveRight],
+      focusBall: [...this.settings.gamepadBinds.focusBall],
+      pause: [...this.settings.gamepadBinds.pause],
+      menu: [...this.settings.gamepadBinds.menu]
+    };
+    for (const key of Object.keys(nextBinds) as Array<keyof GamepadBindConfig>) {
+      if (key !== action && nextBinds[key].includes(code)) {
+        nextBinds[key] = nextBinds[key].filter((c) => c !== code);
+      }
+    }
+    nextBinds[action] = [code];
+    this.saveSettings({ gamepadBinds: nextBinds });
+  }
+
+  public resetGamepadBinds(): void {
+    this.saveSettings({
+      gamepadDeadzone: DEFAULT_SETTINGS.gamepadDeadzone,
+      gamepadBinds: {
+        kick: [...DEFAULT_GAMEPAD_BINDS.kick],
+        dash: [...DEFAULT_GAMEPAD_BINDS.dash],
+        turbo: [...DEFAULT_GAMEPAD_BINDS.turbo],
+        curveLeft: [...DEFAULT_GAMEPAD_BINDS.curveLeft],
+        curveRight: [...DEFAULT_GAMEPAD_BINDS.curveRight],
+        focusBall: [...DEFAULT_GAMEPAD_BINDS.focusBall],
+        pause: [...DEFAULT_GAMEPAD_BINDS.pause],
+        menu: [...DEFAULT_GAMEPAD_BINDS.menu]
+      }
+    });
   }
 
   public get isAdmin(): boolean {
@@ -2385,6 +2554,83 @@ class GameUIStore {
     return this.activeRoom?.name ?? 'LegacyX-GO Arena';
   }
 
+  public get roomCapacity(): number {
+    return Math.max(2, Math.min(30, this.activeRoom?.maxPlayers || 12));
+  }
+
+  private nextTeamOrderSeq: number = 1;
+
+  public assignDefaultPositionForTeam(
+    team: 'red' | 'blue',
+    excludePlayerId?: number
+  ): PlayerPosition {
+    const teammates = this.rosterPlayers.filter(
+      (p) => p.team === team && p.id !== excludePlayerId
+    );
+    const occupied = new Set(teammates.map((p) => p.position).filter(Boolean));
+    for (const pos of PLAYER_POSITIONS) {
+      if (!occupied.has(pos)) return pos;
+    }
+    const counts: Record<PlayerPosition, number> = { GK: 0, DFC: 0, MC: 0, ST: 0 };
+    for (const tm of teammates) {
+      if (tm.position && counts[tm.position] !== undefined) {
+        counts[tm.position]++;
+      }
+    }
+    const outfield: PlayerPosition[] = ['DFC', 'MC', 'ST'];
+    outfield.sort((a, b) => counts[a] - counts[b]);
+    return outfield[0] ?? 'MC';
+  }
+
+  public getTeamPlayers(team: 'red' | 'blue' | 'spectator'): RosterPlayer[] {
+    const filtered = this.rosterPlayers
+      .map((p, idx) => ({ p, idx }))
+      .filter((item) => item.p.team === team);
+    if (team === 'red' || team === 'blue') {
+      filtered.sort((a, b) => {
+        const oa = a.p.teamOrder && a.p.teamOrder > 0 ? a.p.teamOrder : Number.MAX_SAFE_INTEGER;
+        const ob = b.p.teamOrder && b.p.teamOrder > 0 ? b.p.teamOrder : Number.MAX_SAFE_INTEGER;
+        if (oa !== ob) return oa - ob;
+        return a.idx - b.idx;
+      });
+    }
+    return filtered.map((item) => item.p);
+  }
+
+  public getTeamCaptain(team: 'red' | 'blue'): RosterPlayer | null {
+    const teamPlayers = this.getTeamPlayers(team);
+    return teamPlayers[0] ?? null;
+  }
+
+  public canManageTeamPositions(team: 'red' | 'blue'): boolean {
+    if (this.isHost || this.isAdmin) return true;
+    const cap = this.getTeamCaptain(team);
+    return Boolean(cap && cap.id === this.localPlayerId);
+  }
+
+  public changePlayerPosition(targetPlayerId: number, position: PlayerPosition): boolean {
+    const target = this.rosterPlayers.find((p) => p.id === targetPlayerId);
+    if (!target || (target.team !== 'red' && target.team !== 'blue')) return false;
+    if (!this.canManageTeamPositions(target.team)) return false;
+    if (!PLAYER_POSITIONS.includes(position)) return false;
+
+    const prevPos: PlayerPosition = target.position || 'DFC';
+    if (prevPos === position) return true;
+
+    if (position === 'GK') {
+      const existingGk = this.rosterPlayers.find(
+        (p) => p.id !== targetPlayerId && p.team === target.team && p.position === 'GK'
+      );
+      if (existingGk) {
+        existingGk.position = prevPos === 'GK' ? 'DFC' : prevPos;
+      }
+    }
+    target.position = position;
+    soundFX.playUIClick();
+    this.onPositionChange?.(targetPlayerId, position);
+    return true;
+  }
+
   public set activeRoomName(name: string) {
     if (this.activeRoom) {
       this.activeRoom.name = name;
@@ -2467,13 +2713,12 @@ class GameUIStore {
     this.emitHudStateChange('kits_updated', { redKitVariant: this.redKitVariant, blueKitVariant: variant });
   }
 
-  /** Equipación activa del capitán RED (índice 0): su kit Local por defecto, o Visitante si se conmuta. */
+  /** Equipación activa del capitán RED (primer jugador unido al equipo): su kit Local por defecto, o Visitante si se conmuta. */
   public get redCaptainKit(): TeamKitConfig {
-    const redPlayers = this.rosterPlayers.filter((p) => p.team === 'red');
-    if (redPlayers.length === 0) {
+    const cap = this.getTeamCaptain('red');
+    if (!cap) {
       return GameUIStore.DEFAULT_RED_KIT;
     }
-    const cap = redPlayers[0];
     if (this.isGuestPlayer(cap)) {
       return GameUIStore.DEFAULT_RED_KIT;
     }
@@ -2483,13 +2728,12 @@ class GameUIStore {
     return kit;
   }
 
-  /** Equipación activa del capitán BLUE (índice 0): su kit Visitante por defecto, o Local si se conmuta. */
+  /** Equipación activa del capitán BLUE (primer jugador unido al equipo): su kit Visitante por defecto, o Local si se conmuta. */
   public get blueCaptainKit(): TeamKitConfig {
-    const bluePlayers = this.rosterPlayers.filter((p) => p.team === 'blue');
-    if (bluePlayers.length === 0) {
+    const cap = this.getTeamCaptain('blue');
+    if (!cap) {
       return GameUIStore.DEFAULT_BLUE_KIT;
     }
-    const cap = bluePlayers[0];
     if (this.isGuestPlayer(cap)) {
       return GameUIStore.DEFAULT_BLUE_KIT;
     }
@@ -2963,10 +3207,14 @@ class GameUIStore {
     this.modifiers.baseKickStrength = (cfg.kickStrength / 4.545) * 450.0;
     this.modifiers.kickMargin = cfg.kickMargin ?? DEFAULT_GAMEPLAY_CONFIG.kickMargin;
     this.modifiers.boostMultiplier = cfg.boostMultiplier;
+    this.modifiers.turboStaminaDrain =
+      cfg.turboStaminaDrain ?? DEFAULT_GAMEPLAY_CONFIG.turboStaminaDrain;
     this.modifiers.dashDistance = cfg.dashDistance;
     this.modifiers.dashPower = (cfg.dashDistance / 7) * 60;
     this.modifiers.dashCooldown = cfg.dashCooldown ?? DEFAULT_GAMEPLAY_CONFIG.dashCooldown;
     this.modifiers.dashesPerFullBar = cfg.dashesPerFullBar ?? DEFAULT_GAMEPLAY_CONFIG.dashesPerFullBar;
+    this.modifiers.dashStaminaCost =
+      cfg.dashStaminaCost ?? DEFAULT_GAMEPLAY_CONFIG.dashStaminaCost;
     this.modifiers.staminaRechargeRate = cfg.staminaRechargeRate;
     this.modifiers.staminaRechargeDelay =
       cfg.staminaRechargeDelay ?? DEFAULT_GAMEPLAY_CONFIG.staminaRechargeDelay;
@@ -3105,7 +3353,17 @@ class GameUIStore {
     }
     const p = this.rosterPlayers.find((item) => item.id === playerId);
     if (!p) return false;
+    const prevTeam = p.team;
     p.team = team;
+    if (prevTeam !== team) {
+      if (team === 'spectator') {
+        p.teamOrder = 0;
+        p.position = undefined;
+      } else {
+        p.teamOrder = this.nextTeamOrderSeq++;
+        p.position = this.assignDefaultPositionForTeam(team, p.id);
+      }
+    }
     this.onTeamChanged?.(playerId, team);
     return true;
   }
@@ -3117,8 +3375,11 @@ class GameUIStore {
     for (const s of specs) {
       const redCount = this.rosterPlayers.filter((p) => p.team === 'red').length;
       const blueCount = this.rosterPlayers.filter((p) => p.team === 'blue').length;
-      s.team = redCount <= blueCount ? 'red' : 'blue';
-      this.onTeamChanged?.(s.id, s.team);
+      const nextTeam = redCount <= blueCount ? 'red' : 'blue';
+      s.team = nextTeam;
+      s.teamOrder = this.nextTeamOrderSeq++;
+      s.position = this.assignDefaultPositionForTeam(nextTeam, s.id);
+      this.onTeamChanged?.(s.id, nextTeam);
     }
   }
 
@@ -3133,8 +3394,11 @@ class GameUIStore {
       all[j] = tmp;
     }
     all.forEach((p, idx) => {
-      p.team = idx % 2 === 0 ? 'red' : 'blue';
-      this.onTeamChanged?.(p.id, p.team);
+      const nextTeam = idx % 2 === 0 ? 'red' : 'blue';
+      p.team = nextTeam;
+      p.teamOrder = this.nextTeamOrderSeq++;
+      p.position = this.assignDefaultPositionForTeam(nextTeam, p.id);
+      this.onTeamChanged?.(p.id, nextTeam);
     });
   }
 
@@ -3198,6 +3462,7 @@ class GameUIStore {
     this.chatMessages = [];
     this.players = [];
     this.rosterPlayers = [];
+    this.nextTeamOrderSeq = 1;
     this.lastMatchStats = null;
     this.redTeamStats = [];
     this.blueTeamStats = [];
@@ -3305,6 +3570,8 @@ class GameUIStore {
       nickname: profile.nickname,
       name: profile.nickname,
       team: 'red',
+      position: 'MC',
+      teamOrder: 1,
       number: 10,
       isAdmin: true,
       isHost: true,

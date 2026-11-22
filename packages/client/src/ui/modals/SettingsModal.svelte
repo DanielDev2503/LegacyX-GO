@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
   import {
     gameUI,
     formatKeybindCode,
@@ -8,18 +9,20 @@
     type MobileControlsMode,
     type MobileJoystickMode,
     type MobileJoystickAnchor,
-    type MobileTurboMode
+    type MobileTurboMode,
+    type GamepadBindConfig
   } from '../state/gameUI.svelte.js';
   import { userProfile, validateAccountUsername } from '../state/userProfile.svelte.js';
   import { mouseButtonToCode } from '../../controllers/InputManager.js';
   import { soundFX } from '../../audio/SoundFX.js';
+  import { musicPlayer } from '../../audio/MusicPlayer.svelte.js';
   import { EMOJI_CATALOG } from '../utils/constants.js';
   import { tooltip } from '../actions/tooltip.js';
   import { drawBallDesign, type BallSkin } from '../../renderer/ballDesigns.js';
   import MatchScoreboard from '../components/MatchScoreboard.svelte';
   import KitPatternBadge from '../components/KitPatternBadge.svelte';
   import SocialLinksSection from '../components/SocialLinksSection.svelte';
-  import { LEGAL_DOCUMENTS, LEGAL_OPERATOR } from '../../legal/legalContent.js';
+  import { LEGAL_DOCUMENTS, LEGAL_OPERATOR, getLegalHref } from '../../legal/legalContent.js';
 
   type SettingsTab = 'controls' | 'audio' | 'video' | 'visual' | 'kits' | 'avatar' | 'account' | 'social' | 'legal';
   let activeTab = $state<SettingsTab>(
@@ -173,7 +176,97 @@
     gameUI.saveSettings();
   }
 
+  // Gamepad / Controller remapping state & live detector
+  let rebindingGamepadAction = $state<keyof GamepadBindConfig | null>(null);
+  let connectedGamepadName = $state<string | null>(null);
+  let gamepadPrevPressed = new Set<number>();
+
+  const GAMEPAD_BIND_ITEMS: readonly { action: keyof GamepadBindConfig; label: string; hint: string }[] = [
+    { action: 'kick', label: 'Patear / Disparar', hint: 'Chute principal o disparo con curva' },
+    { action: 'dash', label: 'Dash Explosivo', hint: 'Acelerón instantáneo en la dirección actual' },
+    { action: 'turbo', label: 'Turbo / Sprint', hint: 'Mantener para aumentar velocidad' },
+    { action: 'curveLeft', label: 'Efecto Izq (Curva)', hint: 'Giro antihorario / efecto Magnus' },
+    { action: 'curveRight', label: 'Efecto Der (Curva)', hint: 'Giro horario / efecto Magnus' },
+    { action: 'focusBall', label: 'Enfocar Balón', hint: 'Centrar cámara momentáneamente en el balón' },
+    { action: 'pause', label: 'Pausar Partido', hint: 'Solicitar o alternar pausa (admin)' },
+    { action: 'menu', label: 'Menú / Alineación', hint: 'Abrir o cerrar panel de equipos' }
+  ];
+
+  function startGamepadRebind(action: keyof GamepadBindConfig) {
+    soundFX.playUIClick();
+    rebindingAction = null;
+    rebindingGamepadAction = rebindingGamepadAction === action ? null : action;
+    gamepadPrevPressed.clear();
+    if (typeof navigator !== 'undefined' && typeof navigator.getGamepads === 'function') {
+      const pads = navigator.getGamepads();
+      for (const pad of pads) {
+        if (!pad || !pad.connected) continue;
+        pad.buttons.forEach((btn, idx) => {
+          if (btn?.pressed) gamepadPrevPressed.add(idx);
+        });
+      }
+    }
+  }
+
+  function handleResetGamepad() {
+    soundFX.playUIClick();
+    rebindingGamepadAction = null;
+    gameUI.resetGamepadBinds();
+  }
+
+  onMount(() => {
+    void musicPlayer.refreshTracks();
+
+    const pollPad = () => {
+      if (typeof navigator === 'undefined' || typeof navigator.getGamepads !== 'function') return;
+      const pads = navigator.getGamepads();
+      let activePad: Gamepad | null = null;
+      for (const p of pads) {
+        if (p && p.connected) {
+          activePad = p;
+          break;
+        }
+      }
+      connectedGamepadName = activePad ? activePad.id : null;
+
+      if (rebindingGamepadAction && activePad) {
+        for (let i = 0; i < activePad.buttons.length; i++) {
+          const pressed = Boolean(activePad.buttons[i]?.pressed || (activePad.buttons[i]?.value ?? 0) > 0.65);
+          if (pressed && !gamepadPrevPressed.has(i)) {
+            soundFX.playUIClick();
+            gameUI.remapGamepadButton(rebindingGamepadAction, `Gamepad${i}`);
+            rebindingGamepadAction = null;
+            gamepadPrevPressed.add(i);
+            break;
+          }
+          if (!pressed) {
+            gamepadPrevPressed.delete(i);
+          }
+        }
+      }
+    };
+
+    pollPad();
+    const timer = window.setInterval(pollPad, 90);
+    window.addEventListener('gamepadconnected', pollPad);
+    window.addEventListener('gamepaddisconnected', pollPad);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener('gamepadconnected', pollPad);
+      window.removeEventListener('gamepaddisconnected', pollPad);
+    };
+  });
+
   function handleKeyDown(e: KeyboardEvent) {
+    if (rebindingGamepadAction) {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        rebindingGamepadAction = null;
+      }
+      return;
+    }
+
     if (rebindingAction) {
       e.preventDefault();
       e.stopPropagation();
@@ -466,20 +559,6 @@
   oncontextmenu={handleWindowContextMenu}
 />
 
-<!-- Botón flotante Volver en la parte superior izquierda de la pantalla -->
-<button
-  type="button"
-  class="floating-back-btn"
-  onclick={handleClose}
-  title="Volver"
->
-  <svg class="back-arrow-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-    <line x1="19" y1="12" x2="5" y2="12"></line>
-    <polyline points="12 19 5 12 12 5"></polyline>
-  </svg>
-  <span>Volver</span>
-</button>
-
 {#snippet lockBadge()}
   <span class="tab-lock-icon" aria-label="Solo cuentas registradas" title="Exclusivo para cuentas registradas">
     <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -523,8 +602,24 @@
   onclick={handleBackdropClick}
 >
   <div class="settings-modal-card" role="dialog" aria-modal="true" aria-labelledby="settings-dialog-title">
-    <!-- Panel Izquierdo: Encabezado y Lista vertical continua de Pestañas -->
+    <!-- Panel Izquierdo: Botón Volver integrado + Encabezado y Pestañas -->
     <aside class="tabs-sidebar">
+      <div class="sidebar-back-row">
+        <button
+          type="button"
+          class="header-back-btn"
+          data-testid="settings-back-btn"
+          onclick={handleClose}
+          title="Volver"
+        >
+          <svg class="back-arrow-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="19" y1="12" x2="5" y2="12"></line>
+            <polyline points="12 19 5 12 12 5"></polyline>
+          </svg>
+          <span>Volver</span>
+        </button>
+      </div>
+
       <div class="sidebar-header">
         <span class="settings-icon-box" aria-hidden="true">
           <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="#00e5ff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -972,6 +1067,72 @@
               </div>
             </div>
 
+            <!-- Subsección: Mando / Controlador (Gamepad Plug & Play) -->
+            <div class="controls-card gamepad-controls-card" data-testid="gamepad-controls-section">
+              <div class="gamepad-header-row">
+                <div>
+                  <h4 class="card-title">Mando / Control (Xbox, PlayStation, Genérico)</h4>
+                  <small class="bind-hint">
+                    Compatible con Stick Izquierdo 360° y Cruceta D-Pad de forma simultánea con teclado y ratón.
+                  </small>
+                </div>
+                <span class="gamepad-status-pill" class:connected={Boolean(connectedGamepadName)}>
+                  {connectedGamepadName ? `Conectado: ${connectedGamepadName.slice(0, 26)}` : 'Sin mando detectado'}
+                </span>
+              </div>
+
+              <div class="gamepad-deadzone-row">
+                <div class="setting-copy">
+                  <span class="setting-title">Zona muerta del Stick Izquierdo (Deadzone)</span>
+                  <span class="setting-desc">Evita micro-movimientos involuntarios por desgaste del joystick</span>
+                </div>
+                <div class="gamepad-slider-wrap">
+                  <input
+                    type="range"
+                    class="custom-slider"
+                    min="0.05"
+                    max="0.4"
+                    step="0.01"
+                    style="--val-percent: {Math.round(((gameUI.settings.gamepadDeadzone - 0.05) / 0.35) * 100)}%;"
+                    value={gameUI.settings.gamepadDeadzone}
+                    oninput={(e) => {
+                      gameUI.settings.gamepadDeadzone = Number((e.currentTarget as HTMLInputElement).value);
+                      gameUI.saveSettings();
+                    }}
+                  />
+                  <span class="channel-val">{Math.round(gameUI.settings.gamepadDeadzone * 100)}%</span>
+                </div>
+              </div>
+
+              <div class="grid-2col">
+                {#each GAMEPAD_BIND_ITEMS as gItem (gItem.action)}
+                  <div class="bind-row">
+                    <div>
+                      <span class="bind-name">{gItem.label}</span>
+                      <small class="bind-hint">{gItem.hint}</small>
+                    </div>
+                    <button
+                      type="button"
+                      class="key-badge"
+                      class:rebinding={rebindingGamepadAction === gItem.action}
+                      data-testid="gamepad-bind-{gItem.action}"
+                      onclick={() => startGamepadRebind(gItem.action)}
+                    >
+                      {rebindingGamepadAction === gItem.action
+                        ? 'Pulsa botón...'
+                        : getKeyLabel(gameUI.settings.gamepadBinds[gItem.action])}
+                    </button>
+                  </div>
+                {/each}
+              </div>
+
+              <div class="gamepad-actions-footer">
+                <button type="button" class="btn-hud-reset" onclick={handleResetGamepad}>
+                  ↺ Restaurar botones de mando
+                </button>
+              </div>
+            </div>
+
             <!-- Subsección: Controles Táctiles y HUD Móvil -->
             <div class="controls-card mobile-controls-card" data-testid="mobile-controls-section">
               <div class="mobile-controls-header">
@@ -1283,6 +1444,7 @@
                       onchange={(e) => {
                         gameUI.settings.isMuted = (e.currentTarget as HTMLInputElement).checked;
                         soundFX.setMuted(gameUI.settings.isMuted);
+                        musicPlayer.syncVolume();
                         gameUI.saveSettings();
                       }}
                     />
@@ -1303,6 +1465,7 @@
                   oninput={(e) => {
                     gameUI.settings.masterVolume = Number((e.currentTarget as HTMLInputElement).value);
                     soundFX.setMasterVolume(gameUI.settings.masterVolume);
+                    musicPlayer.syncVolume();
                     gameUI.saveSettings();
                   }}
                 />
@@ -1566,6 +1729,134 @@
                   {/if}
                 </div>
               </div>
+            </div>
+
+            <!-- Reproductor de Música (carpeta musica/) -->
+            <div class="channel-card music-player-card" data-testid="music-player-card">
+              <div class="channel-header">
+                <div class="channel-info">
+                  <span class="channel-name">Música de Fondo (carpeta <code>musica/</code>)</span>
+                  <span class="channel-desc">
+                    {musicPlayer.currentTrack
+                      ? `Sonando: ${musicPlayer.currentTrack.title}`
+                      : musicPlayer.tracks.length > 0
+                        ? `${musicPlayer.tracks.length} pista(s) disponible(s)`
+                        : 'Coloca archivos .mp3/.ogg/.wav en la carpeta musica/'}
+                  </span>
+                </div>
+                <div class="channel-actions">
+                  <span class="channel-val">{Math.round(gameUI.settings.musicVolume * 100)}%</span>
+                </div>
+              </div>
+
+              <input
+                type="range"
+                class="custom-slider"
+                min="0"
+                max="1"
+                step="0.01"
+                style="--val-percent: {Math.round(gameUI.settings.musicVolume * 100)}%;"
+                value={gameUI.settings.musicVolume}
+                oninput={(e) => {
+                  gameUI.settings.musicVolume = Number((e.currentTarget as HTMLInputElement).value);
+                  musicPlayer.syncVolume();
+                  gameUI.saveSettings();
+                }}
+              />
+
+              <div class="music-controls-row">
+                <div class="music-transport-btns">
+                  <button
+                    type="button"
+                    class="accordion-btn"
+                    onclick={() => {
+                      soundFX.playUIClick();
+                      void musicPlayer.prevTrack();
+                    }}
+                    title="Pista anterior"
+                  >
+                    ⏮
+                  </button>
+                  <button
+                    type="button"
+                    class="accordion-btn music-play-btn"
+                    onclick={() => {
+                      soundFX.playUIClick();
+                      void musicPlayer.togglePlay();
+                    }}
+                  >
+                    {musicPlayer.isPlaying ? '⏸ Pausar' : '▶ Reproducir'}
+                  </button>
+                  <button
+                    type="button"
+                    class="accordion-btn"
+                    onclick={() => {
+                      soundFX.playUIClick();
+                      void musicPlayer.nextTrack();
+                    }}
+                    title="Siguiente pista"
+                  >
+                    ⏭
+                  </button>
+                  <button
+                    type="button"
+                    class="accordion-btn"
+                    onclick={() => {
+                      soundFX.playUIClick();
+                      void musicPlayer.refreshTracks();
+                    }}
+                    title="Recargar carpeta musica/"
+                  >
+                    ↻
+                  </button>
+                </div>
+
+                <div class="music-toggles-inline">
+                  <label class="music-inline-check">
+                    <input
+                      type="checkbox"
+                      checked={gameUI.settings.musicEnabled}
+                      onchange={(e) => {
+                        gameUI.settings.musicEnabled = (e.currentTarget as HTMLInputElement).checked;
+                        if (!gameUI.settings.musicEnabled) musicPlayer.pause();
+                        else musicPlayer.syncVolume();
+                        gameUI.saveSettings();
+                      }}
+                    />
+                    <span>Activar música</span>
+                  </label>
+                  <label class="music-inline-check">
+                    <input
+                      type="checkbox"
+                      checked={gameUI.settings.musicInMatch}
+                      onchange={(e) => {
+                        gameUI.settings.musicInMatch = (e.currentTarget as HTMLInputElement).checked;
+                        musicPlayer.syncVolume();
+                        gameUI.saveSettings();
+                      }}
+                    />
+                    <span>Sonar durante partido</span>
+                  </label>
+                </div>
+              </div>
+
+              {#if musicPlayer.tracks.length > 0}
+                <div class="music-track-pills">
+                  {#each musicPlayer.tracks as track, idx (track.url)}
+                    <button
+                      type="button"
+                      class="music-track-pill"
+                      class:active={musicPlayer.currentTrack?.url === track.url}
+                      onclick={() => {
+                        soundFX.playUIClick();
+                        void musicPlayer.play(idx);
+                      }}
+                    >
+                      {track.title}
+                    </button>
+                  {/each}
+                </div>
+              {/if}
             </div>
           </div>
         </div>
@@ -2041,6 +2332,29 @@
                         onchange={(e) => {
                           soundFX.playUIClick();
                           gameUI.screenShake = (e.currentTarget as HTMLInputElement).checked;
+                        }}
+                      />
+                      <span class="toggle-slider"></span>
+                    </label>
+                  </div>
+                </div>
+
+                <!-- Etiquetas de Posición Táctica en Cancha (GK / DFC / MC / ST) -->
+                <div class="video-setting-row">
+                  <div class="setting-copy">
+                    <span class="setting-title">Etiquetas de posición en cancha (GK / DFC / MC / ST)</span>
+                    <span class="setting-desc">Muestra una pequeña insignia táctica debajo de cada jugador según su zona asignada</span>
+                  </div>
+                  <div class="setting-control">
+                    <label class="switch-toggle" aria-label="Etiquetas de posición en cancha">
+                      <input
+                        type="checkbox"
+                        data-testid="toggle-position-tags"
+                        checked={gameUI.settings.showPositionTags !== false}
+                        onchange={(e) => {
+                          soundFX.playUIClick();
+                          gameUI.settings.showPositionTags = (e.currentTarget as HTMLInputElement).checked;
+                          gameUI.saveSettings();
                         }}
                       />
                       <span class="toggle-slider"></span>
@@ -3263,21 +3577,23 @@
           <div class="settings-scroll-area">
             <div class="legal-overview-card">
               <p class="legal-overview-copy">
-                Operado por <strong>{LEGAL_OPERATOR.owner}</strong> ({LEGAL_OPERATOR.country}). Consulta en cualquier momento nuestros documentos legales vigentes para Web, móvil y escritorio:
+                Operado por <strong>{LEGAL_OPERATOR.owner}</strong> ({LEGAL_OPERATOR.country}) en <strong>{LEGAL_OPERATOR.domain}</strong>. Consulta nuestros documentos legales independientes en <code>/legal</code>:
               </p>
               <div class="legal-docs-grid">
                 {#each LEGAL_DOCUMENTS as doc (doc.id)}
-                  <button
-                    type="button"
+                  <a
+                    href={getLegalHref(doc.id)}
+                    target="_blank"
+                    rel="noopener noreferrer"
                     class="legal-doc-open-btn"
-                    onclick={() => gameUI.openLegalDoc(doc.id)}
+                    onclick={() => soundFX.playUIClick()}
                   >
                     <div class="legal-doc-btn-top">
                       <strong>{doc.title}</strong>
-                      <span class="legal-doc-arrow">Abrir →</span>
+                      <span class="legal-doc-arrow">Abrir ↗</span>
                     </div>
                     <span class="legal-doc-summary">{doc.summary}</span>
-                  </button>
+                  </a>
                 {/each}
               </div>
               <p class="legal-support-note">
@@ -3292,46 +3608,37 @@
 </div>
 
 <style>
-  /* Floating back button outside the modal card (top-left) */
-  .floating-back-btn {
-    position: fixed;
-    top: 1.5rem;
-    left: 1.5rem;
-    z-index: 60;
+  .sidebar-back-row {
+    padding: 0 1rem 0.75rem;
+    flex-shrink: 0;
+  }
+
+  .header-back-btn {
     display: inline-flex;
     align-items: center;
-    gap: 0.5rem;
-    padding: 0.6rem 1.15rem;
-    background: rgba(10, 16, 26, 0.9);
-    border: 1px solid rgba(0, 229, 255, 0.3);
+    gap: 0.45rem;
+    padding: 0.45rem 0.9rem;
+    background: rgba(10, 16, 26, 0.92);
+    border: 1px solid rgba(0, 229, 255, 0.35);
     border-radius: 9999px;
     color: #67e8f9;
     font-family: 'Chivo', system-ui, sans-serif;
-    font-size: 0.875rem;
+    font-size: 0.8rem;
     font-weight: 700;
-    letter-spacing: 0.02em;
     cursor: pointer;
-    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5), 0 0 12px rgba(0, 229, 255, 0.15);
-    transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+    transition: all 0.18s ease;
     user-select: none;
-    pointer-events: auto;
   }
 
-  .floating-back-btn:hover {
+  .header-back-btn:hover {
     background: rgba(0, 229, 255, 0.15);
     border-color: #00e5ff;
     color: #ffffff;
-    box-shadow: 0 0 16px rgba(0, 229, 255, 0.45), 0 6px 24px rgba(0, 0, 0, 0.6);
-    transform: translateY(-1px);
-  }
-
-  .floating-back-btn:active {
-    transform: scale(0.95);
   }
 
   .back-arrow-svg {
-    width: 1.1rem;
-    height: 1.1rem;
+    width: 1rem;
+    height: 1rem;
     flex-shrink: 0;
   }
 
@@ -3344,18 +3651,18 @@
     align-items: center;
     justify-content: center;
     background: rgba(5, 8, 14, 0.85);
-    padding: 1.5rem;
+    padding: 0.75rem;
     box-sizing: border-box;
     pointer-events: auto;
   }
 
-  /* Modal Main Card (Starts directly in 2 columns from the top) */
+  /* Modal Main Card (Fits cleanly within viewport height on PC & mobile) */
   .settings-modal-card {
     position: relative;
     width: 100%;
     max-width: 980px;
-    height: 680px;
-    max-height: 88vh;
+    height: min(680px, calc(100dvh - 1.5rem));
+    max-height: calc(100dvh - 1.5rem);
     background: rgba(10, 16, 26, 0.95);
     border: 1px solid rgba(0, 229, 255, 0.6);
     border-radius: 0.5rem;
@@ -3374,9 +3681,10 @@
     border-right: 1px solid rgba(255, 255, 255, 0.08);
     display: flex;
     flex-direction: column;
-    padding: 1.25rem 0;
+    padding: 0.9rem 0;
     box-sizing: border-box;
     flex-shrink: 0;
+    overflow-y: auto;
   }
 
   .sidebar-header {
@@ -5857,20 +6165,22 @@
 
   /* Responsive Adjustments — Mobile Landscape & Compact Touch Viewports */
   @media (max-height: 520px), (max-width: 960px) {
-    .floating-back-btn {
-      top: 0.45rem;
-      left: 0.55rem;
-      padding: 0.35rem 0.75rem;
-      font-size: 0.75rem;
+    .sidebar-back-row {
+      padding: 0 0.65rem 0.45rem;
+    }
+
+    .header-back-btn {
+      padding: 0.32rem 0.7rem;
+      font-size: 0.74rem;
     }
 
     .modal-backdrop {
-      padding: 0.4rem 0.65rem;
+      padding: 0.35rem 0.5rem;
     }
 
     .settings-modal-card {
-      height: calc(100vh - 0.8rem);
-      max-height: 96vh;
+      height: calc(100dvh - 0.7rem);
+      max-height: calc(100dvh - 0.7rem);
       max-width: 100%;
     }
 
@@ -6021,6 +6331,7 @@
 
   .legal-doc-open-btn {
     text-align: left;
+    text-decoration: none;
     display: flex;
     flex-direction: column;
     gap: 0.28rem;
@@ -6030,12 +6341,13 @@
     background: rgba(9, 14, 27, 0.88);
     color: #f8fafc;
     cursor: pointer;
-    transition: border-color 0.16s ease, background 0.16s ease;
+    transition: border-color 0.16s ease, background 0.16s ease, transform 0.14s ease;
   }
 
   .legal-doc-open-btn:hover {
     border-color: rgba(0, 229, 255, 0.6);
     background: rgba(15, 23, 42, 0.96);
+    transform: translateY(-1px);
   }
 
   .legal-doc-btn-top {
@@ -6089,15 +6401,25 @@
   @media (max-width: 680px) and (min-height: 521px) {
     .settings-modal-card {
       flex-direction: column;
+      height: calc(100dvh - 0.7rem);
+      max-height: calc(100dvh - 0.7rem);
     }
     .tabs-sidebar {
       width: 100%;
       height: auto;
       flex-direction: row;
+      align-items: center;
       overflow-x: auto;
       border-right: none;
       border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-      padding: 0.5rem;
+      padding: 0.45rem;
+      gap: 0.45rem;
+    }
+    .sidebar-back-row {
+      padding: 0;
+    }
+    .sidebar-header {
+      display: none;
     }
     .nav-tabs {
       flex-direction: row;
@@ -6120,5 +6442,134 @@
     .ball-cards-grid {
       grid-template-columns: repeat(2, 1fr);
     }
+  }
+
+  /* Gamepad & Music Player Extensions */
+  .gamepad-controls-card {
+    display: flex;
+    flex-direction: column;
+    gap: 0.8rem;
+  }
+
+  .gamepad-header-row {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+  }
+
+  .gamepad-status-pill {
+    padding: 0.3rem 0.75rem;
+    border-radius: 9999px;
+    font-size: 0.72rem;
+    font-weight: 700;
+    background: rgba(148, 163, 184, 0.14);
+    border: 1px solid rgba(148, 163, 184, 0.35);
+    color: #94a3b8;
+  }
+
+  .gamepad-status-pill.connected {
+    background: rgba(16, 185, 129, 0.16);
+    border-color: rgba(16, 185, 129, 0.55);
+    color: #34d399;
+  }
+
+  .gamepad-deadzone-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.9rem;
+    padding: 0.55rem 0.75rem;
+    background: rgba(15, 23, 42, 0.6);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 0.45rem;
+    flex-wrap: wrap;
+  }
+
+  .gamepad-slider-wrap {
+    display: flex;
+    align-items: center;
+    gap: 0.65rem;
+    min-width: 180px;
+    flex: 1;
+    max-width: 260px;
+  }
+
+  .gamepad-actions-footer {
+    display: flex;
+    justify-content: flex-end;
+  }
+
+  .music-player-card {
+    margin-top: 0.25rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.65rem;
+  }
+
+  .music-controls-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+  }
+
+  .music-transport-btns {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    flex-wrap: wrap;
+  }
+
+  .music-play-btn {
+    border-color: rgba(0, 229, 255, 0.55);
+    color: #00e5ff;
+  }
+
+  .music-toggles-inline {
+    display: flex;
+    align-items: center;
+    gap: 0.9rem;
+    flex-wrap: wrap;
+  }
+
+  .music-inline-check {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 0.78rem;
+    color: #cbd5e1;
+    cursor: pointer;
+  }
+
+  .music-track-pills {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+  }
+
+  .music-track-pill {
+    padding: 0.32rem 0.65rem;
+    border-radius: 0.4rem;
+    background: rgba(15, 23, 42, 0.75);
+    border: 1px solid rgba(148, 163, 184, 0.24);
+    color: #cbd5e1;
+    font-size: 0.72rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+
+  .music-track-pill:hover {
+    border-color: rgba(0, 229, 255, 0.55);
+    color: #ffffff;
+  }
+
+  .music-track-pill.active {
+    background: rgba(0, 229, 255, 0.16);
+    border-color: #00e5ff;
+    color: #67e8f9;
   }
 </style>

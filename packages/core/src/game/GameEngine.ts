@@ -545,7 +545,21 @@ export class GameEngine {
   }
 
   public setGameplayConfig(newConfig: Partial<GameplayConfig>): void {
-    this.gameplayConfig = sanitizeGameplayConfig({ ...this.gameplayConfig, ...newConfig });
+    const merged: Partial<GameplayConfig> = { ...this.gameplayConfig, ...newConfig };
+    if (
+      typeof newConfig.dashesPerFullBar === 'number' &&
+      newConfig.dashStaminaCost === undefined &&
+      newConfig.dashesPerFullBar !== this.gameplayConfig.dashesPerFullBar
+    ) {
+      delete merged.dashStaminaCost;
+    } else if (
+      typeof newConfig.dashStaminaCost === 'number' &&
+      newConfig.dashesPerFullBar === undefined &&
+      newConfig.dashStaminaCost !== this.gameplayConfig.dashStaminaCost
+    ) {
+      delete merged.dashesPerFullBar;
+    }
+    this.gameplayConfig = sanitizeGameplayConfig(merged);
     if (this.ball) {
       this.ball.radius = this.gameplayConfig.ballRadius;
       this.ball.bounciness = this.gameplayConfig.ballRestitution;

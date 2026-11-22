@@ -2,10 +2,13 @@ import type { LegalDocId } from '../ui/state/gameUI.svelte.js';
 
 export const LEGAL_OPERATOR = {
   appName: 'LegacyX-GO',
+  domain: 'legacyxgo.com',
+  appUrl: 'https://legacyxgo.com',
+  legalBaseUrl: 'https://legacyxgo.com/legal',
   owner: 'Daniel Sanchez',
   country: 'Colombia',
   supportEmail: 'soporte@legacyxgo.com',
-  lastUpdated: '2026-11-20',
+  lastUpdated: '2026-11-22',
   discordInvite: 'https://discord.gg/VBg4fqdY4N'
 } as const;
 
@@ -205,8 +208,11 @@ export function parseLegalDocFromLocation(
     if (params.has('support')) {
       return 'rights';
     }
-    const lowerPath = pathname.toLowerCase();
-    const match = lowerPath.match(/\/legal\/(privacy|terms|legal|cookies|rights)\b/);
+    const lowerPath = pathname.toLowerCase().replace(/\/+$/, '') || '/';
+    if (lowerPath === '/legal') {
+      return 'privacy';
+    }
+    const match = lowerPath.match(/^\/legal\/(privacy|terms|legal|cookies|rights)$/);
     if (match && match[1] && isValidLegalDocId(match[1])) {
       return match[1];
     }
@@ -214,6 +220,25 @@ export function parseLegalDocFromLocation(
     // Ignore malformed query string
   }
   return null;
+}
+
+export function getLegalHref(docId: LegalDocId = 'privacy'): string {
+  return docId === 'privacy' ? '/legal/privacy' : `/legal/${docId}`;
+}
+
+export function isLegalRoute(pathname: string): boolean {
+  const clean = (pathname || '/').toLowerCase().replace(/\/+$/, '') || '/';
+  return (
+    clean === '/legal' ||
+    /^\/legal\/(privacy|terms|legal|cookies|rights)$/.test(clean)
+  );
+}
+
+export function isKnownAppRoute(pathname: string): boolean {
+  const clean = (pathname || '/').replace(/\/+$/, '') || '/';
+  if (clean === '/' || clean === '/index.html') return true;
+  if (/^\/room\/[A-Za-z0-9_-]+$/.test(clean)) return true;
+  return isLegalRoute(clean);
 }
 
 export function isValidLegalDocId(val: string): val is LegalDocId {

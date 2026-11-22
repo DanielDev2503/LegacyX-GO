@@ -4,6 +4,7 @@
   import { tooltip } from '../actions/tooltip.js';
   import {
     DEFAULT_GAMEPLAY_CONFIG,
+    GAMEPLAY_CONFIG_LIMITS,
     GAMEPLAY_PRESETS,
     type GameplayConfig,
     type GameplayPreset,
@@ -136,19 +137,30 @@
       key: 'boostMultiplier',
       label: 'Multiplicador de velocidad de turbo',
       sublabel: 'Factor de sprint continuo sobre velocidad base',
-      min: 1.1,
-      max: 4.0,
-      step: 0.05,
+      min: GAMEPLAY_CONFIG_LIMITS.boostMultiplier.min,
+      max: GAMEPLAY_CONFIG_LIMITS.boostMultiplier.max,
+      step: GAMEPLAY_CONFIG_LIMITS.boostMultiplier.step,
       defaultVal: DEFAULT_GAMEPLAY_CONFIG.boostMultiplier,
+      parentToggle: 'turboEnabled'
+    },
+    {
+      key: 'turboStaminaDrain',
+      label: 'Consumo de estamina del turbo',
+      sublabel: 'Porcentaje de estamina que drena el Turbo por segundo al esprintar',
+      min: GAMEPLAY_CONFIG_LIMITS.turboStaminaDrain.min,
+      max: GAMEPLAY_CONFIG_LIMITS.turboStaminaDrain.max,
+      step: GAMEPLAY_CONFIG_LIMITS.turboStaminaDrain.step,
+      defaultVal: DEFAULT_GAMEPLAY_CONFIG.turboStaminaDrain,
+      unit: '%/s',
       parentToggle: 'turboEnabled'
     },
     {
       key: 'dashDistance',
       label: 'Distancia del dash',
       sublabel: 'Distancia cinemática recorrida en impulso rápido (7 ticks con Estela)',
-      min: 3.75,
-      max: 112.5,
-      step: 0.25,
+      min: GAMEPLAY_CONFIG_LIMITS.dashDistance.min,
+      max: GAMEPLAY_CONFIG_LIMITS.dashDistance.max,
+      step: GAMEPLAY_CONFIG_LIMITS.dashDistance.step,
       defaultVal: DEFAULT_GAMEPLAY_CONFIG.dashDistance,
       unit: 'px',
       parentToggle: 'dashEnabled'
@@ -157,20 +169,31 @@
       key: 'dashCooldown',
       label: 'Enfriamiento de Dash (Cooldown)',
       sublabel: 'Tiempo mínimo de espera entre impulsos Dash',
-      min: 0.0,
-      max: 5.0,
-      step: 0.25,
+      min: GAMEPLAY_CONFIG_LIMITS.dashCooldown.min,
+      max: GAMEPLAY_CONFIG_LIMITS.dashCooldown.max,
+      step: GAMEPLAY_CONFIG_LIMITS.dashCooldown.step,
       defaultVal: DEFAULT_GAMEPLAY_CONFIG.dashCooldown,
       unit: 's',
+      parentToggle: 'dashEnabled'
+    },
+    {
+      key: 'dashStaminaCost',
+      label: 'Porcentaje de estamina que consume el dash',
+      sublabel: 'Porcentaje de la barra de estamina consumido al ejecutar un Dash',
+      min: GAMEPLAY_CONFIG_LIMITS.dashStaminaCost.min,
+      max: GAMEPLAY_CONFIG_LIMITS.dashStaminaCost.max,
+      step: GAMEPLAY_CONFIG_LIMITS.dashStaminaCost.step,
+      defaultVal: DEFAULT_GAMEPLAY_CONFIG.dashStaminaCost,
+      unit: '%',
       parentToggle: 'dashEnabled'
     },
     {
       key: 'staminaRechargeDelay',
       label: 'Espera inmóvil para recarga',
       sublabel: 'Segundos sin movimiento, Turbo ni Dash antes de empezar a recargar estamina (patear no reinicia esta espera)',
-      min: 0.0,
-      max: 5.0,
-      step: 0.1,
+      min: GAMEPLAY_CONFIG_LIMITS.staminaRechargeDelay.min,
+      max: GAMEPLAY_CONFIG_LIMITS.staminaRechargeDelay.max,
+      step: GAMEPLAY_CONFIG_LIMITS.staminaRechargeDelay.step,
       defaultVal: DEFAULT_GAMEPLAY_CONFIG.staminaRechargeDelay,
       unit: 's'
     },
@@ -178,9 +201,9 @@
       key: 'staminaRechargeRate',
       label: 'Tasa de recarga de estamina',
       sublabel: 'Porcentaje base regenerado por segundo',
-      min: 5.0,
-      max: 100.0,
-      step: 1.0,
+      min: GAMEPLAY_CONFIG_LIMITS.staminaRechargeRate.min,
+      max: GAMEPLAY_CONFIG_LIMITS.staminaRechargeRate.max,
+      step: GAMEPLAY_CONFIG_LIMITS.staminaRechargeRate.step,
       defaultVal: DEFAULT_GAMEPLAY_CONFIG.staminaRechargeRate,
       unit: '%/s'
     },
@@ -188,9 +211,9 @@
       key: 'staminaRegenMovingRate',
       label: 'Velocidad de recarga en movimiento',
       sublabel: 'Porcentaje relativo de recarga al desplazarse sin usar Turbo (0% - 200%, defecto 25%)',
-      min: 0,
-      max: 200,
-      step: 5,
+      min: GAMEPLAY_CONFIG_LIMITS.staminaRegenMovingRate.min,
+      max: GAMEPLAY_CONFIG_LIMITS.staminaRegenMovingRate.max,
+      step: GAMEPLAY_CONFIG_LIMITS.staminaRegenMovingRate.step,
       defaultVal: 25,
       unit: '%',
       parentToggle: 'staminaRegenMoving'
@@ -199,22 +222,11 @@
       key: 'magnusCurveStrength',
       label: 'Fuerza de curva Magnus',
       sublabel: 'Coeficiente de aceleración centrípeta lateral',
-      min: 0.0,
-      max: 5.0,
-      step: 0.05,
+      min: GAMEPLAY_CONFIG_LIMITS.magnusCurveStrength.min,
+      max: GAMEPLAY_CONFIG_LIMITS.magnusCurveStrength.max,
+      step: GAMEPLAY_CONFIG_LIMITS.magnusCurveStrength.step,
       defaultVal: DEFAULT_GAMEPLAY_CONFIG.magnusCurveStrength,
       parentToggle: 'magnusEnabled'
-    },
-    {
-      key: 'dashesPerFullBar',
-      label: 'Cantidad de dashes por barra llena',
-      sublabel: 'Dashes totales posibles con 100% de estamina',
-      min: 1,
-      max: 6,
-      step: 1,
-      defaultVal: DEFAULT_GAMEPLAY_CONFIG.dashesPerFullBar,
-      unit: 'dashes',
-      parentToggle: 'dashEnabled'
     }
   ];
 
@@ -341,21 +353,6 @@
 
 <svelte:window onkeydown={handleKeyDown} />
 
-<!-- Botón flotante exterior minimalista (Top-Left) -->
-<button
-  type="button"
-  class="floating-back-btn"
-  onclick={handleClose}
-  aria-label="Volver a la pantalla anterior"
-  title="Volver [Esc]"
->
-  <svg class="back-arrow-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-    <line x1="19" y1="12" x2="5" y2="12"></line>
-    <polyline points="12 19 5 12 12 5"></polyline>
-  </svg>
-  <span>Volver</span>
-</button>
-
 <!-- OVERLAY BACKDROP (Condición #) -->
 <div
   class="modal-backdrop"
@@ -363,9 +360,24 @@
   onclick={handleBackdropClick}
 >
   <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="modifiers-dialog-title">
-    <!-- LEFT SIDEBAR (230px) -->
+    <!-- LEFT SIDEBAR -->
     <aside class="sidebar">
-      <div>
+      <div class="sidebar-top">
+        <div class="sidebar-back-row">
+          <button
+            type="button"
+            class="header-back-btn"
+            onclick={handleClose}
+            aria-label="Volver a la pantalla anterior"
+            title="Volver [Esc]"
+          >
+            <svg class="back-arrow-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="19" y1="12" x2="5" y2="12"></line>
+              <polyline points="12 19 5 12 12 5"></polyline>
+            </svg>
+            <span>Volver</span>
+          </button>
+        </div>
         <!-- Sidebar Header -->
         <div class="sidebar-header">
           <span class="lightning-box" aria-hidden="true">
@@ -936,46 +948,53 @@
 </div>
 
 <style>
-  /* Floating back button outside modal card (top-left) */
-  .floating-back-btn {
-    position: fixed;
-    top: 1.5rem;
-    left: 1.5rem;
-    z-index: 60;
+  /* Integrated Back Button (Zero overlap on PC & Mobile) */
+  .sidebar-top {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
+
+  .sidebar-back-row {
+    display: flex;
+    align-items: center;
+    margin-bottom: 0.65rem;
+  }
+
+  .header-back-btn {
     display: inline-flex;
     align-items: center;
-    gap: 0.5rem;
-    padding: 0.6rem 1.15rem;
-    background: rgba(10, 16, 26, 0.9);
-    border: 1px solid rgba(0, 229, 255, 0.3);
+    gap: 0.45rem;
+    padding: 0.42rem 0.85rem;
+    background: rgba(15, 23, 42, 0.9);
+    border: 1px solid rgba(0, 229, 255, 0.35);
     border-radius: 9999px;
     color: #67e8f9;
     font-family: 'Chivo', system-ui, sans-serif;
-    font-size: 0.875rem;
+    font-size: 0.8rem;
     font-weight: 700;
     letter-spacing: 0.02em;
     cursor: pointer;
-    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5), 0 0 12px rgba(0, 229, 255, 0.15);
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.35);
     transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
     user-select: none;
-    pointer-events: auto;
+    flex-shrink: 0;
   }
 
-  .floating-back-btn:hover {
-    background: rgba(0, 229, 255, 0.15);
+  .header-back-btn:hover {
+    background: rgba(0, 229, 255, 0.16);
     border-color: #00e5ff;
     color: #ffffff;
-    box-shadow: 0 0 16px rgba(0, 229, 255, 0.45), 0 6px 24px rgba(0, 0, 0, 0.6);
-    transform: translateY(-1px);
+    box-shadow: 0 0 12px rgba(0, 229, 255, 0.35);
   }
 
-  .floating-back-btn:active {
+  .header-back-btn:active {
     transform: scale(0.95);
   }
 
   .back-arrow-svg {
-    width: 1.1rem;
-    height: 1.1rem;
+    width: 1rem;
+    height: 1rem;
     flex-shrink: 0;
   }
 
@@ -988,7 +1007,7 @@
     align-items: center;
     justify-content: center;
     background: rgba(5, 8, 14, 0.85);
-    padding: 1.5rem;
+    padding: 0.75rem;
     box-sizing: border-box;
     pointer-events: auto;
     user-select: none;
@@ -999,9 +1018,9 @@
   .modal-card {
     position: relative;
     width: 100%;
-    max-width: 960px;
-    height: 680px;
-    max-height: 85vh;
+    max-width: 980px;
+    height: min(680px, calc(100dvh - 1.5rem));
+    max-height: calc(100dvh - 1.5rem);
     background: rgba(10, 16, 26, 0.95);
     border: 1px solid rgba(0, 229, 255, 0.6);
     border-radius: 0.5rem;
@@ -1642,20 +1661,22 @@
 
   /* Responsive Adjustments — Mobile Landscape & Compact Touch Viewports */
   @media (max-height: 520px), (max-width: 960px) {
-    .floating-back-btn {
-      top: 0.45rem;
-      left: 0.55rem;
-      padding: 0.35rem 0.75rem;
-      font-size: 0.75rem;
+    .sidebar-back-row {
+      margin-bottom: 0.35rem;
+    }
+
+    .header-back-btn {
+      padding: 0.3rem 0.65rem;
+      font-size: 0.72rem;
     }
 
     .modal-backdrop {
-      padding: 0.4rem 0.65rem;
+      padding: 0.3rem 0.45rem;
     }
 
     .modal-card {
-      height: calc(100vh - 0.8rem);
-      max-height: 96vh;
+      height: calc(100dvh - 0.6rem);
+      max-height: calc(100dvh - 0.6rem);
       max-width: 100%;
     }
 

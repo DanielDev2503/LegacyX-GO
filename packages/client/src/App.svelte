@@ -35,10 +35,11 @@
     type MatchBannerPayload
   } from './ui/state/gameUI.svelte.js';
   import { soundFX } from './audio/SoundFX.js';
+  import { musicPlayer } from './audio/MusicPlayer.svelte.js';
   import { gameApp } from './net/GameApp.js';
   import { SimulationTicker } from './net/SimulationTicker.js';
   import { ClientPredictionReconciler } from './net/ClientPrediction.js';
-  import { computeMouseMovementVector, mouseButtonToCode } from './controllers/InputManager.js';
+  import { computeMouseMovementVector, mouseButtonToCode, pollGamepadInput } from './controllers/InputManager.js';
   import { matchRecorder } from './recorder/MatchRecorder.svelte.js';
   import { userProfile } from './ui/state/userProfile.svelte.js';
   import {
@@ -61,8 +62,51 @@
   import KeybindModal from './ui/modals/KeybindModal.svelte';
   import ReplayViewerModal from './ui/modals/ReplayViewerModal.svelte';
   import LegalModal from './ui/modals/LegalModal.svelte';
+  import LegalPage from './ui/screens/LegalPage.svelte';
+  import NotFoundPage from './ui/screens/NotFoundPage.svelte';
+  import IntroVideoOverlay from './ui/components/IntroVideoOverlay.svelte';
   import GlobalTooltip from './ui/components/GlobalTooltip.svelte';
-  import { parseLegalDocFromLocation } from './legal/legalContent.js';
+  import { parseLegalDocFromLocation, isLegalRoute, isKnownAppRoute } from './legal/legalContent.js';
+
+  let currentPath = $state<string>(typeof window !== 'undefined' ? window.location.pathname : '/');
+  let isLegalStandaloneRoute = $derived(isLegalRoute(currentPath));
+  let isUnknownAppRoute = $derived(!isLegalStandaloneRoute && !isKnownAppRoute(currentPath));
+
+  let showIntroOverlay = $state<boolean>(
+    typeof window !== 'undefined' &&
+      isKnownAppRoute(window.location.pathname) &&
+      !isLegalRoute(window.location.pathname) &&
+      !window.location.search.includes('legal=') &&
+      !window.location.search.includes('room=') &&
+      !window.location.hash.includes('room=') &&
+      !window.location.hash.includes('access_token=')
+  );
+
+  function handleIntroFinish(): void {
+    showIntroOverlay = false;
+    void musicPlayer.tryAutoStart();
+  }
+
+  $effect(() => {
+    if (typeof window === 'undefined') return;
+    const syncPath = () => {
+      currentPath = window.location.pathname || '/';
+    };
+    window.addEventListener('popstate', syncPath);
+    return () => window.removeEventListener('popstate', syncPath);
+  });
+
+  $effect(() => {
+    void gameUI.settings.isMuted;
+    void gameUI.settings.masterVolume;
+    void gameUI.settings.musicVolume;
+    void gameUI.settings.musicEnabled;
+    void gameUI.settings.musicInMatch;
+    void gameUI.currentScreen;
+    void gameUI.matchPhase;
+    const inMatch = gameUI.currentScreen === 'IN_GAME' && gameUI.matchPhase !== 0;
+    musicPlayer.syncVolume(inMatch);
+  });
 
   let canvasRef = $state<HTMLCanvasElement | null>(null);
 
@@ -329,16 +373,22 @@
       gameUI.openOverlay('TEAM_MANAGEMENT');
     }
 
-    // Sincronizar jugadores del engine con el roster reactivo
+    // Sincronizar jugadores del engine con el roster reactivo y sus posiciones tácticas
     function syncEnginePlayers() {
       if (!engine) return;
       const activeIds = new Set<number>();
+      let anyPositionChanged = false;
       for (const p of gameUI.rosterPlayers) {
         if (p.team === 'red' || p.team === 'blue') {
           activeIds.add(p.id);
           const currentTeam = engine.playerTeams.get(p.id);
           if (currentTeam !== p.team) {
             engine.setPlayerTeam(p.id, p.team);
+          }
+          const desiredPos = p.position ?? null;
+          if (engine.playerPositions.get(p.id) !== desiredPos) {
+            engine.setPlayerPosition(p.id, desiredPos);
+            anyPositionChanged = true;
           }
           engine.playerNames.set(p.id, p.nickname || p.name || `Player ${p.id}`);
         } else {
@@ -351,6 +401,9 @@
         if (!activeIds.has(id)) {
           engine.removePlayer(id);
         }
+      }
+      if (anyPositionChanged && engine.fsm.state === MatchPhase.STOP) {
+        engine.resetPositions();
       }
     }
 
@@ -777,11 +830,14 @@
         if (!ev) return;
         dispatchScoreEvent(ev);
         gameApp.networkHost?.broadcastScoreEvent(ev);
+        if (ev.type === 'SAVE' || ev.kind === 'SAVE' || ev.category === 'SAVE') {
+          soundFX.playCrowdGasp();
+          gameApp.networkHost?.broadcastGameFx('save_gasp');
+        }
       });
 
       hostEngine.on('goal', (payload: any) => {
-        soundFX.playGoalHorn();
-        soundFX.playWhistle();
+        soundFX.playGoalCelebration();
         if (gameUI.screenShake) {
           rendererInstance?.triggerShake(15, 500);
         }
@@ -870,6 +926,10 @@
         const isPower = Boolean(payload?.isPowerShot);
         const strength = payload?.strength ?? (isPower ? 1.8 : 1.0);
         soundFX.playKick(strength);
+        if (payload?.isCurve) {
+          soundFX.playMagnusSwirl();
+          gameApp.networkHost?.broadcastGameFx('magnus');
+        }
         if (gameUI.isMobileLayout) {
           void (isPower ? mobileHaptics.impactMedium() : mobileHaptics.impactLight());
         }
@@ -928,8 +988,8 @@
       });
 
       hostEngine.on('match_end', ({ winner, stats, mvp }: any) => {
-        soundFX.playWhistle();
-        gameApp.networkHost?.broadcastGameFx('whistle');
+        soundFX.playWhistle('fulltime');
+        gameApp.networkHost?.broadcastGameFx('fulltime');
         setAndBroadcastBanner({ kind: 'NONE' });
 
         if (matchRecorder.isRecording) {
@@ -1131,6 +1191,8 @@
       return null;
     }
 
+    const prevGamepadButtons = new Set<string>();
+
     function computeLocalPlayerInput(consumeDash: boolean): PlayerInput {
       let mask = 0;
       const isInputActive =
@@ -1139,6 +1201,25 @@
         !gameUI.isHudEditorOpen;
       const activeEl = document.activeElement;
       const isTyping = activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA');
+
+      const padPrev = consumeDash ? prevGamepadButtons : new Set(prevGamepadButtons);
+      const padRes = pollGamepadInput(gameUI.settings.gamepadBinds, gameUI.settings.gamepadDeadzone, padPrev);
+
+      if (consumeDash && !isTyping && gameUI.currentScreen === 'IN_GAME' && !gameUI.isHudEditorOpen) {
+        if (padRes.menuRisingEdge) {
+          const m = gameUI.activeModal as string;
+          if (m === 'NONE') {
+            soundFX.playUIClick();
+            gameUI.openOverlay('TEAM_MANAGEMENT');
+          } else if (m === 'TEAM_MANAGEMENT' || m === 'teamSelect' || m === 'TEAM_SELECT') {
+            soundFX.playUIClick();
+            gameUI.closeOverlay();
+          }
+        } else if (padRes.pauseRisingEdge && isInputActive) {
+          soundFX.playUIClick();
+          gameUI.onTogglePause?.();
+        }
+      }
 
       if (!isInputActive || isTyping) {
         keyState.clear();
@@ -1162,6 +1243,7 @@
 
       const focusHeld =
         gameUI.keybinds.focusBall.some((k) => keyState.get(k)) ||
+        padRes.focusBall ||
         (gameUI.isMobileLayout && mobileTouchController.isHoldingMinimap);
       gameUI.isFocusingBall = focusHeld;
       renderer.focusBallOnly = focusHeld;
@@ -1169,10 +1251,11 @@
       if (gameUI.keybinds.kick.some((k) => keyState.get(k))) mask |= INPUT_FLAG_KICK;
       if (gameUI.keybinds.turbo.some((k) => keyState.get(k))) mask |= INPUT_FLAG_TURBO;
 
-      if (dashTriggered) {
+      if (dashTriggered || (consumeDash && padRes.dashRisingEdge)) {
         mask |= INPUT_FLAG_DASH;
         if (consumeDash) {
           dashTriggered = false;
+          soundFX.playDashWhoosh();
         }
       }
 
@@ -1182,6 +1265,9 @@
       if (gameUI.keybinds.curveRight.some((k) => keyState.get(k))) {
         mask |= INPUT_FLAG_MAGNUS_RIGHT;
       }
+
+      // Combinar botones y cruceta del mando Plug & Play de forma simultánea
+      mask |= padRes.mask & ~INPUT_FLAG_MOUSE_AIM;
 
       if (gameUI.isMobileLayout) {
         const touchPkt = mobileTouchController.sampleInput(consumeDash);
@@ -1193,6 +1279,14 @@
             aimThrottle: touchPkt.aimThrottle ?? 0
           };
         }
+      }
+
+      if (padRes.stickActive && padRes.aimAngle !== null) {
+        return {
+          inputMask: mask | INPUT_FLAG_MOUSE_AIM,
+          aimAngle: padRes.aimAngle,
+          aimThrottle: padRes.aimThrottle
+        };
       }
 
       if (!gameUI.isMobileLayout && gameUI.settings.movementMode === 'mouse') {
@@ -1910,6 +2004,7 @@
       };
       discRendererSettings.showTypingIndicator = gameUI.settings.showTypingIndicator !== false;
       discRendererSettings.showPlayerAvatars = gameUI.settings.showPlayerAvatars !== false;
+      renderer.discRenderer.showPositionTags = gameUI.settings.showPositionTags !== false;
 
       renderer.vfx.magnusTrailEnabled = gameUI.settings.magnusTrailEnabled !== false;
       renderer.vfx.fireTrailEnabled = gameUI.settings.fireShotEnabled !== false;
@@ -1930,7 +2025,8 @@
             avatarType: pAvatarType,
             hasOutline: activeKit?.outlineColor !== 'none' && activeKit?.outlineColor !== '',
             tertiaryColor: activeKit?.tertiaryColor || '#ffffff',
-            kit: activeKit
+            kit: activeKit,
+            position: p.position
           };
           renderer.playerInfos.set(p.id, newVisual);
         } else {
@@ -1941,6 +2037,7 @@
           visual.hasOutline = activeKit?.outlineColor !== 'none' && activeKit?.outlineColor !== '';
           visual.tertiaryColor = activeKit?.tertiaryColor || '#ffffff';
           visual.kit = activeKit;
+          visual.position = p.position;
         }
       }
       scratchStalePlayerIds.length = 0;
@@ -2373,6 +2470,12 @@
               currSnapshot.isGoldenGoal ?? (gameUI.isHost && engine ? engine.fsm.isOvertime : gameUI.isGoldenGoal)
             );
             if (gameUI.isGoldenGoal !== isGolden) {
+              if (!gameUI.isGoldenGoal && isGolden) {
+                soundFX.playGoldenGoalSiren();
+                if (gameUI.isHost) {
+                  gameApp.networkHost?.broadcastGameFx('golden_goal');
+                }
+              }
               gameUI.isGoldenGoal = isGolden;
             }
             const totalSec = currSnapshot.matchTimer ?? (engine ? Math.floor(engine.fsm.matchTicksElapsed / 60) : 0);
@@ -2447,70 +2550,81 @@
 </script>
 
 <main class="app-root">
-  <!-- Capa 3: Canvas 2D en z-index 0 con GameRenderer desacoplado (solo montado en partida) -->
-  {#if gameUI.currentScreen === 'IN_GAME'}
-    <div class="canvas-layer">
-      <canvas bind:this={canvasRef}></canvas>
-    </div>
-  {/if}
-
-  <!-- Capa 1: Interfaz reactiva superpuesta en z-index 10 -->
-  <div class="ui-layer" class:mobile-safe={gameUI.isMobileLayout}>
-    <!-- Pantallas principales -->
-    {#if gameUI.currentScreen === 'GATEKEEPER'}
-      <Gatekeeper />
-    {:else if gameUI.currentScreen === 'LOBBY'}
-      <Lobby />
-    {:else if gameUI.currentScreen === 'ROOM_CREATOR'}
-      <RoomCreator />
-    {:else if gameUI.currentScreen === 'IN_GAME'}
-      <InGameHUD />
-    {/if}
-
-    <!-- Modales canónicos -->
-    {#if !gameUI.isHudEditorOpen}
-      {#if gameUI.activeModal === 'PHYSICS_MODIFIERS' || gameUI.activeModal === 'physics' || gameUI.activeModal === 'MODIFIERS'}
-        <PhysicsModal />
-      {:else if gameUI.activeModal === 'TEAM_MANAGEMENT' || gameUI.activeModal === 'teamSelect' || gameUI.activeModal === 'TEAM_SELECT' || gameUI.activeModal === 'STATS' || gameUI.activeModal === 'stats'}
-        <TeamSelectModal />
-      {:else if gameUI.activeModal === 'STADIUM_SELECTOR' || gameUI.activeModal === 'stadiumSelect' || gameUI.activeModal === 'STADIUM_SELECT'}
-        <StadiumSelectModal />
-      {:else if gameUI.activeModal === 'SETTINGS' || gameUI.activeModal === 'settings'}
-        <SettingsModal />
-      {:else if gameUI.activeModal === 'KEYBINDS' || gameUI.activeModal === 'keybinds'}
-        <KeybindModal />
-      {:else if (gameUI.activeModal === 'REPLAY_VIEWER' || gameUI.activeModal === 'replayViewer') && userProfile.isAuthenticated && !userProfile.isGuest}
-        <ReplayViewerModal />
-      {/if}
-    {/if}
-
-    <!-- Modal Legal Global (accesible desde Gatekeeper, Lobby, Ajustes y enlaces directos ?legal=*) -->
-    <LegalModal />
-
-    <!-- Tooltip Global Singleton (Portal) -->
-    <GlobalTooltip />
-  </div>
-
-  {#if gameUI.isMobileLayout && gameUI.isPortraitOnMobile}
-    <div class="portrait-rotate-overlay" role="dialog" aria-modal="true" aria-label="Girar dispositivo a horizontal">
-      <div class="portrait-rotate-card">
-        <div class="portrait-rotate-icon" aria-hidden="true">📱</div>
-        <h2 class="portrait-rotate-title">Gira tu dispositivo a horizontal</h2>
-        <p class="portrait-rotate-desc">
-          LegacyX-GO funciona en orientación horizontal (landscape) para disfrutar toda la cancha y los controles multitouch.
-        </p>
-        <button
-          type="button"
-          class="portrait-rotate-btn"
-          onclick={() => {
-            void lockLandscapeOrientation();
-            void enterImmersiveMode();
-          }}
-        >
-          Bloquear Horizontal y Pantalla Completa
-        </button>
+  {#if isLegalStandaloneRoute}
+    <LegalPage />
+  {:else if isUnknownAppRoute}
+    <NotFoundPage />
+  {:else}
+    <!-- Capa 3: Canvas 2D en z-index 0 con GameRenderer desacoplado (solo montado en partida) -->
+    {#if gameUI.currentScreen === 'IN_GAME'}
+      <div class="canvas-layer">
+        <canvas bind:this={canvasRef}></canvas>
       </div>
+    {/if}
+
+    <!-- Capa 1: Interfaz reactiva superpuesta en z-index 10 -->
+    <div class="ui-layer" class:mobile-safe={gameUI.isMobileLayout}>
+      <!-- Pantallas principales -->
+      {#if gameUI.currentScreen === 'GATEKEEPER'}
+        <Gatekeeper />
+      {:else if gameUI.currentScreen === 'LOBBY'}
+        <Lobby />
+      {:else if gameUI.currentScreen === 'ROOM_CREATOR'}
+        <RoomCreator />
+      {:else if gameUI.currentScreen === 'IN_GAME'}
+        <InGameHUD />
+      {/if}
+
+      <!-- Modales canónicos -->
+      {#if !gameUI.isHudEditorOpen}
+        {#if gameUI.activeModal === 'PHYSICS_MODIFIERS' || gameUI.activeModal === 'physics' || gameUI.activeModal === 'MODIFIERS'}
+          <PhysicsModal />
+        {:else if gameUI.activeModal === 'TEAM_MANAGEMENT' || gameUI.activeModal === 'teamSelect' || gameUI.activeModal === 'TEAM_SELECT' || gameUI.activeModal === 'STATS' || gameUI.activeModal === 'stats'}
+          <TeamSelectModal />
+        {:else if gameUI.activeModal === 'STADIUM_SELECTOR' || gameUI.activeModal === 'stadiumSelect' || gameUI.activeModal === 'STADIUM_SELECT'}
+          <StadiumSelectModal />
+        {:else if gameUI.activeModal === 'SETTINGS' || gameUI.activeModal === 'settings'}
+          <SettingsModal />
+        {:else if gameUI.activeModal === 'KEYBINDS' || gameUI.activeModal === 'keybinds'}
+          <KeybindModal />
+        {:else if (gameUI.activeModal === 'REPLAY_VIEWER' || gameUI.activeModal === 'replayViewer') && userProfile.isAuthenticated && !userProfile.isGuest}
+          <ReplayViewerModal />
+        {/if}
+      {/if}
+
+      <!-- Modal Legal Global (accesible desde Gatekeeper, Lobby, Ajustes y enlaces directos ?legal=*) -->
+      <LegalModal />
+
+      <!-- Video Intro de arranque (carpeta video intro/) -->
+      {#if showIntroOverlay}
+        <IntroVideoOverlay onFinish={handleIntroFinish} />
+      {/if}
+
+      <!-- Tooltip Global Singleton (Portal) -->
+      <GlobalTooltip />
     </div>
+
+    {#if gameUI.isMobileLayout && gameUI.isPortraitOnMobile}
+      <div class="portrait-rotate-overlay" role="dialog" aria-modal="true" aria-label="Girar dispositivo a horizontal">
+        <div class="portrait-rotate-card">
+          <div class="portrait-rotate-icon" aria-hidden="true">📱</div>
+          <h2 class="portrait-rotate-title">Gira tu dispositivo a horizontal</h2>
+          <p class="portrait-rotate-desc">
+            LegacyX-GO funciona en orientación horizontal (landscape) para disfrutar toda la cancha y los controles multitouch.
+          </p>
+          <button
+            type="button"
+            class="portrait-rotate-btn"
+            onclick={() => {
+              void lockLandscapeOrientation();
+              void enterImmersiveMode();
+            }}
+          >
+            Bloquear Horizontal y Pantalla Completa
+          </button>
+        </div>
+      </div>
+    {/if}
   {/if}
 </main>
 

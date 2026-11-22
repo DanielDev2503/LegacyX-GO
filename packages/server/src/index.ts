@@ -29,8 +29,135 @@ const MIME_TYPES: Record<string, string> = {
   '.ico': 'image/x-icon',
   '.wav': 'audio/wav',
   '.mp3': 'audio/mpeg',
+  '.ogg': 'audio/ogg',
+  '.m4a': 'audio/mp4',
+  '.aac': 'audio/aac',
+  '.flac': 'audio/flac',
+  '.mp4': 'video/mp4',
+  '.webm': 'video/webm',
   '.woff2': 'font/woff2'
 };
+
+const INTRO_EXTENSIONS = new Set(['.mp4', '.webm', '.ogg']);
+const MUSIC_EXTENSIONS = new Set(['.mp3', '.wav', '.ogg', '.m4a', '.aac', '.flac']);
+
+function resolveMediaDir(distPath: string, folder: 'video intro' | 'musica'): string | null {
+  const distSubfolder = folder === 'video intro' ? 'intro' : 'musica';
+  const candidates = [
+    path.resolve(process.cwd(), folder),
+    path.resolve(__dirname, `../../../${folder}`),
+    path.resolve(__dirname, `../../${folder}`),
+    path.join(path.resolve(distPath), 'media', distSubfolder)
+  ];
+  return candidates.find((p) => fs.existsSync(p) && fs.statSync(p).isDirectory()) || null;
+}
+
+function listMediaEntries(dir: string | null, allowedExts: Set<string>, urlPrefix: string) {
+  if (!dir) return [];
+  try {
+    return fs
+      .readdirSync(dir, { withFileTypes: true })
+      .filter((entry) => entry.isFile() && allowedExts.has(path.extname(entry.name).toLowerCase()))
+      .map((entry) => {
+        const ext = path.extname(entry.name);
+        return {
+          name: entry.name,
+          title: entry.name.slice(0, entry.name.length - ext.length),
+          url: `${urlPrefix}/${encodeURIComponent(entry.name)}`
+        };
+      })
+      .sort((a, b) => a.name.localeCompare(b.name, 'es', { sensitivity: 'base' }));
+  } catch {
+    return [];
+  }
+}
+
+function isKnownServerRoute(pathname: string): boolean {
+  const clean = (pathname || '/').replace(/\/+$/, '') || '/';
+  if (clean === '/' || clean === '/index.html') return true;
+  if (/^\/room\/[A-Za-z0-9_-]+$/.test(clean)) return true;
+  const lower = clean.toLowerCase();
+  return (
+    lower === '/legal' ||
+    /^\/legal\/(privacy|terms|legal|cookies|rights)$/.test(lower)
+  );
+}
+
+function serveMediaWithRange(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  baseDir: string | null,
+  rawName: string
+): boolean {
+  if (!baseDir) return false;
+  let decodedName = '';
+  try {
+    decodedName = decodeURIComponent(rawName);
+  } catch {
+    res.writeHead(400);
+    res.end('Invalid media path');
+    return true;
+  }
+
+  const normalizedBase = path.resolve(baseDir);
+  const resolvedFile = path.resolve(normalizedBase, decodedName);
+  if (
+    resolvedFile === normalizedBase ||
+    !resolvedFile.startsWith(normalizedBase + path.sep) ||
+    !fs.existsSync(resolvedFile)
+  ) {
+    res.writeHead(404);
+    res.end('Media not found');
+    return true;
+  }
+
+  const stat = fs.statSync(resolvedFile);
+  if (!stat.isFile()) {
+    res.writeHead(404);
+    res.end('Media not found');
+    return true;
+  }
+
+  const ext = path.extname(resolvedFile).toLowerCase();
+  const contentType = MIME_TYPES[ext] || 'application/octet-stream';
+  const fileSize = stat.size;
+  const rangeHeader = req.headers.range;
+
+  if (rangeHeader) {
+    const match = rangeHeader.match(/bytes=(\d*)-(\d*)/);
+    if (!match) {
+      res.writeHead(416, { 'Content-Range': `bytes */${fileSize}` });
+      res.end();
+      return true;
+    }
+    const start = match[1] ? Number.parseInt(match[1], 10) : 0;
+    const end = match[2] ? Math.min(Number.parseInt(match[2], 10), fileSize - 1) : fileSize - 1;
+    if (Number.isNaN(start) || Number.isNaN(end) || start > end || start >= fileSize) {
+      res.writeHead(416, { 'Content-Range': `bytes */${fileSize}` });
+      res.end();
+      return true;
+    }
+
+    res.writeHead(206, {
+      'Content-Range': `bytes ${start}-${end}/${fileSize}`,
+      'Accept-Ranges': 'bytes',
+      'Content-Length': String(end - start + 1),
+      'Content-Type': contentType,
+      'Cache-Control': 'public, max-age=3600'
+    });
+    fs.createReadStream(resolvedFile, { start, end }).pipe(res);
+    return true;
+  }
+
+  res.writeHead(200, {
+    'Accept-Ranges': 'bytes',
+    'Content-Length': String(fileSize),
+    'Content-Type': contentType,
+    'Cache-Control': 'public, max-age=3600'
+  });
+  fs.createReadStream(resolvedFile).pipe(res);
+  return true;
+}
 
 const PORT = Number(process.env.PORT) || 8080;
 
@@ -161,10 +288,38 @@ export function createHttpServer(distPath: string = clientDistPath): http.Server
           return sendJson(res, 200, { success: true, ...data });
         }
 
+        if (parsedUrl.pathname === '/api/media/list' && req.method === 'GET') {
+          const introDir = resolveMediaDir(distPath, 'video intro');
+          const musicDir = resolveMediaDir(distPath, 'musica');
+          return sendJson(res, 200, {
+            success: true,
+            intros: listMediaEntries(introDir, INTRO_EXTENSIONS, '/media/intro'),
+            music: listMediaEntries(musicDir, MUSIC_EXTENSIONS, '/media/musica')
+          });
+        }
+
         return sendJson(res, 404, { success: false, error: 'Endpoint API no encontrado.' });
       } catch (err: any) {
         return sendJson(res, 500, { success: false, error: err?.message || 'Error interno del servidor.' });
       }
+    }
+
+    if (parsedUrl.pathname.startsWith('/media/intro/')) {
+      const rel = parsedUrl.pathname.slice('/media/intro/'.length);
+      if (serveMediaWithRange(req, res, resolveMediaDir(distPath, 'video intro'), rel)) {
+        return;
+      }
+      res.writeHead(404);
+      return res.end('Intro media not found');
+    }
+
+    if (parsedUrl.pathname.startsWith('/media/musica/')) {
+      const rel = parsedUrl.pathname.slice('/media/musica/'.length);
+      if (serveMediaWithRange(req, res, resolveMediaDir(distPath, 'musica'), rel)) {
+        return;
+      }
+      res.writeHead(404);
+      return res.end('Music media not found');
     }
 
     let filePath = path.join(distPath, parsedUrl.pathname);
@@ -180,7 +335,9 @@ export function createHttpServer(distPath: string = clientDistPath): http.Server
       normalizedFilePath = path.join(normalizedFilePath, 'index.html');
     }
 
+    let isUnknownRoute = false;
     if (!fs.existsSync(normalizedFilePath)) {
+      isUnknownRoute = !isKnownServerRoute(parsedUrl.pathname);
       normalizedFilePath = path.join(normalizedDistPath, 'index.html');
     }
 
@@ -203,7 +360,7 @@ export function createHttpServer(distPath: string = clientDistPath): http.Server
         headers['Cache-Control'] = 'public, max-age=31536000, immutable';
       }
 
-      res.writeHead(200, headers);
+      res.writeHead(isUnknownRoute ? 404 : 200, headers);
       res.end(data);
     });
   });

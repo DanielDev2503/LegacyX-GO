@@ -10,7 +10,8 @@ import {
   INPUT_FLAG_KICK,
   INPUT_FLAG_MAGNUS_LEFT,
   INPUT_FLAG_MAGNUS_RIGHT,
-  type PlayerInput
+  type PlayerInput,
+  type PlayerPosition
 } from '@legacyx/core';
 
 const REMOTE_IMPULSE_FLAGS =
@@ -86,6 +87,8 @@ export function mapPlayersToRoster(players: PlayerInfo[]): RosterPlayer[] {
       avatar: p.avatar || nick.slice(0, 2).toUpperCase(),
       avatarType: p.avatarType || 'letters',
       team: p.team,
+      position: p.position,
+      teamOrder: p.teamOrder,
       isAdmin: Boolean(p.isHost || p.isAdmin),
       isHost: Boolean(p.isHost),
       isGuest: Boolean(p.isGuest),
@@ -135,6 +138,9 @@ export class GameApp {
     gameUI.onRoomConfigChanged = (patch: RoomConfigPatch) => this.updateRoomConfig(patch);
     gameUI.onAdminAction = (action: string, payload?: any) => this.dispatchAdminAction(action, payload);
     gameUI.onProfileUpdated = () => this.syncPlayerProfile();
+    gameUI.onPositionChange = (playerId: number, position: PlayerPosition) => {
+      this.requestPositionChange(playerId, position);
+    };
 
     this.signaling.on('RANKED_MATCH_TOKEN', (msg: any) => {
       if (typeof msg?.matchToken === 'string' && msg.matchToken) {
@@ -347,17 +353,34 @@ export class GameApp {
         soundFX.playBounce();
         break;
       case 'goal':
-        soundFX.playGoalHorn();
-        soundFX.playWhistle();
+        soundFX.playGoalCelebration();
         if (gameUI.screenShake) {
           gameUI.onTriggerShake?.(15, 500);
         }
         break;
       case 'whistle':
-        soundFX.playWhistle();
+        soundFX.playWhistle('kickoff');
+        break;
+      case 'fulltime':
+        soundFX.playWhistle('fulltime');
         break;
       case 'countdown_tick':
         soundFX.playCountdown(countdownValue === 0);
+        break;
+      case 'golden_goal':
+        soundFX.playGoldenGoalSiren();
+        break;
+      case 'barras':
+        soundFX.playBarrasChant();
+        break;
+      case 'save_gasp':
+        soundFX.playCrowdGasp();
+        break;
+      case 'dash':
+        soundFX.playDashWhoosh();
+        break;
+      case 'magnus':
+        soundFX.playMagnusSwirl();
         break;
     }
   }
@@ -512,6 +535,14 @@ export class GameApp {
       this.networkHost.broadcastRoomStateSync();
     } else if (this.networkClient) {
       this.networkClient.sendKitVariantChange(team, variant);
+    }
+  }
+
+  public requestPositionChange(targetPlayerId: number, position: PlayerPosition): void {
+    if (this.isHost && this.networkHost) {
+      this.networkHost.setPlayerPosition(targetPlayerId, position, gameUI.localPlayerId || 1);
+    } else if (this.networkClient) {
+      this.networkClient.requestPositionChange(targetPlayerId, position);
     }
   }
 
