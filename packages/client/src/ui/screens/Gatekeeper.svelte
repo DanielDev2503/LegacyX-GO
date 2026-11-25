@@ -7,7 +7,7 @@
   } from '../state/userProfile.svelte.js';
   import { soundFX } from '../../audio/SoundFX.js';
   import { EMOJI_CATALOG } from '../utils/constants.js';
-  import SocialLinksSection from '../components/SocialLinksSection.svelte';
+  import EmojiPickerPopover from '../components/EmojiPickerPopover.svelte';
   import { CONSENT_STORAGE_KEY, getLegalHref } from '../../legal/legalContent.js';
 
   let acceptedLegalTerms = $state(false);
@@ -666,18 +666,12 @@
                   <span>{effectiveAvatar}</span>
                   <span class="status-dot-active"></span>
                 </div>
-                <div class="emoji-grid-catalog">
-                  {#each emojiList as emoji}
-                    <button
-                      type="button"
-                      class="emoji-choice-btn"
-                      class:selected={gameUI.avatarValue === emoji}
-                      onclick={() => selectEmoji(emoji)}
-                    >
-                      {emoji}
-                    </button>
-                  {/each}
-                </div>
+                <EmojiPickerPopover
+                  value={gameUI.avatarValue || '⚽'}
+                  onSelect={(emoji) => selectEmoji(emoji)}
+                  ariaLabel="Elegir emoji de avatar de invitado"
+                  testId="guest-emoji-picker"
+                />
               </div>
             {/if}
           </div>
@@ -698,29 +692,9 @@
               />
             </svg>
           </button>
-
-          <p class="guest-legal-note">
-            Al jugar aceptas los
-            <a href={getLegalHref('terms')} target="_blank" rel="noopener noreferrer" class="inline-legal-link">Términos</a>,
-            <a href={getLegalHref('privacy')} target="_blank" rel="noopener noreferrer" class="inline-legal-link">Privacidad WebRTC/Datos</a>
-            y el
-            <a href={getLegalHref('legal')} target="_blank" rel="noopener noreferrer" class="inline-legal-link">Aviso Legal</a>.
-          </p>
         </div>
       </section>
     </main>
-
-    <footer class="gatekeeper-bottom-strip">
-      <SocialLinksSection compact={true} title="COMUNIDAD Y DISCORD OFICIAL" />
-
-      <div class="legal-footer-links" aria-label="Información legal">
-        <a href={getLegalHref('privacy')} target="_blank" rel="noopener noreferrer" class="legal-pill-link">Privacidad Global</a>
-        <a href={getLegalHref('terms')} target="_blank" rel="noopener noreferrer" class="legal-pill-link">Términos y EULA</a>
-        <a href={getLegalHref('legal')} target="_blank" rel="noopener noreferrer" class="legal-pill-link">Aviso Legal / IP</a>
-        <a href={getLegalHref('cookies')} target="_blank" rel="noopener noreferrer" class="legal-pill-link">Cookies / Storage</a>
-        <a href={getLegalHref('rights')} target="_blank" rel="noopener noreferrer" class="legal-pill-link">Derechos / Borrado</a>
-      </div>
-    </footer>
   </div>
 </div>
 
@@ -732,6 +706,7 @@
     width: 100%;
     height: 100dvh;
     overflow-y: auto;
+    overflow-x: hidden;
     -webkit-overflow-scrolling: touch;
     background-color: #0e141e;
     background: radial-gradient(circle at 50% 20%, #152033 0%, #090e17 100%);
@@ -1477,27 +1452,6 @@
     outline: none;
   }
 
-  .emoji-grid-catalog {
-    display: grid;
-    grid-template-columns: repeat(5, 1fr);
-    gap: 5px;
-    flex: 1;
-  }
-
-  .emoji-choice-btn {
-    height: 34px;
-    background: #070b13;
-    border: 1px solid rgba(0, 229, 255, 0.22);
-    border-radius: 5px;
-    font-size: 16px;
-    cursor: pointer;
-  }
-
-  .emoji-choice-btn.selected {
-    border-color: #ffd700;
-    background: rgba(255, 215, 0, 0.18);
-  }
-
   .guest-play-btn {
     width: 100%;
     height: 44px;
@@ -1650,11 +1604,6 @@
       height: 34px;
       font-size: 13px;
     }
-
-    .emoji-choice-btn {
-      height: 30px;
-      font-size: 14px;
-    }
   }
 
   .legal-consent-row {
@@ -1683,48 +1632,6 @@
     font-weight: 700;
     text-decoration: underline;
     cursor: pointer;
-  }
-
-  .guest-legal-note {
-    margin: 2px 0 0;
-    text-align: center;
-    font-size: 11px;
-    line-height: 1.4;
-    color: #8b9bb6;
-  }
-
-  .gatekeeper-bottom-strip {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-    margin-top: 12px;
-  }
-
-  .legal-footer-links {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    justify-content: center;
-    gap: 8px;
-    padding-bottom: env(safe-area-inset-bottom, 4px);
-  }
-
-  .legal-pill-link {
-    background: rgba(15, 23, 42, 0.72);
-    border: 1px solid rgba(148, 163, 184, 0.22);
-    border-radius: 999px;
-    padding: 4px 10px;
-    font-size: 11px;
-    font-weight: 600;
-    color: #94a3b8;
-    text-decoration: none;
-    cursor: pointer;
-    transition: border-color 0.16s ease, color 0.16s ease;
-  }
-
-  .legal-pill-link:hover {
-    border-color: rgba(0, 229, 255, 0.55);
-    color: #67e8f9;
   }
 
   @media (max-height: 760px) {

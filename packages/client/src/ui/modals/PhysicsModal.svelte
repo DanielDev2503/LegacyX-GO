@@ -188,6 +188,28 @@
       parentToggle: 'dashEnabled'
     },
     {
+      key: 'dashSlowdownDuration',
+      label: 'Duración de freno post-dash',
+      sublabel: 'Segundos de reducción temporal de velocidad tras terminar un Dash',
+      min: GAMEPLAY_CONFIG_LIMITS.dashSlowdownDuration.min,
+      max: GAMEPLAY_CONFIG_LIMITS.dashSlowdownDuration.max,
+      step: GAMEPLAY_CONFIG_LIMITS.dashSlowdownDuration.step,
+      defaultVal: DEFAULT_GAMEPLAY_CONFIG.dashSlowdownDuration,
+      unit: 's',
+      parentToggle: 'dashEnabled'
+    },
+    {
+      key: 'dashSlowdownPercent',
+      label: 'Reducción de velocidad post-dash',
+      sublabel: 'Porcentaje de penalización de velocidad durante el freno posterior al Dash',
+      min: GAMEPLAY_CONFIG_LIMITS.dashSlowdownPercent.min,
+      max: GAMEPLAY_CONFIG_LIMITS.dashSlowdownPercent.max,
+      step: GAMEPLAY_CONFIG_LIMITS.dashSlowdownPercent.step,
+      defaultVal: DEFAULT_GAMEPLAY_CONFIG.dashSlowdownPercent,
+      unit: '%',
+      parentToggle: 'dashEnabled'
+    },
+    {
       key: 'staminaRechargeDelay',
       label: 'Espera inmóvil para recarga',
       sublabel: 'Segundos sin movimiento, Turbo ni Dash antes de empezar a recargar estamina (patear no reinicia esta espera)',
@@ -1018,7 +1040,8 @@
   .modal-card {
     position: relative;
     width: 100%;
-    max-width: 980px;
+    max-width: min(980px, 100%);
+    min-width: 0;
     height: min(680px, calc(100dvh - 1.5rem));
     max-height: calc(100dvh - 1.5rem);
     background: rgba(10, 16, 26, 0.95);
@@ -1027,6 +1050,8 @@
     display: flex;
     flex-direction: row;
     overflow: hidden;
+    overflow-x: hidden;
+    box-sizing: border-box;
     box-shadow: 0 0 24px rgba(0, 229, 255, 0.35), inset 0 0 12px rgba(0, 229, 255, 0.15);
     pointer-events: auto;
   }

@@ -74,11 +74,11 @@
     }
   });
 
-  let chatSlideIndex = $derived<2 | 3>(canSeeRoomSettings ? 3 : 2);
+  let chatSlideIndex = 3 as const;
 
   let currentSlide = $derived<0 | 1 | 2 | 3>(
     gameUI.isMobileLayout
-      ? mobileActiveSlide
+      ? (!canSeeRoomSettings && mobileActiveSlide === 2 ? 1 : mobileActiveSlide)
       : canShowStats && desktopActiveSlide === 0
         ? 0
         : canSeeRoomSettings && desktopActiveSlide === 2
@@ -87,6 +87,7 @@
   );
 
   let menuChatInput = $state('');
+  let menuChatInputEl = $state<HTMLInputElement | null>(null);
   let menuChatScrollEl = $state<HTMLDivElement | null>(null);
   let lastSeenChatCount = $state(gameUI.chatMessages.length);
   let unreadChatCount = $derived(
@@ -109,7 +110,9 @@
   function goToSlide(slide: 0 | 1 | 2 | 3) {
     if (slide === 2 && !canSeeRoomSettings) {
       if (gameUI.isMobileLayout) {
-        goToSlide(chatSlideIndex);
+        mobileActiveSlide = 3;
+        soundFX.playUIClick();
+        lastSeenChatCount = gameUI.chatMessages.length;
       }
       return;
     }
@@ -161,7 +164,7 @@
     const dy = t.clientY - swipeStartY;
     if (Math.abs(dx) < 48 || Math.abs(dx) <= Math.abs(dy) * 1.25) return;
 
-    const validOrder: Array<0 | 1 | 2 | 3> = canSeeRoomSettings ? [0, 1, 2, 3] : [0, 1, 2];
+    const validOrder: Array<0 | 1 | 2 | 3> = canSeeRoomSettings ? [0, 1, 2, 3] : [0, 1, 3];
     const curIdx = validOrder.indexOf(currentSlide);
     if (curIdx === -1) return;
     if (dx < 0 && curIdx < validOrder.length - 1) {
@@ -178,6 +181,10 @@
     gameUI.sendChatMessage(trimmed);
     menuChatInput = '';
     lastSeenChatCount = gameUI.chatMessages.length;
+    menuChatInputEl?.blur();
+    if (typeof document !== 'undefined') {
+      (document.activeElement as HTMLElement | null)?.blur?.();
+    }
   }
 
   let expandedPlayers = $state<Set<string>>(new Set());
@@ -238,6 +245,45 @@
 
   function getZonePlayers(players: RosterPlayer[], zone: PlayerPosition): RosterPlayer[] {
     return players.filter((p, idx) => resolvePlayerZone(p, idx) === zone);
+  }
+
+  function computeFormationLabel(players: RosterPlayer[]): string {
+    if (players.length === 0) return '0 - 0 - 0';
+    let dfc = 0;
+    let mc = 0;
+    let st = 0;
+    players.forEach((p, idx) => {
+      const zone = resolvePlayerZone(p, idx);
+      if (zone === 'DFC') dfc++;
+      else if (zone === 'MC') mc++;
+      else if (zone === 'ST') st++;
+    });
+    return `${dfc} - ${mc} - ${st}`;
+  }
+
+  let canManageBots = $derived(
+    (gameUI.isPracticeMode || gameUI.isHost) && gameUI.roomType !== 'ranked'
+  );
+  let canClearTeams = $derived(gameUI.isPracticeMode || gameUI.isHost || gameUI.isAdmin);
+  let showRedControls = $state(true);
+  let showBlueControls = $state(true);
+  let redFormation = $derived(computeFormationLabel(redPlayers));
+  let blueFormation = $derived(computeFormationLabel(bluePlayers));
+
+  function botDifficultyLabel(diff?: 'easy' | 'medium' | 'hard'): string {
+    if (diff === 'easy') return 'FÁC';
+    if (diff === 'hard') return 'DIF';
+    return 'MED';
+  }
+
+  function handleAddBotTo(team: 'red' | 'blue') {
+    if (!canManageBots) return;
+    gameUI.addBotToTeam(team, 'medium');
+  }
+
+  function handleClearTeamList(team: 'red' | 'blue') {
+    if (!canClearTeams) return;
+    gameUI.clearTeam(team);
   }
 
   function handleQuickJoinTeam(targetTeam: TeamSlot) {
@@ -1116,8 +1162,12 @@
                   title="Capitán del equipo"
                 >C</span>
               {/if}
+              {#if p.isBot}
+                <span class="token-bot-badge" title="Bot IA ({botDifficultyLabel(p.botDifficulty)})">{botDifficultyLabel(p.botDifficulty)}</span>
+              {/if}
             </div>
             <span class="token-nickname">{p.name || p.nickname}</span>
+            <span class="token-ping-line">{p.isBot ? 'BOT IA' : `${p.ping ?? 0}ms`}</span>
           </div>
         {/snippet}
 
@@ -1217,10 +1267,18 @@
             </div>
           </header>
 
-          <!-- Cuerpo Temático: Campo Táctico (Rojo vs Azul en 4 Zonas) + Banquillo de Espectadores -->
-          <div class="pitch-lineup-workspace">
-            <div class="pitch-team-headers-row">
-              <!-- Barra Equipo Rojo -->
+          <!-- Broadcast 3-Col Layout: Mitad Roja | Espectadores (Sillas + Reglas) | Mitad Azul -->
+          <div class="pitch-lineup-workspace broadcast-3col" data-testid="broadcast-lineup-3col">
+            <!-- COLUMNA IZQUIERDA: EQUIPO ROJO -->
+            <section
+              class="broadcast-team-col red-col"
+              data-team-column="red"
+              class:is-drag-over={dragOverTeam === 'red'}
+              ondragover={(e) => handleDragOver(e, 'red')}
+              ondragleave={() => handleDragLeave('red')}
+              ondrop={(e) => handleDrop(e, 'red')}
+              aria-label="Columna Equipo Rojo"
+            >
               <div
                 class="pitch-team-bar red-bar captain-bicolor-header"
                 style="--captain-local-primary: {redPrimaryColor}; background: {redKitBg}; border: {redHasOutline ? '1.5px solid #000000' : 'none'};"
@@ -1244,7 +1302,7 @@
                       class:active={gameUI.redKitVariant === 'away'}
                       disabled={!isRedCaptainOrAdmin}
                       onclick={() => handleSetRedKitVariant('away')}
-                    >Visitante</button>
+                    >Visit.</button>
                   </div>
                   <button
                     type="button"
@@ -1255,7 +1313,224 @@
                 </div>
               </div>
 
-              <!-- Barra Equipo Azul -->
+              <div class="formation-badge red-formation">{redFormation}</div>
+
+              <div id="redPlayersList" class="vertical-half-pitch red-pitch">
+                <div class="vpitch-goal-arc top-goal" aria-hidden="true"></div>
+                <div class="vpitch-mid-curve bottom-curve" aria-hidden="true"></div>
+                {#each RED_ZONE_ORDER as zonePos (zonePos)}
+                  {@const zoneMembers = getZonePlayers(redPlayers, zonePos)}
+                  <div
+                    class="pitch-zone-col vertical-zone zone-{zonePos.toLowerCase()}"
+                    data-zone-team="red"
+                    data-zone-pos={zonePos}
+                    role="region"
+                    aria-label="Zona {POSITION_META[zonePos].title} Rojo"
+                    class:is-zone-hover={dragOverZone?.team === 'red' && dragOverZone?.pos === zonePos}
+                    ondragover={(e) => handleZoneDragOver(e, 'red', zonePos)}
+                    ondrop={(e) => handleZoneDrop(e, 'red', zonePos)}
+                  >
+                    <span class="zone-header-pill role-{zonePos.toLowerCase()}" title={POSITION_META[zonePos].title}>
+                      {POSITION_META[zonePos].label}
+                    </span>
+                    <div class="zone-players-stack vertical-stack custom-scrollbar-red">
+                      {#each zoneMembers as p (p.id)}
+                        {@render playerPitchToken(p, 'red')}
+                      {/each}
+                    </div>
+                  </div>
+                {/each}
+              </div>
+
+              {#if canManageBots || canClearTeams}
+                <div class="team-controls-box red-controls">
+                  <button
+                    type="button"
+                    class="team-controls-toggle red-toggle"
+                    onclick={() => (showRedControls = !showRedControls)}
+                  >
+                    <span>Controles de Equipo</span>
+                    <span>{showRedControls ? '▾' : '▸'}</span>
+                  </button>
+                  {#if showRedControls}
+                    <div class="team-controls-actions">
+                      {#if canManageBots}
+                        <button
+                          type="button"
+                          class="tctrl-btn tctrl-add-bot"
+                          data-testid="btn-add-bot-red"
+                          onclick={() => handleAddBotTo('red')}
+                        >
+                          <span>Añadir Bot</span>
+                          <span>+</span>
+                        </button>
+                      {/if}
+                      {#if canClearTeams}
+                        <button
+                          type="button"
+                          class="tctrl-btn tctrl-clear"
+                          data-testid="btn-clear-red"
+                          disabled={redPlayers.length === 0}
+                          onclick={() => handleClearTeamList('red')}
+                        >
+                          <span>Vaciar Equipo</span>
+                          <span>🗑</span>
+                        </button>
+                      {/if}
+                    </div>
+                  {/if}
+                </div>
+              {/if}
+            </section>
+
+            <!-- COLUMNA CENTRAL: ESPECTADORES + SILLAS + REGLAS -->
+            <section
+              class="broadcast-center-col"
+              data-team-column="spectator"
+              class:is-drag-over={dragOverTeam === 'spectator'}
+              ondragover={(e) => handleDragOver(e, 'spectator')}
+              ondragleave={() => handleDragLeave('spectator')}
+              ondrop={(e) => handleDrop(e, 'spectator')}
+              aria-label="Banquillo Espectadores"
+            >
+              <div class="center-spec-heading">
+                <span class="banquillo-title">ESPECTADORES</span>
+                <span class="banquillo-cap-badge">{specPlayers.length} / {roomCapacity} sillas</span>
+              </div>
+
+              <div class="dugout-middle-row">
+                <div class="side-transfer-rail">
+                  <button
+                    type="button"
+                    class="rail-arrow-btn is-red"
+                    disabled={localTeam === 'red' || !canSwitchOwnTeam}
+                    onclick={() => handleQuickJoinTeam('red')}
+                    title="Unirse a Rojo"
+                    aria-label="Ir a Equipo Rojo"
+                  >&lt;</button>
+                  <button
+                    type="button"
+                    class="rail-arrow-btn is-spec"
+                    disabled={localTeam === 'spectator' || !canSwitchOwnTeam}
+                    onclick={() => handleQuickJoinTeam('spectator')}
+                    title="Ir al Banquillo"
+                    aria-label="Ir al Banquillo"
+                  >&gt;</button>
+                </div>
+
+                <div class="banquillo-dugout broadcast-dugout">
+                  <div class="banquillo-header">
+                    <span class="waiting-sub">Banquillo de Suplentes</span>
+                    <button
+                      type="button"
+                      class="bench-join-btn"
+                      disabled={localTeam === 'spectator' || !canSwitchOwnTeam}
+                      onclick={() => handleQuickJoinTeam('spectator')}
+                    >Sentarse</button>
+                  </div>
+
+                  <div id="specPlayersList" class="banquillo-chairs-grid broadcast-chairs custom-scrollbar">
+                    {#each benchSeats as chairPlayer, seatIdx (seatIdx)}
+                      {#if chairPlayer}
+                        {@const isDraggable = canDragPlayer(chairPlayer)}
+                        <div
+                          class="bench-seat-slot is-occupied"
+                          class:cursor-grab={isDraggable}
+                          class:is-dragging={draggedPlayerId === chairPlayer.id}
+                          role="button"
+                          tabindex="0"
+                          draggable={isDraggable}
+                          ondragstart={(e) => handleDragStart(e, chairPlayer)}
+                          ondragend={handleDragEnd}
+                          onpointerdown={(e) => handlePlayerPointerDown(e, chairPlayer)}
+                          onpointermove={(e) => handlePlayerPointerMove(e, chairPlayer)}
+                          onpointerup={(e) => handlePlayerPointerUp(e, chairPlayer)}
+                          onpointercancel={handlePlayerPointerCancel}
+                          onclick={(e) => handlePlayerCardClick(e, chairPlayer)}
+                          onkeydown={(e) => {
+                            if (e.key === 'Enter' || e.key === ' ') {
+                              e.preventDefault();
+                              handlePlayerCardClick(e as unknown as MouseEvent, chairPlayer);
+                            }
+                          }}
+                        >
+                          <span class="chair-num">{seatIdx + 1}</span>
+                          <div class="seat-backrest" aria-hidden="true"></div>
+                          <div class="seat-avatar-wrap">
+                            <div class="slot-avatar spec">{chairPlayer.avatar || chairPlayer.number || 'S'}</div>
+                            {#if chairPlayer.isAdmin || chairPlayer.isHost}
+                              <span class="seat-crown" title={chairPlayer.isHost ? 'Anfitrión' : 'Admin'}>👑</span>
+                            {/if}
+                          </div>
+                          <span class="seat-player-name">{chairPlayer.name || chairPlayer.nickname}</span>
+                          <span class="seat-ping">{chairPlayer.ping ?? 0}ms</span>
+                        </div>
+                      {:else}
+                        <div
+                          class="bench-seat-slot is-empty"
+                          role="button"
+                          tabindex="0"
+                          aria-label="Silla vacía {seatIdx + 1}"
+                          onclick={() => handleQuickJoinTeam('spectator')}
+                          onkeydown={(e) => {
+                            if (e.key === 'Enter' || e.key === ' ') {
+                              e.preventDefault();
+                              handleQuickJoinTeam('spectator');
+                            }
+                          }}
+                        >
+                          <span class="chair-num">{seatIdx + 1}</span>
+                          <div class="seat-backrest empty-chair" aria-hidden="true"></div>
+                          <span class="seat-empty-plus">+</span>
+                        </div>
+                      {/if}
+                    {/each}
+                  </div>
+                </div>
+
+                <div class="side-transfer-rail">
+                  <button
+                    type="button"
+                    class="rail-arrow-btn is-blue"
+                    disabled={localTeam === 'blue' || !canSwitchOwnTeam}
+                    onclick={() => handleQuickJoinTeam('blue')}
+                    title="Unirse a Azul"
+                    aria-label="Ir a Equipo Azul"
+                  >&gt;</button>
+                  <button
+                    type="button"
+                    class="rail-arrow-btn is-spec"
+                    disabled={localTeam === 'spectator' || !canSwitchOwnTeam}
+                    onclick={() => handleQuickJoinTeam('spectator')}
+                    title="Ir al Banquillo"
+                    aria-label="Ir al Banquillo"
+                  >&lt;</button>
+                </div>
+              </div>
+
+              <!-- Tarjeta inferior de Límites (Minutos & Goles) -->
+              <div class="center-limits-bar">
+                <div class="limit-pill-group">
+                  <span class="limit-lbl">Tiempo límite</span>
+                  <span class="limit-val">{gameUI.timeLimitMinutes === 0 ? '∞' : `${gameUI.timeLimitMinutes}m`}</span>
+                </div>
+                <div class="limit-pill-group">
+                  <span class="limit-lbl">Límite de goles</span>
+                  <span class="limit-val">{gameUI.scoreLimitGoals === 0 ? '∞' : gameUI.scoreLimitGoals}</span>
+                </div>
+              </div>
+            </section>
+
+            <!-- COLUMNA DERECHA: EQUIPO AZUL -->
+            <section
+              class="broadcast-team-col blue-col"
+              data-team-column="blue"
+              class:is-drag-over={dragOverTeam === 'blue'}
+              ondragover={(e) => handleDragOver(e, 'blue')}
+              ondragleave={() => handleDragLeave('blue')}
+              ondrop={(e) => handleDrop(e, 'blue')}
+              aria-label="Columna Equipo Azul"
+            >
               <div
                 class="pitch-team-bar blue-bar captain-bicolor-header"
                 style="--captain-visitor-primary: {bluePrimaryColor}; background: {blueKitBg}; border: {blueHasOutline ? '1.5px solid #000000' : 'none'};"
@@ -1279,7 +1554,7 @@
                       class:active={gameUI.blueKitVariant === 'away'}
                       disabled={!isBlueCaptainOrAdmin}
                       onclick={() => handleSetBlueKitVariant('away')}
-                    >Visitante</button>
+                    >Visit.</button>
                   </div>
                   <button
                     type="button"
@@ -1289,68 +1564,16 @@
                   >+ Unirse</button>
                 </div>
               </div>
-            </div>
 
-            <!-- Cancha Táctica en 4 Zonas por Equipo -->
-            <div class="tactical-pitch-arena">
-              <!-- Marcas decorativas del campo -->
-              <div class="pitch-halfway-line" aria-hidden="true"></div>
-              <div class="pitch-center-circle" aria-hidden="true"></div>
-              <div class="pitch-goal-box left-goal" aria-hidden="true"></div>
-              <div class="pitch-goal-box right-goal" aria-hidden="true"></div>
+              <div class="formation-badge blue-formation">{blueFormation}</div>
 
-              <!-- Mitad Roja (Izquierda): GK | DFC | MC | ST -->
-              <div
-                id="redPlayersList"
-                class="pitch-half red-half"
-                data-team-column="red"
-                class:is-drag-over={dragOverTeam === 'red'}
-                ondragover={(e) => handleDragOver(e, 'red')}
-                ondragleave={() => handleDragLeave('red')}
-                ondrop={(e) => handleDrop(e, 'red')}
-                role="region"
-                aria-label="Alineación Equipo Rojo"
-              >
+              <div id="bluePlayersList" class="vertical-half-pitch blue-pitch">
+                <div class="vpitch-goal-arc top-goal" aria-hidden="true"></div>
+                <div class="vpitch-mid-curve bottom-curve" aria-hidden="true"></div>
                 {#each RED_ZONE_ORDER as zonePos (zonePos)}
-                  {@const zoneMembers = getZonePlayers(redPlayers, zonePos)}
-                  <div
-                    class="pitch-zone-col zone-{zonePos.toLowerCase()}"
-                    data-zone-team="red"
-                    data-zone-pos={zonePos}
-                    role="region"
-                    aria-label="Zona {POSITION_META[zonePos].title} Rojo"
-                    class:is-zone-hover={dragOverZone?.team === 'red' && dragOverZone?.pos === zonePos}
-                    ondragover={(e) => handleZoneDragOver(e, 'red', zonePos)}
-                    ondrop={(e) => handleZoneDrop(e, 'red', zonePos)}
-                  >
-                    <div class="zone-header-pill role-{zonePos.toLowerCase()}" title={POSITION_META[zonePos].title}>
-                      {POSITION_META[zonePos].label}
-                    </div>
-                    <div class="zone-players-stack custom-scrollbar-red">
-                      {#each zoneMembers as p (p.id)}
-                        {@render playerPitchToken(p, 'red')}
-                      {/each}
-                    </div>
-                  </div>
-                {/each}
-              </div>
-
-              <!-- Mitad Azul (Derecha): ST | MC | DFC | GK -->
-              <div
-                id="bluePlayersList"
-                class="pitch-half blue-half"
-                data-team-column="blue"
-                class:is-drag-over={dragOverTeam === 'blue'}
-                ondragover={(e) => handleDragOver(e, 'blue')}
-                ondragleave={() => handleDragLeave('blue')}
-                ondrop={(e) => handleDrop(e, 'blue')}
-                role="region"
-                aria-label="Alineación Equipo Azul"
-              >
-                {#each BLUE_ZONE_ORDER as zonePos (zonePos)}
                   {@const zoneMembers = getZonePlayers(bluePlayers, zonePos)}
                   <div
-                    class="pitch-zone-col zone-{zonePos.toLowerCase()}"
+                    class="pitch-zone-col vertical-zone zone-{zonePos.toLowerCase()}"
                     data-zone-team="blue"
                     data-zone-pos={zonePos}
                     role="region"
@@ -1359,10 +1582,10 @@
                     ondragover={(e) => handleZoneDragOver(e, 'blue', zonePos)}
                     ondrop={(e) => handleZoneDrop(e, 'blue', zonePos)}
                   >
-                    <div class="zone-header-pill role-{zonePos.toLowerCase()}" title={POSITION_META[zonePos].title}>
+                    <span class="zone-header-pill role-{zonePos.toLowerCase()}" title={POSITION_META[zonePos].title}>
                       {POSITION_META[zonePos].label}
-                    </div>
-                    <div class="zone-players-stack custom-scrollbar">
+                    </span>
+                    <div class="zone-players-stack vertical-stack custom-scrollbar">
                       {#each zoneMembers as p (p.id)}
                         {@render playerPitchToken(p, 'blue')}
                       {/each}
@@ -1370,75 +1593,47 @@
                   </div>
                 {/each}
               </div>
-            </div>
 
-            <!-- Banquillo de Espectadores con N sillas según capacidad -->
-            <div
-              class="banquillo-dugout"
-              data-team-column="spectator"
-              class:is-drag-over={dragOverTeam === 'spectator'}
-              ondragover={(e) => handleDragOver(e, 'spectator')}
-              ondragleave={() => handleDragLeave('spectator')}
-              ondrop={(e) => handleDrop(e, 'spectator')}
-              role="region"
-              aria-label="Banquillo Espectadores"
-            >
-              <div class="banquillo-header">
-                <div class="banquillo-title-group">
-                  <span class="banquillo-title">BANQUILLO DE ESPECTADORES</span>
-                  <span class="banquillo-cap-badge">{specPlayers.length} / {roomCapacity} sillas</span>
-                </div>
-                <button
-                  type="button"
-                  class="bench-join-btn"
-                  disabled={localTeam === 'spectator' || !canSwitchOwnTeam}
-                  onclick={() => handleQuickJoinTeam('spectator')}
-                >+ Ir al Banquillo</button>
-              </div>
-
-              <div id="specPlayersList" class="banquillo-chairs-grid custom-scrollbar">
-                {#each benchSeats as chairPlayer, seatIdx (seatIdx)}
-                  {#if chairPlayer}
-                    {@const isDraggable = canDragPlayer(chairPlayer)}
-                    <div
-                      class="bench-seat-slot is-occupied"
-                      class:cursor-grab={isDraggable}
-                      class:is-dragging={draggedPlayerId === chairPlayer.id}
-                      role="button"
-                      tabindex="0"
-                      draggable={isDraggable}
-                      ondragstart={(e) => handleDragStart(e, chairPlayer)}
-                      ondragend={handleDragEnd}
-                      onpointerdown={(e) => handlePlayerPointerDown(e, chairPlayer)}
-                      onpointermove={(e) => handlePlayerPointerMove(e, chairPlayer)}
-                      onpointerup={(e) => handlePlayerPointerUp(e, chairPlayer)}
-                      onpointercancel={handlePlayerPointerCancel}
-                      onclick={(e) => handlePlayerCardClick(e, chairPlayer)}
-                      onkeydown={(e) => {
-                        if (e.key === 'Enter' || e.key === ' ') {
-                          e.preventDefault();
-                          handlePlayerCardClick(e as unknown as MouseEvent, chairPlayer);
-                        }
-                      }}
-                    >
-                      <div class="seat-backrest" aria-hidden="true"></div>
-                      <div class="seat-avatar-wrap">
-                        <div class="slot-avatar spec">{chairPlayer.avatar || chairPlayer.number || 'S'}</div>
-                        {#if chairPlayer.isAdmin || chairPlayer.isHost}
-                          <span class="seat-crown" title={chairPlayer.isHost ? 'Anfitrión' : 'Admin'}>👑</span>
-                        {/if}
-                      </div>
-                      <span class="seat-player-name">{chairPlayer.name || chairPlayer.nickname}</span>
-                    </div>
-                  {:else}
-                    <div class="bench-seat-slot is-empty" aria-label="Silla vacía {seatIdx + 1}">
-                      <div class="seat-backrest empty-chair" aria-hidden="true"></div>
-                      <span class="seat-empty-num">#{seatIdx + 1}</span>
+              {#if canManageBots || canClearTeams}
+                <div class="team-controls-box blue-controls">
+                  <button
+                    type="button"
+                    class="team-controls-toggle blue-toggle"
+                    onclick={() => (showBlueControls = !showBlueControls)}
+                  >
+                    <span>Controles de Equipo</span>
+                    <span>{showBlueControls ? '▾' : '▸'}</span>
+                  </button>
+                  {#if showBlueControls}
+                    <div class="team-controls-actions">
+                      {#if canManageBots}
+                        <button
+                          type="button"
+                          class="tctrl-btn tctrl-add-bot"
+                          data-testid="btn-add-bot-blue"
+                          onclick={() => handleAddBotTo('blue')}
+                        >
+                          <span>Añadir Bot</span>
+                          <span>+</span>
+                        </button>
+                      {/if}
+                      {#if canClearTeams}
+                        <button
+                          type="button"
+                          class="tctrl-btn tctrl-clear"
+                          data-testid="btn-clear-blue"
+                          disabled={bluePlayers.length === 0}
+                          onclick={() => handleClearTeamList('blue')}
+                        >
+                          <span>Vaciar Equipo</span>
+                          <span>🗑</span>
+                        </button>
+                      {/if}
                     </div>
                   {/if}
-                {/each}
-              </div>
-            </div>
+                </div>
+              {/if}
+            </section>
           </div>
         </div>
       </div>
@@ -1878,6 +2073,7 @@
 
             <form class="mobile-menu-chat-form" onsubmit={handleSendMenuChat}>
               <input
+                bind:this={menuChatInputEl}
                 type="text"
                 class="mobile-chat-input"
                 maxlength="140"
@@ -1990,7 +2186,36 @@
         </div>
       {/if}
 
-      {#if canModerate}
+      {#if ctxPlayer.isBot && canManageBots}
+        <div class="ctx-position-section" data-testid="ctx-bot-difficulty">
+          <span class="ctx-pos-label">Dificultad del Bot:</span>
+          <div class="ctx-bot-diff-grid">
+            {#each [['easy', 'Fácil'], ['medium', 'Medio'], ['hard', 'Difícil']] as [diffKey, diffLabel] (diffKey)}
+              <button
+                type="button"
+                class="ctx-pos-btn"
+                class:is-current={(ctxPlayer.botDifficulty ?? 'medium') === diffKey}
+                onclick={() => {
+                  gameUI.setBotDifficulty(ctxPlayer.id, diffKey as 'easy' | 'medium' | 'hard');
+                  closeContextMenu();
+                }}
+              >
+                {diffLabel}
+              </button>
+            {/each}
+          </div>
+          <button
+            type="button"
+            class="context-menu-item item-danger"
+            onclick={() => {
+              gameUI.removeBot(ctxPlayer.id);
+              closeContextMenu();
+            }}
+          >
+            <span>Eliminar Bot</span>
+          </button>
+        </div>
+      {:else if canModerate}
         {#if ctxPlayer.team !== 'red'}
           <button
             type="button"
@@ -2375,6 +2600,7 @@
   .pitch-lineup-workspace {
     flex: 1;
     min-height: 0;
+    min-width: 0;
     display: flex;
     flex-direction: column;
     gap: 0.45rem;
@@ -2382,95 +2608,339 @@
     overflow: hidden;
   }
 
-  .pitch-team-headers-row {
+  .pitch-lineup-workspace.broadcast-3col {
     display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 0.5rem;
+    grid-template-columns: minmax(0, 1.12fr) minmax(0, 1.16fr) minmax(0, 1.12fr);
+    gap: 0.65rem;
+    align-items: stretch;
+  }
+
+  .broadcast-team-col {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    min-height: 0;
+    min-width: 0;
+    background: rgba(11, 16, 26, 0.94);
+    border: 1px solid rgba(148, 163, 184, 0.25);
+    border-radius: 0.6rem;
+    padding: 0.45rem;
+    transition: border-color 0.15s ease;
+  }
+
+  .broadcast-team-col.red-col { border-color: rgba(239, 68, 68, 0.38); }
+  .broadcast-team-col.blue-col { border-color: rgba(56, 189, 248, 0.38); }
+  .broadcast-team-col.is-drag-over { border-color: #00e5ff; box-shadow: inset 0 0 18px rgba(0, 229, 255, 0.15); }
+
+  .formation-badge {
+    align-self: center;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.72rem;
+    font-weight: 800;
+    padding: 0.12rem 0.75rem;
+    border-radius: 999px;
+    background: #172133;
+    border: 1px solid rgba(148, 163, 184, 0.3);
+    color: #e2e8f0;
     flex-shrink: 0;
   }
 
-  .pitch-team-bar {
-    height: 36px;
-    border-radius: 0.45rem;
-    padding: 0 0.55rem;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 0.4rem;
-  }
-
-  .tactical-pitch-arena {
+  .vertical-half-pitch {
     position: relative;
     flex: 1;
     min-height: 0;
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    border-radius: 0.65rem;
-    border: 2px solid rgba(16, 185, 129, 0.45);
-    background:
-      repeating-linear-gradient(
-        90deg,
-        #0c3322 0px,
-        #0c3322 44px,
-        #0f3d29 44px,
-        #0f3d29 88px
-      );
-    box-shadow: inset 0 0 28px rgba(0, 0, 0, 0.55);
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    gap: 0.22rem;
+    padding: 0.35rem;
+    border-radius: 0.5rem;
+    border: 1.5px solid rgba(148, 163, 184, 0.28);
+    background: repeating-linear-gradient(
+      180deg,
+      #141c24 0px,
+      #141c24 38px,
+      #18212b 38px,
+      #18212b 76px
+    );
+    overflow-y: auto;
+    overflow-x: hidden;
+  }
+
+  .vpitch-goal-arc {
+    position: absolute;
+    left: 24%;
+    right: 24%;
+    top: 0;
+    height: 36px;
+    border: 1.5px solid rgba(255, 255, 255, 0.18);
+    border-top: none;
+    border-radius: 0 0 10px 10px;
+    pointer-events: none;
+  }
+
+  .vpitch-mid-curve {
+    position: absolute;
+    left: 28%;
+    right: 28%;
+    bottom: 0;
+    height: 26px;
+    border: 1.5px solid rgba(255, 255, 255, 0.14);
+    border-bottom: none;
+    border-radius: 999px 999px 0 0;
+    pointer-events: none;
+  }
+
+  .pitch-zone-col.vertical-zone {
+    position: relative;
+    z-index: 2;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.2rem;
+    padding: 0.2rem 0.18rem;
+    border-radius: 0.38rem;
+    border: 1px dashed transparent;
+  }
+
+  .pitch-zone-col.vertical-zone.is-zone-hover {
+    border-color: #00e5ff;
+    background: rgba(0, 229, 255, 0.1);
+  }
+
+  .zone-players-stack.vertical-stack {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    align-items: flex-start;
+    gap: 0.35rem 0.45rem;
+    width: 100%;
+  }
+
+  .token-ping-line {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.56rem;
+    font-weight: 700;
+    color: #34d399;
+    line-height: 1;
+  }
+
+  .token-bot-badge {
+    position: absolute;
+    bottom: -3px;
+    left: -5px;
+    padding: 1px 3px;
+    border-radius: 4px;
+    background: #0f172a;
+    border: 1px solid #38bdf8;
+    color: #38bdf8;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.48rem;
+    font-weight: 900;
+    line-height: 1;
+  }
+
+  .team-controls-box {
+    flex-shrink: 0;
+    border-radius: 0.45rem;
+    background: #101724;
+    border: 1px solid rgba(148, 163, 184, 0.25);
     overflow: hidden;
   }
 
-  .pitch-halfway-line {
-    position: absolute;
-    left: 50%;
-    top: 0;
-    bottom: 0;
-    width: 2px;
-    background: rgba(255, 255, 255, 0.25);
-    transform: translateX(-50%);
-    pointer-events: none;
+  .team-controls-toggle {
+    width: 100%;
+    padding: 0.3rem 0.55rem;
+    border: none;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-family: 'Space Grotesk', system-ui, sans-serif;
+    font-size: 0.68rem;
+    font-weight: 800;
+    color: #ffffff;
+    cursor: pointer;
   }
 
-  .pitch-center-circle {
-    position: absolute;
-    left: 50%;
-    top: 50%;
-    width: 84px;
-    height: 84px;
-    border-radius: 50%;
-    border: 2px solid rgba(255, 255, 255, 0.22);
-    transform: translate(-50%, -50%);
-    pointer-events: none;
+  .team-controls-toggle.red-toggle { background: rgba(153, 27, 27, 0.72); }
+  .team-controls-toggle.blue-toggle { background: rgba(30, 64, 175, 0.72); }
+
+  .team-controls-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+    padding: 0.25rem;
   }
 
-  .pitch-goal-box {
-    position: absolute;
-    top: 22%;
-    bottom: 22%;
-    width: 48px;
-    border: 2px solid rgba(255, 255, 255, 0.2);
-    pointer-events: none;
+  .tctrl-btn {
+    width: 100%;
+    padding: 0.26rem 0.5rem;
+    border-radius: 0.32rem;
+    border: 1px solid rgba(148, 163, 184, 0.2);
+    background: #172030;
+    color: #e2e8f0;
+    font-size: 0.68rem;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    cursor: pointer;
   }
 
-  .pitch-goal-box.left-goal {
-    left: 0;
-    border-left: none;
-    border-radius: 0 8px 8px 0;
+  .tctrl-btn:hover:not(:disabled) { border-color: #00e5ff; background: #1e293b; }
+  .tctrl-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
+  .broadcast-center-col {
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    gap: 0.4rem;
+    min-width: 0;
+    min-height: 0;
+    padding: 0.35rem 0.2rem;
   }
 
-  .pitch-goal-box.right-goal {
-    right: 0;
-    border-right: none;
-    border-radius: 8px 0 0 8px;
+  .center-spec-heading {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 0.4rem;
+    flex-shrink: 0;
   }
 
-  .pitch-half {
-    position: relative;
-    z-index: 2;
+  .dugout-middle-row {
+    flex: 1;
+    min-height: 0;
     display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: auto 1fr auto;
+    align-items: center;
+    gap: 0.3rem;
+  }
+
+  .side-transfer-rail {
+    display: flex;
+    flex-direction: column;
+    gap: 0.32rem;
+  }
+
+  .rail-arrow-btn {
+    width: 24px;
+    height: 30px;
+    border-radius: 0.35rem;
+    border: 1px solid rgba(148, 163, 184, 0.35);
+    background: #182235;
+    color: #f8fafc;
+    font-weight: 900;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .rail-arrow-btn.is-red { border-color: rgba(239, 68, 68, 0.55); background: rgba(153, 27, 27, 0.5); }
+  .rail-arrow-btn.is-blue { border-color: rgba(56, 189, 248, 0.55); background: rgba(30, 64, 175, 0.5); }
+  .rail-arrow-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+
+  .banquillo-dugout.broadcast-dugout {
     height: 100%;
     min-height: 0;
-    transition: background 0.15s ease;
+  }
+
+  .waiting-sub {
+    font-size: 0.68rem;
+    font-weight: 700;
+    color: #94a3b8;
+  }
+
+  .banquillo-chairs-grid.broadcast-chairs {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 0.3rem;
+    overflow-y: auto;
+    overflow-x: hidden;
+    align-content: start;
+    flex: 1;
+  }
+
+  .chair-num {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.54rem;
+    font-weight: 800;
+    color: #94a3b8;
+    line-height: 1;
+  }
+
+  .seat-ping {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.52rem;
+    font-weight: 700;
+    color: #34d399;
+    line-height: 1;
+  }
+
+  .seat-empty-plus {
+    width: 22px;
+    height: 22px;
+    border-radius: 999px;
+    border: 1.5px dashed rgba(148, 163, 184, 0.45);
+    color: #94a3b8;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.78rem;
+    font-weight: 700;
+  }
+
+  .center-limits-bar {
+    flex-shrink: 0;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.45rem;
+    padding: 0.36rem 0.5rem;
+    border-radius: 0.45rem;
+    background: #101724;
+    border: 1px solid rgba(148, 163, 184, 0.25);
+  }
+
+  .limit-pill-group {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.3rem;
+    padding: 0.2rem 0.42rem;
+    border-radius: 0.32rem;
+    background: #0a0f1a;
+  }
+
+  .limit-lbl {
+    font-size: 0.62rem;
+    font-weight: 700;
+    color: #94a3b8;
+  }
+
+  .limit-val {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.72rem;
+    font-weight: 900;
+    color: #f8fafc;
+  }
+
+  .ctx-bot-diff-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 0.25rem;
+    margin-bottom: 0.3rem;
+  }
+
+  .pitch-team-bar {
+    height: 34px;
+    border-radius: 0.4rem;
+    padding: 0 0.48rem;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.3rem;
+    flex-shrink: 0;
   }
 
   .red-half.is-drag-over {
@@ -3735,11 +4205,35 @@
       gap: 0.22rem;
     }
 
+    .banquillo-chairs-grid.broadcast-chairs {
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 0.2rem;
+    }
+
     .bench-seat-slot {
-      min-width: 48px;
-      width: 52px;
-      height: 46px;
-      gap: 0.1rem;
+      min-width: 0;
+      width: 100%;
+      height: 50px;
+      gap: 0.08rem;
+    }
+
+    .pitch-lineup-workspace.broadcast-3col {
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1.05fr) minmax(0, 1fr);
+      gap: 0.3rem;
+      padding: 0.28rem 0.35rem;
+    }
+
+    .stats-header-row {
+      grid-template-columns: 1fr;
+      padding: 0.5rem 0.65rem;
+      gap: 0.45rem;
+    }
+
+    .stats-hero-matchup,
+    .stats-center-zone,
+    .match-status-meta {
+      justify-self: center;
+      flex-wrap: wrap;
     }
 
     .slot-avatar.spec { width: 20px; height: 20px; min-width: 20px; font-size: 0.56rem; }
@@ -3757,15 +4251,17 @@
   }
 
   @media (max-width: 680px) {
-    .pitch-team-headers-row,
-    .tactical-pitch-arena,
+    .pitch-lineup-workspace.broadcast-3col {
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr);
+      gap: 0.22rem;
+    }
+    .banquillo-chairs-grid.broadcast-chairs {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+    .side-transfer-rail { display: none; }
     .settings-2col-grid,
     .tables-parallel-grid {
       grid-template-columns: 1fr;
-    }
-    .pitch-halfway-line,
-    .pitch-center-circle {
-      display: none;
     }
   }
 </style>

@@ -21,7 +21,17 @@ class MusicPlayerManager {
 
   private audio: HTMLAudioElement | null = null;
   private fetchedOnce = false;
+  private hasPickedInitialTrack = false;
   private lastMatchActive = false;
+
+  private pickRandomIndex(excludeIndex?: number): number {
+    if (this.tracks.length <= 1) return 0;
+    let candidate = Math.floor(Math.random() * this.tracks.length);
+    if (excludeIndex !== undefined && this.tracks.length > 1 && candidate === excludeIndex) {
+      candidate = (candidate + 1 + Math.floor(Math.random() * (this.tracks.length - 1))) % this.tracks.length;
+    }
+    return candidate;
+  }
 
   private ensureAudio(): HTMLAudioElement | null {
     if (typeof window === 'undefined' || typeof Audio === 'undefined') return null;
@@ -79,7 +89,10 @@ class MusicPlayerManager {
         ? data.music.filter((t: any) => t && typeof t.url === 'string' && typeof t.title === 'string')
         : [];
       this.tracks = list;
-      if (this.currentTrackIndex >= this.tracks.length) {
+      if (this.tracks.length > 0 && !this.hasPickedInitialTrack) {
+        this.currentTrackIndex = this.pickRandomIndex();
+        this.hasPickedInitialTrack = true;
+      } else if (this.currentTrackIndex >= this.tracks.length) {
         this.currentTrackIndex = 0;
       }
       this.fetchedOnce = true;
@@ -148,7 +161,11 @@ class MusicPlayerManager {
       await this.refreshTracks();
     }
     if (this.tracks.length === 0) return;
-    await this.play(this.currentTrackIndex + 1);
+    if (this.tracks.length === 1) {
+      await this.play(0);
+      return;
+    }
+    await this.play(this.pickRandomIndex(this.currentTrackIndex));
   }
 
   public async prevTrack(): Promise<void> {

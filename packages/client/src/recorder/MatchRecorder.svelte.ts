@@ -6,6 +6,7 @@ export type LxrRoomType = 'casual' | 'ranked';
 
 export type LxrScoreboardDesign =
   | 'original'
+  | 'champions'
   | 'wc2006'
   | 'wc2010'
   | 'wc2014'
@@ -20,6 +21,7 @@ export type LxrBallSkin =
   | 'cyber'
   | 'gold'
   | 'solid'
+  | 'champions'
   | 'wc2006'
   | 'wc2010'
   | 'wc2014'

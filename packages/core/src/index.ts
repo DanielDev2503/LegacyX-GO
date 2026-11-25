@@ -38,6 +38,13 @@ import {
   type PlayerKinematicsState,
   type StepKinematicsOptions
 } from './physics/PlayerKinematics';
+import {
+  computeBotInput,
+  type BotConfig,
+  type BotDifficulty,
+  type BotWorldPlayer,
+  type BotDecisionContext
+} from './game/BotAI';
 import { PhysicsTicker } from './physics/PhysicsTicker';
 import { GoalNet, GoalNetOptions, NetBall } from './physics/GoalNet';
 import { Stadium, StadiumOptions, GoalDefinition, StadiumBallPhysics, StadiumPlayerPhysics } from './stadiums/Stadium';
@@ -217,6 +224,7 @@ export interface GoalBannerDetails {
 interface EngineDashState {
   ticksRemaining: number;
   cooldownTimer: number;
+  slowdownTimer: number;
   dirX: number;
   dirY: number;
   prevDashDown: boolean;
@@ -239,6 +247,7 @@ export class EngineInstance {
   public playerTeams: Map<number, 'red' | 'blue' | 'spec'> = new Map();
   public playerNames: Map<number, string> = new Map();
   public playerPositions: Map<number, PlayerPosition> = new Map();
+  public botConfigs: Map<number, BotConfig> = new Map();
   public matchStats: Map<number, PlayerMatchStats> = new Map();
   private playerRuntime: Map<number, EngineDashState> = new Map();
   private readonly seenPlayerIds: Set<number> = new Set();
@@ -562,6 +571,7 @@ export class EngineInstance {
       rt = {
         ticksRemaining: 0,
         cooldownTimer: 0,
+        slowdownTimer: 0,
         dirX: 0,
         dirY: 0,
         prevDashDown: false,
@@ -636,6 +646,22 @@ export class EngineInstance {
     } else {
       this.playerPositions.set(id, pos);
     }
+    const existingBot = this.botConfigs.get(id);
+    if (existingBot && pos) {
+      existingBot.position = pos;
+    }
+  }
+
+  public setBot(id: number, config: BotConfig | null): void {
+    if (!config) {
+      this.botConfigs.delete(id);
+    } else {
+      this.botConfigs.set(id, { ...config });
+    }
+  }
+
+  public getPlayerSlowdownTimer(id: number): number {
+    return this.playerRuntime.get(id)?.slowdownTimer ?? 0;
   }
 
   public getZoneSpawnCoordinates(
@@ -680,6 +706,7 @@ export class EngineInstance {
       this.playerPositions.delete(id);
       this.playerRuntime.delete(id);
     }
+    this.botConfigs.delete(id);
   }
 
   public setPlayerTeam(id: number, team: 'red' | 'blue' | 'spec' | 'spectator'): void {
@@ -789,6 +816,7 @@ export class EngineInstance {
       const rt = this.getRuntime(id);
       rt.ticksRemaining = 0;
       rt.cooldownTimer = 0;
+      rt.slowdownTimer = 0;
       rt.prevDashDown = false;
       rt.staminaIdleTimer = 0;
       rt.staminaRegenUnlocked = false;
@@ -866,6 +894,17 @@ export class EngineInstance {
     this.isNeutralKickoff = true;
     this.resetPositions();
     this.resetMatchStats();
+    for (const [id, team] of this.playerTeams.entries()) {
+      if (team === 'red' || team === 'blue') {
+        const s = this.getOrCreateStats(id);
+        s.team = team;
+        const name = this.playerNames.get(id);
+        if (name) {
+          s.playerName = name;
+          s.nickname = name;
+        }
+      }
+    }
     this.fsm.startMatch(withIntro);
   }
 
@@ -912,6 +951,46 @@ export class EngineInstance {
     }
 
     if (isGameActive) {
+      if (!isReplay && this.botConfigs.size > 0 && !isCelebration) {
+        const botWorldPlayers: BotWorldPlayer[] = [];
+        for (const [pid, pDisc] of this.players.entries()) {
+          const pTeam = this.playerTeams.get(pid) ?? 'spec';
+          botWorldPlayers.push({
+            id: pid,
+            team: pTeam,
+            x: pDisc.pos.x,
+            y: pDisc.pos.y,
+            vx: pDisc.vel.x,
+            vy: pDisc.vel.y,
+            radius: pDisc.radius,
+            position: this.playerPositions.get(pid)
+          });
+        }
+        const botCtx: BotDecisionContext = {
+          ballX: this.ball.pos.x,
+          ballY: this.ball.pos.y,
+          ballVx: this.ball.vel.x,
+          ballVy: this.ball.vel.y,
+          ballRadius: this.ball.radius,
+          halfWidth: this.stadium.halfWidth,
+          halfHeight: this.stadium.halfHeight,
+          goalHalfHeight: this.stadium.goalHalfHeight ?? 85,
+          kickMargin: this.world.kickMargin ?? 4,
+          currentTick: this.currentTick,
+          isKickoff: this.fsm.state === MatchPhase.KICKOFF && !this.shouldBypassKickoffBarriers(),
+          players: botWorldPlayers
+        };
+        for (const [botId, botCfg] of this.botConfigs.entries()) {
+          if (inputs.has(botId)) continue;
+          const bDisc = this.players.get(botId);
+          const bTeam = this.playerTeams.get(botId);
+          if (!bDisc || (bTeam !== 'red' && bTeam !== 'blue')) continue;
+          const bWorld = botWorldPlayers.find((w) => w.id === botId);
+          if (!bWorld) continue;
+          inputs.set(botId, computeBotInput(bWorld, { ...botCfg, team: bTeam }, bDisc.stamina, botCtx));
+        }
+      }
+
       const baseKickCfg = (this.modifiers as any).kickStrength !== undefined
         ? ((this.modifiers as any).kickStrength / 4.545) * 450.0
         : (this.modifiers.baseKickStrength ?? 450.0);
@@ -933,6 +1012,7 @@ export class EngineInstance {
           isDashing: player.isDashing,
           dashTicksRemaining: rt.ticksRemaining,
           dashCooldownTimer: rt.cooldownTimer,
+          dashSlowdownTimer: rt.slowdownTimer,
           dashDirX: rt.dirX,
           dashDirY: rt.dirY,
           isTurbo: player.isTurbo,
@@ -963,6 +1043,7 @@ export class EngineInstance {
         player.kicking = pState.kicking ?? false;
         rt.ticksRemaining = pState.dashTicksRemaining;
         rt.cooldownTimer = pState.dashCooldownTimer;
+        rt.slowdownTimer = pState.dashSlowdownTimer ?? 0;
         rt.dirX = pState.dashDirX;
         rt.dirY = pState.dashDirY;
         rt.prevDashDown = pState.prevDashState ?? false;
@@ -1584,6 +1665,9 @@ export class EngineInstance {
       }
       s.totalPoints = s.points;
     }
+    for (const s of this.matchStats.values()) {
+      s.totalPoints = s.points;
+    }
     return Array.from(this.matchStats.values());
   }
 
@@ -1962,7 +2046,8 @@ export {
   sanitizeGameplayConfig,
   defaultStadium,
   PLAYER_POSITIONS,
-  stepPlayerKinematics
+  stepPlayerKinematics,
+  computeBotInput
 };
 
 export type {
@@ -2007,5 +2092,9 @@ export type {
   KinematicsConfig,
   PlayerKinematicsInput,
   PlayerKinematicsState,
-  StepKinematicsOptions
+  StepKinematicsOptions,
+  BotConfig,
+  BotDifficulty,
+  BotWorldPlayer,
+  BotDecisionContext
 };

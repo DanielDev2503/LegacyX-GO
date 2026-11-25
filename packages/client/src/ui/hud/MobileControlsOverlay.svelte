@@ -383,11 +383,11 @@
 
   function getEmoteFanOffset(index: number, total: number): { x: number; y: number } {
     const count = Math.max(1, total);
-    const startAngle = -Math.PI * 0.92;
-    const endAngle = -Math.PI * 0.08;
+    const startAngle = Math.PI * 0.72;
+    const endAngle = Math.PI * 1.48;
     const angle =
-      count === 1 ? -Math.PI / 2 : startAngle + (index / (count - 1)) * (endAngle - startAngle);
-    const radius = 66;
+      count === 1 ? Math.PI * 1.1 : startAngle + (index / (count - 1)) * (endAngle - startAngle);
+    const radius = 50;
     return {
       x: Math.round(Math.cos(angle) * radius),
       y: Math.round(Math.sin(angle) * radius)
@@ -864,8 +864,8 @@
   }
 
   .node-emotes {
-    bottom: 92px;
-    right: 122px;
+    bottom: 146px;
+    right: 132px;
   }
 
   .touch-btn {
@@ -968,10 +968,23 @@
   }
 
   .btn-dash,
-  .btn-turbo,
-  .btn-emotes {
+  .btn-turbo {
     width: 60px;
     height: 60px;
+  }
+
+  .btn-emotes {
+    width: 34px;
+    height: 34px;
+    border-width: 1.5px;
+  }
+
+  .btn-emotes .btn-icon-emoji {
+    font-size: 0.95rem;
+  }
+
+  .btn-emotes .btn-sub-label {
+    display: none;
   }
 
   .btn-turbo.is-active {
@@ -1071,10 +1084,10 @@
 
   .emote-fan-item {
     position: absolute;
-    left: -21px;
-    top: -21px;
-    width: 42px;
-    height: 42px;
+    left: -17px;
+    top: -17px;
+    width: 34px;
+    height: 34px;
     border-radius: 9999px;
     background: #0d1729;
     border: 1.5px solid rgba(0, 229, 255, 0.6);

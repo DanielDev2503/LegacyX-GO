@@ -18,6 +18,8 @@ export interface GameplayConfig {
   dashDistance: number;            // min: 3.75, max: 112.5, def: 48.0 (px, ~7 ticks continuos)
   dashCooldown: number;            // min: 0.0, max: 5.0, def: 1.25 (s)
   dashStaminaCost: number;         // min: 10, max: 100, def: 33 (% estamina que consume el Dash)
+  dashSlowdownDuration: number;    // min: 0.0, max: 3.0, def: 1.0 (s penalización temporal post-dash)
+  dashSlowdownPercent: number;     // min: 0, max: 70, def: 35 (% reducción velocidad máxima tras dash)
   staminaRechargeRate: number;     // min: 5.0, max: 100.0, def: 30.0 (%/s)
   staminaRechargeDelay: number;    // min: 0.0, max: 5.0, def: 1.0 (s)
   staminaRegenMoving: boolean;     // default: false
@@ -174,6 +176,24 @@ export const GAMEPLAY_CONFIG_LIMITS: Record<
     unit: '%',
     description: 'Porcentaje de barra de estamina consumido en cada impulso de Dash.'
   },
+  dashSlowdownDuration: {
+    min: 0.0,
+    max: 3.0,
+    step: 0.1,
+    default: 1.0,
+    label: 'Penalización Post-Dash',
+    unit: 's',
+    description: 'Duración de la reducción progresiva de velocidad después de usar el Dash.'
+  },
+  dashSlowdownPercent: {
+    min: 0,
+    max: 70,
+    step: 5,
+    default: 35,
+    label: 'Reducción Post-Dash',
+    unit: '%',
+    description: 'Porcentaje inicial de reducción de velocidad justo al finalizar un Dash.'
+  },
   staminaRechargeRate: {
     min: 5.0,
     max: 100.0,
@@ -267,6 +287,8 @@ export const DEFAULT_GAMEPLAY_CONFIG: Readonly<GameplayConfig> = Object.freeze({
   dashDistance: 48.0,
   dashCooldown: 1.25,
   dashStaminaCost: 33,
+  dashSlowdownDuration: 1.0,
+  dashSlowdownPercent: 35,
   staminaRechargeRate: 30.0,
   staminaRechargeDelay: 1.0,
   staminaRegenMoving: false,

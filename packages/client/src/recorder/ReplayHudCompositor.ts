@@ -1925,7 +1925,46 @@ function drawScoreboard(ctx: CanvasRenderingContext2D, state: ReplayHudOverlaySt
     return;
   }
 
-  // World Cup Broadcast Scoreboards (wc2006..wc2026) matching MatchScoreboard.svelte
+  // World Cup & Champions Broadcast Scoreboards matching MatchScoreboard.svelte
+  if (design === 'champions') {
+    const barW = 360;
+    const barH = 42;
+    const left = centerX - barW / 2;
+    drawRoundedRect(ctx, left, top + 2, barW, barH, 21);
+    ctx.fillStyle = '#071236';
+    ctx.fill();
+    ctx.lineWidth = isWarning ? 1.8 : 1.5;
+    ctx.strokeStyle = isWarning ? '#ef4444' : '#38bdf8';
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+
+    drawRoundedRect(ctx, left + 2, top + 4, 72, barH - 4, 19);
+    ctx.fillStyle = '#f8fafc';
+    ctx.fill();
+    ctx.font = '900 13.5px "JetBrains Mono", monospace';
+    ctx.fillStyle = '#071236';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(`★ ${clockStr}`, left + 38, top + 2 + barH / 2);
+
+    ctx.font = '900 14px Inter, system-ui, sans-serif';
+    ctx.fillStyle = '#f8fafc';
+    ctx.textAlign = 'right';
+    ctx.fillText(state.redAcronym.slice(0, 6), centerX - 10, top + 2 + barH / 2);
+    drawRoundedRect(ctx, centerX - 2, top + 8, 56, 28, 14);
+    ctx.fillStyle = '#1d4ed8';
+    ctx.fill();
+    ctx.font = '900 16px Inter, system-ui, sans-serif';
+    ctx.fillStyle = '#ffffff';
+    ctx.textAlign = 'center';
+    ctx.fillText(`${state.redScore} - ${state.blueScore}`, centerX + 26, top + 2 + barH / 2);
+    ctx.font = '900 14px Inter, system-ui, sans-serif';
+    ctx.textAlign = 'left';
+    ctx.fillText(state.blueAcronym.slice(0, 6), centerX + 62, top + 2 + barH / 2);
+    if (state.isGoldenGoal) drawGoldenGoalEmblem(ctx, left + barW + 24, top + 2 + barH / 2);
+    ctx.restore();
+    return;
+  }
   if (design === 'wc2006') {
     drawWc2006Scoreboard(ctx, state, centerX, top, clockStr, isWarning);
   } else if (design === 'wc2010') {

@@ -112,7 +112,6 @@
     padding: max(12px, env(safe-area-inset-top, 12px)) max(12px, env(safe-area-inset-right, 12px))
       max(12px, env(safe-area-inset-bottom, 12px)) max(12px, env(safe-area-inset-left, 12px));
     background: rgba(3, 6, 14, 0.86);
-    backdrop-filter: blur(8px);
     pointer-events: auto;
   }
 

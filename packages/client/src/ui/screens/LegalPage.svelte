@@ -66,10 +66,6 @@
 <div class="legal-page-root" data-testid="standalone-legal-page">
   <header class="legal-topbar">
     <div class="brand-area">
-      <a href="/" class="back-game-btn">
-        <span aria-hidden="true">←</span>
-        <span>Ir a LegacyX-GO</span>
-      </a>
       <div class="brand-meta">
         <strong class="brand-title">CENTRO LEGAL · {LEGAL_OPERATOR.domain}</strong>
         <span class="brand-sub">{LEGAL_OPERATOR.legalBaseUrl}</span>
@@ -150,7 +146,9 @@
 
 <style>
   .legal-page-root {
-    min-height: 100dvh;
+    position: fixed;
+    inset: 0;
+    height: 100dvh;
     width: 100%;
     background: #060b14;
     color: #e2e8f0;
@@ -158,6 +156,8 @@
     display: flex;
     flex-direction: column;
     overflow-y: auto;
+    overflow-x: hidden;
+    -webkit-overflow-scrolling: touch;
     box-sizing: border-box;
   }
 
@@ -177,25 +177,6 @@
     align-items: center;
     gap: 0.9rem;
     flex-wrap: wrap;
-  }
-
-  .back-game-btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.45rem;
-    padding: 0.45rem 0.9rem;
-    border-radius: 999px;
-    background: rgba(0, 229, 255, 0.14);
-    border: 1px solid rgba(0, 229, 255, 0.48);
-    color: #67e8f9;
-    text-decoration: none;
-    font-size: 0.82rem;
-    font-weight: 800;
-  }
-
-  .back-game-btn:hover {
-    background: #00e5ff;
-    color: #06101c;
   }
 
   .brand-meta {

@@ -93,16 +93,15 @@ describe('Overhaul Client Suite: Mobile Carousel, Modifiers Presets, Legal, Disc
     expect(accountHtml).toContain('Eliminar cuenta permanentemente');
   });
 
-  it('Gatekeeper, Lobby and LegalModal enforce consent checkbox, social Discord link and WebRTC P2P disclosure', () => {
+  it('Gatekeeper, Lobby, Settings and LegalModal enforce consent checkbox and WebRTC P2P disclosure (with footer cards moved into Settings)', () => {
     userProfile.gatekeeperTab = 'register';
     const { html: gateHtml } = render(Gatekeeper);
-    expect(gateHtml).toContain('https://discord.gg/VBg4fqdY4N');
     expect(gateHtml).toContain('Política de Privacidad');
     expect(gateHtml).toContain('WebRTC P2P');
+    expect(gateHtml).not.toContain('gatekeeper-bottom-strip');
 
     const { html: lobbyHtml } = render(Lobby);
-    expect(lobbyHtml).toContain('https://discord.gg/VBg4fqdY4N');
-    expect(lobbyHtml).toContain('Privacidad');
+    expect(lobbyHtml).not.toContain('lobby-community-footer');
 
     expect(parseLegalDocFromLocation('?legal=privacy', '/')).toBe('privacy');
     expect(parseLegalDocFromLocation('', '/legal/terms')).toBe('terms');

@@ -21,6 +21,7 @@
   import { drawBallDesign, type BallSkin } from '../../renderer/ballDesigns.js';
   import MatchScoreboard from '../components/MatchScoreboard.svelte';
   import KitPatternBadge from '../components/KitPatternBadge.svelte';
+  import EmojiPickerPopover from '../components/EmojiPickerPopover.svelte';
   import SocialLinksSection from '../components/SocialLinksSection.svelte';
   import { LEGAL_DOCUMENTS, LEGAL_OPERATOR, getLegalHref } from '../../legal/legalContent.js';
 
@@ -41,6 +42,7 @@
     { id: 'neon', label: 'Neón' },
     { id: 'cyber', label: 'Cyber' },
     { id: 'gold', label: 'Oro' },
+    { id: 'champions', label: 'Champions Starball', era: 'UCL' },
     { id: 'wc2006', label: 'Teamgeist', era: '2006' },
     { id: 'wc2010', label: 'Jabulani', era: '2010' },
     { id: 'wc2014', label: 'Brazuca', era: '2014' },
@@ -51,6 +53,7 @@
 
   const SCOREBOARD_DESIGN_OPTIONS: readonly { id: ScoreboardDesignType; label: string; era: string }[] = [
     { id: 'original', label: 'Original LegacyX', era: 'Clásico' },
+    { id: 'champions', label: 'Champions League', era: 'UCL' },
     { id: 'wc2006', label: 'Alemania 2006', era: 'WC 2006' },
     { id: 'wc2010', label: 'Sudáfrica 2010', era: 'WC 2010' },
     { id: 'wc2014', label: 'Brasil 2014', era: 'WC 2014' },
@@ -74,7 +77,7 @@
     gameUI.saveSettings();
   }
 
-  // Keybinding remapping state
+  // Keybinding remapping state & controls sub-section tab
   let rebindingAction = $state<string | null>(null);
 
   // Audio accordions state
@@ -816,7 +819,53 @@
             <div class="swap-notice-pill">{gameUI.lastKeybindSwapNotice}</div>
           {/if}
 
+          <div class="controls-subtabs" role="tablist" aria-label="Subsecciones de Controles">
+            <button
+              type="button"
+              role="tab"
+              data-testid="controls-subtab-keyboard"
+              aria-selected={gameUI.activeControlsSubTab === 'keyboard'}
+              class="controls-subtab-btn"
+              class:active={gameUI.activeControlsSubTab === 'keyboard'}
+              onclick={() => {
+                soundFX.playUIClick();
+                gameUI.activeControlsSubTab = 'keyboard';
+              }}
+            >
+              Teclado y Mouse
+            </button>
+            <button
+              type="button"
+              role="tab"
+              data-testid="controls-subtab-gamepad"
+              aria-selected={gameUI.activeControlsSubTab === 'gamepad'}
+              class="controls-subtab-btn"
+              class:active={gameUI.activeControlsSubTab === 'gamepad'}
+              onclick={() => {
+                soundFX.playUIClick();
+                gameUI.activeControlsSubTab = 'gamepad';
+              }}
+            >
+              Mando / Control
+            </button>
+            <button
+              type="button"
+              role="tab"
+              data-testid="controls-subtab-touch"
+              aria-selected={gameUI.activeControlsSubTab === 'touch'}
+              class="controls-subtab-btn"
+              class:active={gameUI.activeControlsSubTab === 'touch'}
+              onclick={() => {
+                soundFX.playUIClick();
+                gameUI.activeControlsSubTab = 'touch';
+              }}
+            >
+              Control Táctil
+            </button>
+          </div>
+
           <div class="controls-scroll-area">
+            {#if gameUI.activeControlsSubTab === 'keyboard'}
             <!-- Selector de Modo de Movimiento (Teclado vs Ratón 360°) -->
             <div class="controls-card movement-mode-card">
               <div class="movement-mode-header">
@@ -1066,7 +1115,7 @@
                 </div>
               </div>
             </div>
-
+            {:else if gameUI.activeControlsSubTab === 'gamepad'}
             <!-- Subsección: Mando / Controlador (Gamepad Plug & Play) -->
             <div class="controls-card gamepad-controls-card" data-testid="gamepad-controls-section">
               <div class="gamepad-header-row">
@@ -1132,7 +1181,7 @@
                 </button>
               </div>
             </div>
-
+            {:else}
             <!-- Subsección: Controles Táctiles y HUD Móvil -->
             <div class="controls-card mobile-controls-card" data-testid="mobile-controls-section">
               <div class="mobile-controls-header">
@@ -1392,6 +1441,7 @@
                 </div>
               </div>
             </div>
+            {/if}
           </div>
 
           <!-- Footer con reset -->
@@ -2361,6 +2411,52 @@
                     </label>
                   </div>
                 </div>
+
+                <!-- Mostrar nombres de jugadores en cancha -->
+                <div class="video-setting-row">
+                  <div class="setting-copy">
+                    <span class="setting-title">Mostrar nombres en cancha</span>
+                    <span class="setting-desc">Muestra el apodo del jugador debajo de su disco y encima de su etiqueta de posición</span>
+                  </div>
+                  <div class="setting-control">
+                    <label class="switch-toggle" aria-label="Mostrar nombres en cancha">
+                      <input
+                        type="checkbox"
+                        data-testid="toggle-player-nicknames"
+                        checked={gameUI.settings.showPlayerNicknames !== false}
+                        onchange={(e) => {
+                          soundFX.playUIClick();
+                          gameUI.settings.showPlayerNicknames = (e.currentTarget as HTMLInputElement).checked;
+                          gameUI.saveSettings();
+                        }}
+                      />
+                      <span class="toggle-slider"></span>
+                    </label>
+                  </div>
+                </div>
+
+                <!-- Mostrar tarjeta de Ping y FPS -->
+                <div class="video-setting-row">
+                  <div class="setting-copy">
+                    <span class="setting-title">Mostrar tarjeta de Ping y FPS</span>
+                    <span class="setting-desc">Muestra el monitor en vivo de latencia (ms) y cuadros por segundo en una esquina durante el partido</span>
+                  </div>
+                  <div class="setting-control">
+                    <label class="switch-toggle" aria-label="Mostrar tarjeta de Ping y FPS">
+                      <input
+                        type="checkbox"
+                        data-testid="toggle-telemetry-card"
+                        checked={gameUI.settings.showTelemetryCard === true}
+                        onchange={(e) => {
+                          soundFX.playUIClick();
+                          gameUI.settings.showTelemetryCard = (e.currentTarget as HTMLInputElement).checked;
+                          gameUI.saveSettings();
+                        }}
+                      />
+                      <span class="toggle-slider"></span>
+                    </label>
+                  </div>
+                </div>
               </div>
             </section>
 
@@ -3226,19 +3322,12 @@
                     />
                   </div>
                 {:else}
-                  <div class="emoji-compact-grid">
-                    {#each EMOJI_PALETTE as emoji}
-                      <button
-                        type="button"
-                        class="emoji-choice-btn-compact"
-                        class:selected={selectedEmoji === emoji}
-                        onclick={() => handleEmojiSelect(emoji)}
-                        aria-label={`Seleccionar avatar ${emoji}`}
-                      >
-                        {emoji}
-                      </button>
-                    {/each}
-                  </div>
+                  <EmojiPickerPopover
+                    value={selectedEmoji || '⚽'}
+                    onSelect={(emoji) => handleEmojiSelect(emoji)}
+                    ariaLabel="Seleccionar emoji de avatar"
+                    testId="settings-avatar-emoji-picker"
+                  />
                 {/if}
               </div>
             </div>
@@ -3317,20 +3406,15 @@
                           </div>
                         </td>
                         <td class="emoji-picker-td">
-                          <select
-                            class="inline-emoji-select"
+                          <EmojiPickerPopover
                             value={item.emoji}
-                            onchange={(e) => {
-                              item.emoji = (e.currentTarget as HTMLSelectElement).value;
-                              soundFX.playUIClick();
+                            compact={true}
+                            onSelect={(emoji) => {
+                              item.emoji = emoji;
                               gameUI.saveSettings();
                             }}
-                            aria-label="Seleccionar emoji"
-                          >
-                            {#each EMOJI_CATALOG as emoji}
-                              <option value={emoji}>{emoji}</option>
-                            {/each}
-                          </select>
+                            ariaLabel="Seleccionar emoji de disparador"
+                          />
                         </td>
                         <td class="delete-td">
                           <button
@@ -3364,16 +3448,14 @@
 
                 <div class="input-field emoji-field">
                   <label for="new-trigger-emoji">Emoji:</label>
-                  <select
-                    id="new-trigger-emoji"
-                    class="trigger-emoji-select"
-                    bind:value={newTriggerEmoji}
-                    onchange={() => soundFX.playUIClick()}
-                  >
-                    {#each EMOJI_CATALOG as emoji}
-                      <option value={emoji}>{emoji}</option>
-                    {/each}
-                  </select>
+                  <EmojiPickerPopover
+                    value={newTriggerEmoji}
+                    compact={true}
+                    onSelect={(emoji) => {
+                      newTriggerEmoji = emoji;
+                    }}
+                    ariaLabel="Elegir emoji para nuevo disparador"
+                  />
                 </div>
 
                 <button
@@ -3660,7 +3742,8 @@
   .settings-modal-card {
     position: relative;
     width: 100%;
-    max-width: 980px;
+    max-width: min(980px, 100%);
+    min-width: 0;
     height: min(680px, calc(100dvh - 1.5rem));
     max-height: calc(100dvh - 1.5rem);
     background: rgba(10, 16, 26, 0.95);
@@ -3669,6 +3752,8 @@
     display: flex;
     flex-direction: row;
     overflow: hidden;
+    overflow-x: hidden;
+    box-sizing: border-box;
     box-shadow: 0 0 24px rgba(0, 229, 255, 0.35), inset 0 0 12px rgba(0, 229, 255, 0.15);
     pointer-events: auto;
   }
@@ -5514,13 +5599,6 @@
     box-shadow: 0 0 8px rgba(0, 229, 255, 0.35);
   }
 
-  .inline-emoji-select option,
-  .trigger-emoji-select option {
-    background: #0b111e;
-    color: #f1f5f9;
-    font-size: 1.1rem;
-  }
-
   .delete-td {
     text-align: center;
   }
@@ -6571,5 +6649,48 @@
     background: rgba(0, 229, 255, 0.16);
     border-color: #00e5ff;
     color: #67e8f9;
+  }
+
+  .controls-subtabs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    padding: 0 0 0.65rem 0;
+    border-bottom: 1px solid rgba(148, 163, 184, 0.16);
+    margin-bottom: 0.65rem;
+    flex-shrink: 0;
+  }
+
+  .controls-subtab-btn {
+    padding: 0.42rem 0.85rem;
+    border-radius: 999px;
+    border: 1px solid rgba(148, 163, 184, 0.28);
+    background: #0d1626;
+    color: #94a3b8;
+    font-size: 0.78rem;
+    font-weight: 700;
+    cursor: pointer;
+    transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
+  }
+
+  .controls-subtab-btn:hover {
+    border-color: #38bdf8;
+    color: #e2e8f0;
+  }
+
+  .controls-subtab-btn.active {
+    background: rgba(0, 229, 255, 0.16);
+    border-color: #00e5ff;
+    color: #67e8f9;
+  }
+
+  .tab-content,
+  .tab-pane,
+  .controls-scroll-area,
+  .settings-scroll-area {
+    min-width: 0;
+    max-width: 100%;
+    overflow-x: hidden;
+    box-sizing: border-box;
   }
 </style>

@@ -19,6 +19,7 @@ import {
 } from '@legacyx/core';
 import { MatchPhase as GameEngineMatchPhase } from '../../../core/src/game/GameFSM.js';
 import { gameUI, DEFAULT_GAMEPAD_BINDS } from '../../src/ui/state/gameUI.svelte.js';
+import { userProfile } from '../../src/ui/state/userProfile.svelte.js';
 import { EMOJI_CATALOG } from '../../src/ui/utils/constants.js';
 import { pollGamepadInput } from '../../src/controllers/InputManager.js';
 import { DiscRenderer } from '../../src/renderer/DiscRenderer.js';
@@ -244,6 +245,7 @@ describe('Mega Overhaul Verification Suite (18 Features & UI Fixes)', () => {
     expect(gameUI.settings.gamepadBinds.kick).toEqual(DEFAULT_GAMEPAD_BINDS.kick);
 
     gameUI.activeSettingsTab = 'controls';
+    gameUI.activeControlsSubTab = 'gamepad';
     const { html } = render(SettingsModal);
     expect(html).toContain('data-testid="gamepad-controls-section"');
     expect(html).toContain('Zona muerta del Stick Izquierdo');
@@ -451,13 +453,22 @@ describe('Mega Overhaul Verification Suite (18 Features & UI Fixes)', () => {
   });
 
   it('16-18. Gatekeeper, Lobby, and Settings render with updated layout and no banned blur/legacy syntax', () => {
+    userProfile.gatekeeperTab = 'register';
     const { html: gkHtml } = render(Gatekeeper);
     expect(gkHtml).toContain('/legal/privacy');
-    expect(gkHtml).toContain('https://discord.gg/VBg4fqdY4N');
+    expect(gkHtml).not.toContain('gatekeeper-bottom-strip');
 
     const { html: lobbyHtml } = render(Lobby);
-    expect(lobbyHtml).toContain('data-testid="lobby-community-footer"');
-    expect(lobbyHtml).toContain('/legal/privacy');
+    expect(lobbyHtml).not.toContain('data-testid="lobby-community-footer"');
+    expect(lobbyHtml).toContain('data-testid="btn-open-tutorial"');
+
+    gameUI.activeSettingsTab = 'social';
+    const { html: settingsSocialHtml } = render(SettingsModal);
+    expect(settingsSocialHtml).toContain('https://discord.gg/VBg4fqdY4N');
+
+    gameUI.activeSettingsTab = 'legal';
+    const { html: settingsLegalHtml } = render(SettingsModal);
+    expect(settingsLegalHtml).toContain('/legal/privacy');
 
     gameUI.activeSettingsTab = 'audio';
     const { html: settingsAudioHtml } = render(SettingsModal);

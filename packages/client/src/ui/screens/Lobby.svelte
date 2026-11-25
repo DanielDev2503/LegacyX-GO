@@ -5,8 +5,51 @@
   import { sharedSignaling } from '../../net/SignalingClient.js';
   import { gameApp } from '../../net/GameApp.js';
   import CountryFlagSvg from '../components/CountryFlagSvg.svelte';
-  import SocialLinksSection from '../components/SocialLinksSection.svelte';
-  import { getLegalHref } from '../../legal/legalContent.js';
+  import TutorialModal from '../modals/TutorialModal.svelte';
+
+  let showTutorial = $state(false);
+  let checkedTutorialOnce = false;
+
+  const GUEST_TUTORIAL_SESSION_KEY = 'legacyx_tutorial_seen_guest_v1';
+
+  function dismissTutorial() {
+    showTutorial = false;
+    try {
+      if (userProfile.isAuthenticated && !userProfile.isGuest && userProfile.id) {
+        if (typeof localStorage !== 'undefined') {
+          localStorage.setItem(`legacyx_tutorial_seen_${userProfile.id}`, '1');
+        }
+      } else if (typeof sessionStorage !== 'undefined') {
+        sessionStorage.setItem(GUEST_TUTORIAL_SESSION_KEY, '1');
+      }
+    } catch {
+      // Ignore storage errors
+    }
+  }
+
+  $effect(() => {
+    if (checkedTutorialOnce || typeof window === 'undefined') return;
+    checkedTutorialOnce = true;
+    try {
+      if (userProfile.isAuthenticated && !userProfile.isGuest && userProfile.id) {
+        const key = `legacyx_tutorial_seen_${userProfile.id}`;
+        const seen = typeof localStorage !== 'undefined' && Boolean(localStorage.getItem(key));
+        const isFirstEntry = (userProfile.stats?.matchesPlayed ?? 0) === 0;
+        if (!seen && isFirstEntry) {
+          showTutorial = true;
+        }
+      } else {
+        const seenGuest =
+          typeof sessionStorage !== 'undefined' &&
+          Boolean(sessionStorage.getItem(GUEST_TUTORIAL_SESSION_KEY));
+        if (!seenGuest) {
+          showTutorial = true;
+        }
+      }
+    } catch {
+      // Ignore storage access restriction
+    }
+  });
 
   let passwordInput = $state('');
   let passwordError = $state('');
@@ -338,11 +381,27 @@
           </div>
         </div>
 
-        <div class="online-pill">
-          <span class="pulse-dot"></span>
-          <span class="online-text">
-            {gameUI.onlineUsersCount} {gameUI.onlineUsersCount === 1 ? 'en línea' : 'en línea'}
-          </span>
+        <div class="header-right-actions">
+          <button
+            type="button"
+            class="nav-pill-btn tutorial-pill-btn"
+            data-testid="btn-open-tutorial"
+            onmouseenter={() => soundFX.playUIHover()}
+            onclick={() => {
+              soundFX.playUIClick();
+              showTutorial = true;
+            }}
+            title="Ver tutorial de controles y modos"
+          >
+            <span>? Tutorial</span>
+          </button>
+
+          <div class="online-pill">
+            <span class="pulse-dot"></span>
+            <span class="online-text">
+              {gameUI.onlineUsersCount} {gameUI.onlineUsersCount === 1 ? 'en línea' : 'en línea'}
+            </span>
+          </div>
         </div>
       </header>
 
@@ -680,19 +739,7 @@
     </aside>
   </div>
 
-  <!-- Barra inferior dedicada para Comunidad y Centro Legal (sin solapar el Ranking) -->
-  <footer class="lobby-community-legal lobby-bottom-bar" data-testid="lobby-community-footer">
-    <SocialLinksSection compact={true} title="COMUNIDAD DISCORD Y REDES" />
-    <nav class="lobby-legal-links" aria-label="Enlaces legales">
-      <a href={getLegalHref('privacy')} target="_blank" rel="noopener noreferrer" class="lobby-legal-link">Privacidad</a>
-      <span class="legal-dot" aria-hidden="true">·</span>
-      <a href={getLegalHref('terms')} target="_blank" rel="noopener noreferrer" class="lobby-legal-link">Términos</a>
-      <span class="legal-dot" aria-hidden="true">·</span>
-      <a href={getLegalHref('legal')} target="_blank" rel="noopener noreferrer" class="lobby-legal-link">Aviso Legal</a>
-      <span class="legal-dot" aria-hidden="true">·</span>
-      <a href={getLegalHref('rights')} target="_blank" rel="noopener noreferrer" class="lobby-legal-link">Soporte y Borrado</a>
-    </nav>
-  </footer>
+  <TutorialModal isOpen={showTutorial} onClose={dismissTutorial} />
 
   <!-- PASSWORD PROMPT MODAL -->
   {#if gameUI.activeModal === 'PASSWORD_PROMPT' && gameUI.pendingPasswordRoom}
@@ -811,26 +858,41 @@
     background: radial-gradient(circle at 50% 18%, #111a2e 0%, #070b14 100%);
     pointer-events: auto;
     user-select: none;
-    overflow: hidden;
+    overflow-y: hidden;
+    overflow-x: hidden;
     display: flex;
     flex-direction: column;
     gap: 10px;
   }
 
+  .header-right-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .tutorial-pill-btn {
+    border-color: rgba(56, 189, 248, 0.45);
+    color: #67e8f9;
+  }
+
   .lobby-workspace {
     flex: 1;
     min-height: 0;
+    min-width: 0;
     width: 100%;
     max-width: 1320px;
     margin: 0 auto;
     display: grid;
-    grid-template-columns: minmax(0, 1.5fr) minmax(340px, 0.95fr);
+    grid-template-columns: minmax(0, 1.5fr) minmax(300px, 0.95fr);
     gap: 16px;
   }
 
   @media (max-width: 960px) {
     .lobby-root {
       overflow-y: auto;
+      overflow-x: hidden;
     }
     .lobby-workspace {
       flex: none;

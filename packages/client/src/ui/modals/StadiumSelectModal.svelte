@@ -386,6 +386,8 @@
   .stadium-modal-card {
     position: relative;
     width: min(96vw, 920px);
+    max-width: 100%;
+    min-width: 0;
     height: min(640px, calc(100dvh - 1.5rem));
     max-height: calc(100dvh - 1.5rem);
     background: rgba(10, 16, 26, 0.95);
@@ -395,6 +397,7 @@
     display: flex;
     flex-direction: column;
     overflow: hidden;
+    overflow-x: hidden;
     color: #dde2f1;
     pointer-events: auto;
   }

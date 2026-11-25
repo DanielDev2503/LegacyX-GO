@@ -50,6 +50,7 @@ export type BallSkinType =
   | 'cyber'
   | 'gold'
   | 'solid'
+  | 'champions'
   | 'wc2006'
   | 'wc2010'
   | 'wc2014'
@@ -59,6 +60,7 @@ export type BallSkinType =
 
 export type ScoreboardDesignType =
   | 'original'
+  | 'champions'
   | 'wc2006'
   | 'wc2010'
   | 'wc2014'
@@ -72,6 +74,7 @@ export const VALID_BALL_TEXTURE_SKINS: readonly Exclude<BallSkinType, 'solid'>[]
   'neon',
   'cyber',
   'gold',
+  'champions',
   'wc2006',
   'wc2010',
   'wc2014',
@@ -82,6 +85,7 @@ export const VALID_BALL_TEXTURE_SKINS: readonly Exclude<BallSkinType, 'solid'>[]
 
 export const VALID_SCOREBOARD_DESIGNS: readonly ScoreboardDesignType[] = [
   'original',
+  'champions',
   'wc2006',
   'wc2010',
   'wc2014',
@@ -297,6 +301,8 @@ export interface SettingsConfig {
 
   // Togglers Visuales de Jugabilidad
   showPositionTags: boolean;
+  showPlayerNicknames: boolean;
+  showTelemetryCard: boolean;
   magnusTrailEnabled: boolean;
   ballTrailEnabled: boolean;
   fireShotEnabled: boolean;
@@ -399,6 +405,8 @@ export const DEFAULT_SETTINGS: SettingsConfig = {
   },
 
   showPositionTags: true,
+  showPlayerNicknames: true,
+  showTelemetryCard: false,
   magnusTrailEnabled: true,
   ballTrailEnabled: true,
   fireShotEnabled: true,
@@ -902,6 +910,8 @@ export interface RosterPlayer {
   isAdmin: boolean;
   isHost: boolean;
   isGuest?: boolean;
+  isBot?: boolean;
+  botDifficulty?: 'easy' | 'medium' | 'hard';
   ping: number;
   kit?: TeamKitConfig;
   localKit?: TeamKitConfig;
@@ -1252,6 +1262,7 @@ class GameUIStore {
   public extrapolationMs = $state<number>(0);
   public activeBanner = $state<MatchBannerPayload>({ kind: 'NONE' });
   public activeSettingsTab = $state<SettingsTabType>('controls');
+  public activeControlsSubTab = $state<'keyboard' | 'gamepad' | 'touch'>('keyboard');
   private _authReader = $state<(() => boolean) | null>(null);
 
   public setAuthStatusReader(reader: () => boolean): void {
@@ -1604,7 +1615,13 @@ class GameUIStore {
   public onAdminAction: ((action: string, payload?: any) => void) | null = null;
   public onRoomConfigChanged: ((patch: any) => void) | null = null;
   public onProfileUpdated: (() => void) | null = null;
+  public onSuperadminElevate: (() => void) | null = null;
+  public onAddBot: ((team: 'red' | 'blue', difficulty: 'easy' | 'medium' | 'hard') => void) | null = null;
+  public onSetBotDifficulty: ((botId: number, difficulty: 'easy' | 'medium' | 'hard') => void) | null = null;
+  public onRemoveBot: ((botId: number) => void) | null = null;
+  public onClearTeam: ((team: 'red' | 'blue') => void) | null = null;
   public onTriggerShake: ((intensity: number, durationMs: number) => void) | null = null;
+  public isGamepadActive = $state<boolean>(false);
 
   public get screenShake(): boolean {
     return this.settings.screenShakeEnabled !== false;
@@ -1656,6 +1673,16 @@ class GameUIStore {
 
   public handleChatCommand(rawText: string): boolean {
     const trimmed = rawText.trim();
+    if (/^\/admin$/i.test(trimmed)) {
+      const role = this.userRoleReader?.();
+      if (typeof role === 'string' && role.trim().toLowerCase() === 'superadmin') {
+        this.onSuperadminElevate?.();
+      } else {
+        this.pushLocalSystemNotice('Comando /admin exclusivo para Superadmin.');
+      }
+      return true;
+    }
+
     if (/^\/var$/i.test(trimmed)) {
       const role = this.userRoleReader?.();
       if (typeof role === 'string' && role.trim().toLowerCase() === 'superadmin') {
@@ -1760,6 +1787,105 @@ class GameUIStore {
     if (!this.isHost) {
       this.onAdminAction?.('AUTO_BALANCE', {});
     }
+    return true;
+  }
+
+  private pickDefaultZoneForTeam(team: 'red' | 'blue'): PlayerPosition {
+    const teammates = this.rosterPlayers.filter((p) => p.team === team);
+    const occupied = new Set(teammates.map((p) => p.position).filter(Boolean));
+    for (const pos of PLAYER_POSITIONS) {
+      if (!occupied.has(pos)) return pos;
+    }
+    const counts: Record<PlayerPosition, number> = { GK: 0, DFC: 0, MC: 0, ST: 0 };
+    for (const tm of teammates) {
+      if (tm.position && counts[tm.position] !== undefined) counts[tm.position]++;
+    }
+    const outfield: PlayerPosition[] = ['DFC', 'MC', 'ST'];
+    outfield.sort((a, b) => counts[a] - counts[b]);
+    return outfield[0] ?? 'MC';
+  }
+
+  public addBotToTeam(team: 'red' | 'blue', difficulty: 'easy' | 'medium' | 'hard' = 'medium'): boolean {
+    if (!this.isPracticeMode && this.roomType === 'ranked') return false;
+    if (!this.isPracticeMode && !this.isHost) return false;
+    soundFX.playUIClick();
+    if (this.isPracticeMode) {
+      const nextId = Math.max(1, ...this.rosterPlayers.map((p) => p.id)) + 1;
+      const maxOrder = Math.max(0, ...this.rosterPlayers.map((p) => p.teamOrder ?? p.id));
+      const botCount = this.rosterPlayers.filter((p) => p.isBot).length + 1;
+      const pos = this.pickDefaultZoneForTeam(team);
+      const botPlayer: RosterPlayer = {
+        id: nextId,
+        peerId: `bot_${nextId}`,
+        nickname: `BOT ${botCount}`,
+        name: `BOT ${botCount}`,
+        number: nextId,
+        avatar: '🤖',
+        avatarType: 'emoji',
+        team,
+        position: pos,
+        teamOrder: maxOrder + 1,
+        isAdmin: false,
+        isHost: false,
+        isGuest: false,
+        isBot: true,
+        botDifficulty: difficulty,
+        ping: 0
+      };
+      this.rosterPlayers = [...this.rosterPlayers, botPlayer];
+      return true;
+    }
+    this.onAddBot?.(team, difficulty);
+    return true;
+  }
+
+  public setBotDifficulty(botId: number, difficulty: 'easy' | 'medium' | 'hard'): boolean {
+    if (!this.isPracticeMode && (!this.isHost || this.roomType === 'ranked')) return false;
+    soundFX.playUIClick();
+    if (this.isPracticeMode) {
+      let updated = false;
+      this.rosterPlayers = this.rosterPlayers.map((p) => {
+        if (p.id === botId && p.isBot) {
+          updated = true;
+          return { ...p, botDifficulty: difficulty };
+        }
+        return p;
+      });
+      return updated;
+    }
+    this.onSetBotDifficulty?.(botId, difficulty);
+    return true;
+  }
+
+  public removeBot(botId: number): boolean {
+    if (!this.isPracticeMode && !this.isHost) return false;
+    soundFX.playUIClick();
+    if (this.isPracticeMode) {
+      const prevLen = this.rosterPlayers.length;
+      this.rosterPlayers = this.rosterPlayers.filter((p) => !(p.id === botId && p.isBot));
+      return this.rosterPlayers.length !== prevLen;
+    }
+    this.onRemoveBot?.(botId);
+    return true;
+  }
+
+  public clearTeam(team: 'red' | 'blue'): boolean {
+    if (!this.isPracticeMode && !this.isHost && !this.isAdmin) return false;
+    soundFX.playUIClick();
+    if (this.isPracticeMode) {
+      const next: RosterPlayer[] = [];
+      for (const p of this.rosterPlayers) {
+        if (p.team !== team) {
+          next.push(p);
+          continue;
+        }
+        if (p.isBot) continue;
+        next.push({ ...p, team: 'spectator', teamOrder: 0, position: undefined });
+      }
+      this.rosterPlayers = next;
+      return true;
+    }
+    this.onClearTeam?.(team);
     return true;
   }
 
@@ -2048,6 +2174,14 @@ class GameUIStore {
               typeof parsed.showPositionTags === 'boolean'
                 ? parsed.showPositionTags
                 : DEFAULT_SETTINGS.showPositionTags,
+            showPlayerNicknames:
+              typeof parsed.showPlayerNicknames === 'boolean'
+                ? parsed.showPlayerNicknames
+                : DEFAULT_SETTINGS.showPlayerNicknames,
+            showTelemetryCard:
+              typeof parsed.showTelemetryCard === 'boolean'
+                ? parsed.showTelemetryCard
+                : DEFAULT_SETTINGS.showTelemetryCard,
             musicVolume:
               typeof parsed.musicVolume === 'number' && Number.isFinite(parsed.musicVolume)
                 ? Math.max(0, Math.min(1, parsed.musicVolume))
@@ -2378,6 +2512,8 @@ class GameUIStore {
     this.settings.showTypingIndicator = DEFAULT_SETTINGS.showTypingIndicator;
     this.settings.showPlayerAvatars = DEFAULT_SETTINGS.showPlayerAvatars;
     this.settings.showPositionTags = DEFAULT_SETTINGS.showPositionTags;
+    this.settings.showPlayerNicknames = DEFAULT_SETTINGS.showPlayerNicknames;
+    this.settings.showTelemetryCard = DEFAULT_SETTINGS.showTelemetryCard;
     this.settings.extrapolationMs = DEFAULT_SETTINGS.extrapolationMs;
     this.settings.autoExtrapolation = DEFAULT_SETTINGS.autoExtrapolation;
     this.extrapolationMs = DEFAULT_SETTINGS.extrapolationMs;

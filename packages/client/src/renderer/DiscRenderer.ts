@@ -142,6 +142,7 @@ export class DiscRenderer {
   public showTypingIndicator: boolean = true;
   public showPlayerAvatars: boolean = true;
   public showPositionTags: boolean = true;
+  public showPlayerNicknames: boolean = true;
   public replayEmotes = new Map<number, { emoji: string; progress: number }>();
 
   // Reusable per-frame scratch buffers to avoid GC allocations during render()
@@ -999,9 +1000,13 @@ export class DiscRenderer {
       this.renderStaminaBar(ctx, disc);
     }
 
-    // 3b. Etiqueta de posición táctica debajo del disco (GK / DFC / MC / ST)
+    // 3b. Nombre del jugador debajo del disco y encima de la etiqueta de posición (GK / DFC / MC / ST)
+    const hasNickBelow = this.showPlayerNicknames !== false && Boolean(visualInfo?.nickname?.trim());
+    if (hasNickBelow && visualInfo?.nickname) {
+      this.renderPlayerNickname(ctx, x, y, radius, visualInfo.nickname);
+    }
     if (this.showPositionTags !== false && visualInfo?.position) {
-      this.renderPositionBadge(ctx, x, y, radius, visualInfo.position);
+      this.renderPositionBadge(ctx, x, y, radius, visualInfo.position, hasNickBelow ? 20 : 8);
     }
 
     // Indicadores flotantes discretos de chat / emote
@@ -1046,12 +1051,38 @@ export class DiscRenderer {
     ctx.restore();
   }
 
+  private renderPlayerNickname(
+    ctx: CanvasRenderingContext2D,
+    x: number,
+    y: number,
+    radius: number,
+    nickname: string
+  ): void {
+    const clean = nickname.trim().slice(0, 14);
+    if (!clean || typeof ctx.fillText !== 'function') return;
+    ctx.save();
+    ctx.font = '700 10px "Plus Jakarta Sans", "Space Grotesk", sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    const ny = y + radius + 11.5;
+    if (typeof ctx.strokeText === 'function') {
+      ctx.strokeStyle = 'rgba(2, 6, 18, 0.9)';
+      ctx.lineWidth = 2.6;
+      ctx.lineJoin = 'round';
+      ctx.strokeText(clean, x, ny);
+    }
+    ctx.fillStyle = this.theme === 'light' ? '#0f172a' : '#f1f5f9';
+    ctx.fillText(clean, x, ny);
+    ctx.restore();
+  }
+
   private renderPositionBadge(
     ctx: CanvasRenderingContext2D,
     x: number,
     y: number,
     radius: number,
-    position: PlayerPosition
+    position: PlayerPosition,
+    topOffset: number = 8
   ): void {
     const colors: Record<PlayerPosition, { bg: string; border: string; text: string }> = {
       GK: { bg: 'rgba(20, 14, 4, 0.9)', border: '#f59e0b', text: '#fbbf24' },
@@ -1063,7 +1094,7 @@ export class DiscRenderer {
     const pillW = 26;
     const pillH = 13;
     const px = x - pillW / 2;
-    const py = y + radius + 8;
+    const py = y + radius + topOffset;
     const r = 3.5;
 
     ctx.save();

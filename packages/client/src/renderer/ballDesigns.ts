@@ -24,6 +24,7 @@ export type BallSkin =
   | 'cyber'
   | 'gold'
   | 'solid'
+  | 'champions'
   | WorldCupBallSkin;
 
 export function isBallSkin(value: string): value is BallSkin {
@@ -34,6 +35,7 @@ export function isBallSkin(value: string): value is BallSkin {
     value === 'cyber' ||
     value === 'gold' ||
     value === 'solid' ||
+    value === 'champions' ||
     (WORLD_CUP_BALL_SKINS as readonly string[]).includes(value)
   );
 }
@@ -979,6 +981,8 @@ function getRimColor(skin: BallSkin): string {
       return '#00E5FF';
     case 'gold':
       return '#CA8A04';
+    case 'champions':
+      return '#1D4ED8';
     case 'wc2006':
       return '#D4AF37';
     case 'wc2010':
@@ -1143,6 +1147,37 @@ export function drawBallDesign(ctx: CanvasRenderingContext2D, opts: DrawBallDesi
       cosY,
       sinY
     );
+  } else if (skin === 'champions') {
+    // UEFA Champions League Starball: pearl silver sphere + 3D midnight-navy stars & cyan trim
+    fillPearlWhiteBase(ctx, x, y, radius, '#CBD5E1');
+    ctx.strokeStyle = 'rgba(148, 163, 184, 0.45)';
+    ctx.lineWidth = Math.max(0.8, radius * 0.05);
+    for (let i = 0; i < 12; i++) {
+      const [rx, ry, rz] = rotatePoint(ICOSA_X[i], ICOSA_Y[i], ICOSA_Z[i], cosX, sinX, cosY, sinY);
+      if (rz <= -0.15) continue;
+      const sx = x + rx * radius;
+      const sy = y + ry * radius;
+      const starR = radius * 0.34 * (0.65 + 0.35 * Math.max(0, rz));
+      ctx.save();
+      ctx.translate?.(sx, sy);
+      ctx.rotate?.(Math.atan2(ry, rx));
+      ctx.beginPath();
+      for (let p = 0; p < 10; p++) {
+        const angle = (p * Math.PI) / 5 - Math.PI / 2;
+        const rPt = p % 2 === 0 ? starR : starR * 0.44;
+        const px = Math.cos(angle) * rPt;
+        const py = Math.sin(angle) * rPt;
+        if (p === 0) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+      }
+      ctx.closePath();
+      ctx.fillStyle = rz > 0.45 ? '#0B1F52' : '#1E3A8A';
+      ctx.fill();
+      ctx.strokeStyle = '#38BDF8';
+      ctx.lineWidth = Math.max(0.7, radius * 0.045);
+      ctx.stroke();
+      ctx.restore();
+    }
   } else if (skin === 'wc2006') {
     drawWc2006Teamgeist(ctx, x, y, radius, cosX, sinX, cosY, sinY);
   } else if (skin === 'wc2010') {

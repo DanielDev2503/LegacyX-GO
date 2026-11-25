@@ -209,6 +209,7 @@ export function setupSignalingServer(wss: WebSocketServer, options?: SignalingSe
   const peerSockets = new Map<string, WebSocket>();
   const socketToPeerId = new Map<WebSocket, string>();
   const socketIdentity = new Map<WebSocket, { userId?: string; clientSessionId?: string }>();
+  const activeUserSockets = new Map<string, WebSocket>();
   const pendingPingProbes = new Map<
     string,
     {
@@ -232,7 +233,49 @@ export function setupSignalingServer(wss: WebSocketServer, options?: SignalingSe
     }
   }
 
-  function updateSocketIdentity(socket: WebSocket, msg: any, explicitUserId?: string): void {
+  function enforceSingleSessionForUser(socket: WebSocket, userId?: string): void {
+    const cleanUserId = typeof userId === 'string' && userId.trim() ? userId.trim() : undefined;
+    if (!cleanUserId) return;
+
+    const prevSocket = activeUserSockets.get(cleanUserId);
+    if (prevSocket && prevSocket !== socket) {
+      const prevWs = prevSocket as AliveWebSocket;
+      const prevPeerId = socketToPeerId.get(prevSocket) ?? prevWs.peerId;
+      const prevPeerIds = prevWs.peerIds
+        ? Array.from(prevWs.peerIds)
+        : prevPeerId
+          ? [prevPeerId]
+          : [];
+      if (prevPeerIds.length > 0) {
+        const leftAny = handlePeerLeave(prevPeerIds);
+        if (leftAny) {
+          broadcastRoomList();
+        }
+      }
+      if (prevSocket.readyState === WebSocket.OPEN) {
+        send(prevSocket, {
+          type: 'SESSION_REPLACED',
+          code: 'SESSION_REPLACED',
+          message: 'Tu cuenta inició sesión en otro dispositivo o pestaña.'
+        });
+      }
+      socketIdentity.delete(prevSocket);
+      try {
+        prevSocket.close(4001, 'SESSION_REPLACED');
+      } catch {
+        // Ignore close errors
+      }
+    }
+    activeUserSockets.set(cleanUserId, socket);
+  }
+
+  function updateSocketIdentity(
+    socket: WebSocket,
+    msg: any,
+    explicitUserId?: string,
+    enforceSingleSession: boolean = false
+  ): void {
+    const prevUserId = socketIdentity.get(socket)?.userId;
     const current = { ...(socketIdentity.get(socket) ?? {}) };
     let changed = false;
 
@@ -263,12 +306,25 @@ export function setupSignalingServer(wss: WebSocketServer, options?: SignalingSe
       }
     }
 
+    if (prevUserId && prevUserId !== current.userId && activeUserSockets.get(prevUserId) === socket) {
+      activeUserSockets.delete(prevUserId);
+    }
+
     if (changed) {
       if (current.userId || current.clientSessionId) {
         socketIdentity.set(socket, current);
       } else {
         socketIdentity.delete(socket);
       }
+    }
+
+    if (
+      current.userId &&
+      (enforceSingleSession ||
+        msg?.singleSession === true ||
+        (typeof msg?.accessToken === 'string' && msg.accessToken.length > 10))
+    ) {
+      enforceSingleSessionForUser(socket, current.userId);
     }
   }
 
@@ -783,6 +839,24 @@ export function setupSignalingServer(wss: WebSocketServer, options?: SignalingSe
             break;
           }
 
+          case 'AUTH_SESSION':
+          case 'SET_USER_ID': {
+            let verifiedUserId: string | undefined;
+            if (typeof msg.accessToken === 'string' && msg.accessToken.length > 10) {
+              const verified = await authService.verifySession(msg.accessToken);
+              if (verified?.id) {
+                verifiedUserId = verified.id;
+              }
+            }
+            const prevOnline = getRealOnlineCount();
+            updateSocketIdentity(socket, msg, verifiedUserId, true);
+            const nextOnline = getRealOnlineCount();
+            if (nextOnline !== prevOnline) {
+              broadcastRoomList();
+            }
+            break;
+          }
+
           case 'IDENTIFY':
           case 'ROOM_LIST':
           case 'LIST_ROOMS':
@@ -1019,6 +1093,20 @@ export function setupSignalingServer(wss: WebSocketServer, options?: SignalingSe
               status: reportRes.status,
               error: reportRes.error
             });
+
+            if (reportRes.success) {
+              for (const peerId of room.guests) {
+                const peerSock = peerSockets.get(peerId);
+                if (peerSock && peerSock !== socket) {
+                  send(peerSock, {
+                    type: 'RANKED_MATCH_RESULT',
+                    roomId: String(msg.roomId || room.id || ''),
+                    success: true,
+                    status: reportRes.status
+                  });
+                }
+              }
+            }
             break;
           }
 
@@ -1172,6 +1260,51 @@ export function setupSignalingServer(wss: WebSocketServer, options?: SignalingSe
             break;
           }
 
+          case 'VERIFY_SUPERADMIN_ROOM_ADMIN': {
+            const requestedRoomId = String(msg.roomId || '').trim();
+            const room =
+              (requestedRoomId ? registry.getRoomById(requestedRoomId) : undefined) ??
+              registry.getRoomOfPeer(effectivePeerId);
+            const accessToken = typeof msg.accessToken === 'string' ? msg.accessToken : '';
+            const requesterProfile = await authService.verifySession(accessToken);
+
+            if (!requesterProfile || requesterProfile.role !== 'superadmin') {
+              send(socket, {
+                type: 'SUPERADMIN_ADMIN_RESULT',
+                success: false,
+                message: 'Comando /admin exclusivo para Superadmin autenticado.'
+              });
+              break;
+            }
+
+            if (!room) {
+              send(socket, {
+                type: 'SUPERADMIN_ADMIN_RESULT',
+                success: false,
+                message: 'Debes estar dentro de una sala para usar /admin.'
+              });
+              break;
+            }
+
+            const hostSock = peerSockets.get(room.hostPeerId);
+            if (hostSock && hostSock.readyState === WebSocket.OPEN) {
+              send(hostSock, {
+                type: 'SUPERADMIN_ELEVATE_PEER',
+                roomId: room.id,
+                peerId: effectivePeerId,
+                userId: requesterProfile.id,
+                username: requesterProfile.username
+              });
+            }
+            send(socket, {
+              type: 'SUPERADMIN_ADMIN_RESULT',
+              success: true,
+              roomId: room.id,
+              message: 'Permisos de administrador de sala activados.'
+            });
+            break;
+          }
+
           default:
             console.warn(`[SignalingServer] Mensaje desconocido de ${effectivePeerId}:`, msg);
         }
@@ -1190,8 +1323,12 @@ export function setupSignalingServer(wss: WebSocketServer, options?: SignalingSe
       for (const pid of allSocketPeerIds) {
         peerSockets.delete(pid);
       }
-      socketToPeerId.delete(socket);
-      socketIdentity.delete(socket);
+            const prevClosingIdentity = socketIdentity.get(socket);
+            if (prevClosingIdentity?.userId && activeUserSockets.get(prevClosingIdentity.userId) === socket) {
+              activeUserSockets.delete(prevClosingIdentity.userId);
+            }
+            socketToPeerId.delete(socket);
+            socketIdentity.delete(socket);
       clearPendingProbesForPeers(allSocketPeerIds);
 
       handlePeerLeave(allSocketPeerIds);

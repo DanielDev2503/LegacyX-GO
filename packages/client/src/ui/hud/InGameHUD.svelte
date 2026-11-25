@@ -419,6 +419,9 @@
     isChatInputActive = false;
     gameUI.isChatFocused = false;
     chatInputEl?.blur();
+    if (typeof document !== 'undefined') {
+      (document.activeElement as HTMLElement | null)?.blur?.();
+    }
   }
 
   function handleChatKeyDown(e: KeyboardEvent) {
@@ -1045,9 +1048,9 @@
   {/if}
 
   <!-- ========================================== -->
-  <!-- 2. TELEMETRÍA EN VIVO (SOLO ESCRITORIO; EN MÓVIL VA EN EL MENÚ) -->
+  <!-- 2. TELEMETRÍA EN VIVO (ACTIVABLE EN VIDEO) -->
   <!-- ========================================== -->
-  {#if !gameUI.isMobileLayout}
+  {#if gameUI.settings.showTelemetryCard === true}
     <div class="hud-telemetry-corner" bind:this={telemetryEl}>
       <span class="tel-pulse-dot"></span>
       <span class="tel-label">Ping:</span>
@@ -1121,7 +1124,7 @@
   <!-- ========================================== -->
   <!-- 3. CHAT TÁCTICO FLOTANTE (ADAPTATIVO)      -->
   <!-- ========================================== -->
-  {#if gameUI.isMobileLayout && !isMobileChatOpen}
+  {#if gameUI.isMobileLayout && !isMobileChatOpen && gameUI.activeModal === 'NONE' && !gameUI.isHudEditorOpen}
     <div class="mobile-chat-collapsed" aria-label="Chat contraído">
       <button
         type="button"
@@ -1309,7 +1312,7 @@
     </div>
   {/if}
 
-  {#if gameUI.isMobileLayout && (gameUI.activeModal === 'NONE' || gameUI.isHudEditorOpen)}
+  {#if gameUI.isMobileLayout && (gameUI.isHudEditorOpen || (gameUI.activeModal === 'NONE' && !gameUI.isGamepadActive))}
     <MobileControlsOverlay />
   {/if}
 </div>
@@ -2823,16 +2826,28 @@
     height: 36px;
     padding: 0 0.65rem;
     gap: 0.45rem;
+    max-width: calc(50vw - 92px);
+    overflow: hidden;
   }
 
   .hud-root.is-mobile .room-title {
     font-size: 0.72rem;
-    max-width: min(145px, 22vw);
+    max-width: min(115px, 24vw);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .hud-root.is-mobile .top-card-center {
     transform: translateX(-50%) scale(0.84);
     transform-origin: top center;
+  }
+
+  .hud-root.is-mobile .cyber-banner-center {
+    top: calc(50% + 26px);
+    max-width: calc(100vw - 24px);
+    max-height: calc(100dvh - 64px);
+    transform: translate(-50%, -50%) scale(0.84);
   }
 
   .hud-root.is-mobile .top-card-right {
@@ -2859,7 +2874,10 @@
   }
 
   .hud-root.is-mobile .hud-telemetry-corner {
-    display: none;
+    bottom: calc(6px + env(safe-area-inset-bottom, 0px));
+    left: calc(8px + env(safe-area-inset-left, 0px));
+    padding: 0.2rem 0.48rem;
+    font-size: 0.64rem;
   }
 
   .hud-action-btn.is-paused-active {

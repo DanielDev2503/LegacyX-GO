@@ -10,6 +10,7 @@
 
   export const SCOREBOARD_DESIGNS = [
     'original',
+    'champions',
     ...WORLD_CUP_SCOREBOARD_DESIGNS
   ] as const;
 
@@ -187,6 +188,28 @@
           style:box-shadow="0 0 6px {bluePrimaryColor}"
         ></span>
         <KitPatternBadge kit={blueKit} showLabel={false} shape="rect" {compact} fallbackColor="#00e5ff" />
+      </div>
+    </div>
+  {:else if activeDesign === 'champions'}
+    <div class="sb-bar champions-bar" class:warning-active={isWarning30s}>
+      <div class="champions-clock-wing">
+        <span class="champions-star-emblem" aria-hidden="true">★</span>
+        <span class="sb-clock champions-clock" id={compact ? undefined : 'hud-timer'}>{clockText}</span>
+      </div>
+      <div class="champions-teams-wrap">
+        <div class="champions-side champions-side-red">
+          <KitPatternBadge kit={redKit} showLabel={false} shape="rect" {compact} fallbackColor="#e74c3c" />
+          <span class="sb-team-tag champions-tag">{redLabel}</span>
+        </div>
+        <div class="champions-score-box">
+          <span class="sb-score champions-score" id={compact ? undefined : 'hud-score-red'}>{redScore}</span>
+          <span class="champions-score-sep" aria-hidden="true">-</span>
+          <span class="sb-score champions-score" id={compact ? undefined : 'hud-score-blue'}>{blueScore}</span>
+        </div>
+        <div class="champions-side champions-side-blue">
+          <span class="sb-team-tag champions-tag">{blueLabel}</span>
+          <KitPatternBadge kit={blueKit} showLabel={false} shape="rect" {compact} fallbackColor="#00e5ff" />
+        </div>
       </div>
     </div>
   {:else}
@@ -971,5 +994,106 @@
     font-size: 0.55rem;
     border-top-width: 2px;
     border-bottom-width: 2px;
+  }
+
+  /* =============================================
+     Champions League Broadcast Scoreboard
+     ============================================= */
+  .champions-bar {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+    padding: 0 0.7rem 0 0;
+    height: 40px;
+    border-radius: 999px;
+    background: linear-gradient(135deg, #040b24 0%, #0b1e5b 52%, #050f36 100%);
+    border: 1.5px solid rgba(56, 189, 248, 0.55);
+    box-shadow: 0 6px 20px rgba(4, 11, 36, 0.65);
+    overflow: hidden;
+  }
+
+  .is-compact .champions-bar {
+    height: 28px;
+    padding: 0 0.45rem 0 0;
+    gap: 0.28rem;
+  }
+
+  .champions-clock-wing {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.32rem;
+    height: 100%;
+    padding: 0 0.65rem 0 0.6rem;
+    background: linear-gradient(135deg, #f8fafc 0%, #dbeafe 100%);
+    border-right: 3px solid #38bdf8;
+  }
+
+  .is-compact .champions-clock-wing {
+    padding: 0 0.42rem;
+    gap: 0.2rem;
+  }
+
+  .champions-star-emblem {
+    font-size: 0.85rem;
+    line-height: 1;
+    color: #0b1e5b;
+  }
+
+  .is-compact .champions-star-emblem {
+    font-size: 0.65rem;
+  }
+
+  .champions-clock {
+    color: #06133a;
+    font-weight: 900;
+  }
+
+  .champions-teams-wrap {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+  }
+
+  .champions-side {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+  }
+
+  .champions-tag {
+    font-family: 'Space Grotesk', system-ui, sans-serif;
+    font-weight: 900;
+    color: #f8fafc;
+    letter-spacing: 0.06em;
+  }
+
+  .champions-score-box {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.26rem;
+    min-width: 52px;
+    height: 26px;
+    padding: 0 0.48rem;
+    border-radius: 999px;
+    background: linear-gradient(180deg, #1d4ed8 0%, #1e3a8a 100%);
+    border: 1px solid rgba(125, 211, 252, 0.55);
+  }
+
+  .is-compact .champions-score-box {
+    min-width: 36px;
+    height: 19px;
+    padding: 0 0.3rem;
+  }
+
+  .champions-score {
+    color: #ffffff;
+    font-weight: 900;
+    min-width: 12px;
+  }
+
+  .champions-score-sep {
+    color: rgba(186, 230, 253, 0.8);
+    font-weight: 800;
   }
 </style>

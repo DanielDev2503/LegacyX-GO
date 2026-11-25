@@ -55,6 +55,8 @@ export interface PersonalRankSummary {
 
 export const AUTH_SESSION_STORAGE_KEY = 'legacyx_auth_session_v1';
 export const GUEST_MODE_STORAGE_KEY = 'legacyx_is_guest_v1';
+export const SINGLE_SESSION_CHANNEL = 'legacyx_single_session_v1';
+export const SESSION_CLAIM_STORAGE_KEY = 'legacyx_active_session_claim_v1';
 
 const DEFAULT_SUPABASE_URL = 'https://jeopwutoxmaagxlebpsl.supabase.co';
 const DEFAULT_SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_YLPCQO9kz0l9oFkuEPIXow_uRebEaEf';
@@ -181,12 +183,80 @@ class UserProfileStore {
   );
   private refreshInFlight: Promise<string | null> | null = null;
   private personalRankInFlight: Promise<PersonalRankSummary | null> | null = null;
+  private readonly tabSessionId: string =
+    typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+      ? crypto.randomUUID()
+      : `tab_${Math.random().toString(36).slice(2, 10)}_${Date.now().toString(36)}`;
+  private sessionChannel: BroadcastChannel | null = null;
+  private suppressClaimHandling: boolean = false;
   public onUsernameChanged: ((newUsername: string) => void) | null = null;
+  public onSessionReplaced: ((message: string) => void) | null = null;
 
   constructor() {
     gameUI.setAuthStatusReader(() => Boolean(this.isAuthenticated && !this.isGuest));
+    this.initSingleSessionSync();
     this.loadPersistedSession();
     void this.handleOAuthRedirect();
+  }
+
+  private initSingleSessionSync(): void {
+    if (typeof window === 'undefined') return;
+    if (typeof BroadcastChannel === 'function') {
+      try {
+        this.sessionChannel = new BroadcastChannel(SINGLE_SESSION_CHANNEL);
+        this.sessionChannel.onmessage = (ev: MessageEvent) => {
+          const data = ev?.data;
+          if (
+            data?.type === 'SESSION_CLAIM' &&
+            typeof data.userId === 'string' &&
+            data.tabSessionId !== this.tabSessionId
+          ) {
+            this.handleExternalSessionClaim(data.userId);
+          }
+        };
+      } catch {
+        this.sessionChannel = null;
+      }
+    }
+    window.addEventListener('storage', (ev: StorageEvent) => {
+      if (ev.key !== SESSION_CLAIM_STORAGE_KEY || !ev.newValue) return;
+      try {
+        const parsed = JSON.parse(ev.newValue) as { userId?: string; tabSessionId?: string };
+        if (parsed?.userId && parsed.tabSessionId && parsed.tabSessionId !== this.tabSessionId) {
+          this.handleExternalSessionClaim(parsed.userId);
+        }
+      } catch {
+        // Ignore storage claim parse errors
+      }
+    });
+  }
+
+  private handleExternalSessionClaim(claimedUserId: string): void {
+    if (this.suppressClaimHandling) return;
+    if (this.isAuthenticated && !this.isGuest && this.id && this.id === claimedUserId) {
+      this.evictReplacedSession('Tu cuenta inició sesión en otro dispositivo o pestaña.', false);
+    }
+  }
+
+  private broadcastSessionClaim(userId: string): void {
+    if (!userId || typeof window === 'undefined') return;
+    this.suppressClaimHandling = true;
+    try {
+      const payload = {
+        type: 'SESSION_CLAIM',
+        userId,
+        tabSessionId: this.tabSessionId,
+        at: Date.now()
+      };
+      this.sessionChannel?.postMessage(payload);
+      if (typeof localStorage !== 'undefined') {
+        localStorage.setItem(SESSION_CLAIM_STORAGE_KEY, JSON.stringify(payload));
+      }
+    } catch {
+      // Ignore BroadcastChannel/storage errors
+    } finally {
+      this.suppressClaimHandling = false;
+    }
   }
 
   public loginWithGoogle(): void {
@@ -401,6 +471,9 @@ class UserProfileStore {
         this.isAuthenticated = true;
         this.isGuest = false;
         gameUI.setPlayerNickname(this.username);
+        if (this.id) {
+          this.broadcastSessionClaim(this.id);
+        }
         if (typeof window !== 'undefined' && typeof fetch === 'function') {
           void this.refreshSessionProfile();
         }
@@ -495,7 +568,7 @@ class UserProfileStore {
     return guestNick;
   }
 
-  private resetSessionFields(): void {
+  private resetSessionFields(shouldPersist: boolean = true): void {
     this.isAuthenticated = false;
     this.isGuest = true;
     this.jwt = null;
@@ -521,7 +594,22 @@ class UserProfileStore {
     this.personalRank = null;
     this.userReplays = [];
     this.authNotice = null;
-    this.persistSession();
+    if (shouldPersist) {
+      this.persistSession();
+    }
+  }
+
+  public evictReplacedSession(
+    message: string = 'Tu cuenta inició sesión en otro dispositivo o pestaña.',
+    clearStorage: boolean = true
+  ): void {
+    this.resetSessionFields(clearStorage);
+    this.authError = message;
+    this.authNotice = null;
+    gameUI.setPlayerNickname('');
+    gameUI.clearModalStack();
+    gameUI.navigateTo('GATEKEEPER');
+    this.onSessionReplaced?.(message);
   }
 
   private clearExpiredSession(): void {
@@ -583,6 +671,9 @@ class UserProfileStore {
     this.persistSession();
     if (this.isAuthenticated && this.username) {
       gameUI.setPlayerNickname(this.username);
+      if (this.id) {
+        this.broadcastSessionClaim(this.id);
+      }
     }
   }
 

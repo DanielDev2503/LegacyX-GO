@@ -723,6 +723,7 @@ export class GameEngine {
       p.lastShotAwardTick = -9999;
       p.lastPassAwardTick = -9999;
       p.dashCooldownTimer = 0;
+      p.dashSlowdownTimer = 0;
     }
     this.kickoffState = {
       active: true,
@@ -818,6 +819,7 @@ export class GameEngine {
       player.isDashing = false;
       player.dashTicksRemaining = 0;
       player.dashCooldownTimer = 0;
+      player.dashSlowdownTimer = 0;
       player.isTurbo = false;
       player.triggerDash = false;
       player.aimThrottle = 0;
@@ -939,6 +941,7 @@ export class GameEngine {
         isDashing: player.isDashing,
         dashTicksRemaining: player.dashTicksRemaining,
         dashCooldownTimer: player.dashCooldownTimer,
+        dashSlowdownTimer: player.dashSlowdownTimer,
         dashDirX: player.dashDirX,
         dashDirY: player.dashDirY,
         isTurbo: player.isTurbo,
@@ -968,6 +971,7 @@ export class GameEngine {
       player.isDashing = pState.isDashing;
       player.dashTicksRemaining = pState.dashTicksRemaining;
       player.dashCooldownTimer = pState.dashCooldownTimer;
+      player.dashSlowdownTimer = pState.dashSlowdownTimer ?? 0;
       player.dashDirX = pState.dashDirX;
       player.dashDirY = pState.dashDirY;
       player.isTurbo = pState.isTurbo;

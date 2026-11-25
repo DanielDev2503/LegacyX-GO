@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { gameUI } from '../state/gameUI.svelte.js';
 
   let { onFinish }: { onFinish: () => void } = $props();
 
@@ -7,7 +8,6 @@
 
   let videoEl = $state<HTMLVideoElement | null>(null);
   let introUrl = $state<string>(FALLBACK_INTRO_URL);
-  let isMutedFallback = $state<boolean>(false);
   let isFinished = $state<boolean>(false);
 
   function finishIntro() {
@@ -23,25 +23,12 @@
     onFinish();
   }
 
-  function enableSound() {
-    if (!videoEl) return;
-    try {
-      videoEl.muted = false;
-      isMutedFallback = false;
-      void videoEl.play().catch(() => {});
-    } catch {
-      // Ignore audio unlock error
-    }
-  }
-
   onMount(() => {
     let active = true;
 
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' || e.key === ' ' || e.key === 'Enter') {
-        e.preventDefault();
-        finishIntro();
-      }
+      e.preventDefault();
+      finishIntro();
     };
     window.addEventListener('keydown', handleKeyDown);
 
@@ -69,14 +56,13 @@
       if (!active || !videoEl) return;
       try {
         videoEl.muted = false;
+        videoEl.volume = gameUI.settings.isMuted ? 0 : Math.max(0, Math.min(1, gameUI.settings.masterVolume));
         await videoEl.play();
-        isMutedFallback = false;
       } catch {
-        // Browsers often block unmuted autoplay before first user gesture
+        // Fallback only if browser policy blocks unmuted autoplay before any gesture
         try {
           if (!videoEl) return;
           videoEl.muted = true;
-          isMutedFallback = true;
           await videoEl.play();
         } catch {
           finishIntro();
@@ -94,7 +80,15 @@
   });
 </script>
 
-<div class="intro-overlay" data-testid="intro-video-overlay" role="dialog" aria-label="Intro de LegacyX-GO">
+<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+<div
+  class="intro-overlay"
+  data-testid="intro-video-overlay"
+  role="dialog"
+  tabindex="-1"
+  aria-label="Intro de LegacyX-GO"
+  onpointerdown={finishIntro}
+>
   <!-- svelte-ignore a11y_media_has_caption -->
   <video
     bind:this={videoEl}
@@ -106,24 +100,6 @@
     onended={finishIntro}
     onerror={finishIntro}
   ></video>
-
-  <div class="intro-hud">
-    <div class="intro-brand">
-      <span class="intro-kicker">LEGACYX-GO</span>
-      <span class="intro-sub">CYBER-PITCH ARENA</span>
-    </div>
-
-    <div class="intro-actions">
-      {#if isMutedFallback}
-        <button type="button" class="intro-btn sound-btn" onclick={enableSound}>
-          🔊 Activar Sonido
-        </button>
-      {/if}
-      <button type="button" class="intro-btn skip-btn" data-testid="btn-skip-intro" onclick={finishIntro}>
-        SALTAR INTRO ⏭
-      </button>
-    </div>
-  </div>
 </div>
 
 <style>
@@ -136,6 +112,7 @@
     align-items: center;
     justify-content: center;
     overflow: hidden;
+    cursor: pointer;
   }
 
   .intro-video {
@@ -144,86 +121,5 @@
     object-fit: cover;
     display: block;
     background: #02050b;
-  }
-
-  .intro-hud {
-    position: fixed;
-    inset: 0;
-    pointer-events: none;
-    display: flex;
-    flex-direction: column;
-    justify-content: space-between;
-    padding: 20px 24px;
-    background: linear-gradient(180deg, rgba(2, 5, 11, 0.55) 0%, transparent 25%, transparent 72%, rgba(2, 5, 11, 0.8) 100%);
-  }
-
-  .intro-brand {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-  }
-
-  .intro-kicker {
-    font-family: 'Orbitron', sans-serif;
-    font-weight: 900;
-    font-size: 1rem;
-    letter-spacing: 3px;
-    color: #00e5ff;
-    text-shadow: 0 0 12px rgba(0, 229, 255, 0.5);
-  }
-
-  .intro-sub {
-    font-family: 'Rajdhani', sans-serif;
-    font-size: 0.72rem;
-    letter-spacing: 2.5px;
-    color: rgba(255, 255, 255, 0.72);
-    font-weight: 700;
-  }
-
-  .intro-actions {
-    display: flex;
-    justify-content: flex-end;
-    align-items: center;
-    gap: 10px;
-    pointer-events: auto;
-  }
-
-  .intro-btn {
-    padding: 10px 18px;
-    border-radius: 10px;
-    font-family: 'Orbitron', sans-serif;
-    font-size: 0.78rem;
-    font-weight: 800;
-    letter-spacing: 1px;
-    cursor: pointer;
-    transition: transform 0.14s ease, border-color 0.14s ease, background 0.14s ease;
-  }
-
-  .sound-btn {
-    background: rgba(10, 20, 38, 0.9);
-    border: 1px solid rgba(0, 229, 255, 0.45);
-    color: #00e5ff;
-  }
-
-  .skip-btn {
-    background: rgba(255, 255, 255, 0.1);
-    border: 1px solid rgba(255, 255, 255, 0.35);
-    color: #ffffff;
-  }
-
-  .intro-btn:hover {
-    transform: translateY(-2px);
-    border-color: #00e5ff;
-  }
-
-  @media (max-width: 720px) {
-    .intro-hud {
-      padding: 14px 16px;
-    }
-
-    .intro-btn {
-      padding: 8px 14px;
-      font-size: 0.7rem;
-    }
   }
 </style>

@@ -96,7 +96,7 @@ export interface SignalingMessage {
 }
 
 const CLIENT_SESSION_STORAGE_KEY = 'legacyx_client_session_id';
-const AUTH_SESSION_STORAGE_KEY = 'legacyx_auth_session';
+const AUTH_SESSION_STORAGE_KEYS = ['legacyx_auth_session_v1', 'legacyx_auth_session'];
 let fallbackTabSessionId: string | null = null;
 
 function generateUuid(): string {
@@ -130,15 +130,38 @@ function getOrCreateClientSessionId(): string {
 
 function readStoredUserId(): string | null {
   if (typeof localStorage === 'undefined') return null;
-  try {
-    const raw = localStorage.getItem(AUTH_SESSION_STORAGE_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as Record<string, any>;
-    const candidate = parsed?.profile?.id ?? parsed?.user?.id ?? parsed?.id;
-    return typeof candidate === 'string' && candidate.trim() ? candidate.trim() : null;
-  } catch {
-    return null;
+  for (const key of AUTH_SESSION_STORAGE_KEYS) {
+    try {
+      const raw = localStorage.getItem(key);
+      if (!raw) continue;
+      const parsed = JSON.parse(raw) as Record<string, any>;
+      const candidate = parsed?.profile?.id ?? parsed?.user?.id ?? parsed?.id;
+      if (typeof candidate === 'string' && candidate.trim()) {
+        return candidate.trim();
+      }
+    } catch {
+      // Ignore parse error
+    }
   }
+  return null;
+}
+
+function readStoredAccessToken(): string | null {
+  if (typeof localStorage === 'undefined') return null;
+  for (const key of AUTH_SESSION_STORAGE_KEYS) {
+    try {
+      const raw = localStorage.getItem(key);
+      if (!raw) continue;
+      const parsed = JSON.parse(raw) as Record<string, any>;
+      const jwt = parsed?.jwt ?? parsed?.session?.access_token ?? parsed?.accessToken;
+      if (typeof jwt === 'string' && jwt.trim()) {
+        return jwt.trim();
+      }
+    } catch {
+      // Ignore parse error
+    }
+  }
+  return null;
 }
 
 type EventCallback = (payload: any) => void;
@@ -161,6 +184,8 @@ export class SignalingClient {
   public peerId: string = 'peer_' + Math.random().toString(36).substring(2, 9);
   public readonly clientSessionId: string;
   public userId: string | null = null;
+  public accessToken: string | null = null;
+  public sessionReplaced: boolean = false;
   private url: string;
   public isConnected: boolean = false;
   public pingMs: number | null = null;
@@ -217,23 +242,45 @@ export class SignalingClient {
     return { connecting, open };
   }
 
-  public setUserId(userId: string | null): void {
+  public setUserId(userId: string | null, accessToken?: string | null): void {
     const normalized = typeof userId === 'string' && userId.trim().length > 0 ? userId.trim() : null;
     this.userId = normalized;
+    if (normalized && typeof accessToken === 'string' && accessToken.trim()) {
+      this.accessToken = accessToken.trim();
+    } else if (!normalized) {
+      this.accessToken = null;
+    }
+    if (normalized) {
+      this.sessionReplaced = false;
+    }
     if (this.isOpen()) {
-      this.identify(normalized);
+      this.identify(normalized, this.accessToken ?? readStoredAccessToken());
+      if (normalized) {
+        this.send({
+          type: 'AUTH_SESSION',
+          userId: normalized,
+          clientSessionId: this.clientSessionId,
+          singleSession: true,
+          ...((this.accessToken ?? readStoredAccessToken())
+            ? { accessToken: this.accessToken ?? readStoredAccessToken() }
+            : {})
+        });
+      }
     }
   }
 
-  public identify(userId: string | null = this.userId): void {
+  public identify(userId: string | null = this.userId, accessToken: string | null = this.accessToken): void {
     if (userId !== undefined) {
       this.userId = typeof userId === 'string' && userId.trim().length > 0 ? userId.trim() : null;
     }
+    const token = accessToken ?? (this.userId ? readStoredAccessToken() : null);
     if (this.isOpen()) {
       this.send({
         type: 'IDENTIFY',
         userId: this.userId ?? undefined,
-        clientSessionId: this.clientSessionId
+        clientSessionId: this.clientSessionId,
+        ...(this.userId ? { singleSession: true } : {}),
+        ...(token ? { accessToken: token } : {})
       });
     }
   }
@@ -595,8 +642,20 @@ export class SignalingClient {
         socket.onopen = () => {
           if (this.ws !== socket) return;
           this.isConnected = true;
+          this.sessionReplaced = false;
           this.startPingLoop();
-          this.identify(this.userId ?? readStoredUserId());
+          const activeId = this.userId ?? readStoredUserId();
+          const activeToken = this.accessToken ?? readStoredAccessToken();
+          this.identify(activeId, activeToken);
+          if (activeId) {
+            this.send({
+              type: 'AUTH_SESSION',
+              userId: activeId,
+              clientSessionId: this.clientSessionId,
+              singleSession: true,
+              ...(activeToken ? { accessToken: activeToken } : {})
+            });
+          }
           this.joinLobby();
           this.requestRooms();
           if (this.onConnected) this.onConnected();
@@ -767,16 +826,21 @@ export class SignalingClient {
           }
         };
 
-        socket.onclose = () => {
+        socket.onclose = (ev) => {
           if (this.ws !== socket) return;
           this.stopPingLoop();
           this.pingMs = null;
           this.isConnected = false;
           this.ws = null;
           this.clearPendingRoomProbes();
+          if (ev?.code === 4001 || ev?.reason === 'SESSION_REPLACED') {
+            this.sessionReplaced = true;
+            this.userId = null;
+            this.accessToken = null;
+          }
           if (this.onDisconnected) this.onDisconnected();
           this.emit('telemetry', { pingMs: null, onlineCount: this.onlineCount });
-          this.emit('DISCONNECTED', {});
+          this.emit('DISCONNECTED', { code: ev?.code, reason: ev?.reason });
           settleConnect();
         };
 
@@ -932,6 +996,9 @@ export class SignalingClient {
 
   public reconnect(): void {
     const { connecting, open } = SignalingClient.getWsReadyStateConstants();
+    if (this.sessionReplaced) {
+      return;
+    }
     if (this.connectPromise || (this.ws && (this.ws.readyState === open || this.ws.readyState === connecting))) {
       return;
     }

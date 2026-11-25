@@ -8,6 +8,7 @@ import { gameUI } from '../ui/state/gameUI.svelte.js';
 export interface ClientProfileOptions {
   userId?: string | null;
   isGuest?: boolean;
+  elo?: number;
   avatar?: string;
   avatarType?: string;
   kit?: any;
@@ -110,6 +111,7 @@ export class NetworkClient {
       nickname: this.nickname,
       userId: this.profile.userId ?? null,
       isGuest: this.profile.isGuest ?? true,
+      elo: this.profile.elo,
       number: this.number,
       avatar: this.profile.avatar,
       avatarType: this.profile.avatarType,
@@ -557,12 +559,16 @@ export class NetworkClient {
 
   public sendProfileUpdate(profile: {
     nickname?: string;
+    userId?: string | null;
+    isGuest?: boolean;
+    elo?: number;
     avatar?: string;
     avatarType?: string;
     kit?: any;
     localKit?: any;
     visitorKit?: any;
   }): void {
+    this.profile = { ...this.profile, ...profile };
     this.peer?.sendReliable({
       type: 'UPDATE_PLAYER_PROFILE',
       playerId: this.localPlayerId,

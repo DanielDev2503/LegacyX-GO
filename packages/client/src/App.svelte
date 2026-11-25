@@ -1,3 +1,7 @@
+<script module lang="ts">
+  let hasPlayedIntroThisPageLoad = false;
+</script>
+
 <script lang="ts">
   import { untrack } from 'svelte';
   import {
@@ -73,7 +77,8 @@
   let isUnknownAppRoute = $derived(!isLegalStandaloneRoute && !isKnownAppRoute(currentPath));
 
   let showIntroOverlay = $state<boolean>(
-    typeof window !== 'undefined' &&
+    !hasPlayedIntroThisPageLoad &&
+      typeof window !== 'undefined' &&
       isKnownAppRoute(window.location.pathname) &&
       !isLegalRoute(window.location.pathname) &&
       !window.location.search.includes('legal=') &&
@@ -83,9 +88,29 @@
   );
 
   function handleIntroFinish(): void {
+    hasPlayedIntroThisPageLoad = true;
     showIntroOverlay = false;
     void musicPlayer.tryAutoStart();
   }
+
+  $effect(() => {
+    if (typeof window === 'undefined' || typeof navigator === 'undefined') return;
+    const syncGamepadConnected = () => {
+      try {
+        const pads = navigator.getGamepads?.() ?? [];
+        gameUI.isGamepadActive = Array.from(pads).some((p) => Boolean(p && p.connected));
+      } catch {
+        gameUI.isGamepadActive = false;
+      }
+    };
+    syncGamepadConnected();
+    window.addEventListener('gamepadconnected', syncGamepadConnected);
+    window.addEventListener('gamepaddisconnected', syncGamepadConnected);
+    return () => {
+      window.removeEventListener('gamepadconnected', syncGamepadConnected);
+      window.removeEventListener('gamepaddisconnected', syncGamepadConnected);
+    };
+  });
 
   $effect(() => {
     if (typeof window === 'undefined') return;
@@ -139,6 +164,14 @@
   gameUI.registerUserRoleReader(() =>
     userProfile?.isAuthenticated && !userProfile?.isGuest ? userProfile.role : 'jugador'
   );
+  userProfile.onSessionReplaced = () => {
+    if (gameApp.currentRoomId || gameApp.networkHost || gameApp.networkClient) {
+      gameApp.teardownNetworkSession();
+    }
+    gameUI.isPracticeMode = false;
+    gameUI.clearModalStack();
+    gameUI.navigateTo('GATEKEEPER');
+  };
 
   if (typeof window !== 'undefined') {
     const deepLinkedLegal = parseLegalDocFromLocation(window.location.search, window.location.pathname);
@@ -174,7 +207,10 @@
 
   $effect(() => {
     const isLoggedAccount = Boolean(userProfile.isAuthenticated && !userProfile.isGuest);
-    gameApp.signaling.setUserId(isLoggedAccount ? (userProfile.id ?? null) : null);
+    gameApp.signaling.setUserId(
+      isLoggedAccount ? (userProfile.id ?? null) : null,
+      isLoggedAccount ? (userProfile.jwt ?? null) : null
+    );
 
     if (wasAuthenticatedSession && !isLoggedAccount) {
       didAutoRouteAuthenticatedBoot = true;
@@ -391,7 +427,14 @@
             anyPositionChanged = true;
           }
           engine.playerNames.set(p.id, p.nickname || p.name || `Player ${p.id}`);
+          engine.setBot(
+            p.id,
+            p.isBot
+              ? { difficulty: p.botDifficulty ?? 'medium', role: p.position ?? 'MC' }
+              : null
+          );
         } else {
+          engine.setBot(p.id, null);
           if (engine.players.has(p.id)) {
             engine.removePlayer(p.id);
           }
@@ -1204,6 +1247,9 @@
 
       const padPrev = consumeDash ? prevGamepadButtons : new Set(prevGamepadButtons);
       const padRes = pollGamepadInput(gameUI.settings.gamepadBinds, gameUI.settings.gamepadDeadzone, padPrev);
+      if (gameUI.isGamepadActive !== padRes.connected) {
+        gameUI.isGamepadActive = padRes.connected;
+      }
 
       if (consumeDash && !isTyping && gameUI.currentScreen === 'IN_GAME' && !gameUI.isHudEditorOpen) {
         if (padRes.menuRisingEdge) {
@@ -2005,6 +2051,7 @@
       discRendererSettings.showTypingIndicator = gameUI.settings.showTypingIndicator !== false;
       discRendererSettings.showPlayerAvatars = gameUI.settings.showPlayerAvatars !== false;
       renderer.discRenderer.showPositionTags = gameUI.settings.showPositionTags !== false;
+      renderer.discRenderer.showPlayerNicknames = gameUI.settings.showPlayerNicknames !== false;
 
       renderer.vfx.magnusTrailEnabled = gameUI.settings.magnusTrailEnabled !== false;
       renderer.vfx.fireTrailEnabled = gameUI.settings.fireShotEnabled !== false;

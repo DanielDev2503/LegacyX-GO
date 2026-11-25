@@ -33,6 +33,8 @@ export interface KinematicsConfig {
   dashCooldown?: number;
   dashesPerFullBar?: number;
   dashStaminaCost?: number;
+  dashSlowdownDuration?: number;
+  dashSlowdownPercent?: number;
   staminaRechargeRate?: number;
   staminaRechargeDelay?: number;
   staminaRegenMoving?: boolean;
@@ -58,6 +60,7 @@ export interface PlayerKinematicsState {
   isDashing: boolean;
   dashTicksRemaining: number;
   dashCooldownTimer: number;
+  dashSlowdownTimer?: number;
   dashDirX: number;
   dashDirY: number;
   isTurbo: boolean;
@@ -84,9 +87,12 @@ export function stepPlayerKinematics(
   dt: number = 1 / 60,
   options?: StepKinematicsOptions
 ): void {
-  // 1. Dash cooldown decay
+  // 1. Dash cooldown and post-dash slowdown decay
   if (player.dashCooldownTimer > 0) {
     player.dashCooldownTimer = Math.max(0, player.dashCooldownTimer - dt);
+  }
+  if ((player.dashSlowdownTimer ?? 0) > 0 && !player.isDashing) {
+    player.dashSlowdownTimer = Math.max(0, (player.dashSlowdownTimer ?? 0) - dt);
   }
 
   // 2. Parse input mask & continuous 360° aim
@@ -188,14 +194,36 @@ export function stepPlayerKinematics(
 
     if (player.dashTicksRemaining <= 0) {
       player.isDashing = false;
+      const slowdownDur = Math.max(
+        0,
+        config?.dashSlowdownDuration ?? DEFAULT_GAMEPLAY_CONFIG.dashSlowdownDuration
+      );
+      if (slowdownDur > 0) {
+        player.dashSlowdownTimer = slowdownDur;
+      }
     }
   } else {
+    const slowdownDurationCfg = Math.max(
+      0,
+      config?.dashSlowdownDuration ?? DEFAULT_GAMEPLAY_CONFIG.dashSlowdownDuration
+    );
+    const slowdownPctCfg = Math.max(
+      0,
+      Math.min(70, config?.dashSlowdownPercent ?? DEFAULT_GAMEPLAY_CONFIG.dashSlowdownPercent)
+    );
+    let postDashScale = 1.0;
+    if ((player.dashSlowdownTimer ?? 0) > 0 && slowdownDurationCfg > 0 && slowdownPctCfg > 0) {
+      const ratio = Math.min(1, (player.dashSlowdownTimer ?? 0) / slowdownDurationCfg);
+      postDashScale = 1 - (slowdownPctCfg / 100) * ratio;
+    }
+
     const pMaxSpeed = config?.playerMaxSpeed ?? DEFAULT_GAMEPLAY_CONFIG.playerMaxSpeed;
-    const baseMaxSpeed = (pMaxSpeed / 2.8) * 168.0 * (hasMoveInput ? moveThrottle : 1.0);
+    const baseMaxSpeed = (pMaxSpeed / 2.8) * 168.0 * postDashScale * (hasMoveInput ? moveThrottle : 1.0);
     const kSpeedTurbo = config?.boostMultiplier ?? config?.turboMultiplier ?? DEFAULT_GAMEPLAY_CONFIG.boostMultiplier;
     const turboMaxSpeed = baseMaxSpeed * kSpeedTurbo;
     const kAccelTurbo = Math.max(2.8, kSpeedTurbo * 1.5);
-    const turboAccel = effectiveAccel * kAccelTurbo;
+    const turboAccel = effectiveAccel * postDashScale * kAccelTurbo;
+    const slowedBaseAccel = effectiveAccel * postDashScale;
 
     const canTurbo = config?.turboEnabled !== false;
     const wantsTurbo = canTurbo && ((mask & INPUT_TURBO) !== 0);
@@ -224,8 +252,8 @@ export function stepPlayerKinematics(
       if (hasMoveInput) {
         const curSpeed = Math.hypot(player.vel.x, player.vel.y);
         if (curSpeed < baseMaxSpeed) {
-          player.vel.x += uMoveX * effectiveAccel;
-          player.vel.y += uMoveY * effectiveAccel;
+          player.vel.x += uMoveX * slowedBaseAccel;
+          player.vel.y += uMoveY * slowedBaseAccel;
           const postSpeed = Math.hypot(player.vel.x, player.vel.y);
           if (postSpeed > baseMaxSpeed) {
             player.vel.x = (player.vel.x / postSpeed) * baseMaxSpeed;
@@ -233,12 +261,13 @@ export function stepPlayerKinematics(
           }
         } else if (curSpeed > 1e-6) {
           // Redirección fluida post-Turbo/Dash sin incrementar magnitud sobre curSpeed
-          player.vel.x += uMoveX * effectiveAccel;
-          player.vel.y += uMoveY * effectiveAccel;
+          player.vel.x += uMoveX * slowedBaseAccel;
+          player.vel.y += uMoveY * slowedBaseAccel;
           const postSpeed = Math.hypot(player.vel.x, player.vel.y);
           if (postSpeed > 1e-6) {
-            player.vel.x = (player.vel.x / postSpeed) * curSpeed;
-            player.vel.y = (player.vel.y / postSpeed) * curSpeed;
+            const targetCap = postDashScale < 0.999 ? Math.min(curSpeed, baseMaxSpeed > 0 ? Math.max(baseMaxSpeed, curSpeed * 0.96) : curSpeed) : curSpeed;
+            player.vel.x = (player.vel.x / postSpeed) * targetCap;
+            player.vel.y = (player.vel.y / postSpeed) * targetCap;
           }
         }
       }

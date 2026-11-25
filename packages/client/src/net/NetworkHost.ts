@@ -19,6 +19,8 @@ export interface PlayerInfo {
   isHost?: boolean;
   avatar?: string;
   avatarType?: 'letters' | 'emoji' | string;
+  isBot?: boolean;
+  botDifficulty?: 'easy' | 'medium' | 'hard';
   ping?: number;
   kit?: any;
   localKit?: any;
@@ -463,6 +465,9 @@ export class NetworkHost {
       if (typeof msg.isGuest === 'boolean') {
         player.isGuest = msg.isGuest;
       }
+      if (typeof msg.elo === 'number' && Number.isFinite(msg.elo)) {
+        player.elo = msg.elo;
+      }
       if (msg.number !== undefined) {
         player.number = Number(msg.number || player.number) % 100;
       }
@@ -515,6 +520,9 @@ export class NetworkHost {
       if (target) {
         if (typeof msg.nickname === 'string' && msg.nickname) target.nickname = msg.nickname;
         if (typeof msg.name === 'string' && msg.name) target.name = msg.name;
+        if (typeof msg.userId === 'string') target.userId = msg.userId;
+        if (typeof msg.isGuest === 'boolean') target.isGuest = msg.isGuest;
+        if (typeof msg.elo === 'number' && Number.isFinite(msg.elo)) target.elo = msg.elo;
         if (typeof msg.avatar === 'string') target.avatar = msg.avatar;
         if (typeof msg.avatarType === 'string') target.avatarType = msg.avatarType as any;
         if (msg.localKit && typeof msg.localKit === 'object') target.localKit = msg.localKit;
@@ -606,6 +614,8 @@ export class NetworkHost {
         this.broadcastRoomStateSync();
       } else if (action === 'AUTO_BALANCE') {
         this.autoBalanceSpectators();
+      } else if (action === 'CLEAR_TEAM' && (msg.team === 'red' || msg.team === 'blue')) {
+        this.clearTeam(msg.team);
       } else if (
         action === 'START_MATCH' ||
         action === 'STOP_MATCH' ||
@@ -655,6 +665,23 @@ export class NetworkHost {
     return true;
   }
 
+  public elevatePeerToAdmin(peerId: string): boolean {
+    const cleanPeerId = String(peerId || '').trim();
+    if (!cleanPeerId) return false;
+    for (const target of this.players.values()) {
+      if (target.peerId === cleanPeerId) {
+        if (!target.isAdmin) {
+          target.isAdmin = true;
+          this.onPlayersUpdated?.(this.getPlayers());
+          this.broadcastRoomStateSync();
+          this.broadcastSystemNotice(`${target.nickname} ahora es administrador de la sala.`);
+        }
+        return true;
+      }
+    }
+    return false;
+  }
+
   public assignDefaultPosition(team: 'red' | 'blue', excludePlayerId?: number): PlayerPosition {
     const teammates = Array.from(this.players.values()).filter(
       (p) => p.team === team && p.id !== excludePlayerId
@@ -693,11 +720,85 @@ export class NetworkHost {
   public setPlayerTeam(targetPlayerId: number, team: 'red' | 'blue' | 'spectator'): boolean {
     const target = this.players.get(targetPlayerId);
     if (!target) return false;
+    if (target.isBot && team === 'spectator') {
+      return this.removeBot(targetPlayerId);
+    }
     this.applyTeamTransition(target, team);
     this.onTeamChangeRequest?.(targetPlayerId, team);
     this.onPlayersUpdated?.(this.getPlayers());
     this.broadcastRoomStateSync();
     return true;
+  }
+
+  public addBot(team: 'red' | 'blue', difficulty: 'easy' | 'medium' | 'hard' = 'medium'): PlayerInfo | null {
+    if (team !== 'red' && team !== 'blue') return null;
+    const id = this.nextPlayerId++;
+    const botIndex = Array.from(this.players.values()).filter((p) => p.isBot).length + 1;
+    const position = this.assignDefaultPosition(team, id);
+    const botInfo: PlayerInfo = {
+      id,
+      peerId: `bot_${id}`,
+      nickname: `BOT ${botIndex}`,
+      name: `BOT ${botIndex}`,
+      team,
+      position,
+      teamOrder: this.nextTeamOrder++,
+      number: id,
+      isAdmin: false,
+      isHost: false,
+      isGuest: false,
+      isBot: true,
+      botDifficulty: difficulty,
+      avatar: '🤖',
+      avatarType: 'emoji',
+      ping: 0
+    };
+    this.players.set(id, botInfo);
+    this.onPlayersUpdated?.(this.getPlayers());
+    this.broadcastRoomStateSync();
+    return botInfo;
+  }
+
+  public setBotDifficulty(botId: number, difficulty: 'easy' | 'medium' | 'hard'): boolean {
+    const target = this.players.get(botId);
+    if (!target || !target.isBot) return false;
+    target.botDifficulty = difficulty;
+    this.onPlayersUpdated?.(this.getPlayers());
+    this.broadcastRoomStateSync();
+    return true;
+  }
+
+  public removeBot(botId: number): boolean {
+    const target = this.players.get(botId);
+    if (!target || !target.isBot) return false;
+    this.players.delete(botId);
+    this.onTeamChangeRequest?.(botId, 'spectator');
+    this.onPlayersUpdated?.(this.getPlayers());
+    this.broadcastRoomStateSync();
+    return true;
+  }
+
+  public clearTeam(team: 'red' | 'blue'): boolean {
+    let changed = false;
+    for (const [id, player] of Array.from(this.players.entries())) {
+      if (player.team !== team) continue;
+      if (player.isBot) {
+        this.players.delete(id);
+        this.onTeamChangeRequest?.(id, 'spectator');
+        changed = true;
+      } else {
+        this.applyTeamTransition(player, 'spectator');
+        this.onTeamChangeRequest?.(id, 'spectator');
+        changed = true;
+      }
+    }
+    if (changed) {
+      if (team === 'red') this.redKitVariant = 'home';
+      else this.blueKitVariant = 'away';
+      this.onPlayersUpdated?.(this.getPlayers());
+      this.broadcastRoomStateSync();
+    }
+    return changed;
   }
 
   public setPlayerPosition(

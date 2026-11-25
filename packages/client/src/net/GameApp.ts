@@ -92,6 +92,8 @@ export function mapPlayersToRoster(players: PlayerInfo[]): RosterPlayer[] {
       isAdmin: Boolean(p.isHost || p.isAdmin),
       isHost: Boolean(p.isHost),
       isGuest: Boolean(p.isGuest),
+      isBot: Boolean(p.isBot),
+      botDifficulty: p.botDifficulty,
       ping: p.isHost ? 0 : (p.ping ?? 20),
       kit: p.kit ?? p.localKit,
       localKit: p.localKit ?? p.kit,
@@ -117,6 +119,7 @@ export class GameApp {
   private lastRemoteInputSeq = new Map<number, number>();
   private recentLocalEmotes = new Map<string, number>();
   public activeMatchToken: string | null = null;
+  private activeRankedRoster = new Map<number, { userId: string; team: 'red' | 'blue'; elo?: number }>();
   public activeGoalScorerId: number | null = null;
   public hostEngine: any = null;
   public lastJoinError: string | null = null;
@@ -141,6 +144,47 @@ export class GameApp {
     gameUI.onPositionChange = (playerId: number, position: PlayerPosition) => {
       this.requestPositionChange(playerId, position);
     };
+    gameUI.onAddBot = (team: 'red' | 'blue', difficulty: 'easy' | 'medium' | 'hard' = 'medium') => {
+      if (this.isHost && this.networkHost && gameUI.roomType !== 'ranked') {
+        this.networkHost.addBot(team, difficulty);
+      }
+    };
+    gameUI.onSetBotDifficulty = (botId: number, difficulty: 'easy' | 'medium' | 'hard') => {
+      if (this.isHost && this.networkHost && gameUI.roomType !== 'ranked') {
+        this.networkHost.setBotDifficulty(botId, difficulty);
+      }
+    };
+    gameUI.onRemoveBot = (botId: number) => {
+      if (this.isHost && this.networkHost) {
+        this.networkHost.removeBot(botId);
+      }
+    };
+    gameUI.onClearTeam = (team: 'red' | 'blue') => {
+      if (this.isHost && this.networkHost) {
+        this.networkHost.clearTeam(team);
+      } else if (!this.isHost && this.networkClient && gameUI.isAdmin) {
+        this.networkClient.sendAdminAction('CLEAR_TEAM', { team });
+      }
+    };
+    gameUI.onSuperadminElevate = () => this.requestSuperadminRoomAdmin();
+
+    this.signaling.on('SESSION_REPLACED', (msg: any) => {
+      this.handleSessionReplaced(
+        typeof msg?.message === 'string' && msg.message.trim()
+          ? msg.message
+          : 'Tu cuenta inició sesión en otro dispositivo o pestaña.'
+      );
+    });
+    this.signaling.on('SUPERADMIN_ELEVATE_PEER', (msg: any) => {
+      if (this.isHost && this.networkHost && typeof msg?.peerId === 'string') {
+        this.networkHost.elevatePeerToAdmin(msg.peerId);
+      }
+    });
+    this.signaling.on('SUPERADMIN_ADMIN_RESULT', (msg: any) => {
+      if (typeof msg?.message === 'string' && msg.message.trim()) {
+        gameUI.pushLocalSystemNotice(msg.message);
+      }
+    });
 
     this.signaling.on('RANKED_MATCH_TOKEN', (msg: any) => {
       if (typeof msg?.matchToken === 'string' && msg.matchToken) {
@@ -148,8 +192,9 @@ export class GameApp {
       }
     });
     this.signaling.on('RANKED_MATCH_RESULT', (msg: any) => {
-      if (msg?.ok) {
+      if (msg?.success || msg?.ok) {
         void userProfile.fetchLeaderboard(userProfile.leaderboardCategory);
+        void userProfile.fetchPersonalRank(userProfile.leaderboardCategory);
       }
     });
     this.signaling.on('ROOM_PING_RESULT', (msg: any) => {
@@ -390,6 +435,9 @@ export class GameApp {
     if (this.isHost && this.networkHost) {
       this.networkHost.updateHostProfile({
         nickname: profile.nickname,
+        userId: userProfile.id,
+        isGuest: userProfile.isGuest,
+        elo: userProfile.elo,
         avatar: profile.avatar,
         avatarType: profile.avatarType,
         kit: profile.localKit,
@@ -397,7 +445,12 @@ export class GameApp {
         visitorKit: profile.visitorKit
       });
     } else if (!this.isHost && this.networkClient) {
-      this.networkClient.sendProfileUpdate(profile);
+      this.networkClient.sendProfileUpdate({
+        ...profile,
+        userId: userProfile.id,
+        isGuest: userProfile.isGuest,
+        elo: userProfile.elo
+      });
     }
   }
 
@@ -538,6 +591,48 @@ export class GameApp {
     }
   }
 
+  public requestSuperadminRoomAdmin(): void {
+    if (userProfile.isGuest || !userProfile.isAuthenticated || userProfile.role !== 'superadmin') {
+      gameUI.pushLocalSystemNotice('Comando /admin exclusivo para Superadmin.');
+      return;
+    }
+    if (gameUI.isPracticeMode) {
+      gameUI.isAdmin = true;
+      gameUI.pushLocalSystemNotice('Ya eres administrador en Modo Entrenamiento.');
+      return;
+    }
+    if (!this.currentRoomId) {
+      gameUI.pushLocalSystemNotice('Debes estar dentro de una sala para usar /admin.');
+      return;
+    }
+    if (this.isHost && this.networkHost) {
+      this.networkHost.elevatePeerToAdmin(this.networkHost.getPlayers()[0]?.peerId || this.signaling.peerId);
+      gameUI.isAdmin = true;
+      gameUI.pushLocalSystemNotice('Permisos de administrador de sala verificados.');
+      return;
+    }
+    if (!userProfile.jwt) {
+      gameUI.pushLocalSystemNotice('No se encontró un token de sesión válido.');
+      return;
+    }
+    this.signaling.send({
+      type: 'VERIFY_SUPERADMIN_ROOM_ADMIN',
+      roomId: this.currentRoomId,
+      accessToken: userProfile.jwt
+    });
+  }
+
+  public handleSessionReplaced(
+    message: string = 'Tu cuenta inició sesión en otro dispositivo o pestaña.',
+    clearStorage: boolean = true
+  ): void {
+    if (this.currentRoomId || this.networkHost || this.networkClient) {
+      this.teardownNetworkSession();
+      this.resetToLobbyState(false);
+    }
+    userProfile.evictReplacedSession(message, clearStorage);
+  }
+
   public requestPositionChange(targetPlayerId: number, position: PlayerPosition): void {
     if (this.isHost && this.networkHost) {
       this.networkHost.setPlayerPosition(targetPlayerId, position, gameUI.localPlayerId || 1);
@@ -670,6 +765,7 @@ export class GameApp {
       peerId: this.signaling.peerId,
       userId: userProfile.id,
       isGuest: userProfile.isGuest,
+      elo: userProfile.elo,
       team: 'spectator',
       avatar: profile.avatar,
       avatarType: profile.avatarType,
@@ -735,6 +831,17 @@ export class GameApp {
     host.onPlayersUpdated = (players) => {
       gameUI.rosterPlayers = mapPlayersToRoster(players);
       this.syncLocalRole();
+      if (this.activeMatchToken && gameUI.roomType === 'ranked') {
+        for (const p of players) {
+          if ((p.team === 'red' || p.team === 'blue') && p.userId && !p.isGuest && !(p as any).isBot) {
+            this.activeRankedRoster.set(p.id, {
+              userId: p.userId,
+              team: p.team,
+              elo: typeof p.elo === 'number' && Number.isFinite(p.elo) ? p.elo : undefined
+            });
+          }
+        }
+      }
       const activeIds = new Set(players.map((p) => p.id));
       for (const id of this.remoteInputs.keys()) {
         if (!activeIds.has(id)) {
@@ -869,13 +976,23 @@ export class GameApp {
 
   public startRankedMatchSession(): void {
     this.activeMatchToken = null;
+    this.activeRankedRoster.clear();
     if (gameUI.isPracticeMode || gameUI.roomType !== 'ranked') return;
     if (!this.isHost || !this.currentRoomId || !userProfile.jwt || !this.networkHost) return;
 
-    const participantUserIds = this.networkHost
+    const participantPlayers = this.networkHost
       .getPlayers()
-      .filter((p) => (p.team === 'red' || p.team === 'blue') && p.userId && !p.isGuest)
-      .map((p) => p.userId as string);
+      .filter((p) => (p.team === 'red' || p.team === 'blue') && p.userId && !p.isGuest && !(p as any).isBot);
+
+    for (const p of participantPlayers) {
+      this.activeRankedRoster.set(p.id, {
+        userId: p.userId as string,
+        team: p.team as 'red' | 'blue',
+        elo: typeof p.elo === 'number' && Number.isFinite(p.elo) ? p.elo : undefined
+      });
+    }
+
+    const participantUserIds = participantPlayers.map((p) => p.userId as string);
 
     this.signaling.send({
       type: 'RANKED_MATCH_START',
@@ -911,11 +1028,21 @@ export class GameApp {
       .map((s) => {
         const pidNum = Number(s.playerId);
         const pInfo = hostPlayers.find((p) => p.id === pidNum);
-        if (!pInfo || pInfo.isGuest || !pInfo.userId) return null;
-        if (s.team !== 'red' && s.team !== 'blue') return null;
+        const cached = this.activeRankedRoster.get(pidNum);
+        if (pInfo && ((pInfo as any).isBot || pInfo.isGuest)) return null;
+        const userId = pInfo?.userId || cached?.userId;
+        const resolvedTeam =
+          s.team === 'red' || s.team === 'blue' ? s.team : cached?.team;
+        if (!userId || (resolvedTeam !== 'red' && resolvedTeam !== 'blue')) return null;
         return {
-          userId: pInfo.userId,
-          team: s.team as 'red' | 'blue',
+          userId,
+          team: resolvedTeam as 'red' | 'blue',
+          elo:
+            typeof pInfo?.elo === 'number' && Number.isFinite(pInfo.elo)
+              ? pInfo.elo
+              : typeof cached?.elo === 'number' && Number.isFinite(cached.elo)
+                ? cached.elo
+                : 1000,
           goals: Number(s.goals || 0),
           assists: Number(s.assists || 0),
           saves: Number(s.saves || 0),
@@ -940,6 +1067,7 @@ export class GameApp {
       participants
     });
     this.activeMatchToken = null;
+    this.activeRankedRoster.clear();
   }
 
   public async joinRoom(roomId: string, password?: string): Promise<boolean> {
@@ -1045,6 +1173,7 @@ export class GameApp {
     this.isHost = false;
     this.currentRoomId = roomId;
     this.activeMatchToken = null;
+    this.activeRankedRoster.clear();
     this.setActiveGoalScorerId(null);
     this.hostEngine = null;
     this.clearRemoteInputTracking();
@@ -1057,6 +1186,7 @@ export class GameApp {
     const client = new NetworkClient(this.signaling, profile.nickname, 7, {
       userId: userProfile.id,
       isGuest: userProfile.isGuest,
+      elo: userProfile.elo,
       avatar: profile.avatar,
       avatarType: profile.avatarType,
       kit: profile.kit,
@@ -1210,6 +1340,7 @@ export class GameApp {
       this.currentRoomId = null;
     }
     this.activeMatchToken = null;
+    this.activeRankedRoster.clear();
     this.setActiveGoalScorerId(null);
     this.hostEngine = null;
     this.clearRemoteInputTracking();
@@ -1252,6 +1383,7 @@ export class GameApp {
     this.isHost = false;
     this.currentRoomConfig = null;
     this.activeMatchToken = null;
+    this.activeRankedRoster.clear();
     this.setActiveGoalScorerId(null);
     this.hostEngine = null;
     this.clearRemoteInputTracking();

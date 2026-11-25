@@ -404,9 +404,10 @@ describe('World Cup Ball Designs, Replay Overrides, Kit Patterns & Scoreboards',
       hasOutline: true
     };
 
-    it('renders original and all 6 World Cup scoreboard designs using KitPatternBadge (no country flags)', () => {
+    it('renders original, champions, and all 6 World Cup scoreboard designs using KitPatternBadge (no country flags)', () => {
       expect(SCOREBOARD_DESIGNS).toEqual([
         'original',
+        'champions',
         'wc2006',
         'wc2010',
         'wc2014',

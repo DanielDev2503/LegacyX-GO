@@ -62,6 +62,7 @@ export class Player {
   public isDashing: boolean = false;
   public dashTicksRemaining: number = 0;
   public dashCooldownTimer: number = 0;
+  public dashSlowdownTimer: number = 0;
   public dashDirX: number = 0;
   public dashDirY: number = 0;
   public isTurbo: boolean = false;

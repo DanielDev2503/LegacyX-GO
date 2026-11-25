@@ -658,6 +658,7 @@
     width: 100%;
     height: 100dvh;
     overflow-y: auto;
+    overflow-x: hidden;
     background-color: #0b111e;
     background: radial-gradient(circle at 50% 20%, #111a2e 0%, #070b14 100%);
     display: flex;
@@ -703,8 +704,11 @@
 
   .creator-card {
     width: min(94vw, 820px);
+    max-width: 100%;
+    min-width: 0;
     max-height: calc(100dvh - 68px);
     overflow-y: auto;
+    overflow-x: hidden;
     background: #0a101a;
     border: 1px solid #00e5ff;
     border-radius: 8px;
