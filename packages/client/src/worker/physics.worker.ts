@@ -19,6 +19,7 @@ export type WorkerCommand =
   | { type: 'TOGGLE_PAUSE' }
   | { type: 'INPUT'; id: number; inputMask: number; tick?: number }
   | { type: 'APPLY_SNAPSHOT'; buffer: ArrayBuffer; localDiscId?: number }
+  | { type: 'RECYCLE_BUFFER'; buffer: ArrayBuffer }
   | { type: 'SET_MODIFIERS'; modifiers: Partial<PhysicsModifiers> }
   | { type: 'UPDATE_CONFIG'; config: Partial<PhysicsModifiers> };
 
@@ -37,13 +38,25 @@ const currentInputs = new Map<number, PlayerInput>();
 const reconciler = new ClientPredictionReconciler();
 
 const FIXED_DT_MS = 1000 / 60;
+const MAX_FRAME_DELTA_MS = 100;
 const MAX_STEPS_PER_FRAME = 4;
+const POLL_STEP_MS = 4;
 let lastTime = performance.now();
 let accumulator = 0;
-let intervalId: ReturnType<typeof setInterval> | null = null;
+let nextPollAt = 0;
+let isLoopRunning = false;
+let timerId: ReturnType<typeof setTimeout> | null = null;
 
-// Pre-allocated reusable ArrayBuffer for 60Hz worker -> main thread transfer
-let reusableSnapshotBuffer = new ArrayBuffer(1024);
+// Pool de Transferables por tamaño exacto para transferencia zero-copy sin realocación
+const recycledBufferPool = new Map<number, ArrayBuffer[]>();
+
+function acquireTransferBuffer(byteLength: number): ArrayBuffer {
+  const bucket = recycledBufferPool.get(byteLength);
+  if (bucket && bucket.length > 0) {
+    return bucket.pop()!;
+  }
+  return new ArrayBuffer(byteLength);
+}
 
 // Forward engine events (goals, state changes, post hits, kicks) to UI thread
 engine.on('goal', (payload) => {
@@ -64,13 +77,10 @@ engine.on('kick', (payload) => {
 
 function broadcastSnapshot(): void {
   const snapshot: GameStateSnapshot = engine.getState();
-  const requiredBytes = 18 + snapshot.discs.length * 16;
-  if (reusableSnapshotBuffer.byteLength < requiredBytes) {
-    reusableSnapshotBuffer = new ArrayBuffer(requiredBytes * 2);
-  }
-  const encoded = BinaryProtocol.encodeSnapshot(snapshot, reusableSnapshotBuffer);
-  // Copy slice for transferable postMessage while keeping internal reusable buffer intact
-  const transferBuffer = encoded.slice(0);
+  const requiredBytes =
+    BinaryProtocol.SNAPSHOT_HEADER_SIZE + snapshot.discs.length * BinaryProtocol.DISC_RECORD_SIZE;
+  const transferBuffer = acquireTransferBuffer(requiredBytes);
+  BinaryProtocol.encodeSnapshot(snapshot, transferBuffer);
 
   self.postMessage(
     {
@@ -84,43 +94,56 @@ function broadcastSnapshot(): void {
   );
 }
 
+function pumpWorkerTick(): void {
+  if (!isLoopRunning) return;
+  const now = performance.now();
+  const rawDelta = Math.min(Math.max(0, now - lastTime), MAX_FRAME_DELTA_MS);
+  lastTime = now;
+  accumulator += rawDelta;
+
+  let stepped = false;
+  let steps = 0;
+
+  while (accumulator >= FIXED_DT_MS && steps < MAX_STEPS_PER_FRAME) {
+    engine.step(currentInputs, false);
+    reconciler.updateVisualSmoothing(FIXED_DT_MS / 1000);
+    accumulator -= FIXED_DT_MS;
+    steps++;
+    stepped = true;
+  }
+
+  // Prevent spiral of death if tab was backgrounded
+  if (accumulator >= FIXED_DT_MS) {
+    accumulator %= FIXED_DT_MS;
+  }
+
+  if (stepped) {
+    broadcastSnapshot();
+  }
+
+  // Bucle compensado por deriva (inmune al throttling de pestañas en segundo plano)
+  nextPollAt += POLL_STEP_MS;
+  if (now - nextPollAt > MAX_FRAME_DELTA_MS) {
+    nextPollAt = now + POLL_STEP_MS;
+  }
+  const delay = Math.max(1, nextPollAt - performance.now());
+  timerId = setTimeout(pumpWorkerTick, delay);
+}
+
 function startLoop(): void {
-  if (intervalId !== null) return;
+  if (isLoopRunning) return;
+  isLoopRunning = true;
   lastTime = performance.now();
   accumulator = 0;
-
-  intervalId = setInterval(() => {
-    const now = performance.now();
-    const frameDelta = now - lastTime;
-    lastTime = now;
-    accumulator += frameDelta;
-
-    let stepped = false;
-    let steps = 0;
-
-    while (accumulator >= FIXED_DT_MS && steps < MAX_STEPS_PER_FRAME) {
-      engine.step(currentInputs, false);
-      reconciler.decayVisualOffset();
-      accumulator -= FIXED_DT_MS;
-      steps++;
-      stepped = true;
-    }
-
-    // Prevent spiral of death if tab was backgrounded
-    if (accumulator >= FIXED_DT_MS) {
-      accumulator = accumulator % FIXED_DT_MS;
-    }
-
-    if (stepped) {
-      broadcastSnapshot();
-    }
-  }, 4);
+  nextPollAt = lastTime + POLL_STEP_MS;
+  timerId = setTimeout(pumpWorkerTick, POLL_STEP_MS);
 }
 
 function stopLoop(): void {
-  if (intervalId !== null) {
-    clearInterval(intervalId);
-    intervalId = null;
+  isLoopRunning = false;
+  if (timerId !== null) {
+    clearTimeout(timerId);
+    timerId = null;
   }
 }
 
@@ -195,6 +218,21 @@ self.onmessage = (e: MessageEvent<WorkerCommand>) => {
         engine.setState(snapshot);
       }
       broadcastSnapshot();
+      break;
+    }
+
+    case 'RECYCLE_BUFFER': {
+      const buf = cmd.buffer;
+      if (buf && buf.byteLength > 0) {
+        let bucket = recycledBufferPool.get(buf.byteLength);
+        if (!bucket) {
+          bucket = [];
+          recycledBufferPool.set(buf.byteLength, bucket);
+        }
+        if (bucket.length < 4) {
+          bucket.push(buf);
+        }
+      }
       break;
     }
 

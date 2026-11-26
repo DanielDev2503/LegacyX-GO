@@ -1,9 +1,32 @@
 import { BinaryProtocol } from '@legacyx/core';
 
 export type IceLinkState = 'new' | 'checking' | 'connected' | 'Completed' | 'disconnected' | 'failed' | 'closed';
+export type IceRouteLabel =
+  | 'Direct P2P (LAN/host)'
+  | 'Direct P2P (STUN/srflx)'
+  | 'Relay (TURN)'
+  | 'Unknown';
+
+export interface WebRtcStatsSnapshot {
+  rttMs: number;
+  candidateType: string;
+  remoteCandidateType: string;
+  iceRoute: IceRouteLabel;
+  isRelay: boolean;
+  bytesSent: number;
+  bytesReceived: number;
+}
+
+export const SCTP_BACKPRESSURE_LIMIT_BYTES = 16384; // 16 KB cap para prevenir bufferbloat SCTP
+export const DISCONNECTED_GRACE_MS = 5000; // Ventana de gracia 5–8 s antes de ICE restart
+export const NAT_KEEPALIVE_INTERVAL_MS = 4000; // Ping NAT binario cada 3–5 s en DataChannel
+export const STATS_POLL_INTERVAL_MS = 1000; // Sondeo asíncrono pc.getStats() cada 1 s
+export const OP_KEEPALIVE = 0xff;
+const NAT_KEEPALIVE_PACKET = new Uint8Array([OP_KEEPALIVE]).buffer;
 
 export interface PeerConnectionConfig {
   iceServers?: RTCIceServer[];
+  disconnectedGraceMs?: number;
   signalingClient?: {
     isOpen: () => boolean;
     reconnect: () => void;
@@ -14,6 +37,7 @@ export interface PeerConnectionOptions {
   peerId: string;
   isInitiator?: boolean;
   unreliableOnly?: boolean;
+  disconnectedGraceMs?: number;
   iceServers?: RTCIceServer[];
   signalingClient?: {
     isOpen: () => boolean;
@@ -79,15 +103,21 @@ export class PeerConnection {
   public onLocalDescription: ((sdp: RTCSessionDescriptionInit) => void) | null = null;
   public onLocalCandidate: ((candidate: RTCIceCandidateInit) => void) | null = null;
   public onIceRestartOffer: ((offer: RTCSessionDescriptionInit) => void) | null = null;
+  public onStatsUpdated: ((stats: WebRtcStatsSnapshot) => void) | null = null;
 
   private pendingCandidates: RTCIceCandidateInit[] = [];
   private reliableOutbox: string[] = [];
   private isSettingRemoteDescription: boolean = false;
+  private makingOffer: boolean = false;
   private iceRetryCount = 0;
   private readonly maxIceRetries = 3;
+  private readonly disconnectedGraceMs: number;
   private iceRestartTimer: ReturnType<typeof setTimeout> | null = null;
   private isRecovering: boolean = false;
   private disconnectedGraceTimer: ReturnType<typeof setTimeout> | null = null;
+  private natKeepAliveTimer: ReturnType<typeof setInterval> | null = null;
+  private statsPollTimer: ReturnType<typeof setInterval> | null = null;
+  private isPollingStats: boolean = false;
   public hasEverConnected: boolean = false;
   private notifiedConnected: boolean = false;
   private signalingClient?: { isOpen: () => boolean; reconnect: () => void };
@@ -96,6 +126,10 @@ export class PeerConnection {
 
   public rttMs: number = 0;
   public candidateType: string = 'unknown';
+  public remoteCandidateType: string = 'unknown';
+  public iceRoute: IceRouteLabel = 'Unknown';
+  public bytesSent: number = 0;
+  public bytesReceived: number = 0;
 
   constructor(
     peerIdOrOptions: string | PeerConnectionOptions,
@@ -107,12 +141,14 @@ export class PeerConnection {
       this.remotePeerId = peerIdOrOptions;
       this.isInitiator = isInitiatorParam;
       this.signalingClient = config.signalingClient;
+      this.disconnectedGraceMs = Math.max(500, config.disconnectedGraceMs ?? DISCONNECTED_GRACE_MS);
     } else {
       this.options = peerIdOrOptions;
       this.peerId = peerIdOrOptions.peerId;
       this.remotePeerId = peerIdOrOptions.peerId;
       this.isInitiator = Boolean(peerIdOrOptions.isInitiator);
       this.signalingClient = peerIdOrOptions.signalingClient;
+      this.disconnectedGraceMs = Math.max(500, peerIdOrOptions.disconnectedGraceMs ?? DISCONNECTED_GRACE_MS);
       if (peerIdOrOptions.onUnreliableOpen) this.onUnreliableOpen = peerIdOrOptions.onUnreliableOpen;
       if (peerIdOrOptions.onConnected) this.onConnected = peerIdOrOptions.onConnected;
       if (peerIdOrOptions.onDisconnected) this.onDisconnected = peerIdOrOptions.onDisconnected;
@@ -135,6 +171,7 @@ export class PeerConnection {
 
     const pcConfig: RTCConfiguration = {
       iceServers,
+      iceTransportPolicy: 'all',
       iceCandidatePoolSize: 4
     };
     try {
@@ -201,7 +238,7 @@ export class PeerConnection {
             ) {
               this.scheduleRecovery();
             }
-          }, 2000);
+          }, this.disconnectedGraceMs);
         }
       } else if (state === 'failed') {
         this.linkState = 'failed';
@@ -270,6 +307,57 @@ export class PeerConnection {
     }
   }
 
+  private startNatKeepAlive(): void {
+    if (this.natKeepAliveTimer || this.isClosingIntentionally) return;
+    this.natKeepAliveTimer = setInterval(() => {
+      if (this.isClosingIntentionally) {
+        this.stopNatKeepAlive();
+        return;
+      }
+      const target = this.unreliableChannel || this.dataChannel;
+      if (target && target.readyState === 'open' && (target.bufferedAmount ?? 0) <= SCTP_BACKPRESSURE_LIMIT_BYTES) {
+        try {
+          target.send(NAT_KEEPALIVE_PACKET);
+        } catch {
+          // Ignore transient keepalive failure
+        }
+      }
+    }, NAT_KEEPALIVE_INTERVAL_MS);
+  }
+
+  private stopNatKeepAlive(): void {
+    if (this.natKeepAliveTimer) {
+      clearInterval(this.natKeepAliveTimer);
+      this.natKeepAliveTimer = null;
+    }
+  }
+
+  private startStatsPolling(): void {
+    if (this.statsPollTimer || this.isClosingIntentionally) return;
+    if (!this.pc || typeof this.pc.getStats !== 'function') return;
+    void this.auditIceConnection();
+    this.statsPollTimer = setInterval(() => {
+      if (this.isClosingIntentionally) {
+        this.stopStatsPolling();
+        return;
+      }
+      if (!this.isPollingStats) {
+        this.isPollingStats = true;
+        void this.auditIceConnection().finally(() => {
+          this.isPollingStats = false;
+        });
+      }
+    }, STATS_POLL_INTERVAL_MS);
+  }
+
+  private stopStatsPolling(): void {
+    if (this.statsPollTimer) {
+      clearInterval(this.statsPollTimer);
+      this.statsPollTimer = null;
+    }
+    this.isPollingStats = false;
+  }
+
   private scheduleRecovery(): void {
     if (this.isClosingIntentionally) return;
     if (!this.hasEverConnected) return;
@@ -328,12 +416,14 @@ export class PeerConnection {
   private emitConnectedOnce(): void {
     if (this.notifiedConnected) return;
     this.notifiedConnected = true;
+    this.startStatsPolling();
     if (this.onConnected) this.onConnected();
   }
 
   public async executeIceRestart(): Promise<RTCSessionDescriptionInit | null> {
     if (this.isClosingIntentionally) return null;
     this.notifiedConnected = false;
+    this.makingOffer = true;
     try {
       if (typeof this.pc.restartIce === 'function') {
         this.pc.restartIce();
@@ -350,36 +440,103 @@ export class PeerConnection {
       return offer;
     } catch {
       return null;
+    } finally {
+      this.makingOffer = false;
     }
   }
 
-  public async auditIceConnection(): Promise<{ rttMs: number; candidateType: string }> {
+  private static classifyIceRoute(localType: string, remoteType: string): IceRouteLabel {
+    if (localType === 'relay' || remoteType === 'relay') return 'Relay (TURN)';
+    if (
+      localType === 'srflx' ||
+      localType === 'prflx' ||
+      remoteType === 'srflx' ||
+      remoteType === 'prflx'
+    ) {
+      return 'Direct P2P (STUN/srflx)';
+    }
+    if (localType === 'host' || remoteType === 'host') return 'Direct P2P (LAN/host)';
+    return 'Unknown';
+  }
+
+  public async auditIceConnection(): Promise<WebRtcStatsSnapshot> {
     if (!this.pc || typeof this.pc.getStats !== 'function') {
-      return { rttMs: this.rttMs, candidateType: this.candidateType };
+      return {
+        rttMs: this.rttMs,
+        candidateType: this.candidateType,
+        remoteCandidateType: this.remoteCandidateType,
+        iceRoute: this.iceRoute,
+        isRelay: this.iceRoute === 'Relay (TURN)',
+        bytesSent: this.bytesSent,
+        bytesReceived: this.bytesReceived
+      };
     }
     try {
       const stats = await this.pc.getStats();
       let activeLocalCandidateId: string | null = null;
-      stats.forEach((report) => {
-        if (report.type === 'candidate-pair' && report.state === 'succeeded' && report.nominated) {
-          if (typeof report.currentRoundTripTime === 'number') {
-            this.rttMs = Math.round(report.currentRoundTripTime * 1000);
+      let activeRemoteCandidateId: string | null = null;
+      let fallbackLocalId: string | null = null;
+      let fallbackRemoteId: string | null = null;
+
+      stats.forEach((report: any) => {
+        if (report.type === 'candidate-pair' && report.state === 'succeeded') {
+          if (report.nominated || report.selected) {
+            if (typeof report.currentRoundTripTime === 'number' && Number.isFinite(report.currentRoundTripTime)) {
+              this.rttMs = Math.max(1, Math.round(report.currentRoundTripTime * 1000));
+            }
+            if (typeof report.bytesSent === 'number') this.bytesSent = report.bytesSent;
+            if (typeof report.bytesReceived === 'number') this.bytesReceived = report.bytesReceived;
+            activeLocalCandidateId = report.localCandidateId ?? null;
+            activeRemoteCandidateId = report.remoteCandidateId ?? null;
+          } else if (!fallbackLocalId) {
+            fallbackLocalId = report.localCandidateId ?? null;
+            fallbackRemoteId = report.remoteCandidateId ?? null;
           }
-          activeLocalCandidateId = report.localCandidateId;
         }
       });
 
-      if (activeLocalCandidateId) {
-        stats.forEach((report) => {
-          if (report.id === activeLocalCandidateId && report.type === 'local-candidate') {
-            this.candidateType = report.candidateType || 'unknown';
+      const resolvedLocalId = activeLocalCandidateId ?? fallbackLocalId;
+      const resolvedRemoteId = activeRemoteCandidateId ?? fallbackRemoteId;
+      let localType = this.candidateType;
+      let remoteType = this.remoteCandidateType;
+
+      if (resolvedLocalId || resolvedRemoteId) {
+        stats.forEach((report: any) => {
+          if (resolvedLocalId && report.id === resolvedLocalId && report.type === 'local-candidate') {
+            localType = report.candidateType || 'unknown';
+          } else if (resolvedRemoteId && report.id === resolvedRemoteId && report.type === 'remote-candidate') {
+            remoteType = report.candidateType || 'unknown';
           }
         });
       }
+
+      this.remoteCandidateType = remoteType;
+      this.iceRoute = PeerConnection.classifyIceRoute(localType, remoteType);
+      this.candidateType = this.iceRoute === 'Relay (TURN)' ? 'relay' : localType;
+
+      const snapshot: WebRtcStatsSnapshot = {
+        rttMs: this.rttMs,
+        candidateType: this.candidateType,
+        remoteCandidateType: this.remoteCandidateType,
+        iceRoute: this.iceRoute,
+        isRelay: this.iceRoute === 'Relay (TURN)',
+        bytesSent: this.bytesSent,
+        bytesReceived: this.bytesReceived
+      };
+      this.onStatsUpdated?.(snapshot);
+      return snapshot;
     } catch {
       // Ignore stats error in mock environments
     }
-    return { rttMs: this.rttMs, candidateType: this.candidateType };
+    return {
+      rttMs: this.rttMs,
+      candidateType: this.candidateType,
+      remoteCandidateType: this.remoteCandidateType,
+      iceRoute: this.iceRoute,
+      isRelay: this.iceRoute === 'Relay (TURN)',
+      bytesSent: this.bytesSent,
+      bytesReceived: this.bytesReceived
+    };
   }
 
   public async measureRtt(): Promise<number> {
@@ -393,11 +550,18 @@ export class PeerConnection {
 
   private setupReliableChannel(channel: RTCDataChannel): void {
     this.reliableChannel = channel;
+    try {
+      channel.bufferedAmountLowThreshold = SCTP_BACKPRESSURE_LIMIT_BYTES;
+    } catch {
+      // Ignore readonly/mock DataChannel property
+    }
     channel.onopen = () => {
       this.hasEverConnected = true;
       this.linkState = 'connected';
       this.flushReliableOutbox();
-      this.emitConnectedOnce();
+      if (this.areChannelsOpen()) {
+        this.emitConnectedOnce();
+      }
     };
     channel.onclose = () => {
       if (this.isClosingIntentionally && this.onDisconnected) {
@@ -420,17 +584,26 @@ export class PeerConnection {
 
   private setupUnreliableChannel(channel: RTCDataChannel): void {
     channel.binaryType = 'arraybuffer';
+    try {
+      channel.bufferedAmountLowThreshold = SCTP_BACKPRESSURE_LIMIT_BYTES;
+    } catch {
+      // Ignore readonly/mock DataChannel property
+    }
     this.unreliableChannel = channel;
     this.dataChannel = channel;
 
     channel.onopen = () => {
       this.linkState = 'connected';
+      this.startNatKeepAlive();
       this.flushReliableOutbox();
       if (this.onUnreliableOpen) this.onUnreliableOpen();
-      this.emitConnectedOnce();
+      if (this.areChannelsOpen()) {
+        this.emitConnectedOnce();
+      }
     };
 
     channel.onclose = () => {
+      this.stopNatKeepAlive();
       if (this.isClosingIntentionally && this.onDisconnected) {
         this.onDisconnected();
       }
@@ -447,10 +620,18 @@ export class PeerConnection {
           }
         }
       } else if (event.data instanceof ArrayBuffer) {
+        // Ignorar ping NAT Keep-Alive binario mínimo (1 byte 0xff) sin alocaciones
+        if (event.data.byteLength === 1 && BinaryProtocol.peekPacketType(event.data) === OP_KEEPALIVE) {
+          return;
+        }
         if (this.onUnreliableMessage) this.onUnreliableMessage(event.data);
         if (this.options?.onUnreliableSnapshot || this.options?.onUnreliableInput) {
           const type = BinaryProtocol.peekPacketType(event.data);
-          if (type === BinaryProtocol.PKT_SNAPSHOT || event.data.byteLength >= 17) {
+          if (type === BinaryProtocol.PKT_SNAPSHOT) {
+            this.options.onUnreliableSnapshot?.(event.data);
+          } else if (type === BinaryProtocol.PKT_INPUT || type === BinaryProtocol.PKT_INPUT_BUNDLE) {
+            this.options.onUnreliableInput?.(event.data);
+          } else if (event.data.byteLength >= 17) {
             this.options.onUnreliableSnapshot?.(event.data);
           } else {
             this.options.onUnreliableInput?.(event.data);
@@ -464,11 +645,16 @@ export class PeerConnection {
     if (!this.unreliableChannel && !this.reliableChannel && this.options) {
       this.initChannels();
     }
-    const offer = await this.pc.createOffer();
-    await this.pc.setLocalDescription(offer);
-    if (this.onLocalDescription) this.onLocalDescription(offer);
-    if (this.options?.onSignal) this.options.onSignal(offer);
-    return offer;
+    this.makingOffer = true;
+    try {
+      const offer = await this.pc.createOffer();
+      await this.pc.setLocalDescription(offer);
+      if (this.onLocalDescription) this.onLocalDescription(offer);
+      if (this.options?.onSignal) this.options.onSignal(offer);
+      return offer;
+    } finally {
+      this.makingOffer = false;
+    }
   }
 
   private createSessionDesc(desc: RTCSessionDescriptionInit): RTCSessionDescriptionInit {
@@ -490,6 +676,21 @@ export class PeerConnection {
   }
 
   public async handleOffer(offer: RTCSessionDescriptionInit): Promise<RTCSessionDescriptionInit> {
+    const isPolite = !this.isInitiator;
+    const offerCollision =
+      this.makingOffer || (this.pc.signalingState !== undefined && this.pc.signalingState !== 'stable');
+    if (offerCollision) {
+      if (!isPolite) {
+        // Host impolite: descarta oferta concurrente (glare) y mantiene su propia oferta
+        return this.pc.localDescription ?? offer;
+      }
+      try {
+        await this.pc.setLocalDescription({ type: 'rollback' });
+      } catch {
+        // Ignore in mocks lacking rollback support
+      }
+    }
+
     this.isSettingRemoteDescription = true;
     try {
       await this.pc.setRemoteDescription(this.createSessionDesc(offer));
@@ -617,7 +818,7 @@ export class PeerConnection {
     const target = this.unreliableChannel || this.dataChannel;
     if (target && target.readyState === 'open') {
       try {
-        if ((target.bufferedAmount ?? 0) <= 32768) {
+        if ((target.bufferedAmount ?? 0) <= SCTP_BACKPRESSURE_LIMIT_BYTES) {
           target.send(buffer);
         }
       } catch {
@@ -630,7 +831,7 @@ export class PeerConnection {
     const target = this.unreliableChannel || this.dataChannel;
     if (target && target.readyState === 'open') {
       try {
-        if ((target.bufferedAmount ?? 0) <= 32768) {
+        if ((target.bufferedAmount ?? 0) <= SCTP_BACKPRESSURE_LIMIT_BYTES) {
           target.send(typeof msg === 'string' ? msg : JSON.stringify(msg));
         }
       } catch {
@@ -641,11 +842,11 @@ export class PeerConnection {
 
   public areChannelsOpen(): boolean {
     const uOpen = Boolean(this.unreliableChannel && this.unreliableChannel.readyState === 'open');
-    const rOpen = this.options?.unreliableOnly
-      ? true
-      : Boolean(this.reliableChannel && this.reliableChannel.readyState === 'open');
-    const dOpen = Boolean(this.dataChannel && this.dataChannel.readyState === 'open');
-    return (uOpen && rOpen) || dOpen;
+    if (this.options?.unreliableOnly) {
+      return uOpen;
+    }
+    const rOpen = Boolean(this.reliableChannel && this.reliableChannel.readyState === 'open');
+    return uOpen && rOpen;
   }
 
   public get currentRecoveryAttempts(): number {
@@ -662,6 +863,8 @@ export class PeerConnection {
     this.notifiedConnected = false;
     this.clearRestartTimer();
     this.clearDisconnectedGraceTimer();
+    this.stopNatKeepAlive();
+    this.stopStatsPolling();
     this.pendingCandidates = [];
     if (this.reliableChannel) {
       this.reliableChannel.close();

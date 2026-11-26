@@ -8,6 +8,7 @@
 export class SimulationTicker {
   private static readonly FIXED_STEP_MS = 1000 / 60;
   private static readonly MAX_ACCUMULATOR_MS = 100;
+  private static readonly MAX_STEPS_PER_FRAME = 4;
 
   private worker: Worker | null = null;
   private fallbackInterval: ReturnType<typeof setInterval> | null = null;
@@ -39,10 +40,17 @@ export class SimulationTicker {
     this.accumulator += delta;
 
     let executed = 0;
-    while (this.accumulator >= SimulationTicker.FIXED_STEP_MS) {
+    while (
+      this.accumulator >= SimulationTicker.FIXED_STEP_MS &&
+      executed < SimulationTicker.MAX_STEPS_PER_FRAME
+    ) {
       this.onTick(now);
       this.accumulator -= SimulationTicker.FIXED_STEP_MS;
       executed++;
+    }
+    // Evita spiral of death tras pausas prolongadas de pestaña
+    if (this.accumulator >= SimulationTicker.FIXED_STEP_MS) {
+      this.accumulator %= SimulationTicker.FIXED_STEP_MS;
     }
     return executed;
   }
@@ -77,17 +85,32 @@ export class SimulationTicker {
     if (typeof Worker !== 'undefined') {
       try {
         const workerCode = `
-          var id = null;
+          var timerId = null;
+          var running = false;
+          var stepMs = 8;
+          var nextAt = 0;
+          function scheduleNext() {
+            if (!running) return;
+            var now = performance.now();
+            self.postMessage({ type: 'TICK', now: now });
+            nextAt += stepMs;
+            if (now - nextAt > 100) {
+              nextAt = now + stepMs;
+            }
+            var delay = Math.max(1, nextAt - performance.now());
+            timerId = setTimeout(scheduleNext, delay);
+          }
           self.onmessage = function(e) {
             if (e.data && e.data.type === 'START') {
-              if (id !== null) return;
-              id = setInterval(function() {
-                self.postMessage({ type: 'TICK', now: performance.now() });
-              }, 8);
+              if (running) return;
+              running = true;
+              nextAt = performance.now() + stepMs;
+              timerId = setTimeout(scheduleNext, stepMs);
             } else if (e.data && e.data.type === 'STOP') {
-              if (id !== null) {
-                clearInterval(id);
-                id = null;
+              running = false;
+              if (timerId !== null) {
+                clearTimeout(timerId);
+                timerId = null;
               }
             }
           };

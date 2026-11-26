@@ -248,8 +248,12 @@ export class VFXManager {
       ctx.fillStyle = p.color;
 
       if (p.type === 'magnus') {
-        ctx.shadowColor = p.color;
-        ctx.shadowBlur = 8;
+        // Halo concéntrico ligero sin ctx.shadowBlur (evita pases GPU de desenfoque a 60 Hz)
+        ctx.globalAlpha = p.alpha * 0.28;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.size * 2.1, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.globalAlpha = p.alpha;
         ctx.beginPath();
         ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
         ctx.fill();

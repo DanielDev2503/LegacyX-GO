@@ -1051,10 +1051,19 @@
   <!-- 2. TELEMETRÍA EN VIVO (ACTIVABLE EN VIDEO) -->
   <!-- ========================================== -->
   {#if gameUI.settings.showTelemetryCard === true}
-    <div class="hud-telemetry-corner" bind:this={telemetryEl}>
+    <div class="hud-telemetry-corner" bind:this={telemetryEl} title={`Ruta ICE: ${gameUI.iceRoute} · Reconciliaciones: ${gameUI.reconciliationsPerSec}/s`}>
       <span class="tel-pulse-dot"></span>
       <span class="tel-label">Ping:</span>
       <span class="tel-val {pingColorClass}">{gameUI.pingMs} ms</span>
+      <span class="tel-sep">|</span>
+      <span class="tel-label">Jit:</span>
+      <span class="tel-val">{gameUI.jitterMs} ms</span>
+      <span class="tel-sep">|</span>
+      <span class="tel-label">Loss:</span>
+      <span class="tel-val">{gameUI.packetLossPct.toFixed(1)}%</span>
+      <span class="tel-sep">|</span>
+      <span class="tel-label">ICE:</span>
+      <span class="tel-val">{gameUI.iceRoute.includes('TURN') ? 'TURN' : gameUI.iceRoute.includes('STUN') ? 'STUN' : gameUI.iceRoute.includes('LAN') ? 'LAN' : 'HOST'}</span>
       <span class="tel-sep">|</span>
       <span class="tel-label">FPS:</span>
       <span class="tel-val text-cyan">{gameUI.fps}</span>

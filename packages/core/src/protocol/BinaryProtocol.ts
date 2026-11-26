@@ -4,7 +4,21 @@ export const OP_CHAT = 0x03;
 export const OP_EVENT = 0x04;
 export const OP_PING = 0x05;
 export const OP_PONG = 0x06;
+export const OP_INPUT_BUNDLE = 0x07;
 export const OP_KEEPALIVE = 0xff;
+
+// Caché Zero-GC de DataView por ArrayBuffer reutilizable (evita new DataView() a 60 Hz)
+const dataViewCache = new WeakMap<ArrayBuffer, DataView>();
+
+export function getCachedDataView(buffer: ArrayBuffer | DataView): DataView {
+  if (buffer instanceof DataView) return buffer;
+  let view = dataViewCache.get(buffer);
+  if (!view) {
+    view = new DataView(buffer);
+    dataViewCache.set(buffer, view);
+  }
+  return view;
+}
 
 export enum EventType {
   GOAL = 1,
@@ -109,14 +123,18 @@ function decodeWirePhase(wire: number): number {
  */
 export class BinaryProtocol {
   public static readonly PKT_INPUT = OP_INPUT;
+  public static readonly PKT_INPUT_BUNDLE = OP_INPUT_BUNDLE;
   public static readonly PKT_SNAPSHOT = OP_SNAPSHOT;
   public static readonly INPUT_SIZE = 9;
   public static readonly MOUSE_INPUT_SIZE = 12;
+  public static readonly INPUT_BUNDLE_HEADER_SIZE = 2;
+  public static readonly INPUT_BUNDLE_ENTRY_SIZE = 9;
+  public static readonly INPUT_BUNDLE_MAX_COUNT = 3;
   public static readonly SNAPSHOT_HEADER_SIZE = 12;
   public static readonly DISC_RECORD_SIZE = 32;
 
   public static peekPacketType(buffer: ArrayBuffer | DataView): number {
-    const view = buffer instanceof DataView ? buffer : new DataView(buffer);
+    const view = getCachedDataView(buffer);
     return view.byteLength > 0 ? view.getUint8(0) : 0;
   }
 
@@ -150,10 +168,10 @@ export class BinaryProtocol {
 
     const size = hasMouseAim ? this.MOUSE_INPUT_SIZE : this.INPUT_SIZE;
     const buf = outBuffer && outBuffer.byteLength === size ? outBuffer : new ArrayBuffer(size);
-    const view = new DataView(buf);
+    const view = getCachedDataView(buf);
 
     view.setUint8(0, OP_INPUT);
-    view.setUint32(1, input.sequence ?? input.tick ?? (input as any).seq ?? 0, true);
+    view.setUint32(1, (input.sequence ?? input.tick ?? (input as any).seq ?? 0) >>> 0, true);
     view.setUint16(5, mask, false);
     view.setUint16(7, (input.clientTimestamp ?? 0) & 0xffff, false);
 
@@ -167,8 +185,151 @@ export class BinaryProtocol {
     return buf;
   }
 
+  /**
+   * Codifica un paquete redundante OP_INPUT_BUNDLE (0x07) con hasta 3 inputs recientes
+   * ([seq, mask], [seq-1, mask], [seq-2, mask]) en un ArrayBuffer reutilizable (Zero-GC).
+   * Formato: [op(1), count(1)] + count * [seq(uint32 LE), mask(uint16 BE), qAngle(int16 BE), qThrottle(uint8)]
+   */
+  public static encodeInputBundle(
+    entries: readonly PlayerInput[],
+    count: number = entries.length,
+    outBuffer?: ArrayBuffer
+  ): ArrayBuffer {
+    const clampedCount = Math.max(1, Math.min(this.INPUT_BUNDLE_MAX_COUNT, Math.min(entries.length, count)));
+    const totalSize = this.INPUT_BUNDLE_HEADER_SIZE + clampedCount * this.INPUT_BUNDLE_ENTRY_SIZE;
+    const buf = outBuffer && outBuffer.byteLength === totalSize ? outBuffer : new ArrayBuffer(totalSize);
+    const view = getCachedDataView(buf);
+
+    view.setUint8(0, OP_INPUT_BUNDLE);
+    view.setUint8(1, clampedCount);
+
+    let offset = this.INPUT_BUNDLE_HEADER_SIZE;
+    for (let i = 0; i < clampedCount; i++) {
+      const entry = entries[i]!;
+      let mask = entry.inputMask || 0;
+      const hasMouseAim =
+        entry.aimAngle !== null &&
+        entry.aimAngle !== undefined &&
+        (entry.aimThrottle ?? 0) > 0 &&
+        ((mask & (INPUT_FLAG_MOUSE_AIM | INPUT_FLAG_MOUSE_ACTIVE)) !== 0 || entry.aimAngle !== undefined);
+
+      if (hasMouseAim) {
+        mask |= INPUT_FLAG_MOUSE_ACTIVE;
+        mask &= ~(INPUT_FLAG_UP | INPUT_FLAG_DOWN | INPUT_FLAG_LEFT | INPUT_FLAG_RIGHT);
+      } else {
+        mask &= ~(INPUT_FLAG_MOUSE_AIM | INPUT_FLAG_MOUSE_ACTIVE);
+      }
+
+      const seq = (entry.sequence ?? entry.tick ?? (entry as any).seq ?? 0) >>> 0;
+      view.setUint32(offset, seq, true);
+      view.setUint16(offset + 4, mask & 0xffff, false);
+      if (hasMouseAim) {
+        const qAngle = Math.max(-32767, Math.min(32767, Math.round((entry.aimAngle ?? 0) * 10000)));
+        const qThrottle = Math.max(0, Math.min(254, Math.round((entry.aimThrottle ?? 1) * 255)));
+        view.setInt16(offset + 6, qAngle, false);
+        view.setUint8(offset + 8, qThrottle);
+      } else {
+        view.setInt16(offset + 6, 0x7fff, false);
+        view.setUint8(offset + 8, 0xff);
+      }
+      offset += this.INPUT_BUNDLE_ENTRY_SIZE;
+    }
+
+    return buf;
+  }
+
+  /**
+   * Decodifica OP_INPUT_BUNDLE u OP_INPUT en un arreglo scratch preasignado (Zero-GC en el Host).
+   * Devuelve la cantidad de entradas escritas en orden cronológico (más antigua a más reciente).
+   */
+  public static decodeInputBundleInto(buffer: ArrayBuffer | DataView, outEntries: PlayerInput[]): number {
+    const view = getCachedDataView(buffer);
+    if (view.byteLength < 2) return 0;
+    const op = view.getUint8(0);
+
+    if (op === OP_INPUT) {
+      if (view.byteLength < this.INPUT_SIZE) return 0;
+      const dst = outEntries[0] ?? (outEntries[0] = {});
+      const seq = view.getUint32(1, true);
+      const mask = view.getUint16(5, false);
+      const clientTimestamp = view.getUint16(7, false);
+      const hasMouseAim =
+        (mask & (INPUT_FLAG_MOUSE_AIM | INPUT_FLAG_MOUSE_ACTIVE)) !== 0 &&
+        view.byteLength >= this.MOUSE_INPUT_SIZE;
+      let aimAngle: number | null | undefined = undefined;
+      let aimThrottle: number | undefined = undefined;
+      if (hasMouseAim) {
+        const qAngle = view.getInt16(9, false);
+        const qThrottle = view.getUint8(11);
+        if (qThrottle === 0xff || qAngle === 0x7fff || qThrottle === 0) {
+          aimAngle = null;
+          aimThrottle = 0;
+        } else {
+          aimAngle = qAngle / 10000;
+          aimThrottle = qThrottle / 255;
+        }
+      }
+      dst.tick = seq;
+      dst.sequence = seq;
+      dst.inputMask = mask;
+      dst.clientTimestamp = clientTimestamp;
+      dst.aimAngle = aimAngle;
+      dst.aimThrottle = aimThrottle;
+      dst.kick = (mask & INPUT_FLAG_KICK) !== 0;
+      dst.dash = (mask & INPUT_FLAG_DASH) !== 0;
+      dst.magnusLeft = (mask & INPUT_FLAG_MAGNUS_LEFT) !== 0;
+      dst.magnusRight = (mask & INPUT_FLAG_MAGNUS_RIGHT) !== 0;
+      return 1;
+    }
+
+    if (op !== OP_INPUT_BUNDLE) return 0;
+    const rawCount = view.getUint8(1);
+    const maxFitting = Math.floor((view.byteLength - this.INPUT_BUNDLE_HEADER_SIZE) / this.INPUT_BUNDLE_ENTRY_SIZE);
+    const count = Math.min(this.INPUT_BUNDLE_MAX_COUNT, Math.min(rawCount, maxFitting));
+    if (count <= 0) return 0;
+
+    // Las entradas viajan de más reciente a más antigua ([seq, seq-1, seq-2]);
+    // escribir en orden ascendente (más antigua primero) para ingestión secuencial en Host.
+    for (let i = 0; i < count; i++) {
+      const srcIdx = count - 1 - i;
+      const offset = this.INPUT_BUNDLE_HEADER_SIZE + srcIdx * this.INPUT_BUNDLE_ENTRY_SIZE;
+      const dst = outEntries[i] ?? (outEntries[i] = {});
+      const seq = view.getUint32(offset, true);
+      const mask = view.getUint16(offset + 4, false);
+      const qAngle = view.getInt16(offset + 6, false);
+      const qThrottle = view.getUint8(offset + 8);
+      const hasMouseAim =
+        (mask & (INPUT_FLAG_MOUSE_AIM | INPUT_FLAG_MOUSE_ACTIVE)) !== 0 &&
+        qThrottle !== 0xff &&
+        qAngle !== 0x7fff &&
+        qThrottle > 0;
+
+      dst.tick = seq;
+      dst.sequence = seq;
+      dst.inputMask = mask;
+      dst.aimAngle = hasMouseAim ? qAngle / 10000 : null;
+      dst.aimThrottle = hasMouseAim ? qThrottle / 255 : 0;
+      dst.kick = (mask & INPUT_FLAG_KICK) !== 0;
+      dst.dash = (mask & INPUT_FLAG_DASH) !== 0;
+      dst.magnusLeft = (mask & INPUT_FLAG_MAGNUS_LEFT) !== 0;
+      dst.magnusRight = (mask & INPUT_FLAG_MAGNUS_RIGHT) !== 0;
+    }
+    return count;
+  }
+
+  public static decodeInputBundle(buffer: ArrayBuffer | DataView): PlayerInput[] {
+    const out: PlayerInput[] = [];
+    const count = this.decodeInputBundleInto(buffer, out);
+    out.length = count;
+    return out;
+  }
+
   public static decodeInput(buffer: ArrayBuffer | DataView): PlayerInput | null {
-    const view = buffer instanceof DataView ? buffer : new DataView(buffer);
+    const view = getCachedDataView(buffer);
+    if (view.byteLength >= 2 && view.getUint8(0) === OP_INPUT_BUNDLE) {
+      const decoded = this.decodeInputBundle(view);
+      return decoded.length > 0 ? decoded[decoded.length - 1]! : null;
+    }
     if (view.byteLength < this.INPUT_SIZE || view.getUint8(0) !== OP_INPUT) {
       return null;
     }
@@ -234,10 +395,10 @@ export class BinaryProtocol {
     const discCount = snapshot.discs.length;
     const totalLength = this.SNAPSHOT_HEADER_SIZE + discCount * this.DISC_RECORD_SIZE;
     const buf = outBuffer && outBuffer.byteLength >= totalLength ? outBuffer : new ArrayBuffer(totalLength);
-    const view = new DataView(buf);
+    const view = getCachedDataView(buf);
 
     view.setUint8(0, OP_SNAPSHOT);
-    view.setUint32(1, snapshot.tick, false);
+    view.setUint32(1, snapshot.tick >>> 0, false);
     view.setUint8(5, encodeWirePhase(snapshot.phase));
     view.setUint16(6, snapshot.matchTimer & 0xffff, false);
     view.setUint8(8, snapshot.redScore & 0xff);
@@ -274,7 +435,7 @@ export class BinaryProtocol {
   }
 
   public static decodeSnapshot(buffer: ArrayBuffer | DataView): GameStateSnapshot | null {
-    const view = buffer instanceof DataView ? buffer : new DataView(buffer);
+    const view = getCachedDataView(buffer);
     if (view.byteLength < this.SNAPSHOT_HEADER_SIZE || view.getUint8(0) !== OP_SNAPSHOT) {
       return null;
     }
@@ -294,7 +455,11 @@ export class BinaryProtocol {
     const discCount = view.getUint8(11);
 
     const discs: CompactDiscState[] = [];
-    const discStride = discCount > 0 ? Math.floor((view.byteLength - this.SNAPSHOT_HEADER_SIZE) / discCount) : this.DISC_RECORD_SIZE;
+    const hasCurrentRecordFormat =
+      discCount === 0 || view.byteLength >= this.SNAPSHOT_HEADER_SIZE + discCount * this.DISC_RECORD_SIZE;
+    const discStride = hasCurrentRecordFormat
+      ? this.DISC_RECORD_SIZE
+      : Math.floor((view.byteLength - this.SNAPSHOT_HEADER_SIZE) / discCount);
     let offset = this.SNAPSHOT_HEADER_SIZE;
 
     for (let i = 0; i < discCount; i++) {

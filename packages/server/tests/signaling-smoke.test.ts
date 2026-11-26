@@ -140,7 +140,9 @@ describe('Signaling Server - Shift-Left Smoke Test', () => {
 
     await offerReceivedPromise;
 
-    // 6. Cierre de sockets y comprobación de eliminación en memoria
+    // 6. Cierre explícito de sala por el host y cierre de sockets -> eliminación inmediata en memoria
+    hostWs.send(JSON.stringify({ type: 'ROOM_LEAVE' } as ClientSignalMessage));
+
     await new Promise<void>((resolve) => {
       guestWs.close();
       guestWs.on('close', () => resolve());

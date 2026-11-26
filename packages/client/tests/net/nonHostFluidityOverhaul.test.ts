@@ -140,16 +140,18 @@ describe('Non-Host Fluidity, Netcode & Rendering Overhaul', () => {
 
     expect(peer.hasEverConnected).toBe(false);
 
-    // Unreliable opens first -> onConnected fires once, hasEverConnected stays false until reliable opens
+    // Unreliable opens first -> atomic dual-channel handshake waits until reliable also opens
     peer.unreliableChannel!.readyState = 'open';
     peer.unreliableChannel!.onopen?.(new Event('open') as any);
-    expect(onConnectedSpy).toHaveBeenCalledTimes(1);
+    expect(onConnectedSpy).toHaveBeenCalledTimes(0);
     expect(peer.hasEverConnected).toBe(false);
+    expect(peer.areChannelsOpen()).toBe(false);
 
-    // Reliable opens -> hasEverConnected becomes true, onConnected NOT re-fired
+    // Reliable opens -> both channels open, hasEverConnected becomes true, onConnected fires strictly once
     peer.reliableChannel!.readyState = 'open';
     peer.reliableChannel!.onopen?.(new Event('open') as any);
     expect(peer.hasEverConnected).toBe(true);
+    expect(peer.areChannelsOpen()).toBe(true);
     expect(onConnectedSpy).toHaveBeenCalledTimes(1);
 
     // ICE & connection state changes do not burst duplicate onConnected callbacks

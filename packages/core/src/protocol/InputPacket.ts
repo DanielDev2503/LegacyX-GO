@@ -1,4 +1,4 @@
-import { OP_INPUT } from './BinaryProtocol';
+import { OP_INPUT, getCachedDataView } from './BinaryProtocol';
 import {
   INPUT_TURBO,
   INPUT_DASH,
@@ -65,10 +65,10 @@ export class InputPacket {
       buffer && buffer.byteLength === neededBytes
         ? buffer
         : new ArrayBuffer(neededBytes);
-    const view = new DataView(buf);
+    const view = getCachedDataView(buf);
 
     view.setUint8(0, OP_INPUT);
-    view.setUint32(1, data.sequence, true);
+    view.setUint32(1, data.sequence >>> 0, true);
     view.setUint16(5, mask, false);
     view.setUint16(7, data.clientTimestamp & 0xffff, false);
 
@@ -86,7 +86,7 @@ export class InputPacket {
    * Decodes an input message from a DataView or ArrayBuffer with backwards compatibility for 8/9/12-byte packets.
    */
   public static decode(buffer: ArrayBuffer | DataView): InputData | null {
-    const view = buffer instanceof DataView ? buffer : new DataView(buffer);
+    const view = getCachedDataView(buffer);
 
     if (view.byteLength < 8) return null;
     if (view.getUint8(0) !== OP_INPUT) return null;

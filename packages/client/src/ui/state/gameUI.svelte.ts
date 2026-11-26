@@ -1468,7 +1468,10 @@ class GameUIStore {
   public redPossession = $state(50);
   public bluePossession = $state(50);
   public pingMs = $state(0);
-  public jitterMs = $state(2);
+  public jitterMs = $state(0);
+  public packetLossPct = $state(0);
+  public iceRoute = $state<string>('Local');
+  public reconciliationsPerSec = $state(0);
   public fps = $state(60);
 
   // Zero-GC Telemetry Circular Buffer (40 samples)
@@ -2149,7 +2152,9 @@ class GameUIStore {
             ? (parsed.scoreboardDesign as ScoreboardDesignType)
             : DEFAULT_SETTINGS.scoreboardDesign;
 
-          const parsedGamepad = isPlainObject(parsed.gamepadBinds) ? parsed.gamepadBinds : {};
+          const parsedGamepad: Record<string, unknown> = isPlainObject(parsed.gamepadBinds)
+            ? (parsed.gamepadBinds as Record<string, unknown>)
+            : {};
           const gamepadBinds: GamepadBindConfig = {
             kick: Array.isArray(parsedGamepad.kick) && parsedGamepad.kick.length > 0 ? [...parsedGamepad.kick] : [...DEFAULT_GAMEPAD_BINDS.kick],
             dash: Array.isArray(parsedGamepad.dash) && parsedGamepad.dash.length > 0 ? [...parsedGamepad.dash] : [...DEFAULT_GAMEPAD_BINDS.dash],
@@ -3011,8 +3016,32 @@ class GameUIStore {
     });
   }
 
+  public updateNetworkDiagnostics(opts: {
+    jitterMs?: number;
+    packetLossPct?: number;
+    iceRoute?: string;
+    reconciliationsPerSec?: number;
+  }): void {
+    if (typeof opts.jitterMs === 'number' && Number.isFinite(opts.jitterMs)) {
+      this.jitterMs = Math.max(0, Math.round(opts.jitterMs));
+    }
+    if (typeof opts.packetLossPct === 'number' && Number.isFinite(opts.packetLossPct)) {
+      this.packetLossPct = Math.max(0, Math.min(100, Math.round(opts.packetLossPct * 10) / 10));
+    }
+    if (typeof opts.iceRoute === 'string' && opts.iceRoute) {
+      this.iceRoute = opts.iceRoute;
+    }
+    if (typeof opts.reconciliationsPerSec === 'number' && Number.isFinite(opts.reconciliationsPerSec)) {
+      this.reconciliationsPerSec = Math.max(0, Math.round(opts.reconciliationsPerSec));
+    }
+  }
+
   public resetTelemetry(): void {
     this.pingMs = 0;
+    this.jitterMs = 0;
+    this.packetLossPct = 0;
+    this.iceRoute = 'Local';
+    this.reconciliationsPerSec = 0;
     this.avgPingMs = 0;
     this.pingSampleHead = 0;
     this.pingSampleCount = 0;

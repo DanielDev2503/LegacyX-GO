@@ -114,6 +114,7 @@ export class GameApp {
   public remoteInputs = new Map<number, PlayerInput>();
   private remoteInputQueues = new Map<number, PlayerInput[]>();
   private lastConsumedRemoteSeq = new Map<number, number>();
+  private seenRemoteSeqWindow = new Map<number, { maxSeq: number; mask: number }>();
   private pendingImpulseMasks = new Map<number, number>();
   private rawRemoteMasks = new Map<number, number>();
   private lastRemoteInputSeq = new Map<number, number>();
@@ -210,9 +211,11 @@ export class GameApp {
     });
 
     if (typeof window !== 'undefined') {
-      window.addEventListener('beforeunload', () => {
+      const handleExplicitUnload = () => {
         if (this.currentRoomId) this.leaveCurrentRoom();
-      });
+      };
+      window.addEventListener('beforeunload', handleExplicitUnload);
+      window.addEventListener('pagehide', handleExplicitUnload);
     }
   }
 
@@ -374,10 +377,40 @@ export class GameApp {
     this.remoteInputs.clear();
     this.remoteInputQueues.clear();
     this.lastConsumedRemoteSeq.clear();
+    this.seenRemoteSeqWindow.clear();
     this.pendingImpulseMasks.clear();
     this.rawRemoteMasks.clear();
     this.lastRemoteInputSeq.clear();
     this.recentLocalEmotes.clear();
+  }
+
+  /**
+   * Ventana deslizante de 32 bits (Zero-GC) para deduplicación exacta de paquetes redundantes 3x.
+   * Devuelve `true` si `seq` ya fue visto/procesado; si era nuevo, lo marca como visto y devuelve `false`.
+   */
+  private checkAndMarkSeenRemoteSeq(playerId: number, seq: number): boolean {
+    let win = this.seenRemoteSeqWindow.get(playerId);
+    if (!win) {
+      win = { maxSeq: seq, mask: 1 };
+      this.seenRemoteSeqWindow.set(playerId, win);
+      return false;
+    }
+    if (seq > win.maxSeq) {
+      const shift = seq - win.maxSeq;
+      win.mask = shift >= 32 ? 1 : ((win.mask << shift) | 1);
+      win.maxSeq = seq;
+      return false;
+    }
+    const delta = win.maxSeq - seq;
+    if (delta >= 32) {
+      return true;
+    }
+    const bit = 1 << delta;
+    if ((win.mask & bit) !== 0) {
+      return true;
+    }
+    win.mask |= bit;
+    return false;
   }
 
   public playAndApplyGameFx(fx: string, intensity?: number, countdownValue?: number): void {
@@ -680,6 +713,10 @@ export class GameApp {
           clearTimeout(timeout);
           cleanup();
           const roomId = msg.roomId || msg.id || `R-${Date.now().toString().slice(-4)}`;
+          this.signaling.setActiveHostedRoom(
+            roomId,
+            typeof msg.reclaimToken === 'string' ? msg.reclaimToken : undefined
+          );
           this.setupHostState(cleanName, stadium, maxPlayers, isPublic, roomId, params);
           resolve(true);
         }
@@ -848,6 +885,7 @@ export class GameApp {
           this.remoteInputs.delete(id);
           this.remoteInputQueues.delete(id);
           this.lastConsumedRemoteSeq.delete(id);
+          this.seenRemoteSeqWindow.delete(id);
           this.pendingImpulseMasks.delete(id);
           this.rawRemoteMasks.delete(id);
           this.lastRemoteInputSeq.delete(id);
@@ -874,9 +912,12 @@ export class GameApp {
       if (seqReset) {
         this.remoteInputQueues.delete(playerId);
         this.lastConsumedRemoteSeq.delete(playerId);
+        this.seenRemoteSeqWindow.delete(playerId);
         this.lastRemoteInputSeq.delete(playerId);
         this.pendingImpulseMasks.delete(playerId);
       }
+
+      const alreadySeen = this.checkAndMarkSeenRemoteSeq(playerId, seq);
 
       const activeConsumed = this.lastConsumedRemoteSeq.get(playerId);
       if (activeConsumed !== undefined) {
@@ -884,12 +925,15 @@ export class GameApp {
           return;
         }
         if (seq < activeConsumed && activeConsumed - seq < 500) {
-          const impulseBits = inputMask & REMOTE_IMPULSE_FLAGS;
-          if (impulseBits !== 0) {
-            this.pendingImpulseMasks.set(
-              playerId,
-              (this.pendingImpulseMasks.get(playerId) ?? 0) | impulseBits
-            );
+          // Solo rescatar impulsos de paquetes genuinamente perdidos (nunca duplicados redundantes 3x ya consumidos)
+          if (!alreadySeen) {
+            const impulseBits = inputMask & REMOTE_IMPULSE_FLAGS;
+            if (impulseBits !== 0) {
+              this.pendingImpulseMasks.set(
+                playerId,
+                (this.pendingImpulseMasks.get(playerId) ?? 0) | impulseBits
+              );
+            }
           }
           return;
         }
@@ -1070,7 +1114,11 @@ export class GameApp {
     this.activeRankedRoster.clear();
   }
 
-  public async joinRoom(roomId: string, password?: string): Promise<boolean> {
+  public async joinRoom(
+    roomId: string,
+    password?: string,
+    opts?: { waitForHandshake?: boolean; handshakeTimeoutMs?: number }
+  ): Promise<boolean> {
     this.teardownNetworkSession();
     gameUI.isPracticeMode = false;
     this.lastJoinError = null;
@@ -1079,7 +1127,7 @@ export class GameApp {
     this.signaling.setUserId(userProfile.id ?? null);
     await this.signaling.ensureConnected();
 
-    return new Promise<boolean>((resolve) => {
+    const joinedViaSignaling = await new Promise<boolean>((resolve) => {
       let resolved = false;
       const timeout = setTimeout(() => {
         if (!resolved) {
@@ -1108,7 +1156,8 @@ export class GameApp {
             code === 'ROOM_FULL' ||
             code === 'ROOM_LOCKED' ||
             code === 'ROOM_BANNED' ||
-            code === 'RANKED_ACCOUNT_REQUIRED')
+            code === 'RANKED_ACCOUNT_REQUIRED' ||
+            code === 'HOST_RECONNECTING')
         ) {
           resolved = true;
           clearTimeout(timeout);
@@ -1124,7 +1173,9 @@ export class GameApp {
                     ? 'La sala está bloqueada por el anfitrión.'
                     : code === 'ROOM_BANNED'
                       ? 'Has sido baneado de esta sala y no puedes volver a ingresar.'
-                      : 'No se pudo entrar a la sala.';
+                      : code === 'HOST_RECONNECTING'
+                        ? 'El anfitrión está reconectando. Intenta de nuevo en unos segundos.'
+                        : 'No se pudo entrar a la sala.';
           const errMsg = String(msg.message || fallbackMsg);
           this.lastJoinErrorCode = code;
           this.lastJoinError = errMsg;
@@ -1167,6 +1218,20 @@ export class GameApp {
         accessToken: userProfile.jwt || undefined
       });
     });
+
+    if (!joinedViaSignaling) return false;
+    if (opts?.waitForHandshake && this.networkClient) {
+      const handshakeOk = await this.networkClient.waitForInitialHandshake(opts.handshakeTimeoutMs ?? 15_000);
+      if (!handshakeOk) {
+        const errMsg = 'No se pudo completar el handshake P2P (DataChannels) con el anfitrión.';
+        this.lastJoinErrorCode = 'HANDSHAKE_TIMEOUT';
+        this.lastJoinError = errMsg;
+        gameUI.lobbyError = errMsg;
+        this.teardownNetworkSession();
+        return false;
+      }
+    }
+    return true;
   }
 
   private setupGuestState(roomId: string, msg: any): void {
@@ -1339,6 +1404,7 @@ export class GameApp {
       this.signaling.send({ type: 'leave_room', roomId: this.currentRoomId });
       this.currentRoomId = null;
     }
+    this.signaling.setActiveHostedRoom(null);
     this.activeMatchToken = null;
     this.activeRankedRoster.clear();
     this.setActiveGoalScorerId(null);

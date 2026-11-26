@@ -45,10 +45,23 @@ export class JitterBuffer<T extends AnySnapshot = any> {
   private clockOffsetMs: number | null = null;
 
   public static readonly MIN_DELAY_MS = 28;
-  public static readonly MAX_DELAY_MS = 60;
+  public static readonly MAX_DELAY_MS = 100;
   public static readonly DEFAULT_AUTO_EXTRAPOLATION_MS = 200;
   public static readonly MAX_AUTO_EXTRAPOLATION_MS = 200;
   private static readonly TICK_MS = 1000 / 60;
+
+  // Pools Zero-GC (anillo de 4 slots para evitar aliasing entre referencias simultáneas sin alocar)
+  private readonly scratchDiscLookup = new Map<number, any>();
+  private readonly scratchClampProxy = { x: 0, y: 0, vx: 0, vy: 0, radius: 15 };
+  private readonly outSnapSlots: [Record<string, any>, Record<string, any>, Record<string, any>, Record<string, any>] = [
+    { discs: [] },
+    { discs: [] },
+    { discs: [] },
+    { discs: [] }
+  ];
+  private readonly outDiscListSlots: [any[], any[], any[], any[]] = [[], [], [], []];
+  private readonly outDiscPools: [any[], any[], any[], any[]] = [[], [], [], []];
+  private outSlotIndex = 0;
 
   public autoExtrapolationMs: number = JitterBuffer.DEFAULT_AUTO_EXTRAPOLATION_MS;
   public arenaBounds: {
@@ -104,8 +117,105 @@ export class JitterBuffer<T extends AnySnapshot = any> {
   }
 
   public calculateTargetDelay(): number {
-    const raw = JitterBuffer.MIN_DELAY_MS + this.meanJitter * 1.8;
+    const raw = this.meanJitter * 2.5 + JitterBuffer.TICK_MS;
     return Math.max(JitterBuffer.MIN_DELAY_MS, Math.min(JitterBuffer.MAX_DELAY_MS, raw));
+  }
+
+  private acquireSlot(): { outSnap: Record<string, any>; outDiscs: any[]; pool: any[] } {
+    const idx = this.outSlotIndex;
+    this.outSlotIndex = (idx + 1) & 3;
+    const outDiscs = this.outDiscListSlots[idx]!;
+    outDiscs.length = 0;
+    return {
+      outSnap: this.outSnapSlots[idx]!,
+      outDiscs,
+      pool: this.outDiscPools[idx]!
+    };
+  }
+
+  private borrowDisc(pool: any[], index: number): any {
+    let slot = pool[index];
+    if (!slot) {
+      slot = {
+        id: 0,
+        team: 0,
+        x: 0,
+        y: 0,
+        vx: 0,
+        vy: 0,
+        flags: 0,
+        radius: 15,
+        kicking: false,
+        avatar: '',
+        stamina: 100,
+        isDashing: false,
+        isTurbo: false,
+        isTyping: false,
+        isSpinActive: false,
+        isCurvingAllowed: false,
+        isPowerShot: false,
+        spin: 0,
+        lastKickerId: undefined,
+        curveFactor: undefined,
+        lastAckedInputSeq: 0,
+        dashTimer: 0,
+        dashCooldown: 0
+      };
+      pool[index] = slot;
+    }
+    return slot;
+  }
+
+  private copyDiscInto(dst: any, src: any): void {
+    dst.id = src.id;
+    dst.team = src.team;
+    dst.x = src.x;
+    dst.y = src.y;
+    dst.vx = src.vx;
+    dst.vy = src.vy;
+    dst.flags = src.flags;
+    dst.radius = src.radius;
+    dst.kicking = src.kicking;
+    dst.avatar = src.avatar;
+    dst.stamina = src.stamina;
+    dst.isDashing = src.isDashing;
+    dst.isTurbo = src.isTurbo;
+    dst.isTyping = src.isTyping;
+    dst.isSpinActive = src.isSpinActive;
+    dst.isCurvingAllowed = src.isCurvingAllowed;
+    dst.isPowerShot = src.isPowerShot;
+    dst.spin = src.spin;
+    dst.lastKickerId = src.lastKickerId;
+    dst.curveFactor = src.curveFactor;
+    dst.lastAckedInputSeq = src.lastAckedInputSeq;
+    dst.dashTimer = src.dashTimer;
+    dst.dashCooldown = src.dashCooldown;
+  }
+
+  private copySnapshotHeaderInto(dst: Record<string, any>, src: Record<string, any>, discs: any[]): any {
+    dst.tick = src.tick;
+    dst.phase = src.phase;
+    dst.matchTimer = src.matchTimer;
+    dst.redScore = src.redScore;
+    dst.blueScore = src.blueScore;
+    dst.soundMask = src.soundMask;
+    dst.kickoffActive = src.kickoffActive;
+    dst.isGoldenGoal = src.isGoldenGoal;
+    dst.isNeutralKickoff = src.isNeutralKickoff;
+    dst.kickoffPossessingTeam = src.kickoffPossessingTeam;
+    dst.matchPhase = src.matchPhase;
+    dst.matchState = src.matchState;
+    dst.timerSeconds = src.timerSeconds;
+    dst.matchTimerSeconds = src.matchTimerSeconds;
+    dst.subStateTimer = src.subStateTimer;
+    dst.countdownSeconds = src.countdownSeconds;
+    dst.targetTeam = src.targetTeam;
+    dst.scoreRed = src.scoreRed;
+    dst.scoreBlue = src.scoreBlue;
+    dst.kickoffMode = src.kickoffMode;
+    dst.possessingTeam = src.possessingTeam;
+    dst.discs = discs;
+    return dst;
   }
 
   public get targetDelay(): number {
@@ -261,16 +371,17 @@ export class JitterBuffer<T extends AnySnapshot = any> {
                                  isGoalReplay;
 
       if (!isSimulationActive) {
-        const frozenDiscs: DiscSnapshot[] = latestSnapshot.discs.map((d: any) => ({
-          ...d,
-          vx: 0,
-          vy: 0
-        }));
+        const { outSnap, outDiscs, pool } = this.acquireSlot();
+        const srcDiscs = latestSnapshot.discs;
+        for (let i = 0; i < srcDiscs.length; i++) {
+          const dst = this.borrowDisc(pool, i);
+          this.copyDiscInto(dst, srcDiscs[i]);
+          dst.vx = 0;
+          dst.vy = 0;
+          outDiscs.push(dst);
+        }
         this.lastProcessedTick = Math.max(this.lastProcessedTick, latestSnapshot.tick);
-        return {
-          ...latestSnapshot,
-          discs: frozenDiscs
-        } as T;
+        return this.copySnapshotHeaderInto(outSnap, latestSnapshot, outDiscs) as T;
       }
     } else if (isBinarySnapshot) {
       const p = latestSnapshot.phase as number;
@@ -280,16 +391,17 @@ export class JitterBuffer<T extends AnySnapshot = any> {
         !isForcedPaused && (p === 1 || p === 2 || p === 3 || isGoalReplay || p === 4);
 
       if (!isBinarySimActive) {
-        const frozenDiscs = latestSnapshot.discs.map((d: any) => ({
-          ...d,
-          vx: 0,
-          vy: 0
-        }));
+        const { outSnap, outDiscs, pool } = this.acquireSlot();
+        const srcDiscs = latestSnapshot.discs;
+        for (let i = 0; i < srcDiscs.length; i++) {
+          const dst = this.borrowDisc(pool, i);
+          this.copyDiscInto(dst, srcDiscs[i]);
+          dst.vx = 0;
+          dst.vy = 0;
+          outDiscs.push(dst);
+        }
         this.lastProcessedTick = Math.max(this.lastProcessedTick, latestSnapshot.tick);
-        return {
-          ...latestSnapshot,
-          discs: frozenDiscs
-        } as T;
+        return this.copySnapshotHeaderInto(outSnap, latestSnapshot, outDiscs) as T;
       }
     }
 
@@ -352,7 +464,12 @@ export class JitterBuffer<T extends AnySnapshot = any> {
       const bounds = arenaBounds !== undefined ? arenaBounds : this.arenaBounds;
       const defaultBallR = (bounds as any)?.ballRadius ?? DEFAULT_GAMEPLAY_CONFIG.ballRadius;
       const defaultPlayerR = (bounds as any)?.playerRadius ?? DEFAULT_GAMEPLAY_CONFIG.playerRadius;
-      const extrapolatedDiscs = (latest.snapshot as any).discs.map((d: any) => {
+      const { outSnap, outDiscs, pool } = this.acquireSlot();
+      const srcDiscs = (latest.snapshot as any).discs;
+      const proxy = this.scratchClampProxy;
+
+      for (let i = 0; i < srcDiscs.length; i++) {
+        const d = srcDiscs[i];
         const vx = d.vx || 0;
         const vy = d.vy || 0;
         let nextX = d.x + vx * effectiveDeltaSec;
@@ -369,27 +486,28 @@ export class JitterBuffer<T extends AnySnapshot = any> {
           const goalHalfHeight = bounds.goalHalfHeight ?? 0;
           const goalDepth = bounds.goalDepth ?? 0;
 
-          const proxy = { x: nextX, y: nextY, vx: nextVx, vy: nextVy, radius: r };
+          proxy.x = nextX;
+          proxy.y = nextY;
+          proxy.vx = nextVx;
+          proxy.vy = nextVy;
+          proxy.radius = r;
           clampDiscToGoalAwareBounds(proxy, bounds.halfWidth, bounds.halfHeight, goalHalfHeight, goalDepth, runOff);
           nextX = proxy.x;
           nextY = proxy.y;
-          nextVx = proxy.vx ?? nextVx;
-          nextVy = proxy.vy ?? nextVy;
+          nextVx = proxy.vx;
+          nextVy = proxy.vy;
         }
 
-        return {
-          ...d,
-          x: nextX,
-          y: nextY,
-          vx: nextVx,
-          vy: nextVy
-        };
-      });
+        const dst = this.borrowDisc(pool, i);
+        this.copyDiscInto(dst, d);
+        dst.x = nextX;
+        dst.y = nextY;
+        dst.vx = nextVx;
+        dst.vy = nextVy;
+        outDiscs.push(dst);
+      }
 
-      return {
-        ...latest.snapshot,
-        discs: extrapolatedDiscs
-      } as T;
+      return this.copySnapshotHeaderInto(outSnap, latest.snapshot as any, outDiscs) as T;
     }
 
     const t0 = getTime(s0);
@@ -401,14 +519,19 @@ export class JitterBuffer<T extends AnySnapshot = any> {
     this.lastProcessedTick = Math.max(this.lastProcessedTick, s0.snapshot.tick);
 
     if (isGameSnapshot) {
-      const s1DiscsById = new Map<number, any>();
-      for (const d of (s1.snapshot as any).discs) {
-        s1DiscsById.set(d.id, d);
+      this.scratchDiscLookup.clear();
+      const s1Discs = (s1.snapshot as any).discs;
+      for (let i = 0; i < s1Discs.length; i++) {
+        const d = s1Discs[i];
+        this.scratchDiscLookup.set(d.id, d);
       }
 
-      const interpolatedDiscs: any[] = [];
-      for (const d0 of (s0.snapshot as any).discs) {
-        const d1 = s1DiscsById.get(d0.id);
+      const { outSnap, outDiscs, pool } = this.acquireSlot();
+      const s0DiscsArr = (s0.snapshot as any).discs;
+      for (let i = 0; i < s0DiscsArr.length; i++) {
+        const d0 = s0DiscsArr[i];
+        const d1 = this.scratchDiscLookup.get(d0.id);
+        const dst = this.borrowDisc(pool, i);
         if (d1) {
           const jumpDist = Math.hypot(d1.x - d0.x, d1.y - d0.y);
           const sameDirection = (d0.vx * d1.vx + d0.vy * d1.vy) >= 0;
@@ -419,43 +542,27 @@ export class JitterBuffer<T extends AnySnapshot = any> {
             Number.isFinite(d1.vx) &&
             Number.isFinite(d0.vy) &&
             Number.isFinite(d1.vy);
-          interpolatedDiscs.push({
-            id: d0.id,
-            team: d1.team,
-            x: useHermite ? hermite(d0.x, d1.x, d0.vx, d1.vx, alpha, dtSec) : lerp(d0.x, d1.x, alpha),
-            y: useHermite ? hermite(d0.y, d1.y, d0.vy, d1.vy, alpha, dtSec) : lerp(d0.y, d1.y, alpha),
-            vx: lerp(d0.vx, d1.vx, alpha),
-            vy: lerp(d0.vy, d1.vy, alpha),
-            radius: d1.radius,
-            kicking: d1.kicking,
-            avatar: d1.avatar,
-            stamina: d1.stamina,
-            isDashing: d1.isDashing,
-            isTurbo: d1.isTurbo,
-            isTyping: d1.isTyping,
-            isSpinActive: d1.isSpinActive,
-            isCurvingAllowed: d1.isCurvingAllowed,
-            isPowerShot: d1.isPowerShot,
-            spin: d1.spin,
-            lastKickerId: d1.lastKickerId,
-            curveFactor: d1.curveFactor
-          });
+          this.copyDiscInto(dst, d1);
+          dst.id = d0.id;
+          dst.x = useHermite ? hermite(d0.x, d1.x, d0.vx, d1.vx, alpha, dtSec) : lerp(d0.x, d1.x, alpha);
+          dst.y = useHermite ? hermite(d0.y, d1.y, d0.vy, d1.vy, alpha, dtSec) : lerp(d0.y, d1.y, alpha);
+          dst.vx = lerp(d0.vx, d1.vx, alpha);
+          dst.vy = lerp(d0.vy, d1.vy, alpha);
         } else {
-          interpolatedDiscs.push(d0);
+          this.copyDiscInto(dst, d0);
         }
+        outDiscs.push(dst);
       }
 
-      return {
-        ...s1.snapshot,
-        discs: interpolatedDiscs
-      } as T;
+      return this.copySnapshotHeaderInto(outSnap, s1.snapshot as any, outDiscs) as T;
     }
 
-    // Interpolación para GameStateSnapshot (EngineInstance)
-    const s0Discs = new Map<number, any>();
-    for (let i = 0; i < (s0.snapshot as any).discs.length; i++) {
-      const d = (s0.snapshot as any).discs[i];
-      s0Discs.set(d.id, d);
+    // Interpolación Zero-GC para GameStateSnapshot (EngineInstance) preservando metadatos FSM
+    this.scratchDiscLookup.clear();
+    const s0DiscsArr = (s0.snapshot as any).discs;
+    for (let i = 0; i < s0DiscsArr.length; i++) {
+      const d = s0DiscsArr[i];
+      this.scratchDiscLookup.set(d.id, d);
     }
 
     const snap0 = s0.snapshot as any;
@@ -464,49 +571,44 @@ export class JitterBuffer<T extends AnySnapshot = any> {
       snap0.phase !== snap1.phase &&
       (Math.abs(snap0.phase - 3.5) < 0.01 || Math.abs(snap1.phase - 3.5) < 0.01);
 
-    const interpolatedDiscs = snap1.discs.map((d1: any) => {
-      if (crossesReplayBoundary) return d1;
-      const d0 = s0Discs.get(d1.id);
-      if (!d0) return d1;
+    const { outSnap, outDiscs, pool } = this.acquireSlot();
+    const s1DiscsArr = snap1.discs;
+    for (let i = 0; i < s1DiscsArr.length; i++) {
+      const d1 = s1DiscsArr[i];
+      const dst = this.borrowDisc(pool, i);
+      this.copyDiscInto(dst, d1);
 
-      const jumpDist = Math.hypot(d1.x - d0.x, d1.y - d0.y);
-      if (jumpDist > 120) {
-        return d1;
+      if (!crossesReplayBoundary) {
+        const d0 = this.scratchDiscLookup.get(d1.id);
+        if (d0) {
+          const jumpDist = Math.hypot(d1.x - d0.x, d1.y - d0.y);
+          if (jumpDist <= 120) {
+            const sameDirection = (d0.vx * d1.vx + d0.vy * d1.vy) >= 0;
+            const useHermite =
+              jumpDist < 80 &&
+              sameDirection &&
+              Number.isFinite(d0.vx) &&
+              Number.isFinite(d1.vx) &&
+              Number.isFinite(d0.vy) &&
+              Number.isFinite(d1.vy);
+            dst.x = useHermite ? hermite(d0.x, d1.x, d0.vx, d1.vx, alpha, dtSec) : lerp(d0.x, d1.x, alpha);
+            dst.y = useHermite ? hermite(d0.y, d1.y, d0.vy, d1.vy, alpha, dtSec) : lerp(d0.y, d1.y, alpha);
+            dst.vx = lerp(d0.vx, d1.vx, alpha);
+            dst.vy = lerp(d0.vy, d1.vy, alpha);
+            dst.spin = d1.spin !== undefined && d0.spin !== undefined ? lerp(d0.spin, d1.spin, alpha) : d1.spin;
+            dst.stamina =
+              d1.stamina !== undefined && d0.stamina !== undefined
+                ? lerp(d0.stamina, d1.stamina, alpha)
+                : (d1.stamina ?? 100);
+          }
+        }
       }
+      outDiscs.push(dst);
+    }
 
-      const sameDirection = (d0.vx * d1.vx + d0.vy * d1.vy) >= 0;
-      const useHermite =
-        jumpDist < 80 &&
-        sameDirection &&
-        Number.isFinite(d0.vx) &&
-        Number.isFinite(d1.vx) &&
-        Number.isFinite(d0.vy) &&
-        Number.isFinite(d1.vy);
-      const ix = useHermite ? hermite(d0.x, d1.x, d0.vx, d1.vx, alpha, dtSec) : lerp(d0.x, d1.x, alpha);
-      const iy = useHermite ? hermite(d0.y, d1.y, d0.vy, d1.vy, alpha, dtSec) : lerp(d0.y, d1.y, alpha);
-
-      return {
-        id: d1.id,
-        team: d1.team,
-        x: ix,
-        y: iy,
-        vx: lerp(d0.vx, d1.vx, alpha),
-        vy: lerp(d0.vy, d1.vy, alpha),
-        flags: d1.flags,
-        spin: d1.spin !== undefined && d0.spin !== undefined ? lerp(d0.spin, d1.spin, alpha) : d1.spin,
-        stamina: d1.stamina !== undefined && d0.stamina !== undefined ? lerp(d0.stamina, d1.stamina, alpha) : (d1.stamina ?? 100)
-      };
-    });
-
-    return {
-      tick: Math.round(lerp(snap0.tick, snap1.tick, alpha)),
-      phase: snap1.phase,
-      matchTimer: snap1.matchTimer,
-      redScore: snap1.redScore,
-      blueScore: snap1.blueScore,
-      soundMask: snap1.soundMask,
-      discs: interpolatedDiscs
-    } as T;
+    this.copySnapshotHeaderInto(outSnap, snap1, outDiscs);
+    outSnap.tick = Math.round(lerp(snap0.tick, snap1.tick, alpha));
+    return outSnap as T;
   }
 
   public getInterpolatedState(

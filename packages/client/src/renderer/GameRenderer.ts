@@ -1166,10 +1166,7 @@ export class GameRenderer {
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
 
-    ctx.shadowColor = color;
-    ctx.shadowBlur = 18;
-
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.72)';
     ctx.fillText(text, 0, -20 + 4);
 
     if (typeof ctx.strokeText === 'function') {
@@ -1206,11 +1203,7 @@ export class GameRenderer {
     const bannerHeight = subtext ? 96 : 72;
     const yOffset = -20;
 
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.95)';
-    ctx.shadowColor = color;
-    ctx.shadowBlur = 18;
-    ctx.shadowOffsetY = 2;
-
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.96)';
     ctx.beginPath();
     if (typeof ctx.roundRect === 'function') {
       ctx.roundRect(-bannerWidth / 2, yOffset - bannerHeight / 2, bannerWidth, bannerHeight, 16);
@@ -1220,19 +1213,15 @@ export class GameRenderer {
     ctx.fill();
 
     ctx.strokeStyle = color;
-    ctx.lineWidth = 2.5;
+    ctx.lineWidth = 3;
     ctx.stroke();
 
     ctx.font = '900 38px "Zen Dots", "Inter", sans-serif';
     ctx.fillStyle = color;
-    ctx.shadowColor = color;
-    ctx.shadowBlur = 12;
     const titleY = subtext ? yOffset - 14 : yOffset;
     ctx.fillText(text, 0, titleY);
 
     if (subtext) {
-      ctx.shadowColor = 'transparent';
-      ctx.shadowBlur = 0;
       ctx.font = '600 15px "Inter", sans-serif';
       ctx.fillStyle = '#475569';
       ctx.fillText(subtext, 0, yOffset + 22);
@@ -1263,11 +1252,7 @@ export class GameRenderer {
     const yOffset = -15;
 
     ctx.save();
-    ctx.shadowColor = 'rgba(0, 229, 255, 0.6)';
-    ctx.shadowBlur = 24;
-    ctx.shadowOffsetY = 2;
-
-    ctx.fillStyle = 'rgba(15, 23, 42, 0.9)';
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.92)';
     ctx.beginPath();
     if (typeof ctx.roundRect === 'function') {
       ctx.roundRect(-cardWidth / 2, yOffset - cardHeight / 2, cardWidth, cardHeight, 18);
@@ -1276,22 +1261,21 @@ export class GameRenderer {
     }
     ctx.fill();
 
+    ctx.strokeStyle = 'rgba(0, 229, 255, 0.45)';
+    ctx.lineWidth = 5;
+    ctx.stroke();
     ctx.strokeStyle = '#FFFFFF';
-    ctx.lineWidth = 2.5;
+    ctx.lineWidth = 2;
     ctx.stroke();
     ctx.restore();
 
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.font = '900 36px "Zen Dots", "Inter", sans-serif';
-    ctx.shadowColor = '#00E5FF';
-    ctx.shadowBlur = 16;
     ctx.fillStyle = '#FFFFFF';
     ctx.fillText(title, 0, yOffset - 18);
 
     ctx.font = '600 15px "Zen Dots", "Inter", sans-serif';
-    ctx.shadowColor = 'transparent';
-    ctx.shadowBlur = 0;
     ctx.fillStyle = '#E2E8F0';
     ctx.fillText(subtitle, 0, yOffset + 24);
 

@@ -104,9 +104,16 @@ export class DiscRenderer {
   private ballRollAngleX: number = 0;
   private ballRollAngleY: number = 0;
 
-  private static readonly POWER_TRAIL_CAPACITY = 20;
-  private powerTrailX: Float32Array = new Float32Array(20);
-  private powerTrailY: Float32Array = new Float32Array(20);
+  // Capacidad potencia de 2 (16) para máscara binaria (& 15) sin corrupción de anillo
+  private static readonly POWER_TRAIL_CAPACITY = 16;
+  private static readonly POWER_TRAIL_PALETTE = [
+    '#FF5000', '#FF5B00', '#FF6600', '#FF7200',
+    '#FF7E00', '#FF8A00', '#FF9600', '#FFA200',
+    '#FFAE00', '#FFBA00', '#FFC600', '#FFD200',
+    '#FFDC00', '#FFE420', '#FFEC40', '#FFF260'
+  ] as const;
+  private powerTrailX: Float32Array = new Float32Array(16);
+  private powerTrailY: Float32Array = new Float32Array(16);
   private powerTrailHead: number = 0;
   private powerTrailCount: number = 0;
 
@@ -148,6 +155,8 @@ export class DiscRenderer {
   // Reusable per-frame scratch buffers to avoid GC allocations during render()
   private frameRenderDiscs: DiscSnapshot[] = [];
   private activeTurboIds = new Set<number>();
+
+  private readonly scratchClampProxy = { x: 0, y: 0, vx: 0, vy: 0, radius: 15 };
 
   private scratchDisc: DiscSnapshot = {
     id: 0,
@@ -233,7 +242,12 @@ export class DiscRenderer {
       const isPlayer = disc.team !== 0;
       const runOff = isPlayer ? (this.stadiumBounds.runOff ?? 0) : 0;
 
-      const proxy = { x: px, y: py, vx: disc.vx, vy: disc.vy, radius: r };
+      const proxy = this.scratchClampProxy;
+      proxy.x = px;
+      proxy.y = py;
+      proxy.vx = disc.vx;
+      proxy.vy = disc.vy;
+      proxy.radius = r;
       clampDiscToGoalAwareBounds(proxy, hw, hh, gh, gd, runOff);
       px = proxy.x;
       py = proxy.y;
@@ -554,7 +568,10 @@ export class DiscRenderer {
       if (count < 2) continue;
 
       const isRed = buf.team === 1;
-      const neonPrefix = isRed ? 'rgba(255, 0, 85, ' : 'rgba(0, 229, 255, ';
+      const stop0 = isRed ? 'rgba(255, 0, 85, 0.65)' : 'rgba(0, 229, 255, 0.65)';
+      const stop1 = isRed ? 'rgba(255, 0, 85, 0.25)' : 'rgba(0, 229, 255, 0.25)';
+      const stop2 = isRed ? 'rgba(255, 0, 85, 0)' : 'rgba(0, 229, 255, 0)';
+      const fallbackFill = isRed ? 'rgba(255, 0, 85, 0.45)' : 'rgba(0, 229, 255, 0.45)';
 
       for (let i = 0; i < count; i++) {
         const curIdx = (buf.head - i + TURBO_TRAIL_CAPACITY) & (TURBO_TRAIL_CAPACITY - 1);
@@ -612,12 +629,12 @@ export class DiscRenderer {
 
       if (typeof ctx.createLinearGradient === 'function') {
         const grad = ctx.createLinearGradient(headX, headY, tailX, tailY);
-        grad.addColorStop(0, `${neonPrefix}0.65)`);
-        grad.addColorStop(0.6, `${neonPrefix}0.25)`);
-        grad.addColorStop(1, `${neonPrefix}0)`);
+        grad.addColorStop(0, stop0);
+        grad.addColorStop(0.6, stop1);
+        grad.addColorStop(1, stop2);
         ctx.fillStyle = grad;
       } else {
-        ctx.fillStyle = `${neonPrefix}0.45)`;
+        ctx.fillStyle = fallbackFill;
       }
       ctx.fill();
       ctx.restore();
@@ -791,10 +808,12 @@ export class DiscRenderer {
     p.size = 2.5 + Math.random() * 2.0;
     p.alpha = 0.95;
     p.active = true;
-    p.color = disc.team === 1 ? 'rgba(255, 0, 85, ' : 'rgba(0, 229, 255, ';
+    p.color = disc.team === 1 ? '#FF0055' : '#00E5FF';
   }
 
   private renderTurboParticles(ctx: CanvasRenderingContext2D): void {
+    ctx.save();
+    ctx.lineCap = 'round';
     for (let i = 0; i < this.turboParticles.length; i++) {
       const p = this.turboParticles[i]!;
       if (!p.active) continue;
@@ -808,11 +827,10 @@ export class DiscRenderer {
         continue;
       }
 
-      ctx.save();
-      ctx.strokeStyle = `${p.color}${p.alpha})`;
-      ctx.fillStyle = `${p.color}${p.alpha})`;
+      ctx.globalAlpha = p.alpha;
+      ctx.strokeStyle = p.color;
+      ctx.fillStyle = p.color;
       ctx.lineWidth = p.size;
-      ctx.lineCap = 'round';
 
       ctx.beginPath();
       ctx.moveTo(p.x, p.y);
@@ -822,9 +840,8 @@ export class DiscRenderer {
       ctx.beginPath();
       ctx.arc(p.x, p.y, p.size * 0.6, 0, Math.PI * 2);
       ctx.fill();
-
-      ctx.restore();
     }
+    ctx.restore();
   }
 
   private renderBallDisc(ctx: CanvasRenderingContext2D, disc: DiscSnapshot): void {
@@ -1258,6 +1275,7 @@ export class DiscRenderer {
 
     ctx.save();
     ctx.globalCompositeOperation = 'lighter';
+    ctx.fillStyle = '#00E5FF';
 
     for (let i = 0; i < this.ballTrailCount; i++) {
       const idx = (this.ballTrailHead - i + DiscRenderer.BALL_TRAIL_CAPACITY) & (DiscRenderer.BALL_TRAIL_CAPACITY - 1);
@@ -1272,12 +1290,10 @@ export class DiscRenderer {
 
       if (alpha <= 0.01) continue;
 
-      ctx.save();
-      ctx.fillStyle = `rgba(0, 229, 255, ${alpha})`;
+      ctx.globalAlpha = alpha;
       ctx.beginPath();
       ctx.arc(px, py, r, 0, Math.PI * 2);
       ctx.fill();
-      ctx.restore();
     }
 
     ctx.restore();
@@ -1322,19 +1338,20 @@ export class DiscRenderer {
 
       if (alpha <= 0.01) continue;
 
-      ctx.save();
-      ctx.fillStyle = `rgba(255, ${Math.round(80 + 120 * taper)}, 0, ${alpha})`;
+      const paletteIdx = Math.min(15, Math.max(0, Math.round(taper * 15)));
+      ctx.globalAlpha = alpha;
+      ctx.fillStyle = DiscRenderer.POWER_TRAIL_PALETTE[paletteIdx]!;
       ctx.beginPath();
       ctx.arc(px, py, r, 0, Math.PI * 2);
       ctx.fill();
 
       if (taper > 0.4) {
-        ctx.fillStyle = `rgba(255, 255, 220, ${alpha * 0.9})`;
+        ctx.globalAlpha = alpha * 0.9;
+        ctx.fillStyle = '#FFFFDC';
         ctx.beginPath();
         ctx.arc(px, py, r * 0.45, 0, Math.PI * 2);
         ctx.fill();
       }
-      ctx.restore();
     }
 
     ctx.restore();

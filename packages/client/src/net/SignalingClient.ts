@@ -60,10 +60,18 @@ export interface SignalingMessage {
     | 'host_disconnected'
     | 'update_room_count'
     | 'close_room'
+    | 'RECLAIM_ROOM'
+    | 'ROOM_RECLAIMED'
+    | 'HOST_RECONNECTING'
+    | 'HOST_RECONNECTED'
+    | 'HEARTBEAT'
     | 'ping'
     | 'pong'
     | (string & {});
   roomId?: string;
+  reclaimToken?: string;
+  previousPeerId?: string;
+  graceMs?: number;
   peerId?: string;
   userId?: string;
   clientSessionId?: string;
@@ -191,8 +199,17 @@ export class SignalingClient {
   public pingMs: number | null = null;
   public onlineCount: number = 1;
   private pingInterval: ReturnType<typeof setInterval> | null = null;
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private reconnectAttempt = 0;
+  private intentionalDisconnect = false;
+  private lastPongReceivedAt = 0;
+  private activeHostedRoom: { roomId: string; reclaimToken?: string; previousPeerId: string } | null = null;
   private listeners = new Map<string, Set<EventCallback>>();
   private connectPromise: Promise<void> | null = null;
+  private static readonly HEARTBEAT_INTERVAL_MS = 15_000;
+  private static readonly HEARTBEAT_STALE_TIMEOUT_MS = 35_000;
+  private static readonly RECONNECT_BASE_DELAY_MS = 1000;
+  private static readonly RECONNECT_MAX_DELAY_MS = 15_000;
   private static readonly ROOM_PING_CACHE_TTL_MS = 8000;
   private static readonly RTC_PROBE_TIMEOUT_MS = 1500;
   private static readonly WS_PROBE_TIMEOUT_MS = 4500;
@@ -597,10 +614,20 @@ export class SignalingClient {
 
   private startPingLoop(): void {
     this.stopPingLoop();
+    this.lastPongReceivedAt = Date.now();
     this.measurePing();
     this.pingInterval = setInterval(() => {
+      if (this.isOpen() && this.lastPongReceivedAt > 0 && Date.now() - this.lastPongReceivedAt > SignalingClient.HEARTBEAT_STALE_TIMEOUT_MS) {
+        // Socket zombie sin respuesta del servidor -> cerrar para disparar reconexión con backoff
+        try {
+          this.ws?.close();
+        } catch {
+          // Ignore close errors
+        }
+        return;
+      }
       this.measurePing();
-    }, 3000);
+    }, SignalingClient.HEARTBEAT_INTERVAL_MS);
   }
 
   private stopPingLoop(): void {
@@ -610,7 +637,60 @@ export class SignalingClient {
     }
   }
 
+  private clearReconnectTimer(): void {
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+  }
+
+  private scheduleAutoReconnect(): void {
+    if (this.intentionalDisconnect || this.sessionReplaced || this.reconnectTimer) {
+      return;
+    }
+    const baseDelay = Math.min(
+      SignalingClient.RECONNECT_BASE_DELAY_MS * Math.pow(2, this.reconnectAttempt),
+      SignalingClient.RECONNECT_MAX_DELAY_MS
+    );
+    const jitter = Math.floor(Math.random() * 350);
+    const delayMs = baseDelay + jitter;
+    this.reconnectAttempt++;
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      if (!this.intentionalDisconnect && !this.sessionReplaced && !this.isOpen()) {
+        void this.ensureConnected();
+      }
+    }, delayMs);
+  }
+
+  public setActiveHostedRoom(roomId: string | null, reclaimToken?: string | null): void {
+    if (!roomId) {
+      this.activeHostedRoom = null;
+      return;
+    }
+    this.activeHostedRoom = {
+      roomId,
+      reclaimToken: reclaimToken ?? this.activeHostedRoom?.reclaimToken,
+      previousPeerId: this.peerId
+    };
+  }
+
+  public reclaimRoom(roomId: string, reclaimToken?: string): void {
+    if (!roomId || !this.isOpen()) return;
+    const token = reclaimToken ?? this.activeHostedRoom?.reclaimToken;
+    const activeToken = this.accessToken ?? readStoredAccessToken();
+    this.send({
+      type: 'RECLAIM_ROOM',
+      roomId,
+      ...(token ? { reclaimToken: token } : {}),
+      previousPeerId: this.activeHostedRoom?.previousPeerId ?? this.peerId,
+      ...(activeToken ? { accessToken: activeToken } : {})
+    });
+  }
+
   public connect(): Promise<void> {
+    this.intentionalDisconnect = false;
+    this.clearReconnectTimer();
     const { connecting, open } = SignalingClient.getWsReadyStateConstants();
     if (this.isOpen()) return Promise.resolve();
     if (this.connectPromise) return this.connectPromise;
@@ -643,6 +723,8 @@ export class SignalingClient {
           if (this.ws !== socket) return;
           this.isConnected = true;
           this.sessionReplaced = false;
+          this.reconnectAttempt = 0;
+          this.clearReconnectTimer();
           this.startPingLoop();
           const activeId = this.userId ?? readStoredUserId();
           const activeToken = this.accessToken ?? readStoredAccessToken();
@@ -656,16 +738,28 @@ export class SignalingClient {
               ...(activeToken ? { accessToken: activeToken } : {})
             });
           }
-          this.joinLobby();
-          this.requestRooms();
+          if (this.activeHostedRoom) {
+            this.reclaimRoom(this.activeHostedRoom.roomId, this.activeHostedRoom.reclaimToken);
+          } else {
+            this.joinLobby();
+            this.requestRooms();
+          }
           if (this.onConnected) this.onConnected();
           settleConnect();
         };
 
         socket.onmessage = (event) => {
           if (this.ws !== socket) return;
+          this.lastPongReceivedAt = Date.now();
           try {
             const msg = JSON.parse(event.data as string) as SignalingMessage;
+            if ((msg.type === 'ROOM_CREATED' || msg.type === 'room_created') && typeof msg.roomId === 'string') {
+              if (typeof msg.reclaimToken === 'string' && msg.reclaimToken) {
+                this.setActiveHostedRoom(msg.roomId, msg.reclaimToken);
+              }
+            } else if (msg.type === 'ROOM_RECLAIMED' && typeof msg.roomId === 'string') {
+              this.setActiveHostedRoom(msg.roomId, typeof msg.reclaimToken === 'string' ? msg.reclaimToken : undefined);
+            }
             if (typeof msg.onlineCount === 'number') {
               this.onlineCount = msg.onlineCount;
               this.emit('telemetry', { pingMs: this.pingMs, onlineCount: this.onlineCount });
@@ -842,6 +936,9 @@ export class SignalingClient {
           this.emit('telemetry', { pingMs: null, onlineCount: this.onlineCount });
           this.emit('DISCONNECTED', { code: ev?.code, reason: ev?.reason });
           settleConnect();
+          if (!this.intentionalDisconnect && !this.sessionReplaced) {
+            this.scheduleAutoReconnect();
+          }
         };
 
         socket.onerror = () => {
@@ -1006,6 +1103,9 @@ export class SignalingClient {
   }
 
   public disconnect(): void {
+    this.intentionalDisconnect = true;
+    this.activeHostedRoom = null;
+    this.clearReconnectTimer();
     this.stopPingLoop();
     this.pingMs = null;
     this.connectPromise = null;

@@ -36,7 +36,7 @@ function createDummySnapshot(tick: number): GameSnapshot {
 }
 
 describe('Adaptive JitterBuffer & Zero-GC Replication Netcode', () => {
-  it('dynamically adapts target delay within [16ms, 60ms] according to RFC 3550 jitter', () => {
+  it('dynamically adapts target delay within [25ms, 100ms] according to RFC 3550 jitter', () => {
     const jb = new JitterBuffer(33, 30, true);
     expect(jb.interpolationDelayMs).toBe(33);
 
@@ -50,9 +50,9 @@ describe('Adaptive JitterBuffer & Zero-GC Replication Netcode', () => {
       jb.push(createDummySnapshot(i), fakeTime);
     }
 
-    // Mean jitter should stabilize low and targetDelay should be bounded near min (16ms)
-    expect(jb.targetDelay).toBeGreaterThanOrEqual(16);
-    expect(jb.targetDelay).toBeLessThanOrEqual(60);
+    // Mean jitter should stabilize low and targetDelay should be bounded near min (28ms)
+    expect(jb.targetDelay).toBeGreaterThanOrEqual(25);
+    expect(jb.targetDelay).toBeLessThanOrEqual(100);
 
     // Simulate high jitter (erratic arrivals)
     for (let i = 31; i <= 60; i++) {
@@ -61,9 +61,9 @@ describe('Adaptive JitterBuffer & Zero-GC Replication Netcode', () => {
       jb.push(createDummySnapshot(i), fakeTime);
     }
 
-    // Target delay should have expanded to buffer jitter
-    expect(jb.targetDelay).toBeGreaterThanOrEqual(16);
-    expect(jb.targetDelay).toBeLessThanOrEqual(60);
+    // Target delay should have expanded up to 100ms ceiling to buffer jitter
+    expect(jb.targetDelay).toBeGreaterThanOrEqual(25);
+    expect(jb.targetDelay).toBeLessThanOrEqual(100);
 
     nowSpy.mockRestore();
   });

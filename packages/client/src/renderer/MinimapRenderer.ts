@@ -486,9 +486,12 @@ export class MinimapRenderer {
         const by = Math.max(this.y + 2, Math.min(this.y + this.height - 2, bp.y));
 
         ctx.save();
-        ctx.shadowColor = COLOR_BALL;
-        ctx.shadowBlur = 4;
         ctx.fillStyle = COLOR_BALL;
+        ctx.globalAlpha = 0.32;
+        ctx.beginPath();
+        ctx.arc(bx, by, MinimapRenderer.BALL_RADIUS + 1.8, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.globalAlpha = 1;
         ctx.beginPath();
         ctx.arc(bx, by, MinimapRenderer.BALL_RADIUS, 0, Math.PI * 2);
         ctx.fill();

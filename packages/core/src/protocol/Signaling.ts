@@ -80,6 +80,14 @@ export type ClientSignalMessage =
     }
   | { type: 'ROOM_LEAVE' }
   | {
+      type: 'RECLAIM_ROOM';
+      roomId: string;
+      reclaimToken?: string;
+      previousPeerId?: string;
+      clientSessionId?: string;
+      accessToken?: string;
+    }
+  | {
       type: 'RANKED_MATCH_START';
       roomId: string;
       stadiumId: string;
@@ -101,11 +109,15 @@ export type ClientSignalMessage =
     }
   | { type: 'REPORT_PING'; pingMs: number }
   | { type: SignalType; targetId: string; data: SignalData }
+  | { type: 'HEARTBEAT'; timestamp?: number; clientSentAt?: number }
   | { type: 'PING'; clientSentAt?: number };
 
 export type ServerSignalMessage =
   | { type: 'WELCOME'; peerId: string; iceServers: IceServerConfig[]; detectedCountry?: string }
-  | { type: 'ROOM_CREATED'; roomId: string; roomType?: RoomCategory; countryCode?: string }
+  | { type: 'ROOM_CREATED'; roomId: string; reclaimToken?: string; roomType?: RoomCategory; countryCode?: string }
+  | { type: 'ROOM_RECLAIMED'; roomId: string; hostPeerId: string; reclaimToken?: string; guests?: string[] }
+  | { type: 'HOST_RECONNECTING'; roomId: string; graceMs: number }
+  | { type: 'HOST_RECONNECTED'; roomId: string; hostPeerId: string }
   | { type: 'ROOM_LIST'; rooms: RoomSummary[] }
   | { type: 'ROOM_JOINED'; roomId: string; hostPeerId: string; stadiumId: string; roomType?: RoomCategory }
   | { type: 'PEER_JOINED'; peerId: string; nickname: string; userId?: string; isGuest?: boolean }

@@ -456,9 +456,10 @@ describe('Goal Replay Synchronization, Scorer-Only Skip, Prediction & Auto-Extra
         ]
       };
 
-      // reconcile trims inputBuffer from 50 -> 45 entries (ticks 16..60) and replays 45 ticks
+      // reconcile trims unacked buffer to MAX_BUFFER_TICKS (45) and caps full engine.step replays to MAX_REPLAY_TICKS (5)
       reconciler.reconcile(engine, authSnap, 1);
-      expect(reconciler.inputBuffer).toHaveLength(45);
+      expect(reconciler.inputBuffer).toHaveLength(ClientPredictionReconciler.MAX_BUFFER_TICKS);
+      expect(reconciler.lastReplayedFullSteps).toBeLessThanOrEqual(ClientPredictionReconciler.MAX_REPLAY_TICKS);
       // engine.currentTick must NOT regress below lastRecordedSeq (10 + 45 = 55 < 60 would otherwise regress!)
       expect(engine.currentTick).toBeGreaterThanOrEqual(60);
 

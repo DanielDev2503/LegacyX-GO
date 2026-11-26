@@ -4,6 +4,7 @@ import {
   MatchPhase,
   type GameStateSnapshot,
   stepPlayerKinematics,
+  resolveDiscDiscCollision,
   type PlayerKinematicsState,
   type KinematicsConfig,
   type KickoffPhysicsContext,
@@ -36,17 +37,77 @@ export function canChangeTeam(
 
 export class ClientPredictionReconciler {
   public static readonly VISUAL_DECAY = 0.82;
-  public static readonly CATASTROPHIC_ERROR = 90;
-  public static readonly CATASTROPHIC_ERROR_SQ = 8100; // 90^2 px
-  public static readonly MAX_REPLAY_TICKS = 45; // 750 ms limit
+  public static readonly ERROR_DEADZONE = 0.5;
+  public static readonly ERROR_DEADZONE_SQ = 0.25; // 0.5^2 px
+  public static readonly CATASTROPHIC_ERROR = 80;
+  public static readonly CATASTROPHIC_ERROR_SQ = 6400; // 80^2 px
+  public static readonly MAX_REPLAY_TICKS = 5; // Máx. pasos completos de engine.step() por frame
+  public static readonly MAX_BUFFER_TICKS = 45; // Retención máx. de inputs sin confirmar (750 ms RTT)
 
   public inputSeq: number = 0;
   public lastRecordedSeq: number = 0;
+  public lastReplayedFullSteps: number = 0;
   public didHardSnapLastReconcile: boolean = false;
   public didBallHardSnapLastReconcile: boolean = false;
   public inputBuffer: BufferedClientInput[] = [];
   public visualOffset: { x: number; y: number } = { x: 0, y: 0 };
   public ballVisualOffset: { x: number; y: number } = { x: 0, y: 0 };
+
+  // Telemetría Zero-GC de reconciliaciones/s (Fase 4)
+  public reconciliationsPerSec: number = 0;
+  private reconcileWindowCount: number = 0;
+  private reconcileWindowStartMs: number = 0;
+
+  private readonly replayInputScratch = {
+    inputMask: 0,
+    aimAngle: null as number | null | undefined,
+    aimThrottle: 0 as number | undefined,
+    sequence: 0 as number | undefined
+  };
+  private readonly kinematicsInputScratch = {
+    inputMask: 0,
+    aimAngle: null as number | null | undefined,
+    aimThrottle: 0 as number | undefined
+  };
+  private readonly fastForwardStateScratch: PlayerKinematicsState = {
+    pos: { x: 0, y: 0 },
+    vel: { x: 0, y: 0 },
+    radius: 15,
+    stamina: 100,
+    staminaIdleTimer: 0,
+    staminaRegenUnlocked: false,
+    isDashing: false,
+    dashTicksRemaining: 0,
+    dashCooldownTimer: 0,
+    dashSlowdownTimer: 0,
+    dashDirX: 0,
+    dashDirY: 0,
+    isTurbo: false,
+    kicking: false,
+    prevDashState: false,
+    team: 'red'
+  };
+  private readonly reconcileResultScratch = { replayed: false, hardSnapped: false };
+
+  // Anillo Zero-GC de estados predichos (64 ticks = >1s) para saltar rewind si el Host coincide (< 0.5 px)
+  private readonly predHistoryRing = Array.from({ length: 64 }, () => ({
+    seq: -1,
+    px: 0,
+    py: 0,
+    bx: 0,
+    by: 0
+  }));
+
+  public capturePredictionSample(seq: number, engine: EngineInstance, localDiscId: number): void {
+    const p = engine.players.get(localDiscId);
+    if (!p) return;
+    const slot = this.predHistoryRing[seq & 63]!;
+    slot.seq = seq;
+    slot.px = p.pos.x;
+    slot.py = p.pos.y;
+    slot.bx = engine.ball.pos.x;
+    slot.by = engine.ball.pos.y;
+  }
 
   public predictedState: PlayerKinematicsState = {
     pos: new Vec2(0, 0),
@@ -150,6 +211,33 @@ export class ClientPredictionReconciler {
     this.lastRecordedSeq = 0;
     this.didHardSnapLastReconcile = false;
     this.didBallHardSnapLastReconcile = false;
+    this.lastReplayedFullSteps = 0;
+    this.reconciliationsPerSec = 0;
+    this.reconcileWindowCount = 0;
+    this.reconcileWindowStartMs = 0;
+    for (let i = 0; i < this.predHistoryRing.length; i++) {
+      this.predHistoryRing[i]!.seq = -1;
+    }
+  }
+
+  private recordReconcileTelemetry(): void {
+    const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    if (this.reconcileWindowStartMs === 0) {
+      this.reconcileWindowStartMs = now;
+    }
+    this.reconcileWindowCount++;
+    const elapsed = now - this.reconcileWindowStartMs;
+    if (elapsed >= 1000) {
+      this.reconciliationsPerSec = Math.round((this.reconcileWindowCount * 1000) / elapsed);
+      this.reconcileWindowCount = 0;
+      this.reconcileWindowStartMs = now;
+    }
+  }
+
+  private setResult(replayed: boolean, hardSnapped: boolean): { replayed: boolean; hardSnapped: boolean } {
+    this.reconcileResultScratch.replayed = replayed;
+    this.reconcileResultScratch.hardSnapped = hardSnapped;
+    return this.reconcileResultScratch;
   }
 
   private isSnapshotDrivenPhase(phase: number | undefined): boolean {
@@ -165,10 +253,10 @@ export class ClientPredictionReconciler {
   }
 
   /**
-   * Continuous exponential decay for frame-time decoupling (rAF loop)
+   * Continuous exponential decay for frame-time decoupling (rAF loop): Math.exp(-18 * frameDt)
    */
   public updateVisualSmoothing(frameDt: number): void {
-    const decay = Math.exp(-16 * frameDt);
+    const decay = Math.exp(-18 * frameDt);
     this.visualOffset.x *= decay;
     this.visualOffset.y *= decay;
     this.ballVisualOffset.x *= decay;
@@ -213,9 +301,12 @@ export class ClientPredictionReconciler {
       aimThrottle
     });
 
+    this.kinematicsInputScratch.inputMask = inputMask;
+    this.kinematicsInputScratch.aimAngle = aimAngle;
+    this.kinematicsInputScratch.aimThrottle = aimThrottle;
     stepPlayerKinematics(
       this.predictedState,
-      { inputMask, aimAngle, aimThrottle },
+      this.kinematicsInputScratch,
       stadium ?? null,
       kickoffContext ?? null,
       config,
@@ -295,16 +386,36 @@ export class ClientPredictionReconciler {
         }
       }
 
+      // Fast-path Zero-Rewind: si la predicción histórica en ackSeq ya coincide (< 0.5 px) en jugador y balón, omitir rewind/replay
+      this.lastReplayedFullSteps = 0;
+      if (this.inputBuffer.length > ClientPredictionReconciler.MAX_BUFFER_TICKS) {
+        this.inputBuffer.splice(0, this.inputBuffer.length - ClientPredictionReconciler.MAX_BUFFER_TICKS);
+      }
+
+      if (typeof ackSeq === 'number' && ackSeq > 0) {
+        const hist = this.predHistoryRing[ackSeq & 63]!;
+        if (hist.seq === ackSeq) {
+          const authBall = authSnapshot.discs?.find((d) => d.id === 0 || d.team === 0);
+          const pDx = authDisc.x - hist.px;
+          const pDy = authDisc.y - hist.py;
+          const bDx = authBall ? authBall.x - hist.bx : 0;
+          const bDy = authBall ? authBall.y - hist.by : 0;
+          if (
+            pDx * pDx + pDy * pDy < ClientPredictionReconciler.ERROR_DEADZONE_SQ &&
+            bDx * bDx + bDy * bDy < ClientPredictionReconciler.ERROR_DEADZONE_SQ
+          ) {
+            this.didHardSnapLastReconcile = false;
+            this.didBallHardSnapLastReconcile = false;
+            return this.setResult(false, false);
+          }
+        }
+      }
+
       // Visual position on screen before reconciliation
       const xVisualBefore = localDisc.pos.x + this.visualOffset.x;
       const yVisualBefore = localDisc.pos.y + this.visualOffset.y;
       const ballXVisualBefore = engine.ball.pos.x + this.ballVisualOffset.x;
       const ballYVisualBefore = engine.ball.pos.y + this.ballVisualOffset.y;
-
-      // Cap pending inputs to MAX_REPLAY_TICKS (45 ticks)
-      if (this.inputBuffer.length > ClientPredictionReconciler.MAX_REPLAY_TICKS) {
-        this.inputBuffer = this.inputBuffer.slice(-ClientPredictionReconciler.MAX_REPLAY_TICKS);
-      }
 
       // Rewind to authoritative snapshot preservando el estado temporal local de recarga de estamina
       const prevRt = (engine as any).getRuntime?.(localDiscId);
@@ -343,21 +454,93 @@ export class ClientPredictionReconciler {
         }
       }
 
-      // Replay all pending inputs
+      // En RTT alto (> 5 ticks, p. ej. 160–200 ms), avanzar los ticks anteriores con cinemática
+      // ligera Zero-GC sin descartar inputs sin confirmar y acotar engine.step() a MAX_REPLAY_TICKS = 5 por frame
+      const fullReplayStart = Math.max(0, this.inputBuffer.length - ClientPredictionReconciler.MAX_REPLAY_TICKS);
+      if (fullReplayStart > 0) {
+        const ffPlayer = engine.players.get(localDiscId);
+        if (ffPlayer) {
+          const ffState = this.fastForwardStateScratch;
+          const ffTeam = (engine as any).playerTeams?.get(localDiscId) ?? (authDisc.team === 2 ? 'blue' : 'red');
+          const ballDamp = engine.ball.damping ?? 0.99;
+          const dt = 1 / 60;
+          for (let i = 0; i < fullReplayStart; i++) {
+            const pending = this.inputBuffer[i]!;
+            const m = pending.inputMask ?? pending.mask ?? 0;
+            const isMouseActive =
+              (m & INPUT_FLAG_MOUSE_AIM) !== 0 &&
+              pending.aimAngle !== null &&
+              pending.aimAngle !== undefined;
+            ffState.pos = ffPlayer.pos;
+            ffState.vel = ffPlayer.vel;
+            ffState.radius = ffPlayer.radius;
+            ffState.stamina = ffPlayer.stamina;
+            ffState.staminaIdleTimer = rt?.staminaIdleTimer ?? 0;
+            ffState.staminaRegenUnlocked = rt?.staminaRegenUnlocked ?? false;
+            ffState.isDashing = ffPlayer.isDashing;
+            ffState.dashTicksRemaining = rt?.ticksRemaining ?? 0;
+            ffState.dashCooldownTimer = rt?.cooldownTimer ?? 0;
+            ffState.dashSlowdownTimer = rt?.slowdownTimer ?? 0;
+            ffState.dashDirX = rt?.dirX ?? 0;
+            ffState.dashDirY = rt?.dirY ?? 0;
+            ffState.isTurbo = ffPlayer.isTurbo;
+            ffState.kicking = ffPlayer.kicking;
+            ffState.prevDashState = rt?.prevDashDown ?? false;
+            ffState.triggerDash = false;
+            ffState.team = ffTeam;
+
+            this.kinematicsInputScratch.inputMask = m;
+            this.kinematicsInputScratch.aimAngle = isMouseActive ? pending.aimAngle : null;
+            this.kinematicsInputScratch.aimThrottle = isMouseActive ? (pending.aimThrottle ?? 0) : 0;
+
+            stepPlayerKinematics(
+              ffState,
+              this.kinematicsInputScratch,
+              engine.stadium,
+              engine.world.kickoffContext ?? null,
+              engine.modifiers as any,
+              dt
+            );
+
+            ffPlayer.stamina = ffState.stamina;
+            ffPlayer.isDashing = ffState.isDashing;
+            ffPlayer.isTurbo = ffState.isTurbo;
+            ffPlayer.kicking = ffState.kicking ?? false;
+            if (rt) {
+              rt.staminaIdleTimer = ffState.staminaIdleTimer ?? 0;
+              rt.staminaRegenUnlocked = ffState.staminaRegenUnlocked ?? false;
+              rt.ticksRemaining = ffState.dashTicksRemaining;
+              rt.cooldownTimer = ffState.dashCooldownTimer;
+              rt.slowdownTimer = ffState.dashSlowdownTimer ?? 0;
+              rt.dirX = ffState.dashDirX;
+              rt.dirY = ffState.dashDirY;
+              rt.prevDashDown = ffState.prevDashState ?? false;
+            }
+
+            engine.ball.pos.x += engine.ball.vel.x * dt;
+            engine.ball.pos.y += engine.ball.vel.y * dt;
+            resolveDiscDiscCollision(ffPlayer, engine.ball);
+            engine.ball.vel.x *= ballDamp;
+            engine.ball.vel.y *= ballDamp;
+          }
+        }
+      }
+
+      // Replay pending inputs (máximo MAX_REPLAY_TICKS = 5 pasos completos de engine.step con isReplay = true)
       this.replayMap.clear();
-      for (let i = 0; i < this.inputBuffer.length; i++) {
+      for (let i = fullReplayStart; i < this.inputBuffer.length; i++) {
+        this.lastReplayedFullSteps++;
         const pending = this.inputBuffer[i]!;
         const m = pending.inputMask ?? pending.mask ?? 0;
         const isMouseActive =
           (m & INPUT_FLAG_MOUSE_AIM) !== 0 &&
           pending.aimAngle !== null &&
           pending.aimAngle !== undefined;
-        this.replayMap.set(localDiscId, {
-          inputMask: m,
-          aimAngle: isMouseActive ? pending.aimAngle : null,
-          aimThrottle: isMouseActive ? (pending.aimThrottle ?? 0) : 0,
-          sequence: pending.seq ?? pending.tick
-        });
+        this.replayInputScratch.inputMask = m;
+        this.replayInputScratch.aimAngle = isMouseActive ? pending.aimAngle : null;
+        this.replayInputScratch.aimThrottle = isMouseActive ? (pending.aimThrottle ?? 0) : 0;
+        this.replayInputScratch.sequence = pending.seq ?? pending.tick;
+        this.replayMap.set(localDiscId, this.replayInputScratch);
         engine.step(this.replayMap, true);
         if (
           authSnapshot.phase !== undefined &&
@@ -385,6 +568,7 @@ export class ClientPredictionReconciler {
         this.ballVisualOffset.y = 0;
         this.didBallHardSnapLastReconcile = true;
       } else {
+        // Absorción continua exacta (0.00 px de salto instantáneo en el balón al llegar snapshot)
         this.ballVisualOffset.x = ballErrX;
         this.ballVisualOffset.y = ballErrY;
         this.didBallHardSnapLastReconcile = false;
@@ -398,22 +582,30 @@ export class ClientPredictionReconciler {
         const distSq = errX * errX + errY * errY;
 
         if (distSq > ClientPredictionReconciler.CATASTROPHIC_ERROR_SQ) {
-          // Hard snap: reset visualOffset to (0,0)
+          // Hard snap (> 80 px): teleports / goles
           this.visualOffset.x = 0;
           this.visualOffset.y = 0;
           this.didHardSnapLastReconcile = true;
-          return { replayed: true, hardSnapped: true };
+          this.recordReconcileTelemetry();
+          return this.setResult(true, true);
+        } else if (distSq < ClientPredictionReconciler.ERROR_DEADZONE_SQ) {
+          // Deadzone (< 0.5 px): ignorar ruido de cuantización
+          this.visualOffset.x = 0;
+          this.visualOffset.y = 0;
+          this.didHardSnapLastReconcile = false;
+          return this.setResult(true, false);
         } else {
-          // Continuous error absorption: visual position delta is 0.00 px at snapshot arrival!
+          // Absorción continua 0.5–80 px
           this.visualOffset.x = errX;
           this.visualOffset.y = errY;
           this.didHardSnapLastReconcile = false;
-          return { replayed: true, hardSnapped: false };
+          this.recordReconcileTelemetry();
+          return this.setResult(true, false);
         }
       }
 
       this.didHardSnapLastReconcile = false;
-      return { replayed: true, hardSnapped: false };
+      return this.setResult(true, false);
     } else {
       const authSnapshot = engineOrSnapshot as GameStateSnapshot;
       const localDiscId = snapshotOrLocalDiscId as number;
@@ -464,7 +656,7 @@ export class ClientPredictionReconciler {
       const yVisualBefore = this.predictedState.pos.y + this.visualOffset.y;
 
       if (this.inputBuffer.length > ClientPredictionReconciler.MAX_REPLAY_TICKS) {
-        this.inputBuffer = this.inputBuffer.slice(-ClientPredictionReconciler.MAX_REPLAY_TICKS);
+        this.inputBuffer.splice(0, this.inputBuffer.length - ClientPredictionReconciler.MAX_REPLAY_TICKS);
       }
 
       const rawCd = (authDisc as any).dashCooldown ?? 0;
@@ -493,13 +685,12 @@ export class ClientPredictionReconciler {
       for (let i = 0; i < this.inputBuffer.length; i++) {
         const pending = this.inputBuffer[i]!;
         const m = pending.inputMask ?? pending.mask ?? 0;
+        this.kinematicsInputScratch.inputMask = m;
+        this.kinematicsInputScratch.aimAngle = pending.aimAngle ?? null;
+        this.kinematicsInputScratch.aimThrottle = pending.aimThrottle ?? 0;
         stepPlayerKinematics(
           this.predictedState,
-          {
-            inputMask: m,
-            aimAngle: pending.aimAngle ?? null,
-            aimThrottle: pending.aimThrottle ?? 0
-          },
+          this.kinematicsInputScratch,
           stadium,
           kickoffContext ?? null,
           config,
@@ -515,12 +706,19 @@ export class ClientPredictionReconciler {
         this.visualOffset.x = 0;
         this.visualOffset.y = 0;
         this.didHardSnapLastReconcile = true;
-        return { replayed: true, hardSnapped: true };
+        this.recordReconcileTelemetry();
+        return this.setResult(true, true);
+      } else if (distSq < ClientPredictionReconciler.ERROR_DEADZONE_SQ) {
+        this.visualOffset.x = 0;
+        this.visualOffset.y = 0;
+        this.didHardSnapLastReconcile = false;
+        return this.setResult(true, false);
       } else {
         this.visualOffset.x = errX;
         this.visualOffset.y = errY;
         this.didHardSnapLastReconcile = false;
-        return { replayed: true, hardSnapped: false };
+        this.recordReconcileTelemetry();
+        return this.setResult(true, false);
       }
     }
   }

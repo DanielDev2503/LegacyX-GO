@@ -1,4 +1,4 @@
-import { OP_SNAPSHOT } from './BinaryProtocol';
+import { OP_SNAPSHOT, getCachedDataView } from './BinaryProtocol';
 import { GameSnapshot, DiscSnapshot } from '../game/GameState';
 import { MatchPhase, toMatchPhase } from '../game/GameFSM';
 
@@ -20,7 +20,7 @@ export class SnapshotPacket {
     const buffer = (outBuffer && outBuffer.byteLength === totalLength)
       ? outBuffer
       : (outBuffer && outBuffer.byteLength > totalLength ? outBuffer.slice(0, totalLength) : new ArrayBuffer(totalLength));
-    const view = new DataView(buffer);
+    const view = getCachedDataView(buffer);
 
     const phase = snapshot.matchPhase !== undefined
       ? snapshot.matchPhase
@@ -102,7 +102,7 @@ export class SnapshotPacket {
   }
 
   public static decode(buffer: ArrayBuffer | DataView): GameSnapshot | null {
-    const view = buffer instanceof DataView ? buffer : new DataView(buffer);
+    const view = getCachedDataView(buffer);
 
     if (view.byteLength < SnapshotPacket.HEADER_LENGTH) return null;
     if (view.getUint8(0) !== OP_SNAPSHOT) return null;

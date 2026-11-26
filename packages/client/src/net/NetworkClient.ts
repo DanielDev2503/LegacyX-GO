@@ -1,5 +1,5 @@
 import { BinaryProtocol, type GameStateSnapshot, type PlayerPosition } from '@legacyx/core';
-import { PeerConnection } from './PeerConnection';
+import { PeerConnection, type IceRouteLabel } from './PeerConnection';
 import { SignalingClient } from './SignalingClient';
 import { JitterBuffer } from './JitterBuffer';
 import type { PlayerInfo } from './NetworkHost';
@@ -33,7 +33,17 @@ export class NetworkClient {
   private boundOnRoomClosed!: (msg: any) => void;
   private boundOnRoomClosedNotice!: (msg: any) => void;
   private boundOnHostDisconnect!: (msg: any) => void;
+  private boundOnHostReconnecting!: (msg: any) => void;
+  private boundOnHostReconnected!: (msg: any) => void;
   private boundOnModerationNotice!: (msg: any) => void;
+
+  private signalQueue: Promise<void> = Promise.resolve();
+  public initialHandshakeConfirmed: boolean = false;
+  private handshakeRetryTimer: ReturnType<typeof setTimeout> | null = null;
+  private handshakeAttempts: number = 0;
+  private handshakeWaiters: Array<(ok: boolean) => void> = [];
+  private static readonly HANDSHAKE_RETRY_MS = 5000;
+  private static readonly MAX_HANDSHAKE_RETRIES = 3;
 
   public roomId: string = '';
   public roomName: string = '';
@@ -44,6 +54,16 @@ export class NetworkClient {
   public latestSnapshot: GameStateSnapshot | null = null;
   public activeGoalScorerId: number | null = null;
   public autoExtrapolationMs: number = 0;
+
+  // Telemetría real WebRTC + Packet Loss Zero-GC (Fase 4)
+  public packetLossPct: number = 0;
+  public iceRoute: IceRouteLabel = 'Unknown';
+  public webrtcRttMs: number = 0;
+  private lossWindowExpected: number = 0;
+  private lossWindowMissing: number = 0;
+  private lastLossTrackTick: number = -1;
+  private consecutiveStride2Count: number = 0;
+  private nominalSnapshotStride: number = 1;
 
   private highestSnapshotTick: number = -1;
   private lastSnapshotPhase: number | null = null;
@@ -72,7 +92,24 @@ export class NetworkClient {
 
   private nickname: string;
   private number: number;
-  private reusableInputBuffer = new ArrayBuffer(BinaryProtocol.MOUSE_INPUT_SIZE);
+  // Ring buffer Zero-GC de los últimos 3 inputs sin confirmar para redundancia 3x (OP_INPUT_BUNDLE)
+  private readonly inputHistory: Array<{
+    sequence: number;
+    tick: number;
+    inputMask: number;
+    aimAngle: number | null;
+    aimThrottle: number;
+  }> = [
+    { sequence: 0, tick: 0, inputMask: 0, aimAngle: null, aimThrottle: 0 },
+    { sequence: 0, tick: 0, inputMask: 0, aimAngle: null, aimThrottle: 0 },
+    { sequence: 0, tick: 0, inputMask: 0, aimAngle: null, aimThrottle: 0 }
+  ];
+  private inputHistoryCount: number = 0;
+  private readonly reusableBundleBuffers: [ArrayBuffer, ArrayBuffer, ArrayBuffer] = [
+    new ArrayBuffer(BinaryProtocol.INPUT_BUNDLE_HEADER_SIZE + BinaryProtocol.INPUT_BUNDLE_ENTRY_SIZE),
+    new ArrayBuffer(BinaryProtocol.INPUT_BUNDLE_HEADER_SIZE + BinaryProtocol.INPUT_BUNDLE_ENTRY_SIZE * 2),
+    new ArrayBuffer(BinaryProtocol.INPUT_BUNDLE_HEADER_SIZE + BinaryProtocol.INPUT_BUNDLE_ENTRY_SIZE * 3)
+  ];
   private pingIntervalId: ReturnType<typeof setInterval> | null = null;
 
   constructor(
@@ -95,6 +132,74 @@ export class NetworkClient {
     if (!this.peer && !this.isDisconnecting) {
       this.initPeerConnection();
     }
+  }
+
+  public waitForInitialHandshake(timeoutMs: number = 15_000): Promise<boolean> {
+    if (this.initialHandshakeConfirmed && this.localPlayerId !== null) {
+      return Promise.resolve(true);
+    }
+    if (this.isDisconnecting || this.roomClosedNotified) {
+      return Promise.resolve(false);
+    }
+    return new Promise<boolean>((resolve) => {
+      let settled = false;
+      const done = (ok: boolean) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(ok);
+      };
+      const timer = setTimeout(() => {
+        const idx = this.handshakeWaiters.indexOf(done);
+        if (idx !== -1) this.handshakeWaiters.splice(idx, 1);
+        done(false);
+      }, Math.max(1000, timeoutMs));
+      this.handshakeWaiters.push(done);
+    });
+  }
+
+  private resolveHandshakeWaiters(ok: boolean): void {
+    this.clearHandshakeRetryTimer();
+    const waiters = this.handshakeWaiters.splice(0);
+    for (let i = 0; i < waiters.length; i++) {
+      waiters[i]!(ok);
+    }
+  }
+
+  private clearHandshakeRetryTimer(): void {
+    if (this.handshakeRetryTimer) {
+      clearTimeout(this.handshakeRetryTimer);
+      this.handshakeRetryTimer = null;
+    }
+  }
+
+  private startAtomicHandshake(): void {
+    if (this.initialHandshakeConfirmed || this.isDisconnecting || !this.peer) return;
+    if (!this.peer.areChannelsOpen()) return;
+    this.helloSent = true;
+    this.handshakeAttempts = 1;
+    this.sendClientHello();
+    this.scheduleHandshakeRetry();
+  }
+
+  private scheduleHandshakeRetry(): void {
+    this.clearHandshakeRetryTimer();
+    if (this.initialHandshakeConfirmed || this.isDisconnecting) return;
+    this.handshakeRetryTimer = setTimeout(() => {
+      this.handshakeRetryTimer = null;
+      if (this.initialHandshakeConfirmed || this.isDisconnecting || !this.peer) return;
+      if (this.handshakeAttempts >= NetworkClient.MAX_HANDSHAKE_RETRIES) {
+        this.resolveHandshakeWaiters(false);
+        return;
+      }
+      this.handshakeAttempts++;
+      if (!this.peer.areChannelsOpen()) {
+        void this.peer.executeIceRestart();
+      } else {
+        this.sendClientHello();
+      }
+      this.scheduleHandshakeRetry();
+    }, NetworkClient.HANDSHAKE_RETRY_MS);
   }
 
   public updateProfile(nickname: string, profile: ClientProfileOptions = {}): void {
@@ -141,19 +246,30 @@ export class NetworkClient {
       }
     };
 
-    this.boundOnSignal = async (msg) => {
+    this.boundOnSignal = (msg) => {
       const fromPeerId = (msg.fromPeerId ?? msg.senderPeerId ?? msg.fromId) as string;
       if (!this.hostPeerId && fromPeerId) {
         this.hostPeerId = fromPeerId;
       }
-      if (fromPeerId === this.hostPeerId) {
-        if (!this.peer && !this.isDisconnecting) {
-          this.initPeerConnection();
-        }
-        if (this.peer) {
-          await this.peer.handleSignal(msg.data ?? msg);
-        }
-      }
+      if (fromPeerId !== this.hostPeerId) return;
+      // Garantiza orden estricto y espera iceConfigReady ANTES de instanciar RTCPeerConnection
+      this.signalQueue = this.signalQueue
+        .then(async () => {
+          if (this.isDisconnecting) return;
+          if (!this.peer) {
+            await this.signaling.whenIceReady();
+            if (this.isDisconnecting) return;
+            if (!this.peer) {
+              this.initPeerConnection();
+            }
+          }
+          if (this.peer) {
+            await this.peer.handleSignal(msg.data ?? msg);
+          }
+        })
+        .catch(() => {
+          // Ignore stale signal error during teardown
+        });
     };
 
     this.boundOnPeerLeft = (msg) => {
@@ -207,6 +323,18 @@ export class NetworkClient {
       );
     };
 
+    this.boundOnHostReconnecting = (msg) => {
+      if (msg?.roomId && this.roomId && msg.roomId !== this.roomId) return;
+      // Mantener el enlace P2P vivo durante la ventana de gracia del Host
+    };
+
+    this.boundOnHostReconnected = (msg) => {
+      if (msg?.roomId && this.roomId && msg.roomId !== this.roomId) return;
+      if (typeof msg?.hostPeerId === 'string' && msg.hostPeerId) {
+        this.hostPeerId = msg.hostPeerId;
+      }
+    };
+
     this.signaling.on('WELCOME', this.boundOnWelcome);
     this.signaling.on('JOIN_SUCCESS', this.boundOnJoinSuccess);
     this.signaling.on('SIGNAL', this.boundOnSignal);
@@ -215,6 +343,8 @@ export class NetworkClient {
     this.signaling.on('room_closed', this.boundOnRoomClosed);
     this.signaling.on('ROOM_CLOSED_NOTICE', this.boundOnRoomClosedNotice);
     this.signaling.on('HOST_DISCONNECT', this.boundOnHostDisconnect);
+    this.signaling.on('HOST_RECONNECTING', this.boundOnHostReconnecting);
+    this.signaling.on('HOST_RECONNECTED', this.boundOnHostReconnected);
     this.signaling.on('ROOM_MODERATION_NOTICE', this.boundOnModerationNotice);
   }
 
@@ -227,6 +357,8 @@ export class NetworkClient {
     this.signaling.off('room_closed', this.boundOnRoomClosed);
     this.signaling.off('ROOM_CLOSED_NOTICE', this.boundOnRoomClosedNotice);
     this.signaling.off('HOST_DISCONNECT', this.boundOnHostDisconnect);
+    this.signaling.off('HOST_RECONNECTING', this.boundOnHostReconnecting);
+    this.signaling.off('HOST_RECONNECTED', this.boundOnHostReconnected);
     this.signaling.off('ROOM_MODERATION_NOTICE', this.boundOnModerationNotice);
   }
 
@@ -244,8 +376,17 @@ export class NetworkClient {
   private initPeerConnection(): void {
     if (this.peer) return;
     this.helloSent = false;
+    this.inputHistoryCount = 0;
     this.highestSnapshotTick = -1;
     this.lastSnapshotPhase = null;
+    this.lastLossTrackTick = -1;
+    this.lossWindowExpected = 0;
+    this.lossWindowMissing = 0;
+    this.packetLossPct = 0;
+    this.iceRoute = 'Unknown';
+    this.webrtcRttMs = 0;
+    this.consecutiveStride2Count = 0;
+    this.nominalSnapshotStride = 1;
     this.peer = new PeerConnection({
       peerId: this.hostPeerId,
       isInitiator: false,
@@ -275,6 +416,35 @@ export class NetworkClient {
 
         if (!isMonotonic) return;
 
+        // Medición real de pérdida de paquetes UDP por saltos de secuencia de snapshots (Zero-GC)
+        if (this.lastLossTrackTick >= 0 && snapshot.tick > this.lastLossTrackTick) {
+          const deltaTicks = snapshot.tick - this.lastLossTrackTick;
+          if (deltaTicks < 120) {
+            if (deltaTicks === 2) {
+              this.consecutiveStride2Count = Math.min(10, this.consecutiveStride2Count + 1);
+              if (this.consecutiveStride2Count >= 4) {
+                this.nominalSnapshotStride = 2;
+              }
+            } else if (deltaTicks === 1) {
+              this.consecutiveStride2Count = 0;
+              this.nominalSnapshotStride = 1;
+            }
+            const stride = this.nominalSnapshotStride;
+            const expectedPackets = Math.max(1, Math.round(deltaTicks / stride));
+            const missingPackets = Math.max(0, expectedPackets - 1);
+            this.lossWindowExpected += expectedPackets;
+            this.lossWindowMissing += missingPackets;
+            if (this.lossWindowExpected >= 30) {
+              const rawPct = (this.lossWindowMissing / this.lossWindowExpected) * 100;
+              this.packetLossPct = Math.round(Math.min(100, rawPct) * 10) / 10;
+              // Decaimiento suave de ventana para reaccionar rápido a cambios de red
+              this.lossWindowExpected = Math.floor(this.lossWindowExpected * 0.5);
+              this.lossWindowMissing = Math.floor(this.lossWindowMissing * 0.5);
+            }
+          }
+        }
+        this.lastLossTrackTick = snapshot.tick;
+
         this.highestSnapshotTick = snapshot.tick;
         this.lastSnapshotPhase = snapshot.phase;
         this.latestSnapshot = snapshot;
@@ -291,8 +461,7 @@ export class NetworkClient {
       },
       onConnected: () => {
         if (!this.helloSent) {
-          this.helloSent = true;
-          this.sendClientHello();
+          this.startAtomicHandshake();
         }
         this.startPingProbe();
       },
@@ -311,6 +480,13 @@ export class NetworkClient {
         this.onDisconnected?.();
       }
     });
+    this.peer.onStatsUpdated = (stats) => {
+      this.webrtcRttMs = stats.rttMs;
+      this.iceRoute = stats.iceRoute;
+      if (stats.rttMs > 0 && this.rttSamples.length === 0) {
+        gameUI.recordTelemetrySample(stats.rttMs, gameUI.fps);
+      }
+    };
   }
 
   private updateActiveGoalScorerId(nextId: number | null): void {
@@ -387,6 +563,10 @@ export class NetworkClient {
       this.onRoomStateSync?.(msg);
       this.onPlayerListUpdated?.(this.players);
       if (this.localPlayerId !== null) {
+        if (!this.initialHandshakeConfirmed) {
+          this.initialHandshakeConfirmed = true;
+          this.resolveHandshakeWaiters(true);
+        }
         this.onConnected?.(this.localPlayerId);
       }
     } else if (msg.type === 'PLAYER_LIST') {
@@ -514,14 +694,48 @@ export class NetworkClient {
     aimThrottle: number = 1
   ): void {
     if (!this.peer) return;
-    const buffer = BinaryProtocol.encodeInput(
-      {
-        tick,
-        inputMask,
-        aimAngle,
-        aimThrottle
-      },
-      this.reusableInputBuffer
+    const seq = tick >>> 0;
+    const normalizedAngle = aimAngle ?? null;
+    const normalizedThrottle = aimAngle !== null && aimAngle !== undefined ? aimThrottle : 0;
+
+    if (this.inputHistoryCount > 0 && this.inputHistory[0]!.sequence === seq) {
+      // Mismo seq (p. ej. despacho inmediato por flanco ascendente + tick 60 Hz): fusionar bits críticos sin alocar
+      this.inputHistory[0]!.inputMask |= inputMask;
+      this.inputHistory[0]!.aimAngle = normalizedAngle;
+      this.inputHistory[0]!.aimThrottle = normalizedThrottle;
+    } else {
+      // Desplazar [1] -> [2], [0] -> [1] in-place (Zero-GC)
+      const h2 = this.inputHistory[2]!;
+      const h1 = this.inputHistory[1]!;
+      const h0 = this.inputHistory[0]!;
+      h2.sequence = h1.sequence;
+      h2.tick = h1.tick;
+      h2.inputMask = h1.inputMask;
+      h2.aimAngle = h1.aimAngle;
+      h2.aimThrottle = h1.aimThrottle;
+
+      h1.sequence = h0.sequence;
+      h1.tick = h0.tick;
+      h1.inputMask = h0.inputMask;
+      h1.aimAngle = h0.aimAngle;
+      h1.aimThrottle = h0.aimThrottle;
+
+      h0.sequence = seq;
+      h0.tick = seq;
+      h0.inputMask = inputMask;
+      h0.aimAngle = normalizedAngle;
+      h0.aimThrottle = normalizedThrottle;
+
+      if (this.inputHistoryCount < 3) {
+        this.inputHistoryCount++;
+      }
+    }
+
+    const count = this.inputHistoryCount;
+    const buffer = BinaryProtocol.encodeInputBundle(
+      this.inputHistory,
+      count,
+      this.reusableBundleBuffers[count - 1]
     );
     this.peer.sendUnreliable(buffer);
   }
@@ -616,7 +830,7 @@ export class NetworkClient {
     } else {
       jb.autoExtrapolationMs = clamped;
     }
-    const targetDelay = Math.max(28, Math.min(60, 28 + clamped * 0.25));
+    const targetDelay = Math.max(28, Math.min(100, 28 + clamped * 0.25));
     jb.interpolationDelayMs = jb.interpolationDelayMs * 0.8 + targetDelay * 0.2;
   }
 
@@ -683,6 +897,8 @@ export class NetworkClient {
 
   public disconnect(): void {
     this.isDisconnecting = true;
+    this.inputHistoryCount = 0;
+    this.resolveHandshakeWaiters(false);
     this.stopPingProbe();
     this.highestSnapshotTick = -1;
     this.lastSnapshotPhase = null;

@@ -1,5 +1,5 @@
-import { BinaryProtocol, PLAYER_POSITIONS, type PlayerPosition } from '@legacyx/core';
-import { PeerConnection } from './PeerConnection';
+import { BinaryProtocol, PLAYER_POSITIONS, type PlayerInput, type PlayerPosition } from '@legacyx/core';
+import { PeerConnection, SCTP_BACKPRESSURE_LIMIT_BYTES } from './PeerConnection';
 import { SignalingClient } from './SignalingClient';
 import { canChangeTeam } from './ClientPrediction';
 
@@ -40,7 +40,10 @@ export class NetworkHost {
   private pendingNicknames = new Map<string, string>();
   private players = new Map<number, PlayerInfo>();
   private bannedPeerIds = new Set<string>();
+  private welcomedPeers = new Set<string>();
   private lastChatAtByPlayerId = new Map<number, number>();
+  private readonly decodedInputScratch: PlayerInput[] = [{}, {}, {}];
+  private snapshotTickCounter = 0;
   private pendingClosePeers = new Map<ReturnType<typeof setTimeout>, PeerConnection>();
   private nextPlayerId = 2; // 1 is reserved for Host local player
   private nextTeamOrder = 1;
@@ -60,6 +63,7 @@ export class NetworkHost {
   private boundOnSignal!: (msg: any) => void;
   private boundOnRtcPingSignal!: (msg: any) => void;
   private boundOnPeerLeft!: (msg: any) => void;
+  private boundOnRoomReclaimed!: (msg: any) => void;
 
   public onPlayerInput?: (
     playerId: number,
@@ -181,11 +185,19 @@ export class NetworkHost {
       this.handlePeerDisconnect(msg.peerId as string);
     };
 
+    this.boundOnRoomReclaimed = (msg) => {
+      const host = this.players.get(1);
+      if (host && typeof msg?.hostPeerId === 'string' && msg.hostPeerId) {
+        host.peerId = msg.hostPeerId;
+      }
+    };
+
     this.signaling.on('WELCOME', this.boundOnWelcome);
     this.signaling.on('PEER_JOINED', this.boundOnPeerJoined);
     this.signaling.on('SIGNAL', this.boundOnSignal);
     this.signaling.on('RTC_PING_SIGNAL', this.boundOnRtcPingSignal);
     this.signaling.on('PEER_LEFT', this.boundOnPeerLeft);
+    this.signaling.on('ROOM_RECLAIMED', this.boundOnRoomReclaimed);
   }
 
   private cleanupSignalingListeners(): void {
@@ -194,6 +206,7 @@ export class NetworkHost {
     this.signaling.off('SIGNAL', this.boundOnSignal);
     this.signaling.off('RTC_PING_SIGNAL', this.boundOnRtcPingSignal);
     this.signaling.off('PEER_LEFT', this.boundOnPeerLeft);
+    this.signaling.off('ROOM_RECLAIMED', this.boundOnRoomReclaimed);
   }
 
   private cleanupProbePeer(probeKey: string): void {
@@ -374,8 +387,9 @@ export class NetworkHost {
       onUnreliableInput: (buffer: ArrayBuffer) => {
         const playerId = this.peerToPlayerId.get(peerId);
         if (playerId !== undefined) {
-          const decoded = BinaryProtocol.decodeInput(buffer);
-          if (decoded) {
+          const count = BinaryProtocol.decodeInputBundleInto(buffer, this.decodedInputScratch);
+          for (let i = 0; i < count; i++) {
+            const decoded = this.decodedInputScratch[i]!;
             this.onPlayerInput?.(
               playerId,
               decoded.inputMask ?? 0,
@@ -488,10 +502,21 @@ export class NetworkHost {
       }
 
       this.onPlayersUpdated?.(this.getPlayers());
-      this.broadcastRoomStateSync();
       if (isHello) {
-        this.broadcastSystemNotice(`${player.nickname} se ha unido a la sala`);
+        const peer = this.peers.get(peerId);
+        if (peer) {
+          const syncPayload = this.buildRoomStateSyncPayload(playerId);
+          peer.sendReliable({
+            ...syncPayload,
+            type: 'INITIAL_STATE_PACKET'
+          });
+        }
+        if (!this.welcomedPeers.has(peerId)) {
+          this.welcomedPeers.add(peerId);
+          this.broadcastSystemNotice(`${player.nickname} se ha unido a la sala`);
+        }
       }
+      this.broadcastRoomStateSync();
     } else if (msg.type === 'PING_PROBE') {
       const peer = this.peers.get(peerId);
       peer?.sendUnreliableMessage({
@@ -953,6 +978,7 @@ export class NetworkHost {
       }
     }
     this.pendingNicknames.delete(peerId);
+    this.welcomedPeers.delete(peerId);
 
     const playerId = this.peerToPlayerId.get(peerId);
     if (playerId !== undefined) {
@@ -970,9 +996,24 @@ export class NetworkHost {
     }
   }
 
-  public broadcastSnapshot(buffer: ArrayBuffer): void {
+  public broadcastSnapshot(
+    buffer: ArrayBuffer,
+    opts?: { forceImmediate?: boolean }
+  ): void {
+    this.snapshotTickCounter = (this.snapshotTickCounter + 1) >>> 0;
+    const forceImmediate = Boolean(opts?.forceImmediate);
+    const highPlayerDensity = this.players.size >= 6;
+    const isEvenTick = (this.snapshotTickCounter & 1) === 0;
+
     this.peers.forEach((peer) => {
-      if (peer.unreliableBufferedAmount > 32768) return;
+      // Backpressure SCTP estricto (16 KB): omite snapshot para evitar bufferbloat
+      if (peer.unreliableBufferedAmount > SCTP_BACKPRESSURE_LIMIT_BYTES) return;
+      // Tasa adaptativa 30–60 Hz si >= 6 jugadores o enlace TURN relay congestionado
+      const isCongestedRelay =
+        peer.candidateType === 'relay' && peer.unreliableBufferedAmount > 4096;
+      if (!forceImmediate && (highPlayerDensity || isCongestedRelay) && !isEvenTick) {
+        return;
+      }
       peer.sendUnreliable(buffer);
     });
   }
@@ -1081,6 +1122,22 @@ export class NetworkHost {
     });
   }
 
+  public getPrimaryIceRoute(): string {
+    if (this.peers.size === 0) return 'Host Local';
+    let hasRelay = false;
+    let hasStun = false;
+    let hasLan = false;
+    for (const peer of this.peers.values()) {
+      if (peer.iceRoute === 'Relay (TURN)') hasRelay = true;
+      else if (peer.iceRoute === 'Direct P2P (STUN/srflx)') hasStun = true;
+      else if (peer.iceRoute === 'Direct P2P (LAN/host)') hasLan = true;
+    }
+    if (hasRelay) return 'Relay (TURN)';
+    if (hasStun) return 'Direct P2P (STUN/srflx)';
+    if (hasLan) return 'Direct P2P (LAN/host)';
+    return 'Host Local';
+  }
+
   public getPlayers(): PlayerInfo[] {
     return Array.from(this.players.values()).sort((a, b) => {
       const aActive = a.team === 'red' || a.team === 'blue';
@@ -1119,6 +1176,7 @@ export class NetworkHost {
     this.peers.clear();
     this.peerToPlayerId.clear();
     this.pendingNicknames.clear();
+    this.welcomedPeers.clear();
     this.lastChatAtByPlayerId.clear();
   }
 }

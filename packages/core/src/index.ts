@@ -544,18 +544,49 @@ export class EngineInstance {
     }
   }
 
+  private readonly scratchKickoffContext = {
+    active: true,
+    possessingTeam: 'red' as 'red' | 'blue' | null,
+    centerRadius: 80
+  };
+  private readonly scratchKinematicsState: PlayerKinematicsState = {
+    pos: { x: 0, y: 0 },
+    vel: { x: 0, y: 0 },
+    radius: 15,
+    stamina: 100,
+    staminaIdleTimer: 0,
+    staminaRegenUnlocked: false,
+    isDashing: false,
+    dashTicksRemaining: 0,
+    dashCooldownTimer: 0,
+    dashSlowdownTimer: 0,
+    dashDirX: 0,
+    dashDirY: 0,
+    isTurbo: false,
+    kicking: false,
+    prevDashState: false,
+    team: 'spec'
+  };
+  private readonly scratchKinematicsInput = {
+    inputMask: 0,
+    aimAngle: null as number | null | undefined,
+    aimThrottle: 0 as number | undefined
+  };
+  private static readonly SKIP_SUBSTEPS_OPTIONS = { skipSubsteps: true };
+
   private enforceEngineKickoffBarriers(): void {
     if (this.fsm.state !== MatchPhase.KICKOFF || this.shouldBypassKickoffBarriers()) {
       this.world.kickoffContext = null;
       return;
     }
-    this.world.kickoffContext = this.isNeutralKickoff
-      ? null
-      : {
-          active: true,
-          possessingTeam: this.kickoffPossessingTeam,
-          centerRadius: this.stadium.centerRadius ?? 80
-        };
+    if (this.isNeutralKickoff) {
+      this.world.kickoffContext = null;
+    } else {
+      this.scratchKickoffContext.active = true;
+      this.scratchKickoffContext.possessingTeam = this.kickoffPossessingTeam;
+      this.scratchKickoffContext.centerRadius = this.stadium.centerRadius ?? 80;
+      this.world.kickoffContext = this.scratchKickoffContext;
+    }
     for (const [id, player] of this.players.entries()) {
       this.enforceKickoffBarrierForPlayer(id, player);
     }
@@ -1002,37 +1033,38 @@ export class EngineInstance {
         const mask = input ? (input.inputMask ?? 0) : 0;
         player.isTyping = Boolean(mask & INPUT_FLAG_TYPING);
 
-        const pState: PlayerKinematicsState = {
-          pos: player.pos,
-          vel: player.vel,
-          radius: player.radius,
-          stamina: player.stamina,
-          staminaIdleTimer: rt.staminaIdleTimer,
-          staminaRegenUnlocked: rt.staminaRegenUnlocked,
-          isDashing: player.isDashing,
-          dashTicksRemaining: rt.ticksRemaining,
-          dashCooldownTimer: rt.cooldownTimer,
-          dashSlowdownTimer: rt.slowdownTimer,
-          dashDirX: rt.dirX,
-          dashDirY: rt.dirY,
-          isTurbo: player.isTurbo,
-          kicking: player.kicking,
-          prevDashState: rt.prevDashDown,
-          team: this.playerTeams.get(id) ?? 'spec'
-        };
+        const pState = this.scratchKinematicsState;
+        pState.pos = player.pos;
+        pState.vel = player.vel;
+        pState.radius = player.radius;
+        pState.stamina = player.stamina;
+        pState.staminaIdleTimer = rt.staminaIdleTimer;
+        pState.staminaRegenUnlocked = rt.staminaRegenUnlocked;
+        pState.isDashing = player.isDashing;
+        pState.dashTicksRemaining = rt.ticksRemaining;
+        pState.dashCooldownTimer = rt.cooldownTimer;
+        pState.dashSlowdownTimer = rt.slowdownTimer;
+        pState.dashDirX = rt.dirX;
+        pState.dashDirY = rt.dirY;
+        pState.isTurbo = player.isTurbo;
+        pState.kicking = player.kicking;
+        pState.prevDashState = rt.prevDashDown;
+        pState.triggerDash = false;
+        pState.team = this.playerTeams.get(id) ?? 'spec';
+
+        const kInput = this.scratchKinematicsInput;
+        kInput.inputMask = mask;
+        kInput.aimAngle = input ? input.aimAngle : null;
+        kInput.aimThrottle = input ? input.aimThrottle : 0;
 
         stepPlayerKinematics(
           pState,
-          {
-            inputMask: mask,
-            aimAngle: input ? input.aimAngle : null,
-            aimThrottle: input ? input.aimThrottle : 0
-          },
+          kInput,
           this.stadium,
           null,
           this.modifiers as any,
           CORE_DT,
-          { skipSubsteps: true }
+          EngineInstance.SKIP_SUBSTEPS_OPTIONS
         );
 
         player.stamina = pState.stamina;

@@ -74,6 +74,29 @@ export interface StepKinematicsOptions {
   skipSubsteps?: boolean;
 }
 
+// Objetos scratch preasignados a nivel de módulo para Zero-GC en stepPlayerKinematics (60–240 Hz)
+const SCRATCH_BOUNDARIES: StadiumBoundariesConfig = {
+  halfWidth: 600,
+  halfHeight: 270,
+  goalHalfHeight: 85,
+  goalDepth: 35,
+  runOff: 0,
+  postRadius: 8
+};
+
+const SCRATCH_KINEMATICS_DISC = new Disc({
+  id: 99999,
+  x: 0,
+  y: 0,
+  radius: 15,
+  mass: 2,
+  damping: 0.96,
+  bounciness: 0.5,
+  cGroup: COLLISION_GROUP_RED,
+  cMask: COLLISION_GROUP_ALL,
+  isBall: false
+});
+
 /**
  * Deterministic, Zero-GC isomorphic player kinematics step.
  * Executes exactly 1 tick (dt = 1/60s, SUBSTEPS = 4) identically on Host and Client.
@@ -330,18 +353,16 @@ export function stepPlayerKinematics(
   const subDamping = Math.pow(playerFriction, 1 / SUBSTEPS);
 
   const teamStr: 'red' | 'blue' = (player.team === 'blue' || player.team === 2) ? 'blue' : 'red';
-  const boundariesConfig: StadiumBoundariesConfig = {
-    halfWidth: (stadium as any)?.halfWidth ?? 600,
-    halfHeight: (stadium as any)?.halfHeight ?? 270,
-    goalHalfHeight: (stadium as any)?.goalHalfHeight ?? 85,
-    goalDepth: (stadium as any)?.goalDepth ?? 35,
-    runOff: (stadium as any)?.runOff ?? 0,
-    postRadius: (stadium as any)?.postRadius ?? 8
-  };
+  SCRATCH_BOUNDARIES.halfWidth = (stadium as any)?.halfWidth ?? 600;
+  SCRATCH_BOUNDARIES.halfHeight = (stadium as any)?.halfHeight ?? 270;
+  SCRATCH_BOUNDARIES.goalHalfHeight = (stadium as any)?.goalHalfHeight ?? 85;
+  SCRATCH_BOUNDARIES.goalDepth = (stadium as any)?.goalDepth ?? 35;
+  SCRATCH_BOUNDARIES.runOff = (stadium as any)?.runOff ?? 0;
+  SCRATCH_BOUNDARIES.postRadius = (stadium as any)?.postRadius ?? 8;
 
   const centerRadius = kickoff?.centerRadius ?? ((stadium as any)?.centerRadius ?? 80);
 
-  // Scratch Disc for segment/post resolution if stadium has explicit segments
+  // Reutilizar SCRATCH_KINEMATICS_DISC preasignado (Zero-GC) si el estadio tiene segmentos explícitos
   let scratchDisc: Disc | null = null;
   const stadiumSegments = (stadium && 'segments' in stadium && Array.isArray((stadium as any).segments))
     ? (stadium as any).segments
@@ -351,18 +372,15 @@ export function stepPlayerKinematics(
     : null;
 
   if (stadiumSegments && stadiumSegments.length > 0) {
-    scratchDisc = new Disc({
-      id: 99999,
-      x: player.pos.x,
-      y: player.pos.y,
-      radius: player.radius,
-      mass: 2,
-      damping: playerFriction,
-      bounciness: 0.5,
-      cGroup: teamStr === 'red' ? COLLISION_GROUP_RED : COLLISION_GROUP_BLUE,
-      cMask: COLLISION_GROUP_ALL,
-      isBall: false
-    });
+    scratchDisc = SCRATCH_KINEMATICS_DISC;
+    scratchDisc.pos.x = player.pos.x;
+    scratchDisc.pos.y = player.pos.y;
+    scratchDisc.vel.x = player.vel.x;
+    scratchDisc.vel.y = player.vel.y;
+    scratchDisc.radius = player.radius;
+    scratchDisc.damping = playerFriction;
+    scratchDisc.cGroup = teamStr === 'red' ? COLLISION_GROUP_RED : COLLISION_GROUP_BLUE;
+    scratchDisc.cMask = COLLISION_GROUP_ALL;
   }
 
   for (let s = 0; s < SUBSTEPS; s++) {
@@ -392,7 +410,7 @@ export function stepPlayerKinematics(
       player.vel.x = scratchDisc.vel.x;
       player.vel.y = scratchDisc.vel.y;
     } else {
-      resolveGoalAndPitchBoundaries(player.pos, player.vel, player.radius, boundariesConfig);
+      resolveGoalAndPitchBoundaries(player.pos, player.vel, player.radius, SCRATCH_BOUNDARIES);
     }
 
     // 6d. Kickoff barrier enforcement

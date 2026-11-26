@@ -8,13 +8,31 @@
   let displayPing = $state(0);
   let displayFps = $state(60);
   let displayJitter = $state(0);
+  let displayLoss = $state(0);
+  let displayReconciles = $state(0);
+  let displayIceRoute = $state('Local');
   let sparkCanvas = $state<HTMLCanvasElement | null>(null);
+
+  let shortIceBadge = $derived(
+    displayIceRoute.includes('TURN')
+      ? 'TURN'
+      : displayIceRoute.includes('STUN')
+        ? 'STUN'
+        : displayIceRoute.includes('LAN')
+          ? 'LAN'
+          : displayIceRoute.includes('Host')
+            ? 'HOST'
+            : 'P2P'
+  );
 
   $effect(() => {
     const interval = setInterval(() => {
       displayPing = Math.round(gameUI.pingMs);
       displayFps = Math.round(gameUI.fps);
       displayJitter = Math.round(gameUI.jitterMs);
+      displayLoss = gameUI.packetLossPct;
+      displayReconciles = gameUI.reconciliationsPerSec;
+      displayIceRoute = gameUI.iceRoute;
 
       pingHistory[headIndex] = displayPing;
       headIndex = (headIndex + 1) % HISTORY_SIZE;
@@ -59,7 +77,19 @@
       </div>
       <div class="metric">
         <span class="label">JIT</span>
-        <strong>{displayJitter} ms</strong>
+        <strong class:warn={displayJitter > 25}>{displayJitter} ms</strong>
+      </div>
+      <div class="metric">
+        <span class="label">LOSS</span>
+        <strong class:warn={displayLoss >= 2}>{displayLoss.toFixed(1)}%</strong>
+      </div>
+      <div class="metric">
+        <span class="label">REC</span>
+        <strong>{displayReconciles}/s</strong>
+      </div>
+      <div class="metric" title={displayIceRoute}>
+        <span class="label">ICE</span>
+        <strong class:relay={shortIceBadge === 'TURN'}>{shortIceBadge}</strong>
       </div>
     </div>
     <canvas bind:this={sparkCanvas} width="72" height="24" class="sparkline"></canvas>
@@ -108,6 +138,10 @@
 
   strong.warn {
     color: #f59e0b;
+  }
+
+  strong.relay {
+    color: #a855f7;
   }
 
   .sparkline {

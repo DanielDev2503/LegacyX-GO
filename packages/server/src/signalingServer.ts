@@ -1,7 +1,7 @@
 import { WebSocketServer, WebSocket } from 'ws';
 import type { IncomingMessage } from 'node:http';
 import { randomUUID } from 'node:crypto';
-import { RoomRegistry, MAX_ROOM_PLAYERS } from './rooms/RoomRegistry.js';
+import { RoomRegistry, MAX_ROOM_PLAYERS, DEFAULT_HOST_GRACE_MS } from './rooms/RoomRegistry.js';
 import {
   authService,
   canCreateRankedRoom,
@@ -36,7 +36,10 @@ export interface Room {
   pendingPeers?: Map<string, WebSocket>;
 }
 
-const HEARTBEAT_INTERVAL_MS = 10_000;
+const HEARTBEAT_INTERVAL_MS = 15_000;
+const DEFAULT_ICE_CACHE_TTL_MS = 12 * 60 * 60 * 1000;
+const ICE_CREDENTIAL_SAFETY_MARGIN_MS = 5 * 60 * 1000;
+const ICE_PROACTIVE_REFRESH_FRACTION = 0.1;
 
 interface AliveWebSocket extends WebSocket {
   isAlive: boolean;
@@ -149,51 +152,104 @@ export function resolveCountryCode(opts: {
 
 let cachedIceServers: RTCIceServer[] | null = null;
 let cacheExpiry = 0;
+let cacheTtlMs = DEFAULT_ICE_CACHE_TTL_MS;
+let inFlightIceFetch: Promise<RTCIceServer[]> | null = null;
+
+function computeIceCacheExpiry(servers: RTCIceServer[], now: number): { expiry: number; ttlMs: number } {
+  const configuredTtl = Number(process.env.METERED_ICE_TTL_MS);
+  const baseTtl =
+    Number.isFinite(configuredTtl) && configuredTtl >= 60_000 ? Math.floor(configuredTtl) : DEFAULT_ICE_CACHE_TTL_MS;
+  let expiry = now + baseTtl;
+
+  // Detecta credenciales TURN con marca de tiempo Unix (<unix_ts>:<user>) para renovar antes de caducar
+  for (const s of servers) {
+    if (typeof s.username !== 'string') continue;
+    const match = /^(\d{9,11}):/.exec(s.username.trim());
+    if (!match?.[1]) continue;
+    const credExpMs = Number(match[1]) * 1000;
+    if (Number.isFinite(credExpMs) && credExpMs > now + 60_000) {
+      const safeExp = Math.max(now + 60_000, credExpMs - ICE_CREDENTIAL_SAFETY_MARGIN_MS);
+      if (safeExp < expiry) {
+        expiry = safeExp;
+      }
+    }
+  }
+
+  return { expiry, ttlMs: Math.max(60_000, expiry - now) };
+}
+
+async function fetchFreshMeteredIceServers(cleanDomain: string, apiKey: string): Promise<RTCIceServer[]> {
+  if (inFlightIceFetch) {
+    return inFlightIceFetch;
+  }
+
+  const task = (async () => {
+    const now = Date.now();
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 6000);
+
+      const url = `https://${cleanDomain}/api/v1/turn/credentials?apiKey=${apiKey}`;
+      const res = await fetch(url, { signal: controller.signal });
+      clearTimeout(timeout);
+
+      if (!res.ok) {
+        throw new Error(`Metered API status ${res.status}: ${await res.text()}`);
+      }
+
+      const servers = (await res.json()) as RTCIceServer[];
+      if (Array.isArray(servers) && servers.length > 0) {
+        cachedIceServers = servers;
+        const computed = computeIceCacheExpiry(servers, now);
+        cacheExpiry = computed.expiry;
+        cacheTtlMs = computed.ttlMs;
+        console.log(`[SignalingServer] ${servers.length} servidores ICE cacheados exitosamente.`);
+        return cachedIceServers;
+      }
+      throw new Error('Respuesta inválida de Metered');
+    } catch (err) {
+      console.error('[SignalingServer] Error consultando Metered.ca:', err);
+      if (cachedIceServers && Date.now() < cacheExpiry) {
+        return cachedIceServers;
+      }
+      return [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }];
+    } finally {
+      inFlightIceFetch = null;
+    }
+  })();
+
+  inFlightIceFetch = task;
+  return task;
+}
 
 export async function getMeteredIceServers(): Promise<RTCIceServer[]> {
   const now = Date.now();
-  if (cachedIceServers && now < cacheExpiry) {
-    return cachedIceServers;
-  }
-
   const rawDomain = process.env.METERED_DOMAIN || '';
   const cleanDomain = rawDomain.replace(/^https?:\/\//i, '').replace(/\/+$/, '').trim();
   const apiKey = (process.env.METERED_API_KEY || '').trim();
+
+  if (cachedIceServers && now < cacheExpiry) {
+    // Renovación proactiva en segundo plano cuando queda menos del 10% del TTL
+    const remainingMs = cacheExpiry - now;
+    if (cleanDomain && apiKey && !inFlightIceFetch && remainingMs < cacheTtlMs * ICE_PROACTIVE_REFRESH_FRACTION) {
+      void fetchFreshMeteredIceServers(cleanDomain, apiKey);
+    }
+    return cachedIceServers;
+  }
 
   if (!cleanDomain || !apiKey) {
     console.warn('[SignalingServer] METERED_DOMAIN o METERED_API_KEY no configurados. Usando STUN público.');
     return [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }];
   }
 
-  try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 6000);
-
-    const url = `https://${cleanDomain}/api/v1/turn/credentials?apiKey=${apiKey}`;
-    const res = await fetch(url, { signal: controller.signal });
-    clearTimeout(timeout);
-
-    if (!res.ok) {
-      throw new Error(`Metered API status ${res.status}: ${await res.text()}`);
-    }
-
-    const servers = (await res.json()) as RTCIceServer[];
-    if (Array.isArray(servers) && servers.length > 0) {
-      cachedIceServers = servers;
-      cacheExpiry = now + 12 * 60 * 60 * 1000;
-      console.log(`[SignalingServer] ${servers.length} servidores ICE cacheados exitosamente.`);
-      return cachedIceServers;
-    }
-    throw new Error('Respuesta inválida de Metered');
-  } catch (err) {
-    console.error('[SignalingServer] Error consultando Metered.ca:', err);
-    return [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }];
-  }
+  return fetchFreshMeteredIceServers(cleanDomain, apiKey);
 }
 
 export function resetCachedIceServers(): void {
   cachedIceServers = null;
   cacheExpiry = 0;
+  cacheTtlMs = DEFAULT_ICE_CACHE_TTL_MS;
+  inFlightIceFetch = null;
 }
 
 export const getProvisionedIceServers = getMeteredIceServers;
@@ -203,6 +259,8 @@ export const registry = new RoomRegistry();
 
 export interface SignalingServerOptions {
   pingProbeTimeoutMs?: number;
+  hostGraceMs?: number;
+  heartbeatIntervalMs?: number;
 }
 
 export function setupSignalingServer(wss: WebSocketServer, options?: SignalingServerOptions) {
@@ -222,6 +280,52 @@ export function setupSignalingServer(wss: WebSocketServer, options?: SignalingSe
     }
   >();
   const pingProbeTimeoutMs = Math.max(20, options?.pingProbeTimeoutMs ?? 2500);
+  const hostGraceMs = Math.max(50, options?.hostGraceMs ?? DEFAULT_HOST_GRACE_MS);
+  const heartbeatIntervalMs = Math.max(50, options?.heartbeatIntervalMs ?? HEARTBEAT_INTERVAL_MS);
+  const hostGraceTimers = new Map<string, NodeJS.Timeout>();
+
+  function clearHostGraceTimer(roomId: string): void {
+    const t = hostGraceTimers.get(roomId);
+    if (t) {
+      clearTimeout(t);
+      hostGraceTimers.delete(roomId);
+    }
+  }
+
+  function notifyRoomDestroyed(room: { id: string; name: string; guests: Iterable<string> }): void {
+    for (const guestId of room.guests) {
+      const targetSock = peerSockets.get(guestId);
+      if (targetSock) {
+        send(targetSock, {
+          type: 'room_closed',
+          roomId: room.id,
+          reason: 'El anfitrión ha abandonado la sala.'
+        });
+        send(targetSock, {
+          type: 'HOST_DISCONNECT',
+          roomId: room.id
+        });
+        send(targetSock, {
+          type: 'ROOM_CLOSED_NOTICE',
+          roomId: room.id,
+          roomName: room.name,
+          message: 'La sala ha sido cerrada por el anfitrión.'
+        });
+      }
+    }
+  }
+
+  function finalizeExpiredHostRoom(roomId: string): void {
+    clearHostGraceTimer(roomId);
+    const room = registry.getRoomById(roomId);
+    if (!room || room.hostDisconnectedAt == null) return;
+    const removed = registry.deleteRoom(roomId);
+    if (removed) {
+      maybeAbortRankedRoomMatch(removed);
+      notifyRoomDestroyed(removed);
+      broadcastRoomList();
+    }
+  }
 
   function send(ws: WebSocket, data: object): void {
     if (ws && ws.readyState === WebSocket.OPEN) {
@@ -394,38 +498,53 @@ export function setupSignalingServer(wss: WebSocketServer, options?: SignalingSe
     }
   }
 
-  function handlePeerLeave(peerIdsToLeave: Iterable<string>, explicitRoomId?: string): boolean {
+  function handlePeerLeave(
+    peerIdsToLeave: Iterable<string>,
+    explicitRoomId?: string,
+    opts?: { allowHostGrace?: boolean }
+  ): boolean {
     let anyChanged = false;
     const processedRooms = new Set<string>();
+    const allowHostGrace = Boolean(opts?.allowHostGrace);
 
     for (const pid of peerIdsToLeave) {
+      const currentRoom = registry.getRoomOfPeer(pid);
+      if (allowHostGrace && currentRoom && currentRoom.hostPeerId === pid && !processedRooms.has(currentRoom.id)) {
+        const marked = registry.markHostDisconnected(pid, hostGraceMs);
+        if (marked) {
+          processedRooms.add(marked.room.id);
+          anyChanged = true;
+          clearHostGraceTimer(marked.room.id);
+          const timer = setTimeout(() => {
+            finalizeExpiredHostRoom(marked.room.id);
+          }, marked.graceMs);
+          hostGraceTimers.set(marked.room.id, timer);
+          for (const guestId of marked.notify) {
+            const targetSock = peerSockets.get(guestId);
+            if (targetSock) {
+              send(targetSock, {
+                type: 'HOST_RECONNECTING',
+                roomId: marked.room.id,
+                graceMs: marked.graceMs
+              });
+            }
+          }
+          continue;
+        }
+      }
+
       const left = registry.leaveRoom(pid);
       if (left && !processedRooms.has(left.room.id)) {
         processedRooms.add(left.room.id);
         anyChanged = true;
         if (left.destroyed) {
+          clearHostGraceTimer(left.room.id);
           maybeAbortRankedRoomMatch(left.room);
-        }
-        for (const notifyPeerId of left.notify) {
-          const targetSock = peerSockets.get(notifyPeerId);
-          if (targetSock) {
-            if (left.destroyed) {
-              send(targetSock, {
-                type: 'room_closed',
-                roomId: left.room.id,
-                reason: 'El anfitrión ha abandonado la sala.'
-              });
-              send(targetSock, {
-                type: 'HOST_DISCONNECT',
-                roomId: left.room.id
-              });
-              send(targetSock, {
-                type: 'ROOM_CLOSED_NOTICE',
-                roomId: left.room.id,
-                roomName: left.room.name,
-                message: 'La sala ha sido cerrada por el anfitrión.'
-              });
-            } else {
+          notifyRoomDestroyed({ id: left.room.id, name: left.room.name, guests: left.notify });
+        } else {
+          for (const notifyPeerId of left.notify) {
+            const targetSock = peerSockets.get(notifyPeerId);
+            if (targetSock) {
               send(targetSock, { type: 'PEER_DISCONNECT', peerId: pid });
               send(targetSock, { type: 'PEER_LEFT', peerId: pid });
             }
@@ -439,30 +558,12 @@ export function setupSignalingServer(wss: WebSocketServer, options?: SignalingSe
       if (room) {
         const pidSet = new Set(peerIdsToLeave);
         if (pidSet.has(room.hostPeerId)) {
+          clearHostGraceTimer(explicitRoomId);
           const removed = registry.removeRoom(explicitRoomId);
           if (removed) {
             anyChanged = true;
             maybeAbortRankedRoomMatch(removed);
-            for (const guestId of removed.guests) {
-              const targetSock = peerSockets.get(guestId);
-              if (targetSock) {
-                send(targetSock, {
-                  type: 'room_closed',
-                  roomId: removed.id,
-                  reason: 'El anfitrión ha abandonado la sala.'
-                });
-                send(targetSock, {
-                  type: 'HOST_DISCONNECT',
-                  roomId: removed.id
-                });
-                send(targetSock, {
-                  type: 'ROOM_CLOSED_NOTICE',
-                  roomId: removed.id,
-                  roomName: removed.name,
-                  message: 'La sala ha sido cerrada por el anfitrión.'
-                });
-              }
-            }
+            notifyRoomDestroyed(removed);
           }
         }
       }
@@ -471,10 +572,19 @@ export function setupSignalingServer(wss: WebSocketServer, options?: SignalingSe
     return anyChanged;
   }
 
-  // Heartbeat & medición periódica de RTT de señalización por Host y cliente
+  // Heartbeat bidireccional (15 s) + expiración de salas con Host desconectado
   const heartbeatInterval = setInterval(() => {
     let rttUpdated = false;
     const now = Date.now();
+
+    const expiredRooms = registry.expireDisconnectedHostRooms(now);
+    for (const removed of expiredRooms) {
+      clearHostGraceTimer(removed.id);
+      maybeAbortRankedRoomMatch(removed);
+      notifyRoomDestroyed(removed);
+      rttUpdated = true;
+    }
+
     for (const client of wss.clients) {
       const ws = client as AliveWebSocket;
       if (!ws.isAlive) {
@@ -499,10 +609,14 @@ export function setupSignalingServer(wss: WebSocketServer, options?: SignalingSe
     if (rttUpdated) {
       broadcastRoomList();
     }
-  }, HEARTBEAT_INTERVAL_MS);
+  }, heartbeatIntervalMs);
 
   wss.on('close', () => {
     clearInterval(heartbeatInterval);
+    for (const timer of hostGraceTimers.values()) {
+      clearTimeout(timer);
+    }
+    hostGraceTimers.clear();
     for (const entry of pendingPingProbes.values()) {
       clearTimeout(entry.timer);
     }
@@ -801,7 +915,11 @@ export function setupSignalingServer(wss: WebSocketServer, options?: SignalingSe
               countryCode,
               hostPingMs: ws.rttMs ?? 24,
               hostUserId,
-              hostAccessToken: accessToken
+              hostAccessToken: accessToken,
+              hostClientSessionId:
+                typeof msg.clientSessionId === 'string' && msg.clientSessionId.trim()
+                  ? msg.clientSessionId.trim()
+                  : socketIdentity.get(socket)?.clientSessionId
             });
 
             updateSocketIdentity(socket, msg, hostUserId);
@@ -809,12 +927,69 @@ export function setupSignalingServer(wss: WebSocketServer, options?: SignalingSe
             send(socket, {
               type: 'ROOM_CREATED',
               roomId: room.id,
+              reclaimToken: room.reclaimToken,
               roomName: room.name,
               roomType: room.roomType,
               countryCode: room.countryCode,
               roomConfig: room,
               config: room
             });
+
+            broadcastRoomList();
+            break;
+          }
+
+          case 'RECLAIM_ROOM': {
+            const roomId = String(msg.roomId || '').trim();
+            const reclaimToken = typeof msg.reclaimToken === 'string' ? msg.reclaimToken.trim() : undefined;
+            const previousPeerId = typeof msg.previousPeerId === 'string' ? msg.previousPeerId.trim() : undefined;
+            const hostClientSessionId =
+              typeof msg.clientSessionId === 'string' && msg.clientSessionId.trim()
+                ? msg.clientSessionId.trim()
+                : socketIdentity.get(socket)?.clientSessionId;
+            let verifiedUserId = socketIdentity.get(socket)?.userId;
+            if (!verifiedUserId && typeof msg.accessToken === 'string' && msg.accessToken.length > 10) {
+              const verified = await authService.verifySession(msg.accessToken);
+              if (verified?.id) verifiedUserId = verified.id;
+            }
+
+            const reclaimed = registry.reclaimRoom(roomId, effectivePeerId, {
+              reclaimToken,
+              previousHostPeerId: previousPeerId,
+              hostUserId: verifiedUserId,
+              hostClientSessionId
+            });
+
+            if (!reclaimed.ok) {
+              send(socket, {
+                type: 'ERROR',
+                code: reclaimed.code,
+                message: reclaimed.message
+              });
+              break;
+            }
+
+            clearHostGraceTimer(reclaimed.room.id);
+            updateSocketIdentity(socket, msg, verifiedUserId);
+
+            send(socket, {
+              type: 'ROOM_RECLAIMED',
+              roomId: reclaimed.room.id,
+              hostPeerId: effectivePeerId,
+              reclaimToken: reclaimed.room.reclaimToken,
+              guests: reclaimed.guests
+            });
+
+            for (const guestId of reclaimed.guests) {
+              const guestSock = peerSockets.get(guestId);
+              if (guestSock) {
+                send(guestSock, {
+                  type: 'HOST_RECONNECTED',
+                  roomId: reclaimed.room.id,
+                  hostPeerId: effectivePeerId
+                });
+              }
+            }
 
             broadcastRoomList();
             break;
@@ -1114,7 +1289,7 @@ export function setupSignalingServer(wss: WebSocketServer, options?: SignalingSe
           case 'LEAVE_ROOM':
           case 'CLOSE_ROOM': {
             const ids = ws.peerIds ? Array.from(ws.peerIds) : [effectivePeerId];
-            handlePeerLeave(ids, msg.roomId ? String(msg.roomId) : undefined);
+            handlePeerLeave(ids, msg.roomId ? String(msg.roomId) : undefined, { allowHostGrace: false });
             broadcastRoomList();
             break;
           }
@@ -1331,7 +1506,7 @@ export function setupSignalingServer(wss: WebSocketServer, options?: SignalingSe
             socketIdentity.delete(socket);
       clearPendingProbesForPeers(allSocketPeerIds);
 
-      handlePeerLeave(allSocketPeerIds);
+      handlePeerLeave(allSocketPeerIds, undefined, { allowHostGrace: true });
       registry.purgeInactiveRooms(new Set(peerSockets.keys()));
       broadcastRoomList();
     });

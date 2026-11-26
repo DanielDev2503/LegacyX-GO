@@ -430,7 +430,12 @@
           engine.setBot(
             p.id,
             p.isBot
-              ? { difficulty: p.botDifficulty ?? 'medium', role: p.position ?? 'MC' }
+              ? {
+                  id: p.id,
+                  team: p.team,
+                  difficulty: p.botDifficulty ?? 'medium',
+                  position: p.position ?? 'MC'
+                }
               : null
           );
         } else {
@@ -1235,6 +1240,37 @@
     }
 
     const prevGamepadButtons = new Set<string>();
+    const scratchPadPrev = new Set<string>();
+    const EMPTY_GAMEPAD_RESULT = {
+      connected: false,
+      mask: 0,
+      stickActive: false,
+      aimAngle: null as number | null,
+      aimThrottle: 0,
+      dashRisingEdge: false,
+      menuRisingEdge: false,
+      pauseRisingEdge: false,
+      focusBall: false
+    };
+    const scratchLocalInput: PlayerInput = {
+      inputMask: 0,
+      aimAngle: null,
+      aimThrottle: 0
+    };
+
+    function hasConnectedGamepadFast(): boolean {
+      if (typeof navigator === 'undefined' || typeof navigator.getGamepads !== 'function') return false;
+      try {
+        const pads = navigator.getGamepads();
+        if (!pads) return false;
+        for (let i = 0; i < pads.length; i++) {
+          if (pads[i] && pads[i]!.connected) return true;
+        }
+      } catch {
+        return false;
+      }
+      return false;
+    }
 
     function computeLocalPlayerInput(consumeDash: boolean): PlayerInput {
       let mask = 0;
@@ -1245,8 +1281,18 @@
       const activeEl = document.activeElement;
       const isTyping = activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA');
 
-      const padPrev = consumeDash ? prevGamepadButtons : new Set(prevGamepadButtons);
-      const padRes = pollGamepadInput(gameUI.settings.gamepadBinds, gameUI.settings.gamepadDeadzone, padPrev);
+      let padRes = EMPTY_GAMEPAD_RESULT;
+      if (hasConnectedGamepadFast()) {
+        let padPrev = prevGamepadButtons;
+        if (!consumeDash) {
+          scratchPadPrev.clear();
+          prevGamepadButtons.forEach((b) => scratchPadPrev.add(b));
+          padPrev = scratchPadPrev;
+        }
+        padRes = pollGamepadInput(gameUI.settings.gamepadBinds, gameUI.settings.gamepadDeadzone, padPrev);
+      } else if (prevGamepadButtons.size > 0) {
+        prevGamepadButtons.clear();
+      }
       if (gameUI.isGamepadActive !== padRes.connected) {
         gameUI.isGamepadActive = padRes.connected;
       }
@@ -1275,7 +1321,10 @@
         if (mobileTouchController.hasActiveInput() || mobileTouchController.isEmoteMenuOpen) {
           mobileTouchController.resetAll();
         }
-        return { inputMask: isTyping ? INPUT_FLAG_TYPING : 0, aimAngle: null, aimThrottle: 0 };
+        scratchLocalInput.inputMask = isTyping ? INPUT_FLAG_TYPING : 0;
+        scratchLocalInput.aimAngle = null;
+        scratchLocalInput.aimThrottle = 0;
+        return scratchLocalInput;
       }
 
       const currentPhase = gameUI.isHost && engine ? engine.fsm.state : (currSnapshot?.phase ?? gameUI.matchPhase);
@@ -1284,7 +1333,10 @@
         dashTriggered = false;
         gameUI.isFocusingBall = false;
         renderer.focusBallOnly = false;
-        return { inputMask: 0, aimAngle: null, aimThrottle: 0 };
+        scratchLocalInput.inputMask = 0;
+        scratchLocalInput.aimAngle = null;
+        scratchLocalInput.aimThrottle = 0;
+        return scratchLocalInput;
       }
 
       const focusHeld =
@@ -1319,20 +1371,18 @@
         const touchPkt = mobileTouchController.sampleInput(consumeDash);
         mask |= touchPkt.inputMask ?? 0;
         if (touchPkt.aimAngle !== null && (touchPkt.aimThrottle ?? 0) > 0) {
-          return {
-            inputMask: mask,
-            aimAngle: touchPkt.aimAngle,
-            aimThrottle: touchPkt.aimThrottle ?? 0
-          };
+          scratchLocalInput.inputMask = mask;
+          scratchLocalInput.aimAngle = touchPkt.aimAngle;
+          scratchLocalInput.aimThrottle = touchPkt.aimThrottle ?? 0;
+          return scratchLocalInput;
         }
       }
 
       if (padRes.stickActive && padRes.aimAngle !== null) {
-        return {
-          inputMask: mask | INPUT_FLAG_MOUSE_AIM,
-          aimAngle: padRes.aimAngle,
-          aimThrottle: padRes.aimThrottle
-        };
+        scratchLocalInput.inputMask = mask | INPUT_FLAG_MOUSE_AIM;
+        scratchLocalInput.aimAngle = padRes.aimAngle;
+        scratchLocalInput.aimThrottle = padRes.aimThrottle;
+        return scratchLocalInput;
       }
 
       if (!gameUI.isMobileLayout && gameUI.settings.movementMode === 'mouse') {
@@ -1342,14 +1392,16 @@
           const vec = computeMouseMovementVector(localPos.x, localPos.y, mouseWorld.x, mouseWorld.y);
           if (vec.active) {
             mask |= INPUT_FLAG_MOUSE_AIM | INPUT_FLAG_MOUSE_ACTIVE;
-            return {
-              inputMask: mask,
-              aimAngle: vec.angle,
-              aimThrottle: vec.throttle
-            };
+            scratchLocalInput.inputMask = mask;
+            scratchLocalInput.aimAngle = vec.angle;
+            scratchLocalInput.aimThrottle = vec.throttle;
+            return scratchLocalInput;
           }
         }
-        return { inputMask: mask, aimAngle: null, aimThrottle: 0 };
+        scratchLocalInput.inputMask = mask;
+        scratchLocalInput.aimAngle = null;
+        scratchLocalInput.aimThrottle = 0;
+        return scratchLocalInput;
       }
 
       if (gameUI.keybinds.up.some((k) => keyState.get(k))) mask |= INPUT_FLAG_UP;
@@ -1357,7 +1409,26 @@
       if (gameUI.keybinds.left.some((k) => keyState.get(k))) mask |= INPUT_FLAG_LEFT;
       if (gameUI.keybinds.right.some((k) => keyState.get(k))) mask |= INPUT_FLAG_RIGHT;
 
-      return { inputMask: mask, aimAngle: null, aimThrottle: 0 };
+      scratchLocalInput.inputMask = mask;
+      scratchLocalInput.aimAngle = null;
+      scratchLocalInput.aimThrottle = 0;
+      return scratchLocalInput;
+    }
+
+    /** Despacho inmediato en flanco ascendente de Kick/Dash sin esperar al siguiente tick de 60 Hz. */
+    function dispatchImmediateCriticalAction(criticalFlag: number): void {
+      if (gameUI.isHost || !gameApp.networkClient) return;
+      if (gameUI.currentScreen !== 'IN_GAME' || gameUI.activeModal !== 'NONE' || gameUI.isHudEditorOpen) return;
+      const phase = predEngine ? predEngine.fsm.state : (currSnapshot?.phase ?? gameUI.matchPhase);
+      if (!isMovablePhase(phase)) return;
+      const pkt = computeLocalPlayerInput(false);
+      const nextSeq = (reconciler.lastRecordedSeq + 1) >>> 0;
+      gameApp.networkClient.sendInput(
+        (pkt.inputMask ?? 0) | criticalFlag,
+        nextSeq,
+        pkt.aimAngle,
+        pkt.aimThrottle
+      );
     }
 
     function hasAnyHeldInput(): boolean {
@@ -1410,11 +1481,20 @@
         e.preventDefault();
       }
 
-      if (gameUI.keybinds.dash.includes(code)) {
+      const wasPressed = Boolean(keyState.get(code));
+      let criticalFlag = 0;
+      if (!wasPressed && gameUI.keybinds.dash.includes(code)) {
         dashTriggered = true;
+        criticalFlag |= INPUT_FLAG_DASH;
+      }
+      if (!wasPressed && gameUI.keybinds.kick.includes(code)) {
+        criticalFlag |= INPUT_FLAG_KICK;
       }
 
       keyState.set(code, true);
+      if (criticalFlag !== 0) {
+        dispatchImmediateCriticalAction(criticalFlag);
+      }
     };
 
     const onMouseUp = (e: MouseEvent) => {
@@ -1523,11 +1603,20 @@
         e.preventDefault();
       }
 
-      if (gameUI.keybinds.dash.includes(e.code) && !e.repeat) {
+      const wasPressed = Boolean(keyState.get(e.code));
+      let criticalFlag = 0;
+      if (!e.repeat && !wasPressed && gameUI.keybinds.dash.includes(e.code)) {
         dashTriggered = true;
+        criticalFlag |= INPUT_FLAG_DASH;
+      }
+      if (!e.repeat && !wasPressed && gameUI.keybinds.kick.includes(e.code)) {
+        criticalFlag |= INPUT_FLAG_KICK;
       }
 
       keyState.set(e.code, true);
+      if (criticalFlag !== 0) {
+        dispatchImmediateCriticalAction(criticalFlag);
+      }
     };
 
     const onKeyUp = (e: KeyboardEvent) => {
@@ -1764,19 +1853,12 @@
               localPkt.aimAngle,
               localPkt.aimThrottle
             );
-            if ((localMask & (INPUT_FLAG_DASH | INPUT_FLAG_KICK)) !== 0) {
-              gameApp.networkClient.sendInput(
-                localMask,
-                seq,
-                localPkt.aimAngle,
-                localPkt.aimThrottle
-              );
-            }
 
             (localPkt as any).sequence = seq;
             guestLocalInputMap.clear();
             guestLocalInputMap.set(gameUI.localPlayerId, localPkt);
             predEngine.step(guestLocalInputMap, true);
+            reconciler.capturePredictionSample(seq, predEngine, gameUI.localPlayerId);
 
             const localDiscAfter = predEngine.players.get(gameUI.localPlayerId);
             if (localDiscAfter) {
@@ -1837,7 +1919,13 @@
           hostSnapshotBuffers.set(totalLen, cachedSnapBuf);
         }
         const snapBuffer = BinaryProtocol.encodeSnapshot(currSnapshot, cachedSnapBuf);
-        gameApp.networkHost?.broadcastSnapshot(snapBuffer);
+        const isCriticalSnapshot =
+          !prevSnapshot ||
+          currSnapshot.phase !== prevSnapshot.phase ||
+          currSnapshot.redScore !== prevSnapshot.redScore ||
+          currSnapshot.blueScore !== prevSnapshot.blueScore ||
+          currSnapshot.soundMask !== 0;
+        gameApp.networkHost?.broadcastSnapshot(snapBuffer, { forceImmediate: isCriticalSnapshot });
       }
     });
 
@@ -2479,11 +2567,26 @@
         smoothedFallbackPlayerSpeedPx = 0;
       }
 
-      // Actualizar telemetría reactiva en UI
+      // Actualizar telemetría reactiva en UI (throttled cada 500 ms)
       frameCount++;
       if (now - lastFpsCalculation >= 500) {
         const currentFps = Math.round((frameCount * 1000) / (now - lastFpsCalculation));
         gameUI.recordTelemetrySample(gameUI.isHost ? 0 : gameUI.pingMs, currentFps);
+        if (gameUI.isHost) {
+          gameUI.updateNetworkDiagnostics({
+            jitterMs: 0,
+            packetLossPct: 0,
+            iceRoute: gameApp.networkHost?.getPrimaryIceRoute() ?? 'Host Local',
+            reconciliationsPerSec: 0
+          });
+        } else if (gameApp.networkClient) {
+          gameUI.updateNetworkDiagnostics({
+            jitterMs: gameApp.networkClient.jitterBuffer.meanJitter,
+            packetLossPct: gameApp.networkClient.packetLossPct,
+            iceRoute: gameApp.networkClient.iceRoute,
+            reconciliationsPerSec: reconciler.reconciliationsPerSec
+          });
+        }
         frameCount = 0;
         lastFpsCalculation = now;
         if (!observedChatEl) {

@@ -3,6 +3,7 @@ import type { RoomCategory } from '@legacyx/core';
 import { canJoinRankedRoom, RANKED_GUEST_REJECT_MESSAGE } from '../auth/AuthService.js';
 
 export const MAX_ROOM_PLAYERS = 30;
+export const DEFAULT_HOST_GRACE_MS = 45_000;
 
 export interface Room {
   id: string;
@@ -11,6 +12,10 @@ export interface Room {
   hostPeerId: string;
   hostUserId?: string;
   hostAccessToken?: string;
+  hostClientSessionId?: string;
+  reclaimToken: string;
+  hostDisconnectedAt?: number | null;
+  hostGraceExpiresAt?: number | null;
   maxPlayers: number;
   currentPlayers: number;
   hasPassword: boolean;
@@ -38,9 +43,21 @@ export type JoinResult =
         | 'ROOM_BANNED'
         | 'INVALID_PASSWORD'
         | 'ALREADY_IN_ROOM'
-        | 'RANKED_ACCOUNT_REQUIRED';
+        | 'RANKED_ACCOUNT_REQUIRED'
+        | 'HOST_RECONNECTING';
       message?: string;
     };
+
+export type ReclaimResult =
+  | { ok: true; room: Room; guests: string[] }
+  | { ok: false; code: 'ROOM_NOT_FOUND' | 'GRACE_EXPIRED' | 'UNAUTHORIZED_RECLAIM'; message: string };
+
+function safeTokenEquals(a: string, b: string): boolean {
+  const bufA = Buffer.from(a, 'utf8');
+  const bufB = Buffer.from(b, 'utf8');
+  if (bufA.length === 0 || bufA.length !== bufB.length) return false;
+  return timingSafeEqual(bufA, bufB);
+}
 
 function hashPassword(password: string): string {
   const salt = randomBytes(16).toString('hex');
@@ -72,6 +89,7 @@ export class RoomRegistry {
       hostPingMs?: number;
       hostUserId?: string;
       hostAccessToken?: string;
+      hostClientSessionId?: string;
     }
   ): Room {
     this.leaveRoom(hostPeerId);
@@ -87,6 +105,10 @@ export class RoomRegistry {
       hostPeerId,
       hostUserId: opts.hostUserId,
       hostAccessToken: opts.hostAccessToken,
+      hostClientSessionId: opts.hostClientSessionId,
+      reclaimToken: randomBytes(16).toString('hex'),
+      hostDisconnectedAt: null,
+      hostGraceExpiresAt: null,
       maxPlayers: Math.max(2, Math.min(MAX_ROOM_PLAYERS, Math.floor(opts.maxPlayers) || 12)),
       currentPlayers: 1,
       hasPassword: Boolean(opts.password),
@@ -115,6 +137,13 @@ export class RoomRegistry {
   ): JoinResult {
     const room = this.rooms.get(roomId);
     if (!room) return { ok: false, code: 'ROOM_NOT_FOUND' };
+    if (room.hostDisconnectedAt != null) {
+      return {
+        ok: false,
+        code: 'HOST_RECONNECTING',
+        message: 'El anfitrión está reconectando. Intenta de nuevo en unos segundos.'
+      };
+    }
 
     if (this.isBannedFromRoom(roomId, peerId, joinerAuth?.userId)) {
       return {
@@ -177,6 +206,97 @@ export class RoomRegistry {
     room.guests.delete(peerId);
     room.currentPlayers = room.guests.size + 1;
     return { room, notify: [room.hostPeerId], destroyed: false };
+  }
+
+  /**
+   * Pone la sala en ventana de gracia tras un micro-corte inesperado del Host.
+   * Mantiene a los invitados y el estado de la sala hasta que el Host reclame o expire el plazo.
+   */
+  public markHostDisconnected(
+    hostPeerId: string,
+    graceMs: number = DEFAULT_HOST_GRACE_MS,
+    now: number = Date.now()
+  ): { room: Room; notify: string[]; graceMs: number } | null {
+    const roomId = this.peerToRoom.get(hostPeerId);
+    if (!roomId) return null;
+    const room = this.rooms.get(roomId);
+    if (!room || room.hostPeerId !== hostPeerId) return null;
+
+    this.peerToRoom.delete(hostPeerId);
+    const boundedGraceMs = Math.max(100, Math.floor(graceMs));
+    room.hostDisconnectedAt = now;
+    room.hostGraceExpiresAt = now + boundedGraceMs;
+    return { room, notify: [...room.guests], graceMs: boundedGraceMs };
+  }
+
+  /**
+   * Permite al Host recuperar la propiedad de su sala tras reconectar WebSocket dentro de la ventana de gracia.
+   */
+  public reclaimRoom(
+    roomId: string,
+    newHostPeerId: string,
+    auth: {
+      reclaimToken?: string;
+      previousHostPeerId?: string;
+      hostUserId?: string;
+      hostClientSessionId?: string;
+    },
+    now: number = Date.now()
+  ): ReclaimResult {
+    const room = this.rooms.get(roomId);
+    if (!room) {
+      return { ok: false, code: 'ROOM_NOT_FOUND', message: 'La sala ya no existe.' };
+    }
+
+    if (room.hostGraceExpiresAt != null && now > room.hostGraceExpiresAt) {
+      this.deleteRoom(roomId);
+      return { ok: false, code: 'GRACE_EXPIRED', message: 'La ventana de recuperación de la sala expiró.' };
+    }
+
+    const tokenMatches = Boolean(auth.reclaimToken && safeTokenEquals(auth.reclaimToken, room.reclaimToken));
+    const userMatches = Boolean(auth.hostUserId && room.hostUserId && auth.hostUserId === room.hostUserId);
+    const sessionMatches = Boolean(
+      auth.hostClientSessionId && room.hostClientSessionId && auth.hostClientSessionId === room.hostClientSessionId
+    );
+    const sameActiveHost = room.hostPeerId === newHostPeerId && room.hostDisconnectedAt == null;
+
+    if (!tokenMatches && !userMatches && !sessionMatches && !sameActiveHost) {
+      return {
+        ok: false,
+        code: 'UNAUTHORIZED_RECLAIM',
+        message: 'No tienes autorización para reclamar esta sala.'
+      };
+    }
+
+    if (room.hostPeerId !== newHostPeerId) {
+      this.peerToRoom.delete(room.hostPeerId);
+    }
+    room.guests.delete(newHostPeerId);
+    room.hostPeerId = newHostPeerId;
+    room.hostDisconnectedAt = null;
+    room.hostGraceExpiresAt = null;
+    if (auth.hostClientSessionId) {
+      room.hostClientSessionId = auth.hostClientSessionId;
+    }
+    if (auth.hostUserId && !room.hostUserId) {
+      room.hostUserId = auth.hostUserId;
+    }
+    room.currentPlayers = room.guests.size + 1;
+    this.peerToRoom.set(newHostPeerId, room.id);
+
+    return { ok: true, room, guests: [...room.guests] };
+  }
+
+  /** Elimina salas cuya ventana de gracia de reconexión del Host haya expirado. */
+  public expireDisconnectedHostRooms(now: number = Date.now()): Room[] {
+    const expired: Room[] = [];
+    for (const [roomId, room] of this.rooms.entries()) {
+      if (room.hostGraceExpiresAt != null && now >= room.hostGraceExpiresAt) {
+        const deleted = this.deleteRoom(roomId);
+        if (deleted) expired.push(deleted);
+      }
+    }
+    return expired;
   }
 
   public deleteRoom(roomId: string): Room | undefined {
@@ -254,10 +374,24 @@ export class RoomRegistry {
     return room;
   }
 
-  public purgeInactiveRooms(activePeerIds: Set<string>): void {
+  public purgeInactiveRooms(activePeerIds: Set<string>, now: number = Date.now()): void {
     for (const [roomId, room] of this.rooms.entries()) {
-      if (!activePeerIds.has(room.hostPeerId)) {
+      const inGraceWindow = room.hostGraceExpiresAt != null && now < room.hostGraceExpiresAt;
+      if (!activePeerIds.has(room.hostPeerId) && !inGraceWindow) {
         this.deleteRoom(roomId);
+        continue;
+      }
+      // Limpieza de estados zombi de invitados desconectados para no bloquear nuevos ingresos
+      let removedGuest = false;
+      for (const guestId of [...room.guests]) {
+        if (!activePeerIds.has(guestId)) {
+          room.guests.delete(guestId);
+          this.peerToRoom.delete(guestId);
+          removedGuest = true;
+        }
+      }
+      if (removedGuest) {
+        room.currentPlayers = room.guests.size + 1;
       }
     }
   }
@@ -299,7 +433,7 @@ export class RoomRegistry {
       this.purgeInactiveRooms(activePeerIds);
     }
     return [...this.rooms.values()]
-      .filter((r) => !r.isLocked)
+      .filter((r) => !r.isLocked && r.hostDisconnectedAt == null)
       .map(
         ({
           id,

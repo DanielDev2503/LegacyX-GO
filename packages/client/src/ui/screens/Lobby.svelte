@@ -55,6 +55,7 @@
   let passwordError = $state('');
   let isRefreshing = $state(false);
   let hoveredRoomId = $state<string | null>(null);
+  let joiningRoomId = $state<string | null>(null);
   let pendingRankedInviteRoomId = $state<string | null>(null);
   let isAutoJoiningInvite = false;
   let isLobbyUnmounted = false;
@@ -249,12 +250,18 @@
   });
 
   async function enterJoinedRoom(room: RoomInfo, password?: string): Promise<boolean> {
-    const ok = await gameApp.joinRoom(room.id, password);
-    if (!ok) return false;
-    gameUI.navigateTo('IN_GAME');
-    gameUI.clearModalStack();
-    gameUI.openModal('TEAM_SELECT');
-    return true;
+    if (joiningRoomId) return false;
+    joiningRoomId = room.id;
+    try {
+      const ok = await gameApp.joinRoom(room.id, password, { waitForHandshake: true });
+      if (!ok || isLobbyUnmounted) return false;
+      gameUI.navigateTo('IN_GAME');
+      gameUI.clearModalStack();
+      gameUI.openModal('TEAM_SELECT');
+      return true;
+    } finally {
+      joiningRoomId = null;
+    }
   }
 
   async function handleJoinRoom(room: RoomInfo) {
