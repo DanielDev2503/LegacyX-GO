@@ -44,11 +44,25 @@ export class JitterBuffer<T extends AnySnapshot = any> {
   private lastTick: number | null = null;
   private clockOffsetMs: number | null = null;
 
-  public static readonly MIN_DELAY_MS = 28;
-  public static readonly MAX_DELAY_MS = 100;
+  public static readonly MIN_DELAY_MS = 30;
+  public static readonly MAX_DELAY_MS = 140;
+  public static readonly EMERGENCY_EXTRAPOLATION_MS = 60;
+  public static readonly PLL_MIN_SCALE = 0.93;
+  public static readonly PLL_MAX_SCALE = 1.07;
+  public static readonly PLL_DEADBAND_MS = 5;
+  public static readonly PLL_HARD_RESET_MS = 300;
+  private static readonly PLL_GAIN = 0.00075;
+  private static readonly EMERGENCY_DAMPING_LAMBDA = 16;
   public static readonly DEFAULT_AUTO_EXTRAPOLATION_MS = 200;
   public static readonly MAX_AUTO_EXTRAPOLATION_MS = 200;
   private static readonly TICK_MS = 1000 / 60;
+
+  // Reloj PLL suave Zero-GC para eliminar saltos temporales bajo ráfagas 4G
+  private pllRenderTimeMs: number | null = null;
+  private pllLastNowMs: number | null = null;
+  public lastTimeScale: number = 1.0;
+  public pllHardResetCount: number = 0;
+  public emergencyExtrapolationCapMs: number = JitterBuffer.EMERGENCY_EXTRAPOLATION_MS;
 
   // Pools Zero-GC (anillo de 4 slots para evitar aliasing entre referencias simultáneas sin alocar)
   private readonly scratchDiscLookup = new Map<number, any>();
@@ -117,7 +131,7 @@ export class JitterBuffer<T extends AnySnapshot = any> {
   }
 
   public calculateTargetDelay(): number {
-    const raw = this.meanJitter * 2.5 + JitterBuffer.TICK_MS;
+    const raw = this.meanJitter * 2.8 + 25;
     return Math.max(JitterBuffer.MIN_DELAY_MS, Math.min(JitterBuffer.MAX_DELAY_MS, raw));
   }
 
@@ -227,6 +241,9 @@ export class JitterBuffer<T extends AnySnapshot = any> {
     this.lastArrival = null;
     this.lastTick = null;
     this.clockOffsetMs = null;
+    this.pllRenderTimeMs = null;
+    this.pllLastNowMs = null;
+    this.lastTimeScale = 1.0;
   }
 
   public push(
@@ -284,28 +301,29 @@ export class JitterBuffer<T extends AnySnapshot = any> {
 
       if (this.isAdaptive) {
         const target = this.calculateTargetDelay();
-        this.interpolationDelayMs = this.interpolationDelayMs * 0.9 + target * 0.1;
+        const alpha = target > this.interpolationDelayMs ? 0.2 : 0.05;
+        this.interpolationDelayMs += (target - this.interpolationDelayMs) * alpha;
       }
     }
 
     this.lastArrival = now;
     this.lastTick = snapshot.tick;
 
-    // Sincronización simétrica y acotada del reloj lógico del Host (evita inversiones de timeline)
+    // Alineación asimétrica de envolvente mínima del reloj del Host (baja rápido en menor RTT, sube lento ante picos 4G)
     const logicalMs = snapshot.tick * JitterBuffer.TICK_MS;
     const measuredOffset = now - logicalMs;
     if (this.clockOffsetMs === null || Math.abs(measuredOffset - this.clockOffsetMs) > 350) {
       this.clockOffsetMs = measuredOffset;
     } else {
       const err = measuredOffset - this.clockOffsetMs;
-      const step = Math.max(-2.5, Math.min(2.5, err * 0.05));
+      const step = err < 0 ? Math.max(-5.0, err * 0.2) : Math.min(1.5, err * 0.02);
       this.clockOffsetMs += step;
     }
 
     const item: BufferedSnapshot<T> = {
       snapshot,
       receivedAt: now,
-      timelineAt: logicalMs + this.clockOffsetMs
+      timelineAt: this.isAdaptive ? logicalMs : logicalMs + this.clockOffsetMs
     };
 
     if (this.lastProcessedTick > 0 && this.buffer.length > 0) {
@@ -313,7 +331,7 @@ export class JitterBuffer<T extends AnySnapshot = any> {
       if (snapshot.tick < latest.snapshot.tick - 100) {
         this.clear();
         this.clockOffsetMs = now - logicalMs;
-        item.timelineAt = now;
+        item.timelineAt = this.isAdaptive ? logicalMs : now;
         this.buffer.push(item);
       } else {
         // Insertar ordenado por tick (acepta paquetes desordenados si tick >= lastProcessedTick)
@@ -410,11 +428,58 @@ export class JitterBuffer<T extends AnySnapshot = any> {
       return this.buffer[0].snapshot;
     }
 
-    const renderTime = now - this.interpolationDelayMs;
-    const getTime = (b: BufferedSnapshot<T>): number =>
-      this.clockOffsetMs !== null
+    let renderTime: number;
+    const getTime = (b: BufferedSnapshot<T>): number => {
+      if (this.isAdaptive) {
+        return b.snapshot.tick * JitterBuffer.TICK_MS;
+      }
+      return this.clockOffsetMs !== null
         ? b.snapshot.tick * JitterBuffer.TICK_MS + this.clockOffsetMs
         : (b.timelineAt !== undefined ? b.timelineAt : b.receivedAt);
+    };
+
+    if (this.isAdaptive) {
+      const estimatedServerNow =
+        this.clockOffsetMs !== null
+          ? now - this.clockOffsetMs
+          : this.buffer[this.buffer.length - 1]!.snapshot.tick * JitterBuffer.TICK_MS;
+      const desiredRenderTime = estimatedServerNow - this.interpolationDelayMs;
+
+      if (this.pllRenderTimeMs === null || this.pllLastNowMs === null) {
+        this.pllRenderTimeMs = desiredRenderTime;
+        this.pllLastNowMs = now;
+        this.lastTimeScale = 1.0;
+      } else {
+        const rawFrameDt = now - this.pllLastNowMs;
+        this.pllLastNowMs = now;
+        if (rawFrameDt > 0) {
+          const driftMs = desiredRenderTime - this.pllRenderTimeMs;
+          if (
+            Math.abs(driftMs) > JitterBuffer.PLL_HARD_RESET_MS ||
+            rawFrameDt > JitterBuffer.PLL_HARD_RESET_MS
+          ) {
+            this.pllRenderTimeMs = desiredRenderTime;
+            this.lastTimeScale = 1.0;
+            this.pllHardResetCount++;
+          } else {
+            const clampedDt = Math.min(100, rawFrameDt);
+            let timeScale = 1.0;
+            if (Math.abs(driftMs) > JitterBuffer.PLL_DEADBAND_MS) {
+              const adj = Math.max(-0.07, Math.min(0.07, driftMs * JitterBuffer.PLL_GAIN));
+              timeScale = Math.max(
+                JitterBuffer.PLL_MIN_SCALE,
+                Math.min(JitterBuffer.PLL_MAX_SCALE, 1.0 + adj)
+              );
+            }
+            this.pllRenderTimeMs += clampedDt * timeScale;
+            this.lastTimeScale = timeScale;
+          }
+        }
+      }
+      renderTime = this.pllRenderTimeMs;
+    } else {
+      renderTime = now - this.interpolationDelayMs;
+    }
 
     if (renderTime <= getTime(this.buffer[0])) {
       this.lastProcessedTick = Math.max(this.lastProcessedTick, this.buffer[0].snapshot.tick);
@@ -440,25 +505,38 @@ export class JitterBuffer<T extends AnySnapshot = any> {
       const rawDeltaSec = Math.max(0, (renderTime - getTime(latest)) / 1000);
       if (rawDeltaSec === 0) return latest.snapshot;
 
-      // Extrapolación cinemática suave hasta autoExtrapolationMs (máx 200 ms) con decaimiento continuo de velocidad
-      const maxExtrapSec = Math.max(0, Math.min(JitterBuffer.MAX_AUTO_EXTRAPOLATION_MS, this.autoExtrapolationMs)) / 1000;
-      if (maxExtrapSec <= 0) return latest.snapshot;
-
-      const fullSpeedSec = maxExtrapSec * 0.5;
-      const tailSec = maxExtrapSec - fullSpeedSec;
-
       let effectiveDeltaSec: number;
       let decay: number;
-      if (rawDeltaSec <= fullSpeedSec) {
-        effectiveDeltaSec = rawDeltaSec;
-        decay = 1.0;
-      } else if (rawDeltaSec < maxExtrapSec && tailSec > 0) {
-        const tailElapsed = rawDeltaSec - fullSpeedSec;
-        effectiveDeltaSec = fullSpeedSec + tailElapsed * (1 - tailElapsed / (2 * tailSec));
-        decay = Math.max(0, 1 - tailElapsed / tailSec);
+
+      if (this.isAdaptive) {
+        // Underflow de emergencia 4G: máx 60 ms con amortiguación exponencial continua e integral acotada
+        const maxEmergencySec =
+          Math.max(0, Math.min(JitterBuffer.EMERGENCY_EXTRAPOLATION_MS, this.emergencyExtrapolationCapMs)) / 1000;
+        if (maxEmergencySec <= 0) return latest.snapshot;
+        const lambda = JitterBuffer.EMERGENCY_DAMPING_LAMBDA;
+        const clampedDt = Math.min(rawDeltaSec, maxEmergencySec);
+        effectiveDeltaSec = (1 - Math.exp(-lambda * clampedDt)) / lambda;
+        const rawDecay = Math.exp(-lambda * rawDeltaSec);
+        decay = rawDecay < 0.01 ? 0 : rawDecay;
       } else {
-        effectiveDeltaSec = fullSpeedSec + 0.5 * tailSec;
-        decay = 0;
+        // Extrapolación cinemática suave hasta autoExtrapolationMs (máx 200 ms) para modo no-adaptativo
+        const maxExtrapSec = Math.max(0, Math.min(JitterBuffer.MAX_AUTO_EXTRAPOLATION_MS, this.autoExtrapolationMs)) / 1000;
+        if (maxExtrapSec <= 0) return latest.snapshot;
+
+        const fullSpeedSec = maxExtrapSec * 0.5;
+        const tailSec = maxExtrapSec - fullSpeedSec;
+
+        if (rawDeltaSec <= fullSpeedSec) {
+          effectiveDeltaSec = rawDeltaSec;
+          decay = 1.0;
+        } else if (rawDeltaSec < maxExtrapSec && tailSec > 0) {
+          const tailElapsed = rawDeltaSec - fullSpeedSec;
+          effectiveDeltaSec = fullSpeedSec + tailElapsed * (1 - tailElapsed / (2 * tailSec));
+          decay = Math.max(0, 1 - tailElapsed / tailSec);
+        } else {
+          effectiveDeltaSec = fullSpeedSec + 0.5 * tailSec;
+          decay = 0;
+        }
       }
 
       const bounds = arenaBounds !== undefined ? arenaBounds : this.arenaBounds;

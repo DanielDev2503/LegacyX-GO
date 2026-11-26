@@ -42,7 +42,8 @@ export class NetworkHost {
   private bannedPeerIds = new Set<string>();
   private welcomedPeers = new Set<string>();
   private lastChatAtByPlayerId = new Map<number, number>();
-  private readonly decodedInputScratch: PlayerInput[] = [{}, {}, {}];
+  private readonly decodedInputScratch: PlayerInput[] = [{}, {}, {}, {}];
+  private seenInputSeqByPlayer = new Map<number, { maxSeq: number; mask: number }>();
   private snapshotTickCounter = 0;
   private pendingClosePeers = new Map<ReturnType<typeof setTimeout>, PeerConnection>();
   private nextPlayerId = 2; // 1 is reserved for Host local player
@@ -390,10 +391,14 @@ export class NetworkHost {
           const count = BinaryProtocol.decodeInputBundleInto(buffer, this.decodedInputScratch);
           for (let i = 0; i < count; i++) {
             const decoded = this.decodedInputScratch[i]!;
+            const seq = (decoded.tick ?? decoded.sequence ?? 0) >>> 0;
+            if (seq > 0 && this.checkAndMarkSeenInputSeq(playerId, seq)) {
+              continue;
+            }
             this.onPlayerInput?.(
               playerId,
               decoded.inputMask ?? 0,
-              decoded.tick ?? decoded.sequence ?? 0,
+              seq,
               decoded.aimAngle,
               decoded.aimThrottle
             );
@@ -987,6 +992,7 @@ export class NetworkHost {
       this.peerToPlayerId.delete(peerId);
       this.players.delete(playerId);
       this.lastChatAtByPlayerId.delete(playerId);
+      this.seenInputSeqByPlayer.delete(playerId);
       if (!wasKickedOrBanned) {
         this.broadcastSystemNotice(`${pName} ha abandonado la sala`);
       }
@@ -994,6 +1000,43 @@ export class NetworkHost {
       this.onPlayersUpdated?.(this.getPlayers());
       this.broadcastRoomStateSync();
     }
+  }
+
+  /**
+   * Ventana deslizante Uint32 de 32 bits (Zero-GC) para deduplicar paquetes redundantes 4x al ingresar al Host.
+   */
+  private checkAndMarkSeenInputSeq(playerId: number, seq: number): boolean {
+    let win = this.seenInputSeqByPlayer.get(playerId);
+    if (!win) {
+      win = { maxSeq: seq, mask: 1 };
+      this.seenInputSeqByPlayer.set(playerId, win);
+      return false;
+    }
+    if (seq === win.maxSeq) {
+      return (win.mask & 1) !== 0;
+    }
+    const fwdDelta = (seq - win.maxSeq) >>> 0;
+    if (fwdDelta > 0 && fwdDelta < 0x80000000) {
+      win.mask = fwdDelta >= 32 ? 1 : ((win.mask << fwdDelta) | 1);
+      win.maxSeq = seq;
+      return false;
+    }
+    const backDelta = (win.maxSeq - seq) >>> 0;
+    if (backDelta >= 500) {
+      // Secuencia reiniciada tras nueva sesión/reconexión
+      win.maxSeq = seq;
+      win.mask = 1;
+      return false;
+    }
+    if (backDelta >= 32) {
+      return true;
+    }
+    const bit = 1 << backDelta;
+    if ((win.mask & bit) !== 0) {
+      return true;
+    }
+    win.mask |= bit;
+    return false;
   }
 
   public broadcastSnapshot(
@@ -1004,15 +1047,21 @@ export class NetworkHost {
     const forceImmediate = Boolean(opts?.forceImmediate);
     const highPlayerDensity = this.players.size >= 6;
     const isEvenTick = (this.snapshotTickCounter & 1) === 0;
+    const isDropThirdTick40Hz = this.snapshotTickCounter % 3 === 0;
 
     this.peers.forEach((peer) => {
       // Backpressure SCTP estricto (16 KB): omite snapshot para evitar bufferbloat
       if (peer.unreliableBufferedAmount > SCTP_BACKPRESSURE_LIMIT_BYTES) return;
-      // Tasa adaptativa 30–60 Hz si >= 6 jugadores o enlace TURN relay congestionado
-      const isCongestedRelay =
-        peer.candidateType === 'relay' && peer.unreliableBufferedAmount > 4096;
-      if (!forceImmediate && (highPlayerDensity || isCongestedRelay) && !isEvenTick) {
-        return;
+      const isTurnRelay = peer.candidateType === 'relay' || peer.iceRoute === 'Relay (TURN)';
+      const isCongestedRelay = isTurnRelay && peer.unreliableBufferedAmount > 4096;
+      if (!forceImmediate) {
+        if (highPlayerDensity || isCongestedRelay) {
+          // 30 Hz cuando hay saturación o >= 6 jugadores
+          if (!isEvenTick) return;
+        } else if (isTurnRelay) {
+          // 40 Hz en enlaces móviles TURN estables sin saturar ancho de banda celular
+          if (isDropThirdTick40Hz) return;
+        }
       }
       peer.sendUnreliable(buffer);
     });
@@ -1178,5 +1227,6 @@ export class NetworkHost {
     this.pendingNicknames.clear();
     this.welcomedPeers.clear();
     this.lastChatAtByPlayerId.clear();
+    this.seenInputSeqByPlayer.clear();
   }
 }

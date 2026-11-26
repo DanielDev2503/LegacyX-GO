@@ -103,7 +103,7 @@ export function mapPlayersToRoster(players: PlayerInfo[]): RosterPlayer[] {
 }
 
 export class GameApp {
-  private static readonly MAX_REMOTE_INPUT_QUEUE = 4;
+  private static readonly MAX_REMOTE_INPUT_QUEUE = 6;
   public signaling: SignalingClient;
   public networkHost: NetworkHost | null = null;
   public networkClient: NetworkClient | null = null;
@@ -168,6 +168,9 @@ export class GameApp {
       }
     };
     gameUI.onSuperadminElevate = () => this.requestSuperadminRoomAdmin();
+    gameUI.onSimLagChanged = (cfg) => {
+      this.networkClient?.setNetworkImpairment(cfg);
+    };
 
     this.signaling.on('SESSION_REPLACED', (msg: any) => {
       this.handleSessionReplaced(
@@ -1260,6 +1263,9 @@ export class GameApp {
     });
     client.roomId = roomId;
     client.roomName = String(msg.roomName || msg.name || `Sala ${roomId}`);
+    if (gameUI.simLagConfig.enabled) {
+      client.setNetworkImpairment(gameUI.simLagConfig);
+    }
     this.networkClient = client;
 
     gameUI.isPracticeMode = false;

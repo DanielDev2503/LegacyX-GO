@@ -91,6 +91,11 @@
         <span class="label">ICE</span>
         <strong class:relay={shortIceBadge === 'TURN'}>{shortIceBadge}</strong>
       </div>
+      {#if gameUI.simLagConfig.enabled}
+        <div class="metric" title={`Simulador de red: ${gameUI.simLagConfig.rttMs} ms RTT · ±${gameUI.simLagConfig.jitterMs} ms · ${gameUI.simLagConfig.lossPct}% loss`}>
+          <strong class="sim">SIM</strong>
+        </div>
+      {/if}
     </div>
     <canvas bind:this={sparkCanvas} width="72" height="24" class="sparkline"></canvas>
   </div>
@@ -142,6 +147,10 @@
 
   strong.relay {
     color: #a855f7;
+  }
+
+  strong.sim {
+    color: #f59e0b;
   }
 
   .sparkline {

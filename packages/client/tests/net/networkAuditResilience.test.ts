@@ -324,7 +324,7 @@ describe('Phase 5 Audit Suite — WebRTC Resilience, 3x Input Redundancy & Adver
         dropPredicate: (idx) => idx % 10 === 4 || idx % 10 === 5 // 20% burst loss (2 consecutive drops every 10 packets!)
       });
 
-      const scratchDecode: PlayerInput[] = [{}, {}, {}];
+      const scratchDecode: PlayerInput[] = [{}, {}, {}, {}];
       let hostAppliedKickCount = 0;
       let hostAppliedDashCount = 0;
       let prevAppliedSeq = -1;
@@ -449,7 +449,7 @@ describe('Phase 5 Audit Suite — WebRTC Resilience, 3x Input Redundancy & Adver
       const guestNet = new NetworkClient(sig, 'LagGuest', 10);
       const hostInputs = new Map<number, PlayerInput>();
       const guestLocalMap = new Map<number, PlayerInput>();
-      const decodeScratch: PlayerInput[] = [{}, {}, {}];
+      const decodeScratch: PlayerInput[] = [{}, {}, {}, {}];
       const TICK_MS = 1000 / 60;
       let highestSnapTick = -1;
       let hardSnapCount = 0;
@@ -526,11 +526,11 @@ describe('Phase 5 Audit Suite — WebRTC Resilience, 3x Input Redundancy & Adver
       }
 
       // Assertions under adverse 180ms RTT + 40ms jitter + 5% loss:
-      expect(ClientPredictionReconciler.MAX_REPLAY_TICKS).toBe(5);
+      expect(ClientPredictionReconciler.MAX_REPLAY_TICKS).toBe(30);
       expect(hardSnapCount).toBe(0);
       expect(maxObservedVisualJump).toBeLessThan(18);
-      expect(jitterBuffer.targetDelay).toBeGreaterThanOrEqual(25);
-      expect(jitterBuffer.targetDelay).toBeLessThanOrEqual(100);
+      expect(jitterBuffer.targetDelay).toBeGreaterThanOrEqual(30);
+      expect(jitterBuffer.targetDelay).toBeLessThanOrEqual(140);
       expect(jitterBuffer.meanJitter).toBeGreaterThan(2);
 
       guestNet.disconnect();

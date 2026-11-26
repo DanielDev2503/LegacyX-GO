@@ -2056,6 +2056,59 @@
 
               <div class="card-inner-divider"></div>
 
+              <!-- Modo de red (No-Host) -->
+              <div class="video-setting-row wrap-on-narrow">
+                <div class="setting-copy">
+                  <span class="setting-title label-with-tooltip">
+                    Modo de red (No-Host)
+                    <span
+                      class="info-tooltip-wrapper"
+                      tabindex="0"
+                      role="button"
+                      aria-label="Info modo de red"
+                      use:tooltip={"Clásico (Haxball): línea temporal única y cero tirones en redes 4G o ping > 120 ms. Predicción: respuesta local instantánea con reconciliación. Comando rápido: /netmode <classic|predicted>"}
+                    >
+                      <svg class="info-help-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="12" cy="12" r="10"></circle>
+                        <line x1="12" y1="16" x2="12" y2="12"></line>
+                        <line x1="12" y1="8" x2="12.01" y2="8"></line>
+                      </svg>
+                    </span>
+                  </span>
+                  <span class="setting-desc">Clásico (Haxball) evita tirones en 4G / ping alto; Predicción prioriza respuesta local</span>
+                </div>
+                <div class="setting-control">
+                  <div class="segmented-pills fps-pills" role="group" aria-label="Modo de red No-Host">
+                    <button
+                      type="button"
+                      id="netmode-classic-btn"
+                      class="seg-pill"
+                      class:active={gameUI.settings.netMode !== 'predicted'}
+                      onclick={() => {
+                        soundFX.playUIClick();
+                        gameUI.setNetMode('classic');
+                      }}
+                    >
+                      Clásico (Haxball)
+                    </button>
+                    <button
+                      type="button"
+                      id="netmode-predicted-btn"
+                      class="seg-pill"
+                      class:active={gameUI.settings.netMode === 'predicted'}
+                      onclick={() => {
+                        soundFX.playUIClick();
+                        gameUI.setNetMode('predicted');
+                      }}
+                    >
+                      Predicción
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div class="card-inner-divider"></div>
+
               <!-- Extrapolación automática inteligente -->
               <div class="video-setting-row">
                 <div class="setting-copy">

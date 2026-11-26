@@ -235,6 +235,10 @@ export class GameRenderer {
     this.discRenderer.setExtrapolation(this.extrapolationMs);
   }
 
+  public setExtrapolateAllDiscs(enabled: boolean): void {
+    this.discRenderer.extrapolateAllDiscs = enabled;
+  }
+
   public setChatHeight(height: number): void {
     if (height >= 0) {
       this.chatHeight = height;

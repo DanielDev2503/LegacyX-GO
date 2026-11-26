@@ -389,7 +389,7 @@
 
     const text = chatMessage.trim();
     if (text) {
-      // Local slash commands (/var, /extrapolation) bypass chat spam cooldown
+      // Local slash commands (/var, /extrapolation, /netmode, /simlag) bypass chat spam cooldown
       if (gameUI.handleChatCommand(text)) {
         soundFX.playUIClick();
         chatMessage = '';
@@ -1047,6 +1047,18 @@
     </div>
   {/if}
 
+  {#if gameUI.simLagConfig.enabled}
+    <div
+      class="simlag-indicator"
+      role="status"
+      aria-live="polite"
+      title="Simulador sintético de red 4G activo (/simlag 0 para desactivar)"
+    >
+      <span class="simlag-dot" aria-hidden="true"></span>
+      <span>SIMLAG {gameUI.simLagConfig.rttMs}ms · ±{gameUI.simLagConfig.jitterMs}ms · {gameUI.simLagConfig.lossPct}%</span>
+    </div>
+  {/if}
+
   <!-- ========================================== -->
   <!-- 2. TELEMETRÍA EN VIVO (ACTIVABLE EN VIDEO) -->
   <!-- ========================================== -->
@@ -1283,7 +1295,7 @@
           class="chat-text-input"
           placeholder={gameUI.isMobileLayout
             ? 'Escribe un mensaje (@usuario, @all)...'
-            : 'Presiona Enter para escribir (@usuario, @all, /extrapolation)...'}
+            : 'Presiona Enter para escribir (@usuario, @all, /netmode, /extrapolation)...'}
           bind:value={chatMessage}
           oninput={syncChatCursor}
           onclick={syncChatCursor}
@@ -1935,6 +1947,35 @@
   .hud-btn-svg {
     width: 1.15rem;
     height: 1.15rem;
+  }
+
+  .simlag-indicator {
+    pointer-events: none;
+    position: fixed;
+    top: 72px;
+    left: 16px;
+    z-index: 104;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.24rem 0.55rem;
+    border-radius: 9999px;
+    background: rgba(24, 16, 8, 0.88);
+    border: 1px solid rgba(245, 158, 11, 0.55);
+    color: #fbbf24;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.45);
+    user-select: none;
+  }
+
+  .simlag-dot {
+    width: 0.42rem;
+    height: 0.42rem;
+    border-radius: 9999px;
+    background: #f59e0b;
   }
 
   .hud-telemetry-corner {

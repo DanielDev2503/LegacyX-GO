@@ -171,8 +171,8 @@ describe('P2P Extrapolation (0-250ms), Client Prediction Replay & Non-Host Audio
     reconciler.decayVisualOffset();
     expect(reconciler.visualOffset.x).toBeCloseTo(initialOffsetX * 0.82, 4);
 
-    // Simulate a catastrophic > 60 px desync (e.g. kickoff reset): hard-snaps and clears visualOffset to 0
-    p2.pos.x += 120;
+    // Simulate a catastrophic > 120 px desync (e.g. kickoff reset): hard-snaps and clears visualOffset to 0
+    p2.pos.x += 150;
     const res3 = reconciler.reconcile(predEngine, authAtTick5, 2);
     expect(res3.hardSnapped).toBe(true);
     expect(reconciler.visualOffset.x).toBe(0);

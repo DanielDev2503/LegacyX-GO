@@ -2,6 +2,7 @@ import { BinaryProtocol, type GameStateSnapshot, type PlayerPosition } from '@le
 import { PeerConnection, type IceRouteLabel } from './PeerConnection';
 import { SignalingClient } from './SignalingClient';
 import { JitterBuffer } from './JitterBuffer';
+import { NetworkImpairmentSimulator } from './NetworkImpairmentSimulator';
 import type { PlayerInfo } from './NetworkHost';
 import { gameUI } from '../ui/state/gameUI.svelte.js';
 
@@ -50,7 +51,7 @@ export class NetworkClient {
   public localPlayerId: number | null = null;
   public players: PlayerInfo[] = [];
   public teamsLocked: boolean = false;
-  public jitterBuffer = new JitterBuffer(32, 30, true);
+  public jitterBuffer = new JitterBuffer(32, 45, true);
   public latestSnapshot: GameStateSnapshot | null = null;
   public activeGoalScorerId: number | null = null;
   public autoExtrapolationMs: number = 0;
@@ -62,8 +63,15 @@ export class NetworkClient {
   private lossWindowExpected: number = 0;
   private lossWindowMissing: number = 0;
   private lastLossTrackTick: number = -1;
+  private prevDeltaTick: number = 0;
   private consecutiveStride2Count: number = 0;
+  private stride40HzPairCount: number = 0;
   private nominalSnapshotStride: number = 1;
+
+  // Simulador sintético de red 4G en vivo (/simlag)
+  private uplinkImpairment: NetworkImpairmentSimulator<ArrayBuffer | string> | null = null;
+  private downlinkImpairment: NetworkImpairmentSimulator<ArrayBuffer | Record<string, unknown>> | null = null;
+  private impairmentTimer: ReturnType<typeof setInterval> | null = null;
 
   private highestSnapshotTick: number = -1;
   private lastSnapshotPhase: number | null = null;
@@ -92,7 +100,7 @@ export class NetworkClient {
 
   private nickname: string;
   private number: number;
-  // Ring buffer Zero-GC de los últimos 3 inputs sin confirmar para redundancia 3x (OP_INPUT_BUNDLE)
+  // Ring buffer Zero-GC de los últimos 4 inputs sin confirmar para redundancia 4x (OP_INPUT_BUNDLE, 38 bytes)
   private readonly inputHistory: Array<{
     sequence: number;
     tick: number;
@@ -102,13 +110,15 @@ export class NetworkClient {
   }> = [
     { sequence: 0, tick: 0, inputMask: 0, aimAngle: null, aimThrottle: 0 },
     { sequence: 0, tick: 0, inputMask: 0, aimAngle: null, aimThrottle: 0 },
+    { sequence: 0, tick: 0, inputMask: 0, aimAngle: null, aimThrottle: 0 },
     { sequence: 0, tick: 0, inputMask: 0, aimAngle: null, aimThrottle: 0 }
   ];
   private inputHistoryCount: number = 0;
-  private readonly reusableBundleBuffers: [ArrayBuffer, ArrayBuffer, ArrayBuffer] = [
+  private readonly reusableBundleBuffers: [ArrayBuffer, ArrayBuffer, ArrayBuffer, ArrayBuffer] = [
     new ArrayBuffer(BinaryProtocol.INPUT_BUNDLE_HEADER_SIZE + BinaryProtocol.INPUT_BUNDLE_ENTRY_SIZE),
     new ArrayBuffer(BinaryProtocol.INPUT_BUNDLE_HEADER_SIZE + BinaryProtocol.INPUT_BUNDLE_ENTRY_SIZE * 2),
-    new ArrayBuffer(BinaryProtocol.INPUT_BUNDLE_HEADER_SIZE + BinaryProtocol.INPUT_BUNDLE_ENTRY_SIZE * 3)
+    new ArrayBuffer(BinaryProtocol.INPUT_BUNDLE_HEADER_SIZE + BinaryProtocol.INPUT_BUNDLE_ENTRY_SIZE * 3),
+    new ArrayBuffer(BinaryProtocol.INPUT_BUNDLE_HEADER_SIZE + BinaryProtocol.INPUT_BUNDLE_ENTRY_SIZE * 4)
   ];
   private pingIntervalId: ReturnType<typeof setInterval> | null = null;
 
@@ -380,12 +390,14 @@ export class NetworkClient {
     this.highestSnapshotTick = -1;
     this.lastSnapshotPhase = null;
     this.lastLossTrackTick = -1;
+    this.prevDeltaTick = 0;
     this.lossWindowExpected = 0;
     this.lossWindowMissing = 0;
     this.packetLossPct = 0;
     this.iceRoute = 'Unknown';
     this.webrtcRttMs = 0;
     this.consecutiveStride2Count = 0;
+    this.stride40HzPairCount = 0;
     this.nominalSnapshotStride = 1;
     this.peer = new PeerConnection({
       peerId: this.hostPeerId,
@@ -399,62 +411,15 @@ export class NetworkClient {
         this.handleReliableMessage(msg as Record<string, unknown>);
       },
       onUnreliableSnapshot: (buffer: ArrayBuffer) => {
-        const snapshot = BinaryProtocol.decodeSnapshot(buffer);
-        if (!snapshot) return;
-        this.jitterBuffer.push(snapshot, performance.now());
-
-        const phaseChangedToSpecial =
-          snapshot.phase !== this.lastSnapshotPhase &&
-          (snapshot.phase === 0 || snapshot.phase === 3.5);
-        const isTickReset =
-          this.highestSnapshotTick >= 0 && snapshot.tick + 100 < this.highestSnapshotTick;
-        const isMonotonic =
-          this.highestSnapshotTick < 0 ||
-          snapshot.tick >= this.highestSnapshotTick ||
-          phaseChangedToSpecial ||
-          isTickReset;
-
-        if (!isMonotonic) return;
-
-        // Medición real de pérdida de paquetes UDP por saltos de secuencia de snapshots (Zero-GC)
-        if (this.lastLossTrackTick >= 0 && snapshot.tick > this.lastLossTrackTick) {
-          const deltaTicks = snapshot.tick - this.lastLossTrackTick;
-          if (deltaTicks < 120) {
-            if (deltaTicks === 2) {
-              this.consecutiveStride2Count = Math.min(10, this.consecutiveStride2Count + 1);
-              if (this.consecutiveStride2Count >= 4) {
-                this.nominalSnapshotStride = 2;
-              }
-            } else if (deltaTicks === 1) {
-              this.consecutiveStride2Count = 0;
-              this.nominalSnapshotStride = 1;
+        if (this.downlinkImpairment) {
+          this.downlinkImpairment.send(buffer, performance.now(), (delayedBuf, arrivedAtMs) => {
+            if (delayedBuf instanceof ArrayBuffer) {
+              this.processIncomingSnapshot(delayedBuf, arrivedAtMs);
             }
-            const stride = this.nominalSnapshotStride;
-            const expectedPackets = Math.max(1, Math.round(deltaTicks / stride));
-            const missingPackets = Math.max(0, expectedPackets - 1);
-            this.lossWindowExpected += expectedPackets;
-            this.lossWindowMissing += missingPackets;
-            if (this.lossWindowExpected >= 30) {
-              const rawPct = (this.lossWindowMissing / this.lossWindowExpected) * 100;
-              this.packetLossPct = Math.round(Math.min(100, rawPct) * 10) / 10;
-              // Decaimiento suave de ventana para reaccionar rápido a cambios de red
-              this.lossWindowExpected = Math.floor(this.lossWindowExpected * 0.5);
-              this.lossWindowMissing = Math.floor(this.lossWindowMissing * 0.5);
-            }
-          }
+          });
+          return;
         }
-        this.lastLossTrackTick = snapshot.tick;
-
-        this.highestSnapshotTick = snapshot.tick;
-        this.lastSnapshotPhase = snapshot.phase;
-        this.latestSnapshot = snapshot;
-        if (snapshot.phase === 3.5) {
-          this.jitterBuffer.setMatchState(3.5);
-        } else if (snapshot.phase === 0 || snapshot.phase === 1) {
-          this.updateActiveGoalScorerId(null);
-        }
-        this.onSnapshotDecoded?.(snapshot);
-        this.onSnapshotBuffer?.(buffer);
+        this.processIncomingSnapshot(buffer, performance.now());
       },
       onUnreliableOpen: () => {
         this.sendPingProbe();
@@ -487,6 +452,122 @@ export class NetworkClient {
         gameUI.recordTelemetrySample(stats.rttMs, gameUI.fps);
       }
     };
+  }
+
+  private processIncomingSnapshot(buffer: ArrayBuffer, receivedAtMs: number): void {
+    const snapshot = BinaryProtocol.decodeSnapshot(buffer);
+    if (!snapshot) return;
+    this.jitterBuffer.push(snapshot, receivedAtMs);
+
+    const phaseChangedToSpecial =
+      snapshot.phase !== this.lastSnapshotPhase &&
+      (snapshot.phase === 0 || snapshot.phase === 3.5);
+    const isTickReset =
+      this.highestSnapshotTick >= 0 && snapshot.tick + 100 < this.highestSnapshotTick;
+    const isMonotonic =
+      this.highestSnapshotTick < 0 ||
+      snapshot.tick >= this.highestSnapshotTick ||
+      phaseChangedToSpecial ||
+      isTickReset;
+
+    if (!isMonotonic) return;
+
+    // Medición real de pérdida UDP compatible con emisión adaptativa 60 / 40 / 30 Hz (Zero-GC)
+    if (this.lastLossTrackTick >= 0 && snapshot.tick > this.lastLossTrackTick) {
+      const deltaTicks = snapshot.tick - this.lastLossTrackTick;
+      if (deltaTicks < 120) {
+        if ((this.prevDeltaTick === 1 && deltaTicks === 2) || (this.prevDeltaTick === 2 && deltaTicks === 1)) {
+          this.stride40HzPairCount = Math.min(10, this.stride40HzPairCount + 1);
+          this.consecutiveStride2Count = 0;
+          if (this.stride40HzPairCount >= 4) {
+            this.nominalSnapshotStride = 1.5;
+          }
+        } else if (deltaTicks === 2 && this.prevDeltaTick === 2) {
+          this.consecutiveStride2Count = Math.min(10, this.consecutiveStride2Count + 1);
+          this.stride40HzPairCount = 0;
+          if (this.consecutiveStride2Count >= 4) {
+            this.nominalSnapshotStride = 2;
+          }
+        } else if (deltaTicks === 1 && this.prevDeltaTick === 1) {
+          this.consecutiveStride2Count = 0;
+          this.stride40HzPairCount = 0;
+          this.nominalSnapshotStride = 1;
+        }
+        this.prevDeltaTick = deltaTicks;
+
+        const stride = this.nominalSnapshotStride;
+        const expectedPackets = Math.max(1, Math.round(deltaTicks / stride));
+        const missingPackets = Math.max(0, expectedPackets - 1);
+        this.lossWindowExpected += expectedPackets;
+        this.lossWindowMissing += missingPackets;
+        if (this.lossWindowExpected >= 30) {
+          const rawPct = (this.lossWindowMissing / this.lossWindowExpected) * 100;
+          this.packetLossPct = Math.round(Math.min(100, rawPct) * 10) / 10;
+          this.lossWindowExpected = Math.floor(this.lossWindowExpected * 0.5);
+          this.lossWindowMissing = Math.floor(this.lossWindowMissing * 0.5);
+        }
+      }
+    }
+    this.lastLossTrackTick = snapshot.tick;
+
+    this.highestSnapshotTick = snapshot.tick;
+    this.lastSnapshotPhase = snapshot.phase;
+    this.latestSnapshot = snapshot;
+    if (snapshot.phase === 3.5) {
+      this.jitterBuffer.setMatchState(3.5);
+    } else if (snapshot.phase === 0 || snapshot.phase === 1) {
+      this.updateActiveGoalScorerId(null);
+    }
+    this.onSnapshotDecoded?.(snapshot);
+    this.onSnapshotBuffer?.(buffer);
+  }
+
+  public setNetworkImpairment(cfg: {
+    enabled: boolean;
+    rttMs: number;
+    jitterMs: number;
+    lossPct: number;
+  }): void {
+    if (this.impairmentTimer !== null) {
+      clearInterval(this.impairmentTimer);
+      this.impairmentTimer = null;
+    }
+    if (!cfg.enabled || (cfg.rttMs <= 0 && cfg.jitterMs <= 0 && cfg.lossPct <= 0)) {
+      this.uplinkImpairment = null;
+      this.downlinkImpairment = null;
+      return;
+    }
+    const oneWayLatency = Math.max(0, cfg.rttMs / 2);
+    const perDirectionJitter = Math.max(0, Math.round(cfg.jitterMs * 1.4));
+    const lossRate = Math.max(0, Math.min(0.5, cfg.lossPct / 100));
+    const reorderRate = cfg.jitterMs > 0 ? Math.min(0.15, cfg.jitterMs / 400) : 0;
+
+    this.uplinkImpairment = new NetworkImpairmentSimulator({
+      latencyMs: oneWayLatency,
+      jitterMs: perDirectionJitter,
+      packetLossRate: lossRate,
+      reorderRate,
+      seed: 0x41a2b3c4
+    });
+    this.downlinkImpairment = new NetworkImpairmentSimulator({
+      latencyMs: oneWayLatency,
+      jitterMs: perDirectionJitter,
+      packetLossRate: lossRate,
+      reorderRate,
+      seed: 0x9e3779b9
+    });
+    this.impairmentTimer = setInterval(() => {
+      this.flushImpairment(performance.now());
+    }, 8);
+  }
+
+  public flushImpairment(nowMs: number = performance.now()): void {
+    if (this.uplinkImpairment) {
+      this.uplinkImpairment.flushDue(nowMs);
+    }
+    if (this.downlinkImpairment) {
+      this.downlinkImpairment.flushDue(nowMs);
+    }
   }
 
   private updateActiveGoalScorerId(nextId: number | null): void {
@@ -584,23 +665,15 @@ export class NetworkClient {
         typeof msg.id === 'string' || typeof msg.id === 'number' ? String(msg.id) : undefined
       );
     } else if (msg.type === 'PONG_PROBE') {
-      const now = performance.now();
-      const sentTime = Number(msg.t || 0);
-      if (sentTime > 0) {
-        const rtt = Math.max(1, Math.round(now - sentTime));
-        this.rttSamples.push(rtt);
-        if (this.rttSamples.length > 5) {
-          this.rttSamples.shift();
-        }
-        let targetPing = rtt;
-        if (this.rttSamples.length >= 2) {
-          const sorted = this.rttSamples.slice().sort((a, b) => a - b);
-          targetPing = sorted[Math.floor(sorted.length / 2)]!;
-        }
-        gameUI.recordTelemetrySample(targetPing, gameUI.fps);
-        if (typeof (gameUI as any).effectiveExtrapolationMs === 'number') {
-          this.setAutoExtrapolationMs((gameUI as any).effectiveExtrapolationMs);
-        }
+      if (this.downlinkImpairment) {
+        const pongCopy = { type: 'PONG_PROBE', t: Number(msg.t || 0) };
+        this.downlinkImpairment.send(pongCopy, performance.now(), (delayedMsg, arrivedAt) => {
+          if (delayedMsg && typeof delayedMsg === 'object' && !(delayedMsg instanceof ArrayBuffer)) {
+            this.processPongProbe(Number(delayedMsg.t || 0), arrivedAt);
+          }
+        });
+      } else {
+        this.processPongProbe(Number(msg.t || 0), performance.now());
       }
     } else if (msg.type === 'MATCH_STATS_SUMMARY') {
       if (msg.snapshot) {
@@ -687,6 +760,25 @@ export class NetworkClient {
     }
   }
 
+  private processPongProbe(sentTime: number, now: number): void {
+    if (sentTime > 0) {
+      const rtt = Math.max(1, Math.round(now - sentTime));
+      this.rttSamples.push(rtt);
+      if (this.rttSamples.length > 5) {
+        this.rttSamples.shift();
+      }
+      let targetPing = rtt;
+      if (this.rttSamples.length >= 2) {
+        const sorted = this.rttSamples.slice().sort((a, b) => a - b);
+        targetPing = sorted[Math.floor(sorted.length / 2)]!;
+      }
+      gameUI.recordTelemetrySample(targetPing, gameUI.fps);
+      if (typeof (gameUI as any).effectiveExtrapolationMs === 'number') {
+        this.setAutoExtrapolationMs((gameUI as any).effectiveExtrapolationMs);
+      }
+    }
+  }
+
   public sendInput(
     inputMask: number,
     tick: number,
@@ -699,15 +791,23 @@ export class NetworkClient {
     const normalizedThrottle = aimAngle !== null && aimAngle !== undefined ? aimThrottle : 0;
 
     if (this.inputHistoryCount > 0 && this.inputHistory[0]!.sequence === seq) {
-      // Mismo seq (p. ej. despacho inmediato por flanco ascendente + tick 60 Hz): fusionar bits críticos sin alocar
+      // Mismo seq (flanco ascendente inmediato + tick 60 Hz): fusionar bits críticos sin alocar
       this.inputHistory[0]!.inputMask |= inputMask;
       this.inputHistory[0]!.aimAngle = normalizedAngle;
       this.inputHistory[0]!.aimThrottle = normalizedThrottle;
     } else {
-      // Desplazar [1] -> [2], [0] -> [1] in-place (Zero-GC)
+      // Desplazar [2] -> [3], [1] -> [2], [0] -> [1] in-place (Zero-GC, 4x redundancia)
+      const h3 = this.inputHistory[3]!;
       const h2 = this.inputHistory[2]!;
       const h1 = this.inputHistory[1]!;
       const h0 = this.inputHistory[0]!;
+
+      h3.sequence = h2.sequence;
+      h3.tick = h2.tick;
+      h3.inputMask = h2.inputMask;
+      h3.aimAngle = h2.aimAngle;
+      h3.aimThrottle = h2.aimThrottle;
+
       h2.sequence = h1.sequence;
       h2.tick = h1.tick;
       h2.inputMask = h1.inputMask;
@@ -726,7 +826,7 @@ export class NetworkClient {
       h0.aimAngle = normalizedAngle;
       h0.aimThrottle = normalizedThrottle;
 
-      if (this.inputHistoryCount < 3) {
+      if (this.inputHistoryCount < 4) {
         this.inputHistoryCount++;
       }
     }
@@ -737,6 +837,15 @@ export class NetworkClient {
       count,
       this.reusableBundleBuffers[count - 1]
     );
+    if (this.uplinkImpairment) {
+      const targetPeer = this.peer;
+      this.uplinkImpairment.send(buffer, performance.now(), (delayedBuf) => {
+        if (delayedBuf instanceof ArrayBuffer) {
+          targetPeer.sendUnreliable(delayedBuf);
+        }
+      });
+      return;
+    }
     this.peer.sendUnreliable(buffer);
   }
 
@@ -830,8 +939,10 @@ export class NetworkClient {
     } else {
       jb.autoExtrapolationMs = clamped;
     }
-    const targetDelay = Math.max(28, Math.min(100, 28 + clamped * 0.25));
-    jb.interpolationDelayMs = jb.interpolationDelayMs * 0.8 + targetDelay * 0.2;
+    if (this.jitterBuffer.buffer.length === 0) {
+      const targetDelay = Math.max(30, Math.min(140, 30 + clamped * 0.25));
+      jb.interpolationDelayMs = jb.interpolationDelayMs * 0.8 + targetDelay * 0.2;
+    }
   }
 
   public getInterpolatedState(nowMs: number = performance.now()): GameStateSnapshot | null {
@@ -865,10 +976,20 @@ export class NetworkClient {
   }
 
   private sendPingProbe(): void {
-    this.peer?.sendUnreliableMessage({
+    const payload = {
       type: 'PING_PROBE',
       t: performance.now()
-    });
+    };
+    if (this.uplinkImpairment) {
+      const targetPeer = this.peer;
+      this.uplinkImpairment.send(JSON.stringify(payload), performance.now(), (delayedStr) => {
+        if (typeof delayedStr === 'string') {
+          targetPeer?.sendUnreliableMessage(delayedStr);
+        }
+      });
+      return;
+    }
+    this.peer?.sendUnreliableMessage(payload);
   }
 
   public startPingProbe(): void {
@@ -898,6 +1019,12 @@ export class NetworkClient {
   public disconnect(): void {
     this.isDisconnecting = true;
     this.inputHistoryCount = 0;
+    if (this.impairmentTimer !== null) {
+      clearInterval(this.impairmentTimer);
+      this.impairmentTimer = null;
+    }
+    this.uplinkImpairment = null;
+    this.downlinkImpairment = null;
     this.resolveHandshakeWaiters(false);
     this.stopPingProbe();
     this.highestSnapshotTick = -1;

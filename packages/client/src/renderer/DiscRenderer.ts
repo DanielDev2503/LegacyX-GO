@@ -141,6 +141,7 @@ export class DiscRenderer {
   private scratchCoreRightY: Float32Array = new Float32Array(TURBO_TRAIL_CAPACITY);
 
   public extrapolationMs: number = 0;
+  public extrapolateAllDiscs: boolean = false;
   public isPaused: boolean = false;
   public skipNextFrameExtrapolation: boolean = false;
   public stadiumBounds: { halfWidth: number; halfHeight: number; goalDepth: number; goalHalfHeight: number; runOff?: number } | null = null;
@@ -280,8 +281,10 @@ export class DiscRenderer {
     const skip = this.skipNextFrameExtrapolation;
     for (let i = 0; i < discs.length; i++) {
       const disc = discs[i]!;
-      const isRemote = disc.team === 0 ? true : disc.id !== localDiscId;
-      const renderD = skip ? disc : this.getRenderDisc(disc, isRemote);
+      const shouldExtrapolate = this.extrapolateAllDiscs
+        ? true
+        : (disc.team === 0 ? true : disc.id !== localDiscId);
+      const renderD = skip ? disc : this.getRenderDisc(disc, shouldExtrapolate);
       let slot = this.frameRenderDiscs[i];
       if (!slot) {
         slot = {
@@ -325,56 +328,15 @@ export class DiscRenderer {
     this.frameRenderDiscs.length = discs.length;
   }
 
-  /**
-   * Render-only circle-circle separation guard preventing extrapolated balls and players
-   * from visually overlapping on screen without mutating the authoritative input snapshots.
-   */
-  private separateFrameDiscs(): void {
-    const count = this.frameRenderDiscs.length;
-    for (let i = 0; i < count; i++) {
-      const ball = this.frameRenderDiscs[i]!;
-      if (ball.team !== 0) continue;
-      const ballR = ball.radius || this.ballRadius;
-
-      for (let j = 0; j < count; j++) {
-        const p = this.frameRenderDiscs[j]!;
-        if (p.team === 0) continue;
-
-        const dx = ball.x - p.x;
-        const dy = ball.y - p.y;
-        const dist = Math.hypot(dx, dy);
-        const minDist = ballR + (p.radius || this.playerRadius);
-
-        if (dist < minDist - 0.001) {
-          let nx = 1;
-          let ny = 0;
-          if (dist >= 1e-4) {
-            nx = dx / dist;
-            ny = dy / dist;
-          }
-          const overlap = minDist - dist;
-          ball.x += nx * overlap * 0.72;
-          ball.y += ny * overlap * 0.72;
-          p.x -= nx * overlap * 0.28;
-          p.y -= ny * overlap * 0.28;
-        }
-      }
-    }
-  }
-
   public render(
     ctx: CanvasRenderingContext2D,
     discs: DiscSnapshot[],
     localDiscId?: number | null
   ): void {
-    const skip = this.skipNextFrameExtrapolation;
     try {
       ctx.save();
 
       this.populateFrameRenderDiscs(discs, localDiscId);
-      if (!skip) {
-        this.separateFrameDiscs();
-      }
 
       const renderCount = this.frameRenderDiscs.length;
       this.activeTurboIds.clear();

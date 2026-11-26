@@ -210,7 +210,9 @@ export const LEGACYX_PLAYER_AVATAR_KEY = 'legacyx_player_avatar';
 export const LEGACYX_AVATAR_TYPE_KEY = 'legacyx_avatar_type';
 export const NICKNAME_STORAGE_KEY = 'legacyx_player_name';
 export const AVATAR_STORAGE_KEY = 'legacyx_player_avatar';
+export type NetModeType = 'classic' | 'predicted';
 export const LEGACYX_EXTRAPOLATION_KEY = 'legacyx_extrapolation_ms';
+export const LEGACYX_NET_MODE_KEY = 'legacyx_net_mode';
 
 export interface MatchBannerPayload {
   kind: 'NONE' | 'VS' | 'COUNTDOWN' | 'PAUSED' | 'GOAL' | 'VICTORY';
@@ -340,6 +342,7 @@ export interface SettingsConfig {
   showPlayerAvatars: boolean;
   extrapolationMs: number;
   autoExtrapolation: boolean;
+  netMode: NetModeType;
   netDeformationEnabled: boolean;
   showStatsMonitor: boolean;
 
@@ -441,6 +444,7 @@ export const DEFAULT_SETTINGS: SettingsConfig = {
   showPlayerAvatars: true,
   extrapolationMs: 0,
   autoExtrapolation: true,
+  netMode: 'classic',
   netDeformationEnabled: true,
   showStatsMonitor: true,
 
@@ -1624,7 +1628,15 @@ class GameUIStore {
   public onRemoveBot: ((botId: number) => void) | null = null;
   public onClearTeam: ((team: 'red' | 'blue') => void) | null = null;
   public onTriggerShake: ((intensity: number, durationMs: number) => void) | null = null;
+  public onSimLagChanged: ((cfg: { enabled: boolean; rttMs: number; jitterMs: number; lossPct: number }) => void) | null = null;
   public isGamepadActive = $state<boolean>(false);
+  private hasShownHighPingNetModeHint = false;
+  public simLagConfig = $state<{ enabled: boolean; rttMs: number; jitterMs: number; lossPct: number }>({
+    enabled: false,
+    rttMs: 0,
+    jitterMs: 0,
+    lossPct: 0
+  });
 
   public get screenShake(): boolean {
     return this.settings.screenShakeEnabled !== false;
@@ -1634,6 +1646,43 @@ class GameUIStore {
     this.settings.screenShakeEnabled = Boolean(val);
     this.settings.goalShakeEnabled = Boolean(val);
     this.saveSettings();
+  }
+
+  public setNetMode(mode: NetModeType): NetModeType {
+    const normalized: NetModeType = mode === 'predicted' ? 'predicted' : 'classic';
+    this.settings.netMode = normalized;
+    if (typeof localStorage !== 'undefined') {
+      try {
+        localStorage.setItem(LEGACYX_NET_MODE_KEY, normalized);
+        localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(this.settings));
+      } catch {
+        // Ignore storage quota
+      }
+    }
+    this.onSettingsChanged?.(this.settings);
+    return normalized;
+  }
+
+  public setSimLag(
+    rttMs: number,
+    jitterMs: number = 0,
+    lossPct: number = 0
+  ): { enabled: boolean; rttMs: number; jitterMs: number; lossPct: number } {
+    const safeRtt = Number.isFinite(rttMs) ? Math.max(0, Math.min(1000, Math.round(rttMs))) : 0;
+    const safeJitter = Number.isFinite(jitterMs) ? Math.max(0, Math.min(300, Math.round(jitterMs))) : 0;
+    const safeLoss = Number.isFinite(lossPct)
+      ? Math.max(0, Math.min(50, Math.round(lossPct * 10) / 10))
+      : 0;
+    const enabled = safeRtt > 0 || safeJitter > 0 || safeLoss > 0;
+    const nextCfg = {
+      enabled,
+      rttMs: enabled ? safeRtt : 0,
+      jitterMs: enabled ? safeJitter : 0,
+      lossPct: enabled ? safeLoss : 0
+    };
+    this.simLagConfig = nextCfg;
+    this.onSimLagChanged?.(nextCfg);
+    return nextCfg;
   }
 
   public setExtrapolationMs(ms: number): number {
@@ -1701,6 +1750,70 @@ class GameUIStore {
       return true;
     }
 
+    const netModeMatch = /^\/netmode(?:\s+(.*))?$/i.exec(trimmed);
+    if (netModeMatch) {
+      const arg = (netModeMatch[1] ?? '').trim().toLowerCase();
+      if (!arg) {
+        this.pushLocalSystemNotice(
+          `Modo de red actual: ${this.settings.netMode.toUpperCase()}. Uso: /netmode <classic|predicted>`
+        );
+        return true;
+      }
+      if (arg === 'classic' || arg === 'clasico' || arg === 'clásico') {
+        this.setNetMode('classic');
+        this.pushLocalSystemNotice('Modo de red: CLASSIC (Haxball puro — línea temporal unificada).');
+        return true;
+      }
+      if (arg === 'predicted' || arg === 'predict' || arg === 'prediccion' || arg === 'predicción') {
+        this.setNetMode('predicted');
+        this.pushLocalSystemNotice('Modo de red: PREDICTED (predicción local con reconciliación).');
+        return true;
+      }
+      this.pushLocalSystemNotice('Valor inválido. Uso: /netmode <classic|predicted>');
+      return true;
+    }
+
+    const simLagMatch = /^\/simlag(?:\s+(.*))?$/i.exec(trimmed);
+    if (simLagMatch) {
+      const arg = (simLagMatch[1] ?? '').trim();
+      if (!arg) {
+        if (this.simLagConfig.enabled) {
+          this.pushLocalSystemNotice(
+            `Simulador de lag ACTIVO: ${this.simLagConfig.rttMs} ms RTT · ±${this.simLagConfig.jitterMs} ms jitter · ${this.simLagConfig.lossPct}% pérdida. Uso: /simlag <rttMs> [jitterMs] [lossPct] o /simlag 0`
+          );
+        } else {
+          this.pushLocalSystemNotice(
+            'Simulador de lag (/simlag) INACTIVO. Uso: /simlag <rttMs> [jitterMs] [lossPct] (ej. /simlag 260 40 3)'
+          );
+        }
+        return true;
+      }
+      if (/^(?:0|off|disable|none)$/i.test(arg)) {
+        this.setSimLag(0, 0, 0);
+        this.pushLocalSystemNotice('Simulador de lag (/simlag) DESACTIVADO.');
+        return true;
+      }
+      const parts = arg.split(/\s+/);
+      if (parts.length > 3 || parts.some((p) => !/^\d+(?:\.\d+)?$/.test(p))) {
+        this.pushLocalSystemNotice(
+          'Uso: /simlag <rttMs> [jitterMs] [lossPct] (ej. /simlag 260 40 3) o /simlag 0'
+        );
+        return true;
+      }
+      const rtt = Number(parts[0]);
+      const jitter = parts[1] !== undefined ? Number(parts[1]) : 0;
+      const loss = parts[2] !== undefined ? Number(parts[2]) : 0;
+      const applied = this.setSimLag(rtt, jitter, loss);
+      if (!applied.enabled) {
+        this.pushLocalSystemNotice('Simulador de lag (/simlag) DESACTIVADO.');
+      } else {
+        this.pushLocalSystemNotice(
+          `Simulador de lag ACTIVO: ${applied.rttMs} ms RTT · ±${applied.jitterMs} ms jitter · ${applied.lossPct}% pérdida.`
+        );
+      }
+      return true;
+    }
+
     const match = /^\/(?:extrapolation|extra)(?:\s+(.*))?$/i.exec(trimmed);
     if (!match) return false;
 
@@ -1715,6 +1828,7 @@ class GameUIStore {
       return true;
     }
 
+    this.settings.autoExtrapolation = false;
     const clamped = this.setExtrapolationMs(Number(arg));
     this.pushLocalSystemNotice(`Extrapolación establecida en ${clamped} ms`);
     return true;
@@ -2219,6 +2333,7 @@ class GameUIStore {
               typeof parsed.autoExtrapolation === 'boolean'
                 ? parsed.autoExtrapolation
                 : DEFAULT_SETTINGS.autoExtrapolation,
+            netMode: parsed.netMode === 'predicted' ? 'predicted' : 'classic',
             cameraZoom: clampedZoom,
             chatOpacity: normalizedChatOpacityPct,
             localKit,
@@ -2275,6 +2390,17 @@ class GameUIStore {
       }
     } catch {
       // Ignore corrupt extrapolation localStorage
+    }
+
+    try {
+      const savedNetMode = localStorage.getItem(LEGACYX_NET_MODE_KEY);
+      if (savedNetMode === 'predicted' || savedNetMode === 'classic') {
+        this.settings.netMode = savedNetMode;
+      } else {
+        this.settings.netMode = this.settings.netMode === 'predicted' ? 'predicted' : 'classic';
+      }
+    } catch {
+      // Ignore corrupt netmode localStorage
     }
 
     try {
@@ -2417,6 +2543,7 @@ class GameUIStore {
     this.settings.mobileCustomLayout = normalizedMobile.mobileCustomLayout;
     this.extrapolationMs = Math.max(0, Math.min(250, Math.round(Number(this.settings.extrapolationMs) || 0)));
     this.settings.extrapolationMs = this.extrapolationMs;
+    this.settings.netMode = this.settings.netMode === 'predicted' ? 'predicted' : 'classic';
     this.isAudioMuted = this.settings.isMuted;
     this.masterVolume = this.settings.masterVolume;
 
@@ -2471,6 +2598,7 @@ class GameUIStore {
         localStorage.setItem('haxball_ball_skin', this.settings.ballSkin);
         localStorage.setItem(LEGACYX_EXTRAPOLATION_KEY, String(this.extrapolationMs));
         localStorage.setItem('haxball_extrapolation_ms', String(this.extrapolationMs));
+        localStorage.setItem(LEGACYX_NET_MODE_KEY, this.settings.netMode);
       } catch {
         // Ignore storage error
       }
@@ -2521,6 +2649,7 @@ class GameUIStore {
     this.settings.showTelemetryCard = DEFAULT_SETTINGS.showTelemetryCard;
     this.settings.extrapolationMs = DEFAULT_SETTINGS.extrapolationMs;
     this.settings.autoExtrapolation = DEFAULT_SETTINGS.autoExtrapolation;
+    this.settings.netMode = DEFAULT_SETTINGS.netMode;
     this.extrapolationMs = DEFAULT_SETTINGS.extrapolationMs;
     this.saveSettings();
   }
@@ -3009,6 +3138,18 @@ class GameUIStore {
       sum += this.pingSamples[i]!;
     }
     this.avgPingMs = this.pingSampleCount > 0 ? Math.round(sum / this.pingSampleCount) : this.pingMs;
+    if (
+      !this.isHost &&
+      !this.isPracticeMode &&
+      this.settings.netMode === 'predicted' &&
+      this.pingMs > 120 &&
+      !this.hasShownHighPingNetModeHint
+    ) {
+      this.hasShownHighPingNetModeHint = true;
+      this.pushLocalSystemNotice(
+        `Ping alto (${this.pingMs} ms). Consejo: usa /netmode classic para cero tirones en redes móviles.`
+      );
+    }
     this.emitHudStateChange('telemetry', {
       pingMs: this.pingMs,
       avgPingMs: this.avgPingMs,
@@ -3616,6 +3757,7 @@ class GameUIStore {
       ping: 0
     };
     this.resetTelemetry();
+    this.hasShownHighPingNetModeHint = false;
     this.isHudEditorOpen = false;
     this.isFocusingBall = false;
     this.localStamina = 100;

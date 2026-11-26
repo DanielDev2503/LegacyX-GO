@@ -945,8 +945,8 @@ describe('Task 6: Strict Host & Non-Host Parity Integration', () => {
       expect((netClient as any).autoExtrapolationMs).toBe(gameUI.effectiveExtrapolationMs);
 
       const appSrc = readClientFile('App.svelte');
-      expect(appSrc).toContain('applyPredictiveRenderSeparation(');
-      expect(appSrc).toContain('sepOtherPool');
+      expect(appSrc).not.toContain('applyPredictiveRenderSeparation(');
+      expect(appSrc).toContain('setExtrapolateAllDiscs(');
       expect(appSrc).toContain('scratchDiscPool');
       expect(appSrc).toContain('renderer.stadium.goalHalfHeight');
       expect(appSrc).toContain('renderer.stadium.goalDepth');

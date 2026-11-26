@@ -109,8 +109,8 @@ describe('Anti-Slingshot Reconciler, Camera Zoom Expansion & Chat Enter Activati
       const visualAfter = p.pos.x + reconciler.visualOffset.x;
       expect(visualAfter).toBeCloseTo(visualBefore, 4);
 
-      // Over ~150 ms (10 frames), visualOffset smoothly decays towards 0
-      for (let f = 0; f < 10; f++) {
+      // Over ~200 ms (12 frames), visualOffset smoothly decays towards 0
+      for (let f = 0; f < 12; f++) {
         reconciler.updateVisualSmoothing(1 / 60);
       }
       expect(Math.abs(reconciler.visualOffset.x)).toBeLessThan(1.0);

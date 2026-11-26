@@ -131,8 +131,8 @@ describe('Goal 4 Client Prediction & Netcode Parity Fixes', () => {
       expect(res2.hardSnapped).toBe(false);
       expect(reconciler.didHardSnapLastReconcile).toBe(false);
 
-      // Huge catastrophic error > 90px
-      reconciler.visualOffset.x = 100;
+      // Huge catastrophic error > 120px
+      reconciler.visualOffset.x = 150;
       const res3 = reconciler.reconcile(engine, playSnapshot, 1);
       expect(res3.hardSnapped).toBe(true);
       expect(reconciler.didHardSnapLastReconcile).toBe(true);

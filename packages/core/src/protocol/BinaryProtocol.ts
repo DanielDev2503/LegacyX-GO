@@ -129,7 +129,7 @@ export class BinaryProtocol {
   public static readonly MOUSE_INPUT_SIZE = 12;
   public static readonly INPUT_BUNDLE_HEADER_SIZE = 2;
   public static readonly INPUT_BUNDLE_ENTRY_SIZE = 9;
-  public static readonly INPUT_BUNDLE_MAX_COUNT = 3;
+  public static readonly INPUT_BUNDLE_MAX_COUNT = 4;
   public static readonly SNAPSHOT_HEADER_SIZE = 12;
   public static readonly DISC_RECORD_SIZE = 32;
 
@@ -186,8 +186,8 @@ export class BinaryProtocol {
   }
 
   /**
-   * Codifica un paquete redundante OP_INPUT_BUNDLE (0x07) con hasta 3 inputs recientes
-   * ([seq, mask], [seq-1, mask], [seq-2, mask]) en un ArrayBuffer reutilizable (Zero-GC).
+   * Codifica un paquete redundante OP_INPUT_BUNDLE (0x07) con hasta 4 inputs recientes
+   * ([seq, mask], [seq-1, mask], [seq-2, mask], [seq-3, mask]) en un ArrayBuffer reutilizable (Zero-GC).
    * Formato: [op(1), count(1)] + count * [seq(uint32 LE), mask(uint16 BE), qAngle(int16 BE), qThrottle(uint8)]
    */
   public static encodeInputBundle(

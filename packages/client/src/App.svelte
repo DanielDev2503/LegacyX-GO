@@ -24,7 +24,6 @@
     INPUT_FLAG_TYPING,
     INPUT_FLAG_MOUSE_AIM,
     INPUT_FLAG_MOUSE_ACTIVE,
-    applyPredictiveRenderSeparation,
     lerp,
     DEFAULT_GAMEPLAY_CONFIG
   } from '@legacyx/core';
@@ -1739,6 +1738,10 @@
     };
 
     function flushPendingReconcile(): void {
+      if (gameUI.settings.netMode === 'classic') {
+        pendingReconcileSnapshot = null;
+        return;
+      }
       const snap = pendingReconcileSnapshot;
       if (!snap) return;
       pendingReconcileSnapshot = null;
@@ -1815,8 +1818,29 @@
     const guestLocalInputMap = new Map<number, PlayerInput>();
     const hostSimulationInputs = new Map<number, PlayerInput>();
     let wasModalOpen = gameUI.activeModal !== 'NONE' || gameUI.isHudEditorOpen;
+    let prevNetMode = gameUI.settings.netMode;
 
-    const simTicker = new SimulationTicker((_now) => {
+    function syncNetModeTransition(): void {
+      const currentMode = gameUI.settings.netMode;
+      if (currentMode === prevNetMode) return;
+      prevNetMode = currentMode;
+      pendingReconcileSnapshot = null;
+      hasPredLocalPos = false;
+      hasPredBallPos = false;
+      ballPredWeight = 0;
+      ballPredHoldTimer = 0;
+      reconciler.visualOffset.x = 0;
+      reconciler.visualOffset.y = 0;
+      reconciler.ballVisualOffset.x = 0;
+      reconciler.ballVisualOffset.y = 0;
+      reconciler.inputBuffer.length = 0;
+      if (currentMode === 'predicted' && predEngine && currSnapshot) {
+        predEngine.setState(currSnapshot);
+      }
+    }
+
+    const simTicker = new SimulationTicker((now) => {
+      syncNetModeTransition();
       const isModalOpen = gameUI.activeModal !== 'NONE' || gameUI.isHudEditorOpen;
       if (!wasModalOpen && isModalOpen) {
         releaseAndFlushHeldInputs();
@@ -1825,10 +1849,23 @@
       const localPkt = computeLocalPlayerInput(true);
 
       if (!gameUI.isHost) {
-        // Guest: Predicción local a 60 Hz + envío de input (9 o 12 bytes) por canal no confiable
+        // Guest: Modo classic (Haxball puro) o predicted (60 Hz local + reconciliación)
         if (gameApp.networkClient) {
+          gameApp.networkClient.flushImpairment(now);
           if (!gameApp.networkClient.onSnapshotDecoded) {
             gameApp.networkClient.onSnapshotDecoded = handleAuthoritativeSnapshot;
+          }
+          if (gameUI.settings.netMode === 'classic') {
+            pendingReconcileSnapshot = null;
+            const seq = reconciler.allocateNextSeq();
+            clientTick = seq;
+            gameApp.networkClient.sendInput(
+              localPkt.inputMask ?? 0,
+              seq,
+              localPkt.aimAngle,
+              localPkt.aimThrottle
+            );
+            return;
           }
           flushPendingReconcile();
           if (
@@ -1858,7 +1895,6 @@
             guestLocalInputMap.clear();
             guestLocalInputMap.set(gameUI.localPlayerId, localPkt);
             predEngine.step(guestLocalInputMap, true);
-            reconciler.capturePredictionSample(seq, predEngine, gameUI.localPlayerId);
 
             const localDiscAfter = predEngine.players.get(gameUI.localPlayerId);
             if (localDiscAfter) {
@@ -1955,26 +1991,6 @@
     };
     const scratchDiscs: CompactDiscState[] = [];
     const scratchDiscPool: CompactDiscState[] = [];
-    const sepLocalDisc = { x: 0, y: 0, vx: 0, vy: 0, radius: 15 };
-    const sepOtherPool: Array<{
-      id: number;
-      team: number;
-      x: number;
-      y: number;
-      vx: number;
-      vy: number;
-      radius: number;
-    }> = [];
-    const sepOtherDiscs: Array<{
-      id: number;
-      team: number;
-      x: number;
-      y: number;
-      vx: number;
-      vy: number;
-      radius: number;
-    }> = [];
-    const sepOtherIndexByDisc: number[] = [];
     const scratchExtrapInput = {
       id: 0,
       team: 0 as 0 | 1 | 2,
@@ -2107,7 +2123,11 @@
       renderer.setChatBounds(measuredChatWidth, Math.max(measuredChatHeight, gameUI.chatHeight));
       renderer.screenShakeEnabled = gameUI.screenShake;
       const effExtrapMs = gameUI.effectiveExtrapolationMs;
-      const renderExtrapMs = gameUI.settings.autoExtrapolation === false ? effExtrapMs : 0;
+      const isClassicGuest = !gameUI.isHost && gameUI.settings.netMode === 'classic';
+      const renderExtrapMs = isClassicGuest
+        ? effExtrapMs
+        : (gameUI.settings.autoExtrapolation === false ? effExtrapMs : 0);
+      renderer.setExtrapolateAllDiscs(isClassicGuest);
       renderer.setExtrapolation(renderExtrapMs);
       if (!gameUI.isHost && gameApp.networkClient && lastAppliedExtrapMs !== effExtrapMs) {
         lastAppliedExtrapMs = effExtrapMs;
@@ -2186,20 +2206,25 @@
       }
 
       if (!gameUI.isHost && gameApp.networkClient) {
-        flushPendingReconcile();
-        reconciler.updateVisualSmoothing(frameDt);
+        syncNetModeTransition();
+        gameApp.networkClient.flushImpairment(now);
+        const isClassicMode = gameUI.settings.netMode === 'classic';
+        if (!isClassicMode) {
+          flushPendingReconcile();
+          reconciler.updateVisualSmoothing(frameDt);
+        }
         const interpSnap =
           gameApp.networkClient.getInterpolatedState(now) ??
           gameApp.networkClient.latestSnapshot;
         if (interpSnap && interpSnap.discs) {
           let renderSnap = interpSnap;
           const localId = gameUI.localPlayerId;
-          const predDisc = predEngine && localId > 0 ? predEngine.players.get(localId) : undefined;
-          if (!isMovablePhase(interpSnap.phase)) {
+          const predDisc = !isClassicMode && predEngine && localId > 0 ? predEngine.players.get(localId) : undefined;
+          if (isClassicMode || !isMovablePhase(interpSnap.phase)) {
             ballPredWeight = 0;
             ballPredHoldTimer = 0;
           }
-          if (predDisc && hasPredLocalPos && isMovablePhase(interpSnap.phase)) {
+          if (!isClassicMode && predDisc && hasPredLocalPos && isMovablePhase(interpSnap.phase)) {
             const predX = lerp(prevPredLocalPos.x, currPredLocalPos.x, alpha) + reconciler.visualOffset.x;
             const predY = lerp(prevPredLocalPos.y, currPredLocalPos.y, alpha) + reconciler.visualOffset.y;
             let predFlags = 0;
@@ -2209,17 +2234,10 @@
             if (predDisc.isTyping) predFlags |= 1 << 5;
 
             scratchDiscs.length = 0;
-            sepOtherDiscs.length = 0;
             const inDiscs = interpSnap.discs;
-            sepOtherIndexByDisc.length = inDiscs.length;
             const ballRad = renderer.discRenderer.ballRadius || DEFAULT_GAMEPLAY_CONFIG.ballRadius;
             const playerRad = renderer.discRenderer.playerRadius || DEFAULT_GAMEPLAY_CONFIG.playerRadius;
             const kickMargin = renderer.discRenderer.kickMargin ?? DEFAULT_GAMEPLAY_CONFIG.kickMargin;
-            sepLocalDisc.x = predX;
-            sepLocalDisc.y = predY;
-            sepLocalDisc.vx = predDisc.vel.x;
-            sepLocalDisc.vy = predDisc.vel.y;
-            sepLocalDisc.radius = playerRad;
 
             const predBallX =
               hasPredBallPos && predEngine
@@ -2292,63 +2310,7 @@
               ballPredWeight = 0;
             }
 
-            let nonLocalCount = 0;
             renderer.discRenderer.isPaused = false;
-            for (let i = 0; i < inDiscs.length; i++) {
-              const d = inDiscs[i]!;
-              if (d.id !== localId) {
-                let slot = sepOtherPool[nonLocalCount];
-                if (!slot) {
-                  slot = { id: 0, team: 0, x: 0, y: 0, vx: 0, vy: 0, radius: playerRad };
-                  sepOtherPool.push(slot);
-                }
-                const isBallDisc = d.id === 0 || d.team === 0;
-                const discRadius = isBallDisc ? ballRad : playerRad;
-                scratchExtrapInput.id = d.id;
-                scratchExtrapInput.team = (d.team === 1 || d.team === 2 ? d.team : 0) as 0 | 1 | 2;
-                scratchExtrapInput.x = d.x;
-                scratchExtrapInput.y = d.y;
-                scratchExtrapInput.vx = d.vx;
-                scratchExtrapInput.vy = d.vy;
-                scratchExtrapInput.radius = discRadius;
-                scratchExtrapInput.isDashing = Boolean((d.flags ?? 0) & (1 << 1));
-                const extrapD = renderer.discRenderer.getRenderDisc(scratchExtrapInput, true);
-
-                slot.id = d.id;
-                slot.team = d.team;
-                if (isBallDisc && ballPredWeight > 0 && hasPredBallPos && predEngine) {
-                  slot.x = lerp(extrapD.x, predBallX, ballPredWeight);
-                  slot.y = lerp(extrapD.y, predBallY, ballPredWeight);
-                  slot.vx = ballPredWeight > 0.5 ? predEngine.ball.vel.x : d.vx;
-                  slot.vy = ballPredWeight > 0.5 ? predEngine.ball.vel.y : d.vy;
-                } else {
-                  slot.x = extrapD.x;
-                  slot.y = extrapD.y;
-                  slot.vx = d.vx;
-                  slot.vy = d.vy;
-                }
-                slot.radius = discRadius;
-                sepOtherDiscs.push(slot);
-                sepOtherIndexByDisc[i] = nonLocalCount;
-                nonLocalCount++;
-              } else {
-                sepOtherIndexByDisc[i] = -1;
-              }
-            }
-
-            applyPredictiveRenderSeparation(
-              sepLocalDisc,
-              sepOtherDiscs,
-              renderer.stadium.halfWidth,
-              renderer.stadium.halfHeight,
-              renderer.stadium.goalHalfHeight,
-              renderer.stadium.goalDepth,
-              renderer.stadium.runOff ?? 45,
-              renderer.stadium.postRadius ?? 8,
-              gameUI.gameplayConfig.playerMass,
-              gameUI.gameplayConfig.ballMass
-            );
-
             for (let i = 0; i < inDiscs.length; i++) {
               const d = inDiscs[i]!;
               let outDisc = scratchDiscPool[i];
@@ -2373,10 +2335,10 @@
                 const predRt = (predEngine as any).getRuntime?.(localId);
                 outDisc.id = d.id;
                 outDisc.team = d.team;
-                outDisc.x = sepLocalDisc.x;
-                outDisc.y = sepLocalDisc.y;
-                outDisc.vx = sepLocalDisc.vx;
-                outDisc.vy = sepLocalDisc.vy;
+                outDisc.x = predX;
+                outDisc.y = predY;
+                outDisc.vx = predDisc.vel.x;
+                outDisc.vy = predDisc.vel.y;
                 outDisc.flags = predFlags || d.flags;
                 outDisc.stamina = predDisc.stamina;
                 outDisc.spin = d.spin;
@@ -2384,14 +2346,29 @@
                 outDisc.dashCooldown = predRt?.cooldownTimer ?? 0;
                 outDisc.lastAckedInputSeq = d.lastAckedInputSeq;
               } else {
-                const sep = sepOtherDiscs[sepOtherIndexByDisc[i]!]!;
                 const isBallDisc = d.id === 0 || d.team === 0;
+                const discRadius = isBallDisc ? ballRad : playerRad;
+                scratchExtrapInput.id = d.id;
+                scratchExtrapInput.team = (d.team === 1 || d.team === 2 ? d.team : 0) as 0 | 1 | 2;
+                scratchExtrapInput.x = d.x;
+                scratchExtrapInput.y = d.y;
+                scratchExtrapInput.vx = d.vx;
+                scratchExtrapInput.vy = d.vy;
+                scratchExtrapInput.radius = discRadius;
+                scratchExtrapInput.isDashing = Boolean((d.flags ?? 0) & (1 << 1));
+                const extrapD = renderer.discRenderer.getRenderDisc(scratchExtrapInput, true);
+
                 const usePredBallMeta =
                   isBallDisc && ballPredWeight > 0.5 && hasPredBallPos && Boolean(predEngine);
                 outDisc.id = d.id;
                 outDisc.team = d.team;
-                outDisc.x = sep.x;
-                outDisc.y = sep.y;
+                if (isBallDisc && ballPredWeight > 0 && hasPredBallPos && predEngine) {
+                  outDisc.x = lerp(extrapD.x, predBallX, ballPredWeight);
+                  outDisc.y = lerp(extrapD.y, predBallY, ballPredWeight);
+                } else {
+                  outDisc.x = extrapD.x;
+                  outDisc.y = extrapD.y;
+                }
                 outDisc.vx = usePredBallMeta && predEngine ? predEngine.ball.vel.x : d.vx;
                 outDisc.vy = usePredBallMeta && predEngine ? predEngine.ball.vel.y : d.vy;
                 if (usePredBallMeta && predEngine) {
@@ -2584,7 +2561,8 @@
             jitterMs: gameApp.networkClient.jitterBuffer.meanJitter,
             packetLossPct: gameApp.networkClient.packetLossPct,
             iceRoute: gameApp.networkClient.iceRoute,
-            reconciliationsPerSec: reconciler.reconciliationsPerSec
+            reconciliationsPerSec:
+              gameUI.settings.netMode === 'classic' ? 0 : reconciler.reconciliationsPerSec
           });
         }
         frameCount = 0;

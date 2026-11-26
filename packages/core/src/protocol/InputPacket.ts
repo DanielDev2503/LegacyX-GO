@@ -1,4 +1,4 @@
-import { OP_INPUT, getCachedDataView } from './BinaryProtocol';
+import { BinaryProtocol, OP_INPUT, getCachedDataView, type PlayerInput } from './BinaryProtocol';
 import {
   INPUT_TURBO,
   INPUT_DASH,
@@ -28,6 +28,19 @@ export interface InputData {
 export class InputPacket {
   public static readonly BYTE_LENGTH = 9;
   public static readonly MOUSE_BYTE_LENGTH = 12;
+  public static readonly REDUNDANCY_COUNT = BinaryProtocol.INPUT_BUNDLE_MAX_COUNT;
+
+  public static encodeBundle(
+    entries: readonly PlayerInput[],
+    count: number = entries.length,
+    outBuffer?: ArrayBuffer
+  ): ArrayBuffer {
+    return BinaryProtocol.encodeInputBundle(entries, count, outBuffer);
+  }
+
+  public static decodeBundle(buffer: ArrayBuffer | DataView): PlayerInput[] {
+    return BinaryProtocol.decodeInputBundle(buffer);
+  }
 
   /**
    * Encodes an input message into a clean 9-byte ArrayBuffer (or 12-byte when INPUT_MOUSE_ACTIVE is active).
