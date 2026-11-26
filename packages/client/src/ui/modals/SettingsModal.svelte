@@ -2056,59 +2056,6 @@
 
               <div class="card-inner-divider"></div>
 
-              <!-- Modo de red (No-Host) -->
-              <div class="video-setting-row wrap-on-narrow">
-                <div class="setting-copy">
-                  <span class="setting-title label-with-tooltip">
-                    Modo de red (No-Host)
-                    <span
-                      class="info-tooltip-wrapper"
-                      tabindex="0"
-                      role="button"
-                      aria-label="Info modo de red"
-                      use:tooltip={"Clásico (Haxball): línea temporal única y cero tirones en redes 4G o ping > 120 ms. Predicción: respuesta local instantánea con reconciliación. Comando rápido: /netmode <classic|predicted>"}
-                    >
-                      <svg class="info-help-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <circle cx="12" cy="12" r="10"></circle>
-                        <line x1="12" y1="16" x2="12" y2="12"></line>
-                        <line x1="12" y1="8" x2="12.01" y2="8"></line>
-                      </svg>
-                    </span>
-                  </span>
-                  <span class="setting-desc">Clásico (Haxball) evita tirones en 4G / ping alto; Predicción prioriza respuesta local</span>
-                </div>
-                <div class="setting-control">
-                  <div class="segmented-pills fps-pills" role="group" aria-label="Modo de red No-Host">
-                    <button
-                      type="button"
-                      id="netmode-classic-btn"
-                      class="seg-pill"
-                      class:active={gameUI.settings.netMode !== 'predicted'}
-                      onclick={() => {
-                        soundFX.playUIClick();
-                        gameUI.setNetMode('classic');
-                      }}
-                    >
-                      Clásico (Haxball)
-                    </button>
-                    <button
-                      type="button"
-                      id="netmode-predicted-btn"
-                      class="seg-pill"
-                      class:active={gameUI.settings.netMode === 'predicted'}
-                      onclick={() => {
-                        soundFX.playUIClick();
-                        gameUI.setNetMode('predicted');
-                      }}
-                    >
-                      Predicción
-                    </button>
-                  </div>
-                </div>
-              </div>
-
-              <div class="card-inner-divider"></div>
-
               <!-- Extrapolación automática inteligente -->
               <div class="video-setting-row">
                 <div class="setting-copy">
@@ -2119,7 +2066,7 @@
                       tabindex="0"
                       role="button"
                       aria-label="Info extrapolación automática"
-                      use:tooltip={"Ajusta automáticamente la extrapolación visual entre 0 ms (ping <= 20 ms) y 85 ms según tu latencia actual."}
+                      use:tooltip={"Calcula dinámicamente la extrapolación física real (0 a 85 ms) según tu RTT, proyectando trayectorias y rebotes con @legacyx/core sin alterar al Host."}
                     >
                       <svg class="info-help-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                         <circle cx="12" cy="12" r="10"></circle>
@@ -2128,7 +2075,7 @@
                       </svg>
                     </span>
                   </span>
-                  <span class="setting-desc">Calibra dinámicamente la predicción visual según tu latencia en sala</span>
+                  <span class="setting-desc">Ajusta automáticamente la extrapolación física real según tu latencia en sala</span>
                 </div>
                 <div class="setting-control auto-extrap-controls">
                   {#if gameUI.settings.autoExtrapolation !== false}
@@ -2160,7 +2107,7 @@
                         tabindex="0"
                         role="button"
                         aria-label="Info extrapolación"
-                        use:tooltip={"Proyecta visualmente jugadores y balón (0 a 250 ms) en tu pantalla para compensar la latencia sin alterar la física real. Comando rápido: /extrapolation <0-250>"}
+                        use:tooltip={"Ejecuta extrapolación física real (0 a 250 ms) con @legacyx/core sobre paredes y postes sin alterar el estado del Host ni disparar eventos falsos. Comando rápido: /extrapolation <0-250>"}
                       >
                         <svg class="info-help-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                           <circle cx="12" cy="12" r="10"></circle>

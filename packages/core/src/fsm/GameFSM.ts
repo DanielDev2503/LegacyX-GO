@@ -23,6 +23,24 @@ export enum MatchPhase {
 export type MatchState = MatchPhase;
 export const MatchState = MatchPhase;
 
+/** Fases en las que el reloj de física en vivo y la extrapolación física deben permanecer congelados. */
+export function isFrozenMatchPhase(phase: number): boolean {
+  return (
+    phase === MatchPhase.STOP ||
+    phase === MatchPhase.PRE_MATCH_VS ||
+    phase === MatchPhase.START_COUNTDOWN ||
+    phase === MatchPhase.PAUSE ||
+    phase === MatchPhase.RESUME_COUNTDOWN ||
+    phase === MatchPhase.GOAL_REPLAY ||
+    phase === MatchPhase.STATS
+  );
+}
+
+/** Retorna true cuando la partida está detenida o en pausa. */
+export function isPausedOrStoppedPhase(phase: number): boolean {
+  return phase === MatchPhase.STOP || phase === MatchPhase.PAUSE;
+}
+
 export interface FSMConfig {
   goalCelebrationTicks?: number;    // 180 ticks = 3.0 segundos canónicos a 60 Hz
   goalReplayTicks?: number;         // 240 ticks = 4.0 segundos canónicos a 60 Hz
@@ -379,5 +397,190 @@ export class GameFSM {
       red: Math.round((this.redPossessionTicks / total) * 100),
       blue: Math.round((this.bluePossessionTicks / total) * 100)
     };
+  }
+}
+
+/** Fases heredadas del adaptador secundario `GameEngine` (valores numéricos preservados). */
+export enum LegacyMatchPhase {
+  STOPPED = 0,
+  PLAYING = 1,
+  PAUSED = 2,
+  COUNTDOWN = 3,
+  GOAL_CELEBRATION = 4,
+  MATCH_ENDED = 5,
+  VICTORY_CELEBRATION = 6,
+
+  // Alias de compatibilidad
+  STOP = 0,
+  KICKOFF = 3,
+  PAUSE = 2,
+  GOAL = 4,
+  STATS = 5
+}
+
+export function toLegacyMatchPhase(val: LegacyMatchPhase | string | number): LegacyMatchPhase {
+  if (typeof val === 'number') {
+    return val in LegacyMatchPhase ? (val as LegacyMatchPhase) : LegacyMatchPhase.STOPPED;
+  }
+  switch (val) {
+    case 'PLAYING': return LegacyMatchPhase.PLAYING;
+    case 'PAUSED': return LegacyMatchPhase.PAUSED;
+    case 'COUNTDOWN': return LegacyMatchPhase.COUNTDOWN;
+    case 'GOAL_CELEBRATION': return LegacyMatchPhase.GOAL_CELEBRATION;
+    case 'VICTORY_CELEBRATION': return LegacyMatchPhase.VICTORY_CELEBRATION;
+    case 'MATCH_ENDED': return LegacyMatchPhase.MATCH_ENDED;
+    case 'STOPPED':
+    default:
+      return LegacyMatchPhase.STOPPED;
+  }
+}
+
+export interface LegacyFSMConfig {
+  countdownDurationTicks?: number;
+}
+
+/** FSM consolidada para consumidores legacy (`GameEngine`, `SnapshotPacket`). */
+export class LegacyGameFSM {
+  public currentState: LegacyMatchPhase = LegacyMatchPhase.STOPPED;
+  public countdownSeconds: number = 3;
+  public stateTicksRemaining: number = 0;
+  public countdownDurationTicks: number;
+  public winningTeam: 'red' | 'blue' | null = null;
+  public isResumingFromPause: boolean = false;
+
+  public onStateChange?: (newState: LegacyMatchPhase) => void;
+
+  constructor(config: LegacyFSMConfig = {}) {
+    this.countdownDurationTicks = config.countdownDurationTicks ?? 180;
+  }
+
+  public get state(): LegacyMatchPhase {
+    return this.currentState;
+  }
+
+  public set state(val: LegacyMatchPhase) {
+    this.currentState = val;
+  }
+
+  public startMatch(): void {
+    this.isResumingFromPause = false;
+    this.startResumeCountdown();
+    this.winningTeam = null;
+  }
+
+  public startCountdown(): void {
+    this.startMatch();
+  }
+
+  public stopMatch(): void {
+    this.currentState = LegacyMatchPhase.STOPPED;
+    this.stateTicksRemaining = 0;
+    this.countdownSeconds = 0;
+    this.winningTeam = null;
+    this.isResumingFromPause = false;
+    if (this.onStateChange) this.onStateChange(this.currentState);
+  }
+
+  public pauseMatch(): void {
+    if (this.currentState === LegacyMatchPhase.PLAYING) {
+      this.currentState = LegacyMatchPhase.PAUSED;
+      this.stateTicksRemaining = 0;
+      this.isResumingFromPause = false;
+      if (this.onStateChange) this.onStateChange(this.currentState);
+    }
+  }
+
+  public resumeMatch(): void {
+    if (this.currentState === LegacyMatchPhase.PAUSED || this.currentState === LegacyMatchPhase.STOPPED) {
+      this.isResumingFromPause = this.currentState === LegacyMatchPhase.PAUSED;
+      this.startResumeCountdown();
+    }
+  }
+
+  public togglePause(): void {
+    if (this.currentState === LegacyMatchPhase.PLAYING) {
+      this.pauseMatch();
+    } else if (this.currentState === LegacyMatchPhase.PAUSED) {
+      this.resumeMatch();
+    }
+  }
+
+  public startResumeCountdown(): void {
+    this.currentState = LegacyMatchPhase.COUNTDOWN;
+    this.stateTicksRemaining = this.countdownDurationTicks;
+    this.countdownSeconds = Math.ceil(this.stateTicksRemaining / 60);
+    if (this.onStateChange) this.onStateChange(this.currentState);
+  }
+
+  public isVictoryCelebration(): boolean {
+    return this.currentState === LegacyMatchPhase.VICTORY_CELEBRATION;
+  }
+
+  public isMatchEnded(): boolean {
+    return this.currentState === LegacyMatchPhase.MATCH_ENDED || this.currentState === LegacyMatchPhase.STOPPED;
+  }
+
+  public startGoalCelebration(durationTicks: number = 180): void {
+    this.currentState = LegacyMatchPhase.GOAL_CELEBRATION;
+    this.stateTicksRemaining = durationTicks;
+    if (this.onStateChange) this.onStateChange(this.currentState);
+  }
+
+  public startVictoryCelebration(winner: 'red' | 'blue' | null, durationTicks: number = 300): void {
+    this.currentState = LegacyMatchPhase.VICTORY_CELEBRATION;
+    this.winningTeam = winner;
+    this.stateTicksRemaining = durationTicks;
+    if (this.onStateChange) this.onStateChange(this.currentState);
+  }
+
+  public startMatchEnded(winner: 'red' | 'blue' | null, durationTicks: number = 300): void {
+    this.startVictoryCelebration(winner, durationTicks);
+  }
+
+  public endMatch(winner: 'red' | 'blue' | null): void {
+    this.currentState = LegacyMatchPhase.STOPPED;
+    this.winningTeam = winner;
+    this.stateTicksRemaining = 0;
+    this.countdownSeconds = 0;
+    if (this.onStateChange) this.onStateChange(this.currentState);
+  }
+
+  public resetToWaiting(): void {
+    this.stopMatch();
+  }
+
+  /**
+   * Advances the state machine timer by 1 tick (1/60s).
+   * Returns true if a state transition occurred.
+   */
+  public tick(): boolean {
+    if (this.currentState === LegacyMatchPhase.COUNTDOWN && this.stateTicksRemaining > 0) {
+      this.stateTicksRemaining--;
+      this.countdownSeconds = Math.max(1, Math.ceil(this.stateTicksRemaining / 60));
+
+      if (this.stateTicksRemaining === 0) {
+        this.currentState = LegacyMatchPhase.PLAYING;
+        this.countdownSeconds = 0;
+        this.isResumingFromPause = false;
+        if (this.onStateChange) this.onStateChange(this.currentState);
+        return true;
+      }
+    } else if (this.currentState === LegacyMatchPhase.GOAL_CELEBRATION && this.stateTicksRemaining > 0) {
+      this.stateTicksRemaining--;
+      if (this.stateTicksRemaining === 0) {
+        this.startResumeCountdown();
+        return true;
+      }
+    } else if (
+      (this.currentState === LegacyMatchPhase.VICTORY_CELEBRATION || this.currentState === LegacyMatchPhase.MATCH_ENDED) &&
+      this.stateTicksRemaining > 0
+    ) {
+      this.stateTicksRemaining--;
+      if (this.stateTicksRemaining === 0) {
+        this.endMatch(this.winningTeam);
+        return true;
+      }
+    }
+    return false;
   }
 }

@@ -56,6 +56,31 @@ export const INPUT_FLAG_TYPING = 1 << 9;
 export const INPUT_FLAG_MOUSE_AIM = 1 << 10;
 export const INPUT_FLAG_MOUSE_ACTIVE = 1 << 10;
 
+export const AIM_ANGLE_BYTE_NONE = 0xff;
+const TWO_PI = Math.PI * 2;
+
+/** Cuantiza un ángulo de mouse [-PI, PI) en 0..254 (0xFF reservado para modo teclado/sin mouse). */
+export function encodeAimAngleByte(aimAngle?: number | null, aimThrottle?: number): number {
+  if (aimAngle === null || aimAngle === undefined || !Number.isFinite(aimAngle)) {
+    return AIM_ANGLE_BYTE_NONE;
+  }
+  if (aimThrottle !== undefined && aimThrottle <= 0) {
+    return AIM_ANGLE_BYTE_NONE;
+  }
+  let norm = aimAngle % TWO_PI;
+  if (norm < 0) norm += TWO_PI;
+  const q = Math.round((norm / TWO_PI) * 254) % 255;
+  return q >= 255 ? 0 : q;
+}
+
+/** Decodifica un byte de aim cuantizado a radianes [-PI, PI], o null si es 0xFF (teclado). */
+export function decodeAimAngleByte(byte: number): number | null {
+  const b = byte & 0xff;
+  if (b === AIM_ANGLE_BYTE_NONE) return null;
+  const rad = (b / 254) * TWO_PI;
+  return rad > Math.PI ? rad - TWO_PI : rad;
+}
+
 export interface PlayerInput {
   tick?: number;
   sequence?: number;
@@ -84,6 +109,8 @@ export interface CompactDiscState {
   lastAckedInputSeq?: number;
   dashTimer?: number;
   dashCooldown?: number;
+  inputMask?: number;
+  aimAngleByte?: number;
 }
 
 export interface GameStateSnapshot {
@@ -131,7 +158,7 @@ export class BinaryProtocol {
   public static readonly INPUT_BUNDLE_ENTRY_SIZE = 9;
   public static readonly INPUT_BUNDLE_MAX_COUNT = 4;
   public static readonly SNAPSHOT_HEADER_SIZE = 12;
-  public static readonly DISC_RECORD_SIZE = 32;
+  public static readonly DISC_RECORD_SIZE = 35;
 
   public static peekPacketType(buffer: ArrayBuffer | DataView): number {
     const view = getCachedDataView(buffer);
@@ -394,7 +421,7 @@ export class BinaryProtocol {
   public static encodeSnapshot(snapshot: GameStateSnapshot, outBuffer?: ArrayBuffer): ArrayBuffer {
     const discCount = snapshot.discs.length;
     const totalLength = this.SNAPSHOT_HEADER_SIZE + discCount * this.DISC_RECORD_SIZE;
-    const buf = outBuffer && outBuffer.byteLength >= totalLength ? outBuffer : new ArrayBuffer(totalLength);
+    const buf = outBuffer && outBuffer.byteLength === totalLength ? outBuffer : new ArrayBuffer(totalLength);
     const view = getCachedDataView(buf);
 
     view.setUint8(0, OP_SNAPSHOT);
@@ -414,7 +441,7 @@ export class BinaryProtocol {
 
     let offset = this.SNAPSHOT_HEADER_SIZE;
     for (let i = 0; i < discCount; i++) {
-      const d = snapshot.discs[i];
+      const d = snapshot.discs[i]!;
       view.setUint16(offset, d.id, true);
       view.setUint8(offset + 2, d.team & 0xff);
       view.setUint8(offset + 3, d.flags & 0xff);
@@ -427,6 +454,8 @@ export class BinaryProtocol {
       view.setUint8(offset + 28, Math.max(0, Math.min(255, Math.round(d.dashTimer ?? 0))));
       view.setInt8(offset + 29, Math.max(-128, Math.min(127, Math.round((d.spin ?? 0) * 50))));
       view.setUint16(offset + 30, Math.max(0, Math.min(65535, Math.round((d.dashCooldown ?? 0) * 1000))), true);
+      view.setUint16(offset + 32, (d.inputMask ?? 0) & 0xffff, true);
+      view.setUint8(offset + 34, (d.aimAngleByte ?? AIM_ANGLE_BYTE_NONE) & 0xff);
 
       offset += this.DISC_RECORD_SIZE;
     }
@@ -434,119 +463,120 @@ export class BinaryProtocol {
     return buf;
   }
 
-  public static decodeSnapshot(buffer: ArrayBuffer | DataView): GameStateSnapshot | null {
+  /**
+   * Decodifica OP_SNAPSHOT directamente en un `GameStateSnapshot` preasignado (Zero-Allocation).
+   * Mantiene compatibilidad con registros actuales (35 B) y legacy (32, 18 y 16 B).
+   */
+  public static decodeSnapshotInto(buffer: ArrayBuffer | DataView, target: GameStateSnapshot): boolean {
     const view = getCachedDataView(buffer);
     if (view.byteLength < this.SNAPSHOT_HEADER_SIZE || view.getUint8(0) !== OP_SNAPSHOT) {
-      return null;
+      return false;
     }
 
-    const tick = view.getUint32(1, false);
-    const phase = decodeWirePhase(view.getUint8(5));
-    const matchTimer = view.getUint16(6, false);
-    const redScore = view.getUint8(8);
-    const blueScore = view.getUint8(9);
+    target.tick = view.getUint32(1, false);
+    target.phase = decodeWirePhase(view.getUint8(5));
+    target.matchTimer = view.getUint16(6, false);
+    target.redScore = view.getUint8(8);
+    target.blueScore = view.getUint8(9);
     const metaByte = view.getUint8(10);
-    const soundMask = metaByte & SOUND_MASK_BITS;
-    const kickoffActive = (metaByte & SNAPSHOT_FLAG_KICKOFF_ACTIVE) !== 0;
-    const isGoldenGoal = (metaByte & SNAPSHOT_FLAG_GOLDEN_GOAL) !== 0;
-    const isNeutralKickoff = (metaByte & SNAPSHOT_FLAG_NEUTRAL_KICKOFF) !== 0;
-    const kickoffPossessingTeam: 'red' | 'blue' =
-      (metaByte & SNAPSHOT_FLAG_KICKOFF_BLUE) !== 0 ? 'blue' : 'red';
+    target.soundMask = metaByte & SOUND_MASK_BITS;
+    target.kickoffActive = (metaByte & SNAPSHOT_FLAG_KICKOFF_ACTIVE) !== 0;
+    target.isGoldenGoal = (metaByte & SNAPSHOT_FLAG_GOLDEN_GOAL) !== 0;
+    target.isNeutralKickoff = (metaByte & SNAPSHOT_FLAG_NEUTRAL_KICKOFF) !== 0;
+    target.kickoffPossessingTeam = (metaByte & SNAPSHOT_FLAG_KICKOFF_BLUE) !== 0 ? 'blue' : 'red';
     const discCount = view.getUint8(11);
 
-    const discs: CompactDiscState[] = [];
+    const discs = target.discs;
     const hasCurrentRecordFormat =
       discCount === 0 || view.byteLength >= this.SNAPSHOT_HEADER_SIZE + discCount * this.DISC_RECORD_SIZE;
     const discStride = hasCurrentRecordFormat
       ? this.DISC_RECORD_SIZE
       : Math.floor((view.byteLength - this.SNAPSHOT_HEADER_SIZE) / discCount);
     let offset = this.SNAPSHOT_HEADER_SIZE;
+    let written = 0;
 
     for (let i = 0; i < discCount; i++) {
+      let slot = discs[written];
+      if (!slot) {
+        slot = { id: 0, team: 0, x: 0, y: 0, vx: 0, vy: 0, flags: 0 };
+        discs[written] = slot;
+      }
+
       if (discStride >= 32 && offset + 32 <= view.byteLength) {
-        const id = view.getUint16(offset, true);
-        const team = view.getUint8(offset + 2);
-        const flags = view.getUint8(offset + 3);
-        const x = view.getFloat32(offset + 4, true);
-        const y = view.getFloat32(offset + 8, true);
-        const vx = view.getFloat32(offset + 12, true);
-        const vy = view.getFloat32(offset + 16, true);
-        const stamina = view.getFloat32(offset + 20, true);
-        const lastAckedInputSeq = view.getUint32(offset + 24, true);
-        const dashTimer = view.getUint8(offset + 28);
-        const spin = view.getInt8(offset + 29) / 50;
-        const dashCooldown = view.getUint16(offset + 30, true) / 1000;
-
-        discs.push({
-          id,
-          team,
-          flags,
-          x,
-          y,
-          vx,
-          vy,
-          stamina,
-          spin,
-          lastAckedInputSeq,
-          dashTimer,
-          dashCooldown
-        });
+        slot.id = view.getUint16(offset, true);
+        slot.team = view.getUint8(offset + 2);
+        slot.flags = view.getUint8(offset + 3);
+        slot.x = view.getFloat32(offset + 4, true);
+        slot.y = view.getFloat32(offset + 8, true);
+        slot.vx = view.getFloat32(offset + 12, true);
+        slot.vy = view.getFloat32(offset + 16, true);
+        slot.stamina = view.getFloat32(offset + 20, true);
+        slot.lastAckedInputSeq = view.getUint32(offset + 24, true);
+        slot.dashTimer = view.getUint8(offset + 28);
+        slot.spin = view.getInt8(offset + 29) / 50;
+        slot.dashCooldown = view.getUint16(offset + 30, true) / 1000;
+        if (discStride >= 35 && offset + 35 <= view.byteLength) {
+          slot.inputMask = view.getUint16(offset + 32, true);
+          slot.aimAngleByte = view.getUint8(offset + 34);
+        } else {
+          slot.inputMask = 0;
+          slot.aimAngleByte = AIM_ANGLE_BYTE_NONE;
+        }
         offset += discStride;
+        written++;
       } else if (offset + 18 <= view.byteLength) {
-        // Fallback for legacy 18-byte record (Int16 for vx, vy / 20)
-        const id = view.getUint16(offset, false);
-        const team = view.getUint8(offset + 2);
-        const flags = view.getUint8(offset + 3);
-        const x = view.getFloat32(offset + 4, false);
-        const y = view.getFloat32(offset + 8, false);
-        const vx = view.getInt16(offset + 12, false) / 20;
-        const vy = view.getInt16(offset + 14, false) / 20;
-        const stamina = view.getUint8(offset + 16);
-        const spin = view.getInt8(offset + 17) / 50;
-
-        discs.push({
-          id,
-          team,
-          flags,
-          x,
-          y,
-          vx,
-          vy,
-          stamina,
-          spin,
-          lastAckedInputSeq: 0,
-          dashTimer: 0,
-          dashCooldown: 0
-        });
+        slot.id = view.getUint16(offset, false);
+        slot.team = view.getUint8(offset + 2);
+        slot.flags = view.getUint8(offset + 3);
+        slot.x = view.getFloat32(offset + 4, false);
+        slot.y = view.getFloat32(offset + 8, false);
+        slot.vx = view.getInt16(offset + 12, false) / 20;
+        slot.vy = view.getInt16(offset + 14, false) / 20;
+        slot.stamina = view.getUint8(offset + 16);
+        slot.spin = view.getInt8(offset + 17) / 50;
+        slot.lastAckedInputSeq = 0;
+        slot.dashTimer = 0;
+        slot.dashCooldown = 0;
+        slot.inputMask = 0;
+        slot.aimAngleByte = AIM_ANGLE_BYTE_NONE;
         offset += discStride > 0 ? discStride : 18;
+        written++;
       } else if (offset + 16 <= view.byteLength) {
-        // Fallback for legacy 16-byte record
-        const id = view.getUint16(offset, false);
-        const team = view.getUint8(offset + 2);
-        const flags = view.getUint8(offset + 3);
-        const x = view.getFloat32(offset + 4, false);
-        const y = view.getFloat32(offset + 8, false);
-        const vx = view.getInt16(offset + 12, false) / 20;
-        const vy = view.getInt16(offset + 14, false) / 20;
-        discs.push({ id, team, flags, x, y, vx, vy, stamina: 100, spin: 0, lastAckedInputSeq: 0, dashTimer: 0, dashCooldown: 0 });
+        slot.id = view.getUint16(offset, false);
+        slot.team = view.getUint8(offset + 2);
+        slot.flags = view.getUint8(offset + 3);
+        slot.x = view.getFloat32(offset + 4, false);
+        slot.y = view.getFloat32(offset + 8, false);
+        slot.vx = view.getInt16(offset + 12, false) / 20;
+        slot.vy = view.getInt16(offset + 14, false) / 20;
+        slot.stamina = 100;
+        slot.spin = 0;
+        slot.lastAckedInputSeq = 0;
+        slot.dashTimer = 0;
+        slot.dashCooldown = 0;
+        slot.inputMask = 0;
+        slot.aimAngleByte = AIM_ANGLE_BYTE_NONE;
         offset += discStride > 0 ? discStride : 16;
+        written++;
       } else {
         break;
       }
     }
 
-    return {
-      tick,
-      phase,
-      matchTimer,
-      redScore,
-      blueScore,
-      soundMask,
-      kickoffActive,
-      isGoldenGoal,
-      isNeutralKickoff,
-      kickoffPossessingTeam,
-      discs
+    discs.length = written;
+    return true;
+  }
+
+  public static decodeSnapshot(buffer: ArrayBuffer | DataView): GameStateSnapshot | null {
+    const out: GameStateSnapshot = {
+      tick: 0,
+      phase: 0,
+      matchTimer: 0,
+      redScore: 0,
+      blueScore: 0,
+      soundMask: 0,
+      discs: []
     };
+    return this.decodeSnapshotInto(buffer, out) ? out : null;
   }
 }

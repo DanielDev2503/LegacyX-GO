@@ -1,7 +1,6 @@
-import { BinaryProtocol, type GameStateSnapshot, type PlayerPosition } from '@legacyx/core';
+import { BinaryProtocol, MatchPhase, type GameStateSnapshot, type PlayerPosition } from '@legacyx/core';
 import { PeerConnection, type IceRouteLabel } from './PeerConnection';
 import { SignalingClient } from './SignalingClient';
-import { JitterBuffer } from './JitterBuffer';
 import { NetworkImpairmentSimulator } from './NetworkImpairmentSimulator';
 import type { PlayerInfo } from './NetworkHost';
 import { gameUI } from '../ui/state/gameUI.svelte.js';
@@ -51,10 +50,36 @@ export class NetworkClient {
   public localPlayerId: number | null = null;
   public players: PlayerInfo[] = [];
   public teamsLocked: boolean = false;
-  public jitterBuffer = new JitterBuffer(32, 45, true);
   public latestSnapshot: GameStateSnapshot | null = null;
   public activeGoalScorerId: number | null = null;
-  public autoExtrapolationMs: number = 0;
+  private readonly scratchSnapshotA: GameStateSnapshot = {
+    tick: 0,
+    phase: MatchPhase.STOP,
+    matchTimer: 0,
+    redScore: 0,
+    blueScore: 0,
+    soundMask: 0,
+    kickoffActive: false,
+    isGoldenGoal: false,
+    isNeutralKickoff: true,
+    kickoffPossessingTeam: 'red',
+    discs: []
+  };
+  private readonly scratchSnapshotB: GameStateSnapshot = {
+    tick: 0,
+    phase: MatchPhase.STOP,
+    matchTimer: 0,
+    redScore: 0,
+    blueScore: 0,
+    soundMask: 0,
+    kickoffActive: false,
+    isGoldenGoal: false,
+    isNeutralKickoff: true,
+    kickoffPossessingTeam: 'red',
+    discs: []
+  };
+  private scratchDecodedSnapshot: GameStateSnapshot = this.scratchSnapshotA;
+  private scratchPublishedSnapshot: GameStateSnapshot = this.scratchSnapshotB;
 
   // Telemetría real WebRTC + Packet Loss Zero-GC (Fase 4)
   public packetLossPct: number = 0;
@@ -454,23 +479,29 @@ export class NetworkClient {
     };
   }
 
-  private processIncomingSnapshot(buffer: ArrayBuffer, receivedAtMs: number): void {
-    const snapshot = BinaryProtocol.decodeSnapshot(buffer);
-    if (!snapshot) return;
-    this.jitterBuffer.push(snapshot, receivedAtMs);
+  private processIncomingSnapshot(buffer: ArrayBuffer, _receivedAtMs: number): void {
+    const incoming = this.scratchDecodedSnapshot;
+    const ok = BinaryProtocol.decodeSnapshotInto(buffer, incoming);
+    if (!ok) return;
 
     const phaseChangedToSpecial =
-      snapshot.phase !== this.lastSnapshotPhase &&
-      (snapshot.phase === 0 || snapshot.phase === 3.5);
+      incoming.phase !== this.lastSnapshotPhase &&
+      (incoming.phase === 0 || incoming.phase === 3.5);
     const isTickReset =
-      this.highestSnapshotTick >= 0 && snapshot.tick + 100 < this.highestSnapshotTick;
+      this.highestSnapshotTick >= 0 && incoming.tick + 100 < this.highestSnapshotTick;
     const isMonotonic =
       this.highestSnapshotTick < 0 ||
-      snapshot.tick >= this.highestSnapshotTick ||
+      incoming.tick >= this.highestSnapshotTick ||
       phaseChangedToSpecial ||
       isTickReset;
 
     if (!isMonotonic) return;
+
+    // Intercambiar doble buffer preasignado solo tras confirmar monotonicidad (0 alocaciones)
+    const prevPublished = this.scratchPublishedSnapshot;
+    this.scratchPublishedSnapshot = incoming;
+    this.scratchDecodedSnapshot = prevPublished;
+    const snapshot = incoming;
 
     // Medición real de pérdida UDP compatible con emisión adaptativa 60 / 40 / 30 Hz (Zero-GC)
     if (this.lastLossTrackTick >= 0 && snapshot.tick > this.lastLossTrackTick) {
@@ -513,9 +544,7 @@ export class NetworkClient {
     this.highestSnapshotTick = snapshot.tick;
     this.lastSnapshotPhase = snapshot.phase;
     this.latestSnapshot = snapshot;
-    if (snapshot.phase === 3.5) {
-      this.jitterBuffer.setMatchState(3.5);
-    } else if (snapshot.phase === 0 || snapshot.phase === 1) {
+    if (snapshot.phase === 0 || snapshot.phase === 1) {
       this.updateActiveGoalScorerId(null);
     }
     this.onSnapshotDecoded?.(snapshot);
@@ -625,7 +654,6 @@ export class NetworkClient {
 
       // Gestionar transición de fase sin cerrar el menú en bucle durante el partido
       if (typeof msg.matchPhase === 'number') {
-        this.jitterBuffer.setMatchState(msg.matchPhase);
         gameUI.handleMatchPhaseTransition(msg.matchPhase, msg.type === 'INITIAL_STATE_PACKET');
         if (msg.matchPhase === 0 || msg.matchPhase === 1) {
           this.updateActiveGoalScorerId(null);
@@ -737,9 +765,9 @@ export class NetworkClient {
     } else if (msg.type === 'SCORE_EVENT') {
       this.onScoreEvent?.(msg);
     } else if (msg.type === 'MATCH_PAUSED') {
-      this.jitterBuffer.setMatchState('PAUSED');
+      gameUI.handleMatchPhaseTransition(MatchPhase.PAUSE);
     } else if (msg.type === 'MATCH_RESUMED') {
-      this.jitterBuffer.setMatchState('PLAYING');
+      gameUI.handleMatchPhaseTransition(MatchPhase.PLAYING);
     } else if (msg.type === 'ROOM_CLOSED') {
       this.notifyRoomClosed(
         'closed',
@@ -773,9 +801,6 @@ export class NetworkClient {
         targetPing = sorted[Math.floor(sorted.length / 2)]!;
       }
       gameUI.recordTelemetrySample(targetPing, gameUI.fps);
-      if (typeof (gameUI as any).effectiveExtrapolationMs === 'number') {
-        this.setAutoExtrapolationMs((gameUI as any).effectiveExtrapolationMs);
-      }
     }
   }
 
@@ -920,48 +945,14 @@ export class NetworkClient {
     });
   }
 
-  private hasConfiguredExtrap: boolean = false;
-
-  public setAutoExtrapolationMs(ms: number): void {
-    const clamped = Number.isFinite(ms) ? Math.max(0, Math.min(250, Math.round(ms))) : 0;
-    if (this.hasConfiguredExtrap && clamped === this.autoExtrapolationMs) {
-      return;
-    }
-    this.hasConfiguredExtrap = true;
-    this.autoExtrapolationMs = clamped;
-    const jb = this.jitterBuffer as unknown as {
-      autoExtrapolationMs?: number;
-      setAutoExtrapolationMs?: (val: number) => void;
-      interpolationDelayMs: number;
-    };
-    if (typeof jb.setAutoExtrapolationMs === 'function') {
-      jb.setAutoExtrapolationMs(clamped);
-    } else {
-      jb.autoExtrapolationMs = clamped;
-    }
-    if (this.jitterBuffer.buffer.length === 0) {
-      const targetDelay = Math.max(30, Math.min(140, 30 + clamped * 0.25));
-      jb.interpolationDelayMs = jb.interpolationDelayMs * 0.8 + targetDelay * 0.2;
-    }
-  }
-
-  public getInterpolatedState(nowMs: number = performance.now()): GameStateSnapshot | null {
-    const interp = this.jitterBuffer.getInterpolatedState(nowMs);
-    if (interp && this.latestSnapshot) {
-      if (interp.isGoldenGoal === undefined && this.latestSnapshot.isGoldenGoal !== undefined) {
-        interp.isGoldenGoal = this.latestSnapshot.isGoldenGoal;
-      }
-      if (interp.kickoffActive === undefined && this.latestSnapshot.kickoffActive !== undefined) {
-        interp.kickoffActive = this.latestSnapshot.kickoffActive;
-      }
-      if (interp.isNeutralKickoff === undefined && this.latestSnapshot.isNeutralKickoff !== undefined) {
-        interp.isNeutralKickoff = this.latestSnapshot.isNeutralKickoff;
-      }
-      if (interp.kickoffPossessingTeam === undefined && this.latestSnapshot.kickoffPossessingTeam !== undefined) {
-        interp.kickoffPossessingTeam = this.latestSnapshot.kickoffPossessingTeam;
-      }
-    }
-    return interp;
+  /** Despacho inmediato ante cambios de tecla (keydown/keyup/mouse) sobre canal no confiable. */
+  public sendInputImmediate(
+    inputMask: number,
+    tick: number,
+    aimAngle?: number | null,
+    aimThrottle: number = 1
+  ): void {
+    this.sendInput(inputMask, tick, aimAngle, aimThrottle);
   }
 
   private lastTypingStateSent: boolean | null = null;

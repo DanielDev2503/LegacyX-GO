@@ -3,7 +3,8 @@ import { GameEngine } from '../../../core/src/game/GameEngine';
 import { MatchState, MatchPhase } from '../../../core/src/game/GameFSM';
 import { TeamSelectModal } from '../../src/controllers/components/TeamSelectModal';
 import { Player } from '../../../core/src/game/Player';
-import { JitterBuffer } from '../../src/net/JitterBuffer';
+import { MatchPhase as CoreMatchPhase } from '@legacyx/core';
+import { SharedSimSync } from '../../src/net/SharedSimSync';
 
 describe('Match Conclusion Flow and Menu Synchronization', () => {
   describe('GameEngine state propagation on match end', () => {
@@ -208,66 +209,43 @@ describe('Match Conclusion Flow and Menu Synchronization', () => {
     });
   });
 
-  describe('JitterBuffer immediate purge on STOPPED', () => {
-    it('purges previous dynamic simulation snapshots when STOPPED snapshot arrives', () => {
-      const buffer = new JitterBuffer(70, 30);
+  describe('SharedSimSync immediate hard-sync on STOPPED', () => {
+    it('hard-resets simWorld and clears visualOffset when STOPPED snapshot arrives', () => {
+      const sync = new SharedSimSync('mediano');
 
-      // Push playing snapshots
-      buffer.push({
-        tick: 100,
-        matchPhase: MatchPhase.PLAYING,
-        matchState: MatchPhase.PLAYING,
-        timerSeconds: 100,
-        matchTimerSeconds: 100,
-        subStateTimer: 0,
-        targetTeam: 0,
-        scoreRed: 1,
-        redScore: 1,
-        scoreBlue: 0,
-        blueScore: 0,
-        discs: [{ id: 0, team: 0, x: 200, y: 100, vx: 5, vy: 2, radius: 10, kicking: false, avatar: '' }]
-      }, 1000);
+      sync.onSnapshot(
+        {
+          tick: 100,
+          phase: CoreMatchPhase.PLAYING,
+          matchTimer: 100,
+          redScore: 1,
+          blueScore: 0,
+          soundMask: 0,
+          discs: [{ id: 0, team: 0, x: 200, y: 100, vx: 300, vy: 120, flags: 0 }]
+        },
+        1000
+      );
 
-      buffer.push({
-        tick: 101,
-        matchPhase: MatchPhase.PLAYING,
-        matchState: MatchPhase.PLAYING,
-        timerSeconds: 100,
-        matchTimerSeconds: 100,
-        subStateTimer: 0,
-        targetTeam: 0,
-        scoreRed: 1,
-        redScore: 1,
-        scoreBlue: 0,
-        blueScore: 0,
-        discs: [{ id: 0, team: 0, x: 205, y: 102, vx: 5, vy: 2, radius: 10, kicking: false, avatar: '' }]
-      }, 1016);
+      sync.onSnapshot(
+        {
+          tick: 102,
+          phase: CoreMatchPhase.STOP,
+          matchTimer: 0,
+          redScore: 0,
+          blueScore: 0,
+          soundMask: 0,
+          discs: [{ id: 0, team: 0, x: 0, y: 0, vx: 0, vy: 0, flags: 0 }]
+        },
+        1032
+      );
 
-      expect(buffer.buffer.length).toBe(2);
-
-      // Push STOPPED snapshot
-      buffer.push({
-        tick: 102,
-        matchPhase: MatchPhase.STOPPED,
-        matchState: MatchPhase.STOPPED,
-        timerSeconds: 0,
-        matchTimerSeconds: 0,
-        subStateTimer: 0,
-        targetTeam: 0,
-        scoreRed: 0,
-        redScore: 0,
-        scoreBlue: 0,
-        blueScore: 0,
-        discs: [{ id: 0, team: 0, x: 0, y: 0, vx: 0, vy: 0, radius: 10, kicking: false, avatar: '' }]
-      }, 1032);
-
-      // Previous snapshots must be purged! Only the clean STOPPED snapshot remains
-      expect(buffer.buffer.length).toBe(1);
-      const snap = buffer.getInterpolatedSnapshot(1032);
+      const snap = sync.buildRenderSnapshot(60, 1032);
       expect(snap).not.toBeNull();
-      expect(snap!.matchPhase).toBe(MatchPhase.STOPPED);
-      expect(snap!.discs[0].x).toBe(0);
-      expect(snap!.discs[0].y).toBe(0);
+      expect(snap!.phase).toBe(CoreMatchPhase.STOP);
+      expect(snap!.discs[0]!.x).toBe(0);
+      expect(snap!.discs[0]!.y).toBe(0);
+      expect(snap!.discs[0]!.vx).toBe(0);
+      expect(snap!.discs[0]!.vy).toBe(0);
     });
   });
 });

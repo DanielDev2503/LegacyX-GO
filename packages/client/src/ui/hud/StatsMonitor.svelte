@@ -9,7 +9,7 @@
   let displayFps = $state(60);
   let displayJitter = $state(0);
   let displayLoss = $state(0);
-  let displayReconciles = $state(0);
+  let displaySyncCorrAvg = $state(0);
   let displayIceRoute = $state('Local');
   let sparkCanvas = $state<HTMLCanvasElement | null>(null);
 
@@ -31,7 +31,7 @@
       displayFps = Math.round(gameUI.fps);
       displayJitter = Math.round(gameUI.jitterMs);
       displayLoss = gameUI.packetLossPct;
-      displayReconciles = gameUI.reconciliationsPerSec;
+      displaySyncCorrAvg = gameUI.liveNetDebug.syncCorrectionAvgPx;
       displayIceRoute = gameUI.iceRoute;
 
       pingHistory[headIndex] = displayPing;
@@ -83,9 +83,9 @@
         <span class="label">LOSS</span>
         <strong class:warn={displayLoss >= 2}>{displayLoss.toFixed(1)}%</strong>
       </div>
-      <div class="metric">
-        <span class="label">REC</span>
-        <strong>{displayReconciles}/s</strong>
+      <div class="metric" title="Corrección visual promedio de sincronización (px)">
+        <span class="label">CORR</span>
+        <strong>{displaySyncCorrAvg.toFixed(1)} px</strong>
       </div>
       <div class="metric" title={displayIceRoute}>
         <span class="label">ICE</span>

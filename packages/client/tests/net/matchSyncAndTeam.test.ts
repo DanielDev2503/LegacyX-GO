@@ -1,9 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import { canChangeTeam } from '../../src/controllers/GameApp';
-import { JitterBuffer } from '../../src/net/JitterBuffer';
+import { MatchPhase as CoreMatchPhase } from '@legacyx/core';
+import { SharedSimSync } from '../../src/net/SharedSimSync';
 import { GameEngine } from '../../../core/src/game/GameEngine';
 import { Player } from '../../../core/src/game/Player';
-import { GameSnapshot } from '../../../core/src/game/GameState';
 import { MatchPhase } from '../../../core/src/game/GameFSM';
 
 describe('canChangeTeam Authorization Logic', () => {
@@ -70,61 +70,41 @@ describe('Match State Sync and Pause Freeze', () => {
     expect(disc.vel.y).toBe(30);
   });
 
-  it('stops extrapolation and zeros velocities in JitterBuffer during PAUSED', () => {
-    const buffer = new JitterBuffer(100);
+  it('stops extrapolation and zeros rendered velocities in SharedSimSync during PAUSE', () => {
+    const sync = new SharedSimSync('mediano');
+    sync.onSnapshot(
+      {
+        tick: 1,
+        phase: CoreMatchPhase.PLAYING,
+        matchTimer: 180,
+        redScore: 0,
+        blueScore: 0,
+        soundMask: 0,
+        discs: [{ id: 0, team: 0, x: 10, y: 5, vx: 100, vy: 50, flags: 0 }]
+      },
+      1000
+    );
 
-    const snap1: GameSnapshot = {
-      tick: 1,
-      matchPhase: MatchPhase.PLAYING,
-      timerSeconds: 180,
-      subStateTimer: 0,
-      targetTeam: 0,
-      scoreRed: 0,
-      scoreBlue: 0,
-      matchState: MatchPhase.PLAYING,
-      matchTimerSeconds: 180,
-      redScore: 0,
-      blueScore: 0,
-      discs: [
-        { id: 0, team: 0, x: 0, y: 0, vx: 100, vy: 50, radius: 10, kicking: false, avatar: '' }
-      ]
-    };
+    const activeSnap = sync.buildRenderSnapshot(100, 1000)!;
+    expect(activeSnap.discs[0]!.x).toBeGreaterThan(10);
 
-    const snap2: GameSnapshot = {
-      tick: 2,
-      matchPhase: MatchPhase.PLAYING,
-      timerSeconds: 180,
-      subStateTimer: 0,
-      targetTeam: 0,
-      scoreRed: 0,
-      scoreBlue: 0,
-      matchState: MatchPhase.PLAYING,
-      matchTimerSeconds: 180,
-      redScore: 0,
-      blueScore: 0,
-      discs: [
-        { id: 0, team: 0, x: 10, y: 5, vx: 100, vy: 50, radius: 10, kicking: false, avatar: '' }
-      ]
-    };
-
-    buffer.push(snap1);
-    buffer.push(snap2);
-
-    // In normal state, interpolation / extrapolation runs
-    const interpNormal = buffer.getInterpolatedSnapshot(Date.now() + 500);
-    expect(interpNormal).not.toBeNull();
-
-    // Now set match state to PAUSED
-    buffer.setMatchState('PAUSED');
-    expect(buffer.currentMatchState).toBe('PAUSED');
-
-    const interpPaused = buffer.getInterpolatedSnapshot(Date.now() + 500);
-    expect(interpPaused).not.toBeNull();
-    // Velocities must be forced to 0
-    expect(interpPaused!.discs[0].vx).toBe(0);
-    expect(interpPaused!.discs[0].vy).toBe(0);
-    // Extrapolation must not shoot forward: x and y match the last known snapshot
-    expect(interpPaused!.discs[0].x).toBe(10);
-    expect(interpPaused!.discs[0].y).toBe(5);
+    sync.onSnapshot(
+      {
+        tick: 2,
+        phase: CoreMatchPhase.PAUSE,
+        matchTimer: 180,
+        redScore: 0,
+        blueScore: 0,
+        soundMask: 0,
+        discs: [{ id: 0, team: 0, x: 10, y: 5, vx: 100, vy: 50, flags: 0 }]
+      },
+      1016
+    );
+    sync.update(0.1, 1500);
+    const pausedSnap = sync.buildRenderSnapshot(150, 1500)!;
+    expect(pausedSnap.discs[0]!.vx).toBe(0);
+    expect(pausedSnap.discs[0]!.vy).toBe(0);
+    expect(pausedSnap.discs[0]!.x).toBe(10);
+    expect(pausedSnap.discs[0]!.y).toBe(5);
   });
 });

@@ -1,4 +1,4 @@
-import { clampDiscToGoalAwareBounds, DEFAULT_GAMEPLAY_CONFIG, type DiscSnapshot, type CompactDiscState, type PlayerPosition } from '@legacyx/core';
+import { DEFAULT_GAMEPLAY_CONFIG, type DiscSnapshot, type CompactDiscState, type PlayerPosition } from '@legacyx/core';
 import {
   drawBallDesign,
   isBallSkin,
@@ -140,10 +140,7 @@ export class DiscRenderer {
   private scratchCoreRightX: Float32Array = new Float32Array(TURBO_TRAIL_CAPACITY);
   private scratchCoreRightY: Float32Array = new Float32Array(TURBO_TRAIL_CAPACITY);
 
-  public extrapolationMs: number = 0;
-  public extrapolateAllDiscs: boolean = false;
   public isPaused: boolean = false;
-  public skipNextFrameExtrapolation: boolean = false;
   public stadiumBounds: { halfWidth: number; halfHeight: number; goalDepth: number; goalHalfHeight: number; runOff?: number } | null = null;
   public dampingBall: number = 0.99;
   public dampingPlayer: number = 0.96;
@@ -156,8 +153,6 @@ export class DiscRenderer {
   // Reusable per-frame scratch buffers to avoid GC allocations during render()
   private frameRenderDiscs: DiscSnapshot[] = [];
   private activeTurboIds = new Set<number>();
-
-  private readonly scratchClampProxy = { x: 0, y: 0, vx: 0, vy: 0, radius: 15 };
 
   private scratchDisc: DiscSnapshot = {
     id: 0,
@@ -197,10 +192,6 @@ export class DiscRenderer {
     }
   }
 
-  public setExtrapolation(ms: number): void {
-    this.extrapolationMs = Math.max(0, Math.min(250, ms));
-  }
-
   public setStadiumBounds(bounds: { halfWidth: number; halfHeight: number; goalDepth: number; goalHalfHeight: number; runOff?: number } | null): void {
     this.stadiumBounds = bounds;
   }
@@ -222,69 +213,14 @@ export class DiscRenderer {
     return false;
   }
 
-  public getRenderDisc(disc: DiscSnapshot, isRemote: boolean = true): DiscSnapshot {
-    if (this.isPaused || !isRemote || this.extrapolationMs <= 0) return disc;
-    const k = (this.extrapolationMs / 1000) * 60;
-    if (k <= 0) return disc;
-
-    const d = (disc as { damping?: number }).damping ?? (disc.team === 0 ? this.dampingBall : this.dampingPlayer);
-    const factor = d < 0.9999 ? (1 - Math.pow(d, k)) / (1 - d) : k;
-    const s = this.scratchDisc;
-    s.id = disc.id;
-    let px = disc.x + ((disc.vx || 0) / 60) * factor;
-    let py = disc.y + ((disc.vy || 0) / 60) * factor;
-
-    if (this.stadiumBounds) {
-      const hw = this.stadiumBounds.halfWidth;
-      const hh = this.stadiumBounds.halfHeight;
-      const gh = this.stadiumBounds.goalHalfHeight;
-      const gd = this.stadiumBounds.goalDepth;
-      const r = disc.radius || (disc.team === 0 ? this.ballRadius : this.playerRadius);
-      const isPlayer = disc.team !== 0;
-      const runOff = isPlayer ? (this.stadiumBounds.runOff ?? 0) : 0;
-
-      const proxy = this.scratchClampProxy;
-      proxy.x = px;
-      proxy.y = py;
-      proxy.vx = disc.vx;
-      proxy.vy = disc.vy;
-      proxy.radius = r;
-      clampDiscToGoalAwareBounds(proxy, hw, hh, gh, gd, runOff);
-      px = proxy.x;
-      py = proxy.y;
-    }
-
-    s.x = px;
-    s.y = py;
-    s.vx = disc.vx;
-    s.vy = disc.vy;
-    s.radius = disc.radius;
-    s.team = disc.team;
-    s.avatar = disc.avatar;
-    s.kicking = disc.kicking;
-    s.stamina = disc.stamina;
-    s.isDashing = disc.isDashing;
-    s.isTurbo = disc.isTurbo;
-    s.isTyping = disc.isTyping;
-    s.spin = disc.spin;
-    s.isSpinActive = disc.isSpinActive;
-    s.curveFactor = disc.curveFactor;
-    s.isPowerShot = disc.isPowerShot;
-    return s;
-  }
-
   public draw(ctx: CanvasRenderingContext2D, discs: DiscSnapshot[], localDiscId?: number | null): void {
     this.render(ctx, discs, localDiscId);
   }
 
-  private populateFrameRenderDiscs(discs: DiscSnapshot[], localDiscId?: number | null): void {
-    const skip = this.skipNextFrameExtrapolation;
+  /** Copia discos en buffer preasignado (renderizador 100% de solo lectura; la física/extrapolación viven en SharedSimSync). */
+  private populateFrameRenderDiscs(discs: DiscSnapshot[]): void {
     for (let i = 0; i < discs.length; i++) {
-      const disc = discs[i]!;
-      const shouldExtrapolate = this.extrapolateAllDiscs
-        ? true
-        : (disc.team === 0 ? true : disc.id !== localDiscId);
-      const renderD = skip ? disc : this.getRenderDisc(disc, shouldExtrapolate);
+      const renderD = discs[i]!;
       let slot = this.frameRenderDiscs[i];
       if (!slot) {
         slot = {
@@ -320,9 +256,9 @@ export class DiscRenderer {
       slot.spin = renderD.spin;
       slot.isSpinActive = renderD.isSpinActive;
       slot.curveFactor = renderD.curveFactor;
-      slot.isPowerShot = renderD.isPowerShot ?? disc.isPowerShot;
-      if ((disc as any).isKicking !== undefined || 'isKicking' in slot) {
-        (slot as any).isKicking = (disc as any).isKicking;
+      slot.isPowerShot = renderD.isPowerShot;
+      if ((renderD as any).isKicking !== undefined || 'isKicking' in slot) {
+        (slot as any).isKicking = (renderD as any).isKicking;
       }
     }
     this.frameRenderDiscs.length = discs.length;
@@ -333,10 +269,9 @@ export class DiscRenderer {
     discs: DiscSnapshot[],
     localDiscId?: number | null
   ): void {
-    try {
-      ctx.save();
+    ctx.save();
 
-      this.populateFrameRenderDiscs(discs, localDiscId);
+    this.populateFrameRenderDiscs(discs);
 
       const renderCount = this.frameRenderDiscs.length;
       this.activeTurboIds.clear();
@@ -413,10 +348,7 @@ export class DiscRenderer {
         }
       }
 
-      ctx.restore();
-    } finally {
-      this.skipNextFrameExtrapolation = false;
-    }
+    ctx.restore();
   }
 
   // Overloaded renderBall supporting both DiscSnapshot and GameRenderer's positional call

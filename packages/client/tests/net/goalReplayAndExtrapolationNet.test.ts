@@ -1,11 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
-  EngineInstance,
   INPUT_FLAG_RIGHT,
   MatchPhase,
   type GameStateSnapshot
 } from '@legacyx/core';
-import { ClientPredictionReconciler } from '../../src/net/ClientPrediction.js';
+import { SharedSimSync } from '../../src/net/SharedSimSync.js';
 import { NetworkHost } from '../../src/net/NetworkHost.js';
 import { NetworkClient } from '../../src/net/NetworkClient.js';
 import { GameApp } from '../../src/net/GameApp.js';
@@ -328,77 +327,41 @@ describe('Goal Replay Synchronization, Scorer-Only Skip, Prediction & Auto-Extra
     });
   });
 
-  describe('2. Non-Host Prediction & Auto-Extrapolation Scaling', () => {
-    it('NetworkClient.setAutoExtrapolationMs updates jitterBuffer smoothly and syncs phase 3.5 without frozen pause', async () => {
-      const { sig } = await connectSignaling('guest-extrap');
-      const client = new NetworkClient(sig, 'Guest', 7);
+  describe('2. SharedSimSync Option 3 Extrapolation & Goal Replay Hard-Sync', () => {
+    it('SharedSimSync clamps extrapolationMs [0..250] and handles phase 3.5 GOAL_REPLAY cleanly', () => {
+      const sync = new SharedSimSync('mediano');
+      expect(sync.setExtrapolationMs(80)).toBe(80);
+      expect(sync.extrapolationMs).toBe(80);
+      expect(sync.setExtrapolationMs(-50)).toBe(0);
+      expect(sync.extrapolationMs).toBe(0);
+      expect(sync.setExtrapolationMs(350)).toBe(250);
+      expect(sync.extrapolationMs).toBe(250);
 
-      const initialDelay = client.jitterBuffer.interpolationDelayMs;
-      client.setAutoExtrapolationMs(80);
-      expect(client.autoExtrapolationMs).toBe(80);
-      expect((client.jitterBuffer as any).autoExtrapolationMs).toBe(80);
-      // Smoothly blends interpolationDelayMs rather than abrupt 0 -> max jump
-      expect(client.jitterBuffer.interpolationDelayMs).toBeGreaterThan(initialDelay);
-      expect(client.jitterBuffer.interpolationDelayMs).toBeLessThan(80);
-
-      // Clamps out-of-range values
-      client.setAutoExtrapolationMs(-50);
-      expect(client.autoExtrapolationMs).toBe(0);
-
-      await client.connectToHost('host-1');
-      const pc = mockPcList[0]!;
-      const gameDc = pc.simulateIncomingDataChannel('game');
-      const reliableDc = pc.simulateIncomingDataChannel('reliable');
-      gameDc.readyState = 'open';
-      reliableDc.readyState = 'open';
-      pc.iceConnectionState = 'connected';
-      pc.oniceconnectionstatechange?.();
-
-      // Sync phase 3.5 (GOAL_REPLAY) -> jitterBuffer must NOT be 'PAUSED'
-      reliableDc.onmessage?.({
-        data: JSON.stringify({
-          type: 'ROOM_STATE_SYNC',
-          assignedPlayerId: 2,
-          playersList: [],
-          matchPhase: 3.5,
-          lastGoalScorerId: 2
-        })
-      });
-      expect(client.jitterBuffer.currentMatchState).toBe(3.5);
-      expect(client.jitterBuffer.currentMatchState).not.toBe('PAUSED');
-
-      client.disconnect();
-    });
-
-    it('ClientPredictionReconciler hard-syncs and clears inputBuffer during phase 3.5 (GOAL_REPLAY) and frozen phases', () => {
-      const reconciler = new ClientPredictionReconciler();
-      const engine = new EngineInstance('AF 3v3');
-      engine.startMatch(false);
-      const p = engine.addPlayer(2, 'blue');
-      p.pos.set(150, 40);
-
-      reconciler.recordInput(1, INPUT_FLAG_RIGHT);
-      reconciler.recordInput(2, INPUT_FLAG_RIGHT);
-      reconciler.visualOffset.x = 12;
-      reconciler.visualOffset.y = -5;
+      sync.onSnapshot(
+        {
+          tick: 119,
+          phase: MatchPhase.PLAYING,
+          matchTimer: 30,
+          redScore: 0,
+          blueScore: 0,
+          soundMask: 0,
+          discs: [
+            { id: 0, team: 0, x: 0, y: 0, vx: 0, vy: 0, flags: 0 },
+            { id: 2, team: 2, x: 150, y: 40, vx: 0, vy: 0, flags: 0, stamina: 100 }
+          ]
+        },
+        1000
+      );
 
       const replaySnap: GameStateSnapshot = {
         tick: 120,
-        phase: 3.5, // MatchPhase.GOAL_REPLAY
+        phase: MatchPhase.GOAL_REPLAY,
         matchTimer: 30,
         redScore: 1,
         blueScore: 0,
         soundMask: 0,
         discs: [
-          {
-            id: 0,
-            team: 0,
-            x: 390,
-            y: 12,
-            vx: 250,
-            vy: -30,
-            flags: 0
-          },
+          { id: 0, team: 0, x: 390, y: 12, vx: 250, vy: -30, flags: 0 },
           {
             id: 2,
             team: 2,
@@ -407,73 +370,70 @@ describe('Goal Replay Synchronization, Scorer-Only Skip, Prediction & Auto-Extra
             vx: 110,
             vy: 0,
             flags: 0,
-            stamina: 92
+            stamina: 92,
+            inputMask: INPUT_FLAG_RIGHT
           }
         ]
       };
 
-      const res = reconciler.reconcile(engine, replaySnap, 2);
-      expect(res.replayed).toBe(false);
-      expect(res.hardSnapped).toBe(true);
-      expect(reconciler.inputBuffer).toHaveLength(0);
-      expect(reconciler.visualOffset).toEqual({ x: 0, y: 0 });
-      expect(engine.players.get(2)!.pos.x).toBe(-80);
-      expect(engine.players.get(2)!.pos.y).toBe(25);
+      expect(sync.onSnapshot(replaySnap, 1016)).toBe(true);
+      const rendered = sync.buildRenderSnapshot(80, 1016)!;
+      expect(rendered.phase).toBe(MatchPhase.GOAL_REPLAY);
+      expect(sync.simWorld.players.get(2)!.pos.x).toBe(-80);
+      expect(sync.simWorld.players.get(2)!.pos.y).toBe(25);
+      // During GOAL_REPLAY local stepping does not advance ticks
+      sync.update(0.05, 1066);
+      expect(sync.getTelemetry(undefined, 1066).localStepsSinceSnap).toBe(0);
     });
 
-    it('ClientPredictionReconciler monotonic lastRecordedSeq guard prevents sequence regression after slice(-45) at high RTT', () => {
-      const reconciler = new ClientPredictionReconciler();
-      const engine = new EngineInstance('AF 3v3');
-      engine.startMatch(false);
-      engine.addPlayer(1, 'red');
+    it('SharedSimSync maintains strictly monotonic server ticks and allows tick resets', () => {
+      const sync = new SharedSimSync('AF 3v3');
+      sync.onSnapshot(
+        {
+          tick: 60,
+          phase: MatchPhase.PLAYING,
+          matchTimer: 170,
+          redScore: 0,
+          blueScore: 0,
+          soundMask: 0,
+          discs: [{ id: 1, team: 1, x: -100, y: 0, vx: 0, vy: 0, flags: 0, stamina: 100 }]
+        },
+        1000
+      );
+      expect(sync.getTelemetry(undefined, 1000).lastServerTick).toBe(60);
 
-      // Simulate 60 ticks of unacked inputs (> MAX_REPLAY_TICKS = 45, e.g. 1000ms RTT)
-      for (let t = 1; t <= 60; t++) {
-        reconciler.recordInput(t, INPUT_FLAG_RIGHT);
-      }
-      expect(reconciler.lastRecordedSeq).toBe(60);
-
-      // Authoritative snapshot only acked tick 10
-      const authSnap: GameStateSnapshot = {
-        tick: 10,
-        phase: MatchPhase.PLAYING,
-        matchTimer: 170,
-        redScore: 0,
-        blueScore: 0,
-        soundMask: 0,
-        discs: [
+      // Out-of-order older tick 56 is dropped
+      expect(
+        sync.onSnapshot(
           {
-            id: 1,
-            team: 1,
-            x: -100,
-            y: 0,
-            vx: 0,
-            vy: 0,
-            flags: 0,
-            stamina: 100,
-            lastAckedInputSeq: 10
-          }
-        ]
-      };
+            tick: 56,
+            phase: MatchPhase.PLAYING,
+            matchTimer: 170,
+            redScore: 0,
+            blueScore: 0,
+            soundMask: 0,
+            discs: [{ id: 1, team: 1, x: -110, y: 0, vx: 0, vy: 0, flags: 0, stamina: 100 }]
+          },
+          1016
+        )
+      ).toBe(false);
 
-      // reconcile trims unacked buffer to MAX_BUFFER_TICKS (45) and caps full engine.step replays to MAX_REPLAY_TICKS (5)
-      reconciler.reconcile(engine, authSnap, 1);
-      expect(reconciler.inputBuffer).toHaveLength(ClientPredictionReconciler.MAX_BUFFER_TICKS);
-      expect(reconciler.lastReplayedFullSteps).toBeLessThanOrEqual(ClientPredictionReconciler.MAX_REPLAY_TICKS);
-      // engine.currentTick must NOT regress below lastRecordedSeq (10 + 45 = 55 < 60 would otherwise regress!)
-      expect(engine.currentTick).toBeGreaterThanOrEqual(60);
-
-      // Even if a caller passes a lower tick (e.g., 56), recordInput enforces monotonic sequence > 60
-      reconciler.recordInput(56, INPUT_FLAG_RIGHT);
-      expect(reconciler.lastRecordedSeq).toBe(61);
-      const lastEntry = reconciler.inputBuffer[reconciler.inputBuffer.length - 1]!;
-      expect(lastEntry.seq).toBe(61);
-      expect(lastEntry.tick).toBe(61);
-
-      // Monotonicity holds for predictStep as well
-      const stepSeq = reconciler.predictStep(INPUT_FLAG_RIGHT);
-      expect(stepSeq).toBe(62);
-      expect(reconciler.lastRecordedSeq).toBe(62);
+      // Increasing tick 61 is accepted cleanly
+      expect(
+        sync.onSnapshot(
+          {
+            tick: 61,
+            phase: MatchPhase.PLAYING,
+            matchTimer: 170,
+            redScore: 0,
+            blueScore: 0,
+            soundMask: 0,
+            discs: [{ id: 1, team: 1, x: -95, y: 0, vx: 0, vy: 0, flags: 0, stamina: 100 }]
+          },
+          1032
+        )
+      ).toBe(true);
+      expect(sync.getTelemetry(undefined, 1032).lastServerTick).toBe(61);
     });
   });
 });

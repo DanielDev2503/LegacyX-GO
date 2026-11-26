@@ -270,77 +270,66 @@ describe('Comprehensive Validation: Controls, Rope Net, Universal Extrapolation 
     });
   });
 
-  describe('Universal Extrapolation and Clamping', () => {
-    it('projects both remote players and remote ball with boundary clamping', () => {
-      const discRenderer = new DiscRenderer();
-      discRenderer.setExtrapolation(50); // 50ms = 0.05s
-      discRenderer.setStadiumBounds({
-        halfWidth: 600,
-        halfHeight: 270,
-        goalDepth: 35,
-        goalHalfHeight: 85
-      });
+  describe('Universal Extrapolation and Wall-Bounce Clamping via SharedSimSync', () => {
+    it('projects both remote players and remote ball via real physics with stadium boundary containment', async () => {
+      const { SharedSimSync } = await import('../../src/net/SharedSimSync.js');
+      const { MatchPhase } = await import('@legacyx/core');
+      const sync = new SharedSimSync('big');
 
-      // 1. Remote player with velocity (100 px/s)
-      const remotePlayer = {
-        id: 2,
-        x: 100,
-        y: 50,
-        vx: 100,
-        vy: 0,
-        radius: 15,
-        team: 1 as const,
-        avatar: '',
-        kicking: false,
-        stamina: 100,
-        isDashing: false,
-        isTurbo: false
-      };
+      sync.onSnapshot(
+        {
+          tick: 10,
+          phase: MatchPhase.PLAYING,
+          matchTimer: 30,
+          redScore: 0,
+          blueScore: 0,
+          soundMask: 0,
+          discs: [
+            { id: 0, team: 0, x: 0, y: 0, vx: 200, vy: -100, flags: 0 },
+            { id: 2, team: 2, x: 100, y: 50, vx: 100, vy: 0, flags: 0, stamina: 100 }
+          ]
+        },
+        1000
+      );
 
-      const renderPlayer = discRenderer.getRenderDisc(remotePlayer, true);
-      // Expected x = 100 + 100 * (0.05 * 0.96) = 104.8
-      expect(renderPlayer.x).toBeCloseTo(104.8, 1);
-      expect(renderPlayer.y).toBeCloseTo(50, 1);
+      const projSnap = sync.buildRenderSnapshot(50, 1000)!;
+      const projBall = projSnap.discs.find((d) => d.id === 0)!;
+      const projPlayer = projSnap.discs.find((d) => d.id === 2)!;
+      expect(projPlayer.x).toBeGreaterThan(100);
+      expect(projBall.x).toBeGreaterThan(0);
+      expect(projBall.y).toBeLessThan(0);
 
-      // 2. Remote ball with velocity (200 px/s)
-      const remoteBall = {
-        id: 0,
-        x: 0,
-        y: 0,
-        vx: 200,
-        vy: -100,
-        radius: 5.8,
-        team: 0 as const,
-        avatar: '',
-        kicking: false,
-        stamina: 100,
-        isDashing: false,
-        isTurbo: false
-      };
-
-      const renderBall = discRenderer.getRenderDisc(remoteBall, true);
-      // Expected ball x = 0 + 200 * (0.05 * 0.99) = 9.9, y = 0 + (-100) * (0.05 * 0.99) = -4.95
-      expect(renderBall.x).toBeCloseTo(9.9, 1);
-      expect(renderBall.y).toBeCloseTo(-4.95, 1);
-
-      // 3. Clamping test: remote entity projected outside pitch boundaries
-      const fastPlayerNearWall = {
-        id: 3,
-        x: 595,
-        y: 200, // outside goal mouth, boundary is halfWidth - radius = 600 - 15 = 585
-        vx: 1000,
-        vy: 0,
-        radius: 15,
-        team: 2 as const,
-        avatar: '',
-        kicking: false,
-        stamina: 100,
-        isDashing: false,
-        isTurbo: false
-      };
-
-      const clampedPlayer = discRenderer.getRenderDisc(fastPlayerNearWall, true);
-      expect(clampedPlayer.x).toBeLessThanOrEqual(585);
+      // Wall bounce test: player respects halfWidth + runOff and ball bounces strictly inside halfWidth
+      sync.onSnapshot(
+        {
+          tick: 11,
+          phase: MatchPhase.PLAYING,
+          matchTimer: 30,
+          redScore: 0,
+          blueScore: 0,
+          soundMask: 0,
+          discs: [
+            { id: 0, team: 0, x: sync.simWorld.stadium.halfWidth - 15, y: 260, vx: 1200, vy: 0, flags: 0 },
+            {
+              id: 3,
+              team: 2,
+              x: sync.simWorld.stadium.halfWidth - 15,
+              y: -260,
+              vx: 1000,
+              vy: 0,
+              flags: 0,
+              stamina: 100
+            }
+          ]
+        },
+        1016
+      );
+      const clampedSnap = sync.buildRenderSnapshot(100, 1016)!;
+      const clampedBall = clampedSnap.discs.find((d) => d.id === 0)!;
+      const clampedPlayer = clampedSnap.discs.find((d) => d.id === 3)!;
+      const runOff = sync.simWorld.stadium.runOff ?? 0;
+      expect(clampedBall.x).toBeLessThanOrEqual(sync.simWorld.stadium.halfWidth - sync.simWorld.ball.radius + 0.01);
+      expect(clampedPlayer.x).toBeLessThanOrEqual(sync.simWorld.stadium.halfWidth + runOff - 15 + 0.01);
     });
   });
 

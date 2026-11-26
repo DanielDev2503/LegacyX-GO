@@ -246,7 +246,7 @@
       type="text"
       bind:value={chatInput}
       maxlength="140"
-      placeholder="Presiona Enter para chatear (@usuario, @all, /pause)..."
+      placeholder="Presiona Enter para chatear (@usuario, @all, /pause, /netdebug)..."
       oninput={syncCursor}
       onclick={syncCursor}
       onkeyup={syncCursor}

@@ -1,38 +1,40 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import {
   BinaryProtocol,
   EngineInstance,
   InputPacket,
-  JitterBuffer,
   MatchPhase,
-  createStadium,
-  stepPlayerKinematics,
   INPUT_FLAG_RIGHT,
   INPUT_FLAG_TURBO,
   INPUT_FLAG_DASH,
   INPUT_FLAG_KICK,
   type GameStateSnapshot,
-  type PlayerInput,
-  type PlayerKinematicsState
+  type PlayerInput
 } from '@legacyx/core';
-import { ClientPredictionReconciler } from '../../src/net/ClientPrediction';
+import { SharedSimSync } from '../../src/net/SharedSimSync';
 import { NetworkClient } from '../../src/net/NetworkClient';
 import { GameApp } from '../../src/net/GameApp';
 import { SignalingClient } from '../../src/net/SignalingClient';
 import { NetworkImpairmentSimulator } from '../../src/net/NetworkImpairmentSimulator';
-import { DiscRenderer } from '../../src/renderer/DiscRenderer';
-import { gameUI, LEGACYX_NET_MODE_KEY } from '../../src/ui/state/gameUI.svelte.js';
+import { gameUI } from '../../src/ui/state/gameUI.svelte.js';
 
-describe('4G Mobile High-Ping (260 ms RTT + ±40 ms Jitter + 3–5% Loss) Verification Suite', () => {
+describe('4G Mobile High-Ping (260 ms RTT + ±40 ms Jitter + 3–5% Loss) Verification Suite (Option 3)', () => {
   afterEach(() => {
     vi.restoreAllMocks();
     gameUI.setSimLag(0, 0, 0);
   });
 
-  it('Test 1 (JitterBuffer PLL): absorbs 260 ms RTT + ±40 ms jitter + 3% loss smoothly with bounded 60 ms underflow & 300 ms hard-reset guard', () => {
-    const jb = new JitterBuffer<GameStateSnapshot>(32, 45, true);
-    // Simulador: latencia 130 ms unidireccional (260 ms RTT), jitterMs = 80 (±40 ms), 3% loss, 12% reorder
-    const downLink = new NetworkImpairmentSimulator<GameStateSnapshot>({
+  it('Test 1 (SharedSimSync at 260 ms RTT + ±40 ms jitter + 3% loss): absorbs jitter/loss smoothly with 0 hard snaps & disconnect cap', () => {
+    const sync = new SharedSimSync('mediano');
+    const hostEngine = new EngineInstance('mediano');
+    hostEngine.isPracticeMode = true;
+    hostEngine.startMatch(false);
+    hostEngine.fsm.startPlaying();
+    const hostP = hostEngine.addPlayer(2, 'red');
+    hostP.pos.set(-300, 0);
+    hostEngine.ball.pos.set(0, 0);
+
+    const downLink = new NetworkImpairmentSimulator<ArrayBuffer>({
       latencyMs: 130,
       jitterMs: 80,
       packetLossRate: 0.03,
@@ -41,7 +43,7 @@ describe('4G Mobile High-Ping (260 ms RTT + ±40 ms Jitter + 3–5% Loss) Verifi
     });
 
     const TICK_MS = 1000 / 60;
-    const ballSpeedX = 240; // 4 px/tick constantes
+    const inputs = new Map<number, PlayerInput>([[2, { inputMask: INPUT_FLAG_RIGHT }]]);
     let prevBallX: number | null = null;
     let maxStepPx = 0;
     let minDxPx = Infinity;
@@ -49,99 +51,51 @@ describe('4G Mobile High-Ping (260 ms RTT + ±40 ms Jitter + 3–5% Loss) Verifi
 
     for (let tick = 1; tick <= 360; tick++) {
       const nowMs = tick * TICK_MS;
-      const snap: GameStateSnapshot = {
-        tick,
-        phase: MatchPhase.PLAYING,
-        matchTimer: 180,
-        redScore: 0,
-        blueScore: 0,
-        soundMask: 0,
-        discs: [
-          {
-            id: 0,
-            team: 0,
-            x: (tick * ballSpeedX) / 60,
-            y: 0,
-            vx: ballSpeedX,
-            vy: 0,
-            flags: 0
-          },
-          {
-            id: 2,
-            team: 2,
-            x: -100 + (tick * 120) / 60,
-            y: 0,
-            vx: 120,
-            vy: 0,
-            flags: 0,
-            stamina: 100
-          }
-        ]
-      };
+      hostEngine.step(inputs);
+      const buf = BinaryProtocol.encodeSnapshot(hostEngine.getState());
 
-      downLink.send(snap, nowMs, (arrivedSnap, arrivedAtMs) => {
-        jb.push(arrivedSnap, arrivedAtMs);
+      downLink.send(buf, nowMs, (arrivedBuf, arrivedAtMs) => {
+        const decoded = BinaryProtocol.decodeSnapshot(arrivedBuf);
+        if (decoded) {
+          sync.onSnapshot(decoded, arrivedAtMs);
+        }
       });
       downLink.flushDue(nowMs);
+      sync.update(1 / 60, nowMs);
 
-      const interp = jb.getInterpolatedSnapshot(nowMs);
-      if (interp) {
+      const snap = sync.buildRenderSnapshot(60, nowMs);
+      if (snap) {
         renderedCount++;
-        const bx = interp.discs[0]!.x;
-        expect(Number.isFinite(bx)).toBe(true);
-        expect(jb.lastTimeScale).toBeGreaterThanOrEqual(JitterBuffer.PLL_MIN_SCALE);
-        expect(jb.lastTimeScale).toBeLessThanOrEqual(JitterBuffer.PLL_MAX_SCALE);
+        const p2 = snap.discs.find((d) => d.id === 2)!;
+        expect(Number.isFinite(p2.x)).toBe(true);
         if (prevBallX !== null) {
-          const dx = bx - prevBallX;
-          if (dx < minDxPx) minDxPx = dx;
+          const dx = p2.x - prevBallX;
+          if (hostP.pos.x < 400 && hostP.vel.x > 0 && dx < minDxPx) minDxPx = dx;
           if (Math.abs(dx) > maxStepPx) maxStepPx = Math.abs(dx);
         }
-        prevBallX = bx;
+        prevBallX = p2.x;
       }
     }
 
+    const tel = sync.getTelemetry(undefined, 360 * TICK_MS);
     expect(renderedCount).toBeGreaterThan(220);
-    expect(jb.pllHardResetCount).toBe(0);
-    expect(jb.targetDelay).toBeGreaterThan(30);
-    expect(jb.targetDelay).toBeLessThanOrEqual(140);
-    // Cero saltos hacia atrás ni teletransportes bruscos
+    expect(tel.hardSnaps).toBe(0);
+    expect(tel.syncCorrectionAvgPx).toBeLessThan(6);
     expect(minDxPx).toBeGreaterThanOrEqual(-0.5);
     expect(maxStepPx).toBeLessThan(12);
 
-    // Verificar protección de underflow (máx 60 ms con amortiguación exponencial) al pausar paquetes 500 ms
-    const lastBufferedX = jb.buffer[jb.buffer.length - 1]!.snapshot.discs[0]!.x;
-    const staleNowBase = 360 * TICK_MS;
-    const duringUnderflow = jb.getInterpolatedSnapshot(staleNowBase + 160);
-    const farUnderflow = jb.getInterpolatedSnapshot(staleNowBase + 260);
-    expect(duringUnderflow).not.toBeNull();
-    expect(farUnderflow).not.toBeNull();
-    // Max desplazamiento acotado por la integral de 60 ms con decaimiento exponencial (< 15 px vs 240 px/s)
-    expect(farUnderflow!.discs[0]!.x - lastBufferedX).toBeLessThanOrEqual(15);
-    expect(farUnderflow!.discs[0]!.x - lastBufferedX).toBeGreaterThanOrEqual(0);
-    expect(farUnderflow!.discs[0]!.vx).toBeLessThan(ballSpeedX * 0.25);
-
-    // Hard reset SÓLO si la deriva/salto supera 300 ms
-    jb.push(
-      {
-        tick: 900,
-        phase: MatchPhase.PLAYING,
-        matchTimer: 165,
-        redScore: 0,
-        blueScore: 0,
-        soundMask: 0,
-        discs: [{ id: 0, team: 0, x: 100, y: 0, vx: 0, vy: 0, flags: 0 }]
-      },
-      staleNowBase + 800
-    );
-    jb.getInterpolatedSnapshot(staleNowBase + 816);
-    expect(jb.pllHardResetCount).toBeGreaterThanOrEqual(1);
+    // Disconnect cap stops local progression cleanly at 250 ms (15 steps max)
+    const staleBase = 360 * TICK_MS;
+    for (let k = 1; k <= 30; k++) {
+      sync.update(1 / 60, staleBase + k * TICK_MS);
+    }
+    const stalledTel = sync.getTelemetry(undefined, staleBase + 500);
+    expect(stalledTel.localStepsSinceSnap).toBeLessThanOrEqual(SharedSimSync.MAX_LOCAL_STEPS_SINCE_SNAP);
+    expect(stalledTel.networkStalled).toBe(true);
   });
 
-  it('Test 2 (ClientPrediction a 260 ms RTT): re-simula los 16 inputs en vuelo con stepPlayerKinematics, 0 falsos resets y error < 0.1 px', () => {
-    const stadium = createStadium('mediano');
-
-    // A. Sobrecarga EngineInstance con 16 inputs en vuelo (~267 ms RTT) incluyendo Movimiento, Turbo y Dash
-    const hostEngine = new EngineInstance(stadium);
+  it('Test 2 (SharedSimSync deterministic replay parity with inputMask + Turbo + Dash)', () => {
+    const hostEngine = new EngineInstance('mediano');
     hostEngine.isPracticeMode = true;
     hostEngine.startMatch(false);
     hostEngine.fsm.startPlaying();
@@ -149,103 +103,26 @@ describe('4G Mobile High-Ping (260 ms RTT + ±40 ms Jitter + 3–5% Loss) Verifi
     hostP.pos.set(-150, 0);
     hostEngine.ball.pos.set(450, 200);
 
-    const predEngine = new EngineInstance(stadium);
-    predEngine.isPracticeMode = true;
-    predEngine.startMatch(false);
-    predEngine.fsm.startPlaying();
-    predEngine.setState(hostEngine.getState());
-
-    const kinematicsCfg = { ...(hostEngine.modifiers as any), playerFriction: hostP.damping };
-    const reconciler = new ClientPredictionReconciler();
+    const sync = new SharedSimSync('mediano');
+    sync.configure('mediano', hostEngine.modifiers, true);
     const inputMap = new Map<number, PlayerInput>();
-    const predStateOnly: PlayerKinematicsState = {
-      pos: { x: -150, y: 0 },
-      vel: { x: 0, y: 0 },
-      radius: 15,
-      stamina: 100,
-      staminaIdleTimer: 0,
-      staminaRegenUnlocked: false,
-      isDashing: false,
-      dashTicksRemaining: 0,
-      dashCooldownTimer: 0,
-      dashSlowdownTimer: 0,
-      dashDirX: 0,
-      dashDirY: 0,
-      isTurbo: false,
-      kicking: false,
-      prevDashState: false,
-      team: 'red'
-    };
 
-    const reconcilerOnly = new ClientPredictionReconciler();
-    reconcilerOnly.predictedState.pos.set(-150, 0);
-    reconcilerOnly.predictedState.vel.set(0, 0);
-    reconcilerOnly.predictedState.team = 'red';
+    // Deliver snapshot 1 carrying held INPUT_FLAG_RIGHT | INPUT_FLAG_TURBO
+    inputMap.set(2, { inputMask: INPUT_FLAG_RIGHT | INPUT_FLAG_TURBO });
+    hostEngine.step(inputMap);
+    sync.onSnapshot(BinaryProtocol.decodeSnapshot(BinaryProtocol.encodeSnapshot(hostEngine.getState()))!, 1000);
 
-    const TOTAL_TICKS = 40;
-    const ACKED_TICK = 24; // 40 - 24 = 16 inputs pendientes en vuelo (~267 ms RTT)
-    let snapshotAt24!: GameStateSnapshot;
-
-    for (let tick = 1; tick <= TOTAL_TICKS; tick++) {
-      let mask = INPUT_FLAG_RIGHT | INPUT_FLAG_TURBO;
-      if (tick === 28) mask |= INPUT_FLAG_DASH; // Dash dentro de la ventana de los 16 inputs en vuelo
-
-      const seq = reconciler.recordInput(tick, mask, null, 0);
-      reconcilerOnly.recordInput(tick, mask, null, 0);
-
-      inputMap.clear();
-      inputMap.set(2, { inputMask: mask, sequence: seq } as any);
+    // Simulate 10 dropped ticks (166 ms): Host and SharedSimSync step independently from shared snapshot inputMask!
+    for (let i = 1; i <= 10; i++) {
       hostEngine.step(inputMap);
-      predEngine.step(inputMap, true);
-      stepPlayerKinematics(predStateOnly, { inputMask: mask }, stadium, null, kinematicsCfg, 1 / 60);
-      reconcilerOnly.predictedState.pos.x = predStateOnly.pos.x;
-      reconcilerOnly.predictedState.pos.y = predStateOnly.pos.y;
-      reconcilerOnly.predictedState.vel.x = predStateOnly.vel.x;
-      reconcilerOnly.predictedState.vel.y = predStateOnly.vel.y;
-
-      if (tick === ACKED_TICK) {
-        snapshotAt24 = BinaryProtocol.decodeSnapshot(BinaryProtocol.encodeSnapshot(hostEngine.getState()))!;
-      }
+      sync.update(1 / 60, 1000 + i * (1000 / 60));
     }
 
-    // Primera llamada verifica exactitud determinista en los 16 ticks en vuelo
-    const resEngine = reconciler.reconcile(predEngine, snapshotAt24, 2);
-
-    expect(resEngine.replayed).toBe(true);
-    expect(resEngine.replayedTicks).toBe(16);
-    expect(resEngine.hardSnapped).toBe(false);
-
-    // Medir rendimiento en régimen estable (post-JIT, como en el bucle real de 60 Hz)
-    const t0 = performance.now();
-    reconciler.reconcile(predEngine, snapshotAt24, 2);
-    const elapsedMs = performance.now() - t0;
-    expect(elapsedMs).toBeLessThan(5);
-
-    const resimP = predEngine.players.get(2)!;
-    const errEnginePx = Math.hypot(resimP.pos.x - hostP.pos.x, resimP.pos.y - hostP.pos.y);
-    expect(errEnginePx).toBeLessThan(0.1);
-
-    // Misma verificación para la sobrecarga directa de snapshot + Stadium
-    const resStateOnly = reconcilerOnly.reconcile(snapshotAt24, 2, stadium, null, kinematicsCfg);
-    expect(resStateOnly.replayed).toBe(true);
-    expect(resStateOnly.replayedTicks).toBe(16);
-    expect(resStateOnly.hardSnapped).toBe(false);
-    const errStateOnlyPx = Math.hypot(
-      reconcilerOnly.predictedState.pos.x - hostP.pos.x,
-      reconcilerOnly.predictedState.pos.y - hostP.pos.y
+    const errPx = Math.hypot(
+      sync.simWorld.players.get(2)!.pos.x - hostP.pos.x,
+      sync.simWorld.players.get(2)!.pos.y - hostP.pos.y
     );
-    expect(errStateOnlyPx).toBeLessThan(0.1);
-
-    // Umbral catastrófico elevado a > 120 px: 100 px no dispara hard-snap; 140 px sí
-    predEngine.players.get(2)!.pos.x += 100;
-    const resNonCatastrophic = reconciler.reconcile(predEngine, snapshotAt24, 2);
-    expect(resNonCatastrophic.hardSnapped).toBe(false);
-
-    predEngine.players.get(2)!.pos.x += 140;
-    const resCatastrophic = reconciler.reconcile(predEngine, snapshotAt24, 2);
-    expect(resCatastrophic.hardSnapped).toBe(true);
-    // Tampoco vacía pendingInputs ante discrepancias en fase PLAYING
-    expect(reconciler.pendingInputs.length).toBe(16);
+    expect(errPx).toBeLessThan(0.05);
   });
 
   it('Test 3 (InputPacket 4x redundancia): entrega 100% de Kick/Dash con 0 duplicados ante 5% pérdida aleatoria + ráfaga de 3 pérdidas consecutivas', () => {
@@ -283,6 +160,7 @@ describe('4G Mobile High-Ping (260 ms RTT + ±40 ms Jitter + 3–5% Loss) Verifi
     let appliedDashes = 0;
     let prevAppliedSeq = -1;
     let prevAppliedKick = false;
+    let prevAppliedDash = false;
     const tickMap = new Map<number, PlayerInput>();
 
     const applyHostTick = () => {
@@ -296,11 +174,12 @@ describe('4G Mobile High-Ping (260 ms RTT + ±40 ms Jitter + 3–5% Loss) Verifi
         if (kick && (seq !== prevAppliedSeq || !prevAppliedKick)) {
           appliedKicks++;
         }
-        if (dash) {
+        if (dash && (seq !== prevAppliedSeq || !prevAppliedDash)) {
           appliedDashes++;
         }
         prevAppliedSeq = seq;
         prevAppliedKick = kick;
+        prevAppliedDash = dash;
       }
       app.consumeRemoteImpulses();
     };
@@ -359,7 +238,7 @@ describe('4G Mobile High-Ping (260 ms RTT + ±40 ms Jitter + 3–5% Loss) Verifi
     app.teardownNetworkSession();
   });
 
-  it('Test 4 (/netmode, /simlag & extrapolateAllDiscs): switches modes with persistence, toggles live impairment, and extrapolates local + ball uniformly in classic mode', () => {
+  it('Test 4 (/netdebug, /simlag & SharedSimSync real physics extrapolation): toggles debug panel, live impairment, and extrapolates ball + players cleanly', () => {
     const store = new Map<string, string>();
     const origStorage = (globalThis as any).localStorage;
     (globalThis as any).localStorage = {
@@ -374,13 +253,11 @@ describe('4G Mobile High-Ping (260 ms RTT + ±40 ms Jitter + 3–5% Loss) Verifi
     };
 
     try {
-      expect(gameUI.handleChatCommand('/netmode predicted')).toBe(true);
-      expect(gameUI.settings.netMode).toBe('predicted');
-      expect(store.get(LEGACYX_NET_MODE_KEY)).toBe('predicted');
-
-      expect(gameUI.handleChatCommand('/netmode classic')).toBe(true);
-      expect(gameUI.settings.netMode).toBe('classic');
-      expect(store.get(LEGACYX_NET_MODE_KEY)).toBe('classic');
+      gameUI.showNetDebug = false;
+      expect(gameUI.handleChatCommand('/netdebug on')).toBe(true);
+      expect(gameUI.showNetDebug).toBe(true);
+      expect(gameUI.handleChatCommand('/netdebug off')).toBe(true);
+      expect(gameUI.showNetDebug).toBe(false);
 
       const sig = new SignalingClient('ws://localhost:8080', false);
       const client = new NetworkClient(sig, 'SimGuest', 7);
@@ -402,45 +279,25 @@ describe('4G Mobile High-Ping (260 ms RTT + ±40 ms Jitter + 3–5% Loss) Verifi
       expect((client as any).downlinkImpairment).toBeNull();
       client.disconnect();
 
-      // DiscRenderer en modo classic extrapola jugador local y balón de forma uniforme sin separateFrameDiscs
-      const dr = new DiscRenderer();
-      dr.setExtrapolation(100);
-      dr.extrapolateAllDiscs = true;
-      const mockCtx = {
-        save: vi.fn(),
-        restore: vi.fn(),
-        beginPath: vi.fn(),
-        closePath: vi.fn(),
-        moveTo: vi.fn(),
-        lineTo: vi.fn(),
-        clip: vi.fn(),
-        translate: vi.fn(),
-        rotate: vi.fn(),
-        scale: vi.fn(),
-        arc: vi.fn(),
-        fill: vi.fn(),
-        stroke: vi.fn(),
-        fillRect: vi.fn(),
-        strokeRect: vi.fn(),
-        setLineDash: vi.fn(),
-        fillText: vi.fn(),
-        measureText: vi.fn(() => ({ width: 10 })),
-        createRadialGradient: vi.fn(() => ({ addColorStop: vi.fn() })),
-        createLinearGradient: vi.fn(() => ({ addColorStop: vi.fn() }))
-      } as unknown as CanvasRenderingContext2D;
-
-      dr.render(
-        mockCtx,
-        [
-          { id: 0, team: 0, x: 100, y: 0, vx: 120, vy: 0, radius: 8, avatar: '' },
-          { id: 2, team: 2, x: 85, y: 0, vx: 120, vy: 0, radius: 15, avatar: '2' }
-        ],
-        2
+      const sync = new SharedSimSync('mediano');
+      sync.onSnapshot(
+        {
+          tick: 10,
+          phase: MatchPhase.PLAYING,
+          matchTimer: 30,
+          redScore: 0,
+          blueScore: 0,
+          soundMask: 0,
+          discs: [
+            { id: 0, team: 0, x: 100, y: 0, vx: 120, vy: 0, flags: 0 },
+            { id: 2, team: 2, x: 85, y: 0, vx: 120, vy: 0, flags: 0, stamina: 100 }
+          ]
+        },
+        1000
       );
-      const renderedBall = dr['frameRenderDiscs'][0]!;
-      const renderedLocal = dr['frameRenderDiscs'][1]!;
-      expect(renderedBall.x).toBeGreaterThan(100);
-      expect(renderedLocal.x).toBeGreaterThan(85);
+      const extrap = sync.buildRenderSnapshot(100, 1000)!;
+      expect(extrap.discs.find((d) => d.id === 0)!.x).toBeGreaterThan(100);
+      expect(extrap.discs.find((d) => d.id === 2)!.x).toBeGreaterThan(85);
     } finally {
       (globalThis as any).localStorage = origStorage;
     }

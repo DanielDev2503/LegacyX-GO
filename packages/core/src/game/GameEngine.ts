@@ -2,7 +2,7 @@ import { PhysicsWorld } from '../physics/PhysicsWorld';
 import { Stadium } from '../stadiums/Stadium';
 import { GoalNet } from '../physics/GoalNet';
 import { createStadium } from '../stadiums/StadiumRegistry';
-import { Disc, COLLISION_GROUP_BALL, COLLISION_GROUP_RED, COLLISION_GROUP_BLUE, POWER_SHOT_SPEED_THRESHOLD } from '../entities/Disc';
+import { Disc, COLLISION_GROUP_BALL, COLLISION_GROUP_RED, COLLISION_GROUP_BLUE, POWER_SHOT_SPEED_THRESHOLD, copyDiscPrimitives } from '../entities/Disc';
 import {
   Player,
   DASH_TICKS,
@@ -21,7 +21,7 @@ import {
 } from './Player';
 import { GameFSM, MatchPhase } from './GameFSM';
 import { GameSnapshot, DiscSnapshot, MatchConfig, KickoffState, TouchHistoryEntry, PlayerMatchStats, GoalInfo } from './GameState';
-import { SOUND_KICK, SOUND_POST_HIT, SOUND_GOAL, PlayerInput } from '../protocol/BinaryProtocol';
+import { SOUND_KICK, SOUND_POST_HIT, SOUND_GOAL, PlayerInput, AIM_ANGLE_BYTE_NONE, encodeAimAngleByte } from '../protocol/BinaryProtocol';
 import { ScoreEventCategory } from '../protocol/ControlMessages';
 import { GameplayConfig, sanitizeGameplayConfig, defaultStadium } from './GameConfig';
 import { Vec2 } from '../math/Vec2';
@@ -142,6 +142,8 @@ export class GameEngine {
   public onStateChange?: (state: MatchPhase) => void;
 
   private nextDiscId: number = 1000;
+  private silentTickActive: boolean = false;
+  private readonly scratchPlayerIds: Set<string> = new Set();
 
   constructor(
     config: Partial<MatchConfig> = {},
@@ -213,25 +215,33 @@ export class GameEngine {
               if (this.fsm.currentState === MatchPhase.KICKOFF) {
                 this.fsm.currentState = MatchPhase.PLAYING;
                 this.fsm.stateTicksRemaining = 0;
-                this.onStateChange?.(this.fsm.currentState);
+                if (!this.silentTickActive) {
+                  this.onStateChange?.(this.fsm.currentState);
+                }
               }
               // Contacto físico pasivo (isKick = false: nunca cuenta como tiro al arco)
-              this.registerBallTouch(player.id, false, incomingVx, incomingVy);
+              if (!this.silentTickActive) {
+                this.registerBallTouch(player.id, false, incomingVx, incomingVy);
+              }
               break;
             }
           }
 
-          const post = this.stadium.posts.find(p => p === event.discA || p === event.discB);
-          if (post) {
-            this.pendingShot = null;
-            this.soundMask |= SOUND_POST_HIT;
-            if (this.onPostHit) {
-              this.onPostHit(this.ball, post);
+          if (!this.silentTickActive) {
+            const post = this.stadium.posts.find(p => p === event.discA || p === event.discB);
+            if (post) {
+              this.pendingShot = null;
+              this.soundMask |= SOUND_POST_HIT;
+              if (this.onPostHit) {
+                this.onPostHit(this.ball, post);
+              }
             }
           }
         }
       } else if (event.type === 'disc-segment' && event.discA === this.ball) {
-        this.pendingShot = null;
+        if (!this.silentTickActive) {
+          this.pendingShot = null;
+        }
         this.ball.resetCurve();
       }
     };
@@ -848,62 +858,73 @@ export class GameEngine {
     }
   }
 
-  public step(inputs: Map<string, number | PlayerInput> = new Map()): void {
-    this.tick(inputs);
+  public step(inputs: Map<string, number | PlayerInput> = new Map(), isExtrapolation: boolean = false): void {
+    this.tick(inputs, isExtrapolation);
   }
 
   /**
-   * Deterministic 60Hz tick update.
+   * Deterministic 60Hz tick update. When `isExtrapolation === true`, runs physics/kinematics
+   * silently while skipping GoalNet stepping, goal detection, FSM clock ticks, stats and FX.
    */
-  public tick(inputs: Map<string, number | PlayerInput>): void {
+  public tick(inputs: Map<string, number | PlayerInput>, isExtrapolation: boolean = false): void {
     if (this.fsm.currentState === MatchPhase.STOPPED) {
       return;
     }
-
-    this.soundMask = 0;
-    this.tickCount++;
-    this.physicsWorld.isPracticeMode = this.isPracticeMode;
-
     if (this.fsm.currentState === MatchPhase.PAUSED) {
+      if (!isExtrapolation) {
+        this.tickCount++;
+      }
       return;
     }
 
-    if (this.fsm.currentState === MatchPhase.COUNTDOWN) {
-      this.physicsWorld.stepNets(1 / 60);
-      const wasResumingFromPause = this.fsm.isResumingFromPause;
-      if (this.fsm.stateTicksRemaining > 0) {
-        const transitioned = this.fsm.tick();
-        if (transitioned) {
-          if (!wasResumingFromPause) {
-            this.physicsWorld.resetNets(false);
-          }
-          if (this.onStateChange) {
-            this.onStateChange(this.fsm.currentState);
-          }
-        }
+    const prevSilent = this.silentTickActive;
+    this.silentTickActive = isExtrapolation;
+    try {
+      if (!isExtrapolation) {
+        this.soundMask = 0;
       }
-      if (wasResumingFromPause || inputs.size === 0) {
-        return;
-      }
-    }
+      this.tickCount++;
+      this.physicsWorld.isPracticeMode = this.isPracticeMode;
 
-    if (this.fsm.currentState === MatchPhase.PLAYING && !this.kickoffState.active) {
-      this.activePlayTicks++;
-      if (this.activePlayTicks % 60 === 0) {
-        if (this.isGoldenGoal) {
-          this.matchTimerSeconds++;
-        } else if (this.config.timeLimitSeconds > 0) {
-          if (this.matchTimerSeconds > 0) {
-            this.matchTimerSeconds--;
-            if (this.matchTimerSeconds === 0) {
-              this.checkMatchConclusion();
+      if (this.fsm.currentState === MatchPhase.COUNTDOWN) {
+        if (isExtrapolation) {
+          return;
+        }
+        this.physicsWorld.stepNets(1 / 60);
+        const wasResumingFromPause = this.fsm.isResumingFromPause;
+        if (this.fsm.stateTicksRemaining > 0) {
+          const transitioned = this.fsm.tick();
+          if (transitioned) {
+            if (!wasResumingFromPause) {
+              this.physicsWorld.resetNets(false);
+            }
+            if (this.onStateChange) {
+              this.onStateChange(this.fsm.currentState);
             }
           }
-        } else {
-          this.matchTimerSeconds++;
+        }
+        if (wasResumingFromPause || inputs.size === 0) {
+          return;
         }
       }
-    }
+
+      if (!isExtrapolation && this.fsm.currentState === MatchPhase.PLAYING && !this.kickoffState.active) {
+        this.activePlayTicks++;
+        if (this.activePlayTicks % 60 === 0) {
+          if (this.isGoldenGoal) {
+            this.matchTimerSeconds++;
+          } else if (this.config.timeLimitSeconds > 0) {
+            if (this.matchTimerSeconds > 0) {
+              this.matchTimerSeconds--;
+              if (this.matchTimerSeconds === 0) {
+                this.checkMatchConclusion();
+              }
+            }
+          } else {
+            this.matchTimerSeconds++;
+          }
+        }
+      }
 
     const dt = 1 / 60;
     const kickStrength = (this.gameplayConfig.kickStrength / 4.545) * 450.0;
@@ -1057,11 +1078,15 @@ export class GameEngine {
           if (this.fsm.currentState === MatchPhase.KICKOFF) {
             this.fsm.currentState = MatchPhase.PLAYING;
             this.fsm.stateTicksRemaining = 0;
-            this.onStateChange?.(this.fsm.currentState);
+            if (!isExtrapolation) {
+              this.onStateChange?.(this.fsm.currentState);
+            }
           }
 
-          // Patada explícita (isKick = true -> evalúa tiro al arco con cooldown de 4.0s)
-          this.registerBallTouch(player.id, true);
+          if (!isExtrapolation) {
+            // Patada explícita (isKick = true -> evalúa tiro al arco con cooldown de 4.0s)
+            this.registerBallTouch(player.id, true);
+          }
           this.ball.isPowerShot = isKickPowerShot;
 
           let ex = player.curveX;
@@ -1083,9 +1108,11 @@ export class GameEngine {
             }
           }
 
-          this.soundMask |= SOUND_KICK;
-          if (this.onKick) {
-            this.onKick(disc, this.ball);
+          if (!isExtrapolation) {
+            this.soundMask |= SOUND_KICK;
+            if (this.onKick) {
+              this.onKick(disc, this.ball);
+            }
           }
         }
       }
@@ -1165,7 +1192,7 @@ export class GameEngine {
       this.ball.isPowerShot = false;
     }
 
-    this.physicsWorld.step();
+    this.physicsWorld.step(1 / 60, isExtrapolation);
 
     if (this.ball.lastKickerDiscId !== -1) {
       this.ball.lastKickerDiscId = -1;
@@ -1179,7 +1206,9 @@ export class GameEngine {
         if (this.fsm.currentState === MatchPhase.KICKOFF) {
           this.fsm.currentState = MatchPhase.PLAYING;
           this.fsm.stateTicksRemaining = 0;
-          this.onStateChange?.(this.fsm.currentState);
+          if (!isExtrapolation) {
+            this.onStateChange?.(this.fsm.currentState);
+          }
         }
       } else {
         for (const [playerId, player] of this.players.entries()) {
@@ -1195,12 +1224,18 @@ export class GameEngine {
             if (this.fsm.currentState === MatchPhase.KICKOFF) {
               this.fsm.currentState = MatchPhase.PLAYING;
               this.fsm.stateTicksRemaining = 0;
-              this.onStateChange?.(this.fsm.currentState);
+              if (!isExtrapolation) {
+                this.onStateChange?.(this.fsm.currentState);
+              }
             }
             break;
           }
         }
       }
+    }
+
+    if (isExtrapolation) {
+      return;
     }
 
     if (this.fsm.isVictoryCelebration() || this.fsm.isMatchEnded()) {
@@ -1400,6 +1435,9 @@ export class GameEngine {
         }
       }
     }
+    } finally {
+      this.silentTickActive = prevSilent;
+    }
   }
 
   public checkMatchConclusion(): boolean {
@@ -1456,7 +1494,9 @@ export class GameEngine {
       isPowerShot: this.ball.isPowerShot,
       lastKickerId: kickerDiscId,
       curveFactor: Math.round(this.ball.curvePerp * 10),
-      spin: this.ball.spin
+      spin: this.ball.spin,
+      inputMask: 0,
+      aimAngleByte: AIM_ANGLE_BYTE_NONE
     });
 
     for (const [playerId, player] of this.players.entries()) {
@@ -1478,7 +1518,9 @@ export class GameEngine {
           isTyping: disc.isTyping,
           lastAckedInputSeq: player.lastProcessedInputSeq >>> 0,
           dashTimer: player.dashTicksRemaining,
-          dashCooldown: player.dashCooldownTimer
+          dashCooldown: player.dashCooldownTimer,
+          inputMask: player.inputMask & 0xffff,
+          aimAngleByte: encodeAimAngleByte(player.aimAngle, player.aimThrottle)
         });
       }
     }
@@ -1618,5 +1660,82 @@ export class GameEngine {
 
   public getAdaptiveSnapshotRate(): number {
     return this.players.size <= 3 ? 60 : 30;
+  }
+
+  /** Copia el estado dinámico hacia otro `GameEngine` preasignado sin alocar en caliente. */
+  public copyStateTo(target: GameEngine): void {
+    target.tickCount = this.tickCount;
+    target.activePlayTicks = this.activePlayTicks;
+    target.redScore = this.redScore;
+    target.blueScore = this.blueScore;
+    target.matchTimerSeconds = this.matchTimerSeconds;
+    target.isPracticeMode = this.isPracticeMode;
+    target.isGoldenGoal = this.isGoldenGoal;
+    target.lastScoringTeam = this.lastScoringTeam;
+
+    target.fsm.currentState = this.fsm.currentState;
+    target.fsm.stateTicksRemaining = this.fsm.stateTicksRemaining;
+    target.fsm.countdownSeconds = this.fsm.countdownSeconds;
+    target.fsm.winningTeam = this.fsm.winningTeam;
+    target.fsm.isResumingFromPause = this.fsm.isResumingFromPause;
+
+    target.kickoffState.active = this.kickoffState.active;
+    target.kickoffState.mode = this.kickoffState.mode;
+    target.kickoffState.possessingTeam = this.kickoffState.possessingTeam;
+
+    copyDiscPrimitives(this.ball, target.ball);
+
+    this.scratchPlayerIds.clear();
+    for (const [playerId, srcPlayer] of this.players.entries()) {
+      this.scratchPlayerIds.add(playerId);
+      const srcDisc = this.playerDiscs.get(playerId);
+      let dstPlayer = target.players.get(playerId);
+      if (!dstPlayer) {
+        dstPlayer = new Player({
+          id: srcPlayer.id,
+          name: srcPlayer.name,
+          team: srcPlayer.team,
+          avatar: srcPlayer.avatar,
+          isAdmin: srcPlayer.isAdmin
+        });
+        target.addPlayer(dstPlayer);
+      }
+      dstPlayer.team = srcPlayer.team;
+      dstPlayer.inputMask = srcPlayer.inputMask;
+      dstPlayer.aimAngle = srcPlayer.aimAngle;
+      dstPlayer.aimThrottle = srcPlayer.aimThrottle;
+      dstPlayer.stamina = srcPlayer.stamina;
+      dstPlayer.staminaIdleTimer = srcPlayer.staminaIdleTimer;
+      dstPlayer.staminaRegenUnlocked = srcPlayer.staminaRegenUnlocked;
+      dstPlayer.kickConsumed = srcPlayer.kickConsumed;
+      dstPlayer.isDashing = srcPlayer.isDashing;
+      dstPlayer.dashTicksRemaining = srcPlayer.dashTicksRemaining;
+      dstPlayer.dashCooldownTimer = srcPlayer.dashCooldownTimer;
+      dstPlayer.dashSlowdownTimer = srcPlayer.dashSlowdownTimer;
+      dstPlayer.dashDirX = srcPlayer.dashDirX;
+      dstPlayer.dashDirY = srcPlayer.dashDirY;
+      dstPlayer.isTurbo = srcPlayer.isTurbo;
+      dstPlayer.prevDashState = srcPlayer.prevDashState;
+      dstPlayer.triggerDash = srcPlayer.triggerDash;
+      dstPlayer.isTyping = srcPlayer.isTyping;
+      dstPlayer.curveInput = srcPlayer.curveInput;
+      dstPlayer.curveX = srcPlayer.curveX;
+      dstPlayer.curveY = srcPlayer.curveY;
+      dstPlayer.lastProcessedInputSeq = srcPlayer.lastProcessedInputSeq;
+
+      const dstDisc = target.playerDiscs.get(playerId);
+      if (srcDisc && dstDisc) {
+        copyDiscPrimitives(srcDisc, dstDisc);
+      }
+    }
+
+    for (const existingId of target.players.keys()) {
+      if (!this.scratchPlayerIds.has(existingId)) {
+        target.removePlayer(existingId);
+      }
+    }
+
+    target.physicsWorld.isPracticeMode = this.physicsWorld.isPracticeMode;
+    target.updatePhysicsKickoffContext();
   }
 }

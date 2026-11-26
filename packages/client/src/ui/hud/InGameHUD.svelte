@@ -18,6 +18,35 @@
   let recAuthWarning = $state<string | null>(null);
   let recAuthWarningTimer: ReturnType<typeof setTimeout> | null = null;
 
+  let dbgRttMs = $state(0);
+  let dbgJitterMs = $state(0);
+  let dbgLossPct = $state(0);
+  let dbgIceRoute = $state('Local');
+  let dbgCorrAvgPx = $state(0);
+  let dbgCorrMaxPx = $state(0);
+  let dbgExtrapMs = $state(0);
+  let dbgLocalSteps = $state(0);
+  let dbgFrameTimeP99 = $state(0);
+
+  $effect(() => {
+    if (!gameUI.showNetDebug) return;
+    const syncNetDebug = () => {
+      const m = gameUI.liveNetDebug;
+      dbgRttMs = m.rttMs;
+      dbgJitterMs = m.jitterMs;
+      dbgLossPct = m.lossPct;
+      dbgIceRoute = m.iceRoute;
+      dbgCorrAvgPx = m.syncCorrectionAvgPx;
+      dbgCorrMaxPx = m.syncCorrectionMaxPx;
+      dbgExtrapMs = m.extrapolationMs;
+      dbgLocalSteps = m.localStepsSinceSnap;
+      dbgFrameTimeP99 = m.frameTimeP99;
+    };
+    syncNetDebug();
+    const timer = setInterval(syncNetDebug, 250);
+    return () => clearInterval(timer);
+  });
+
   const remainingSeconds = $derived.by(() => {
     if (gameUI.timeLimit <= 0) return 999;
     return Math.max(0, gameUI.timeLimit * 60 - gameUI.matchTimerSeconds);
@@ -389,7 +418,7 @@
 
     const text = chatMessage.trim();
     if (text) {
-      // Local slash commands (/var, /extrapolation, /netmode, /simlag) bypass chat spam cooldown
+      // Local slash commands (/var, /extrapolation, /netdebug, /simlag) bypass chat spam cooldown
       if (gameUI.handleChatCommand(text)) {
         soundFX.playUIClick();
         chatMessage = '';
@@ -1063,7 +1092,7 @@
   <!-- 2. TELEMETRÍA EN VIVO (ACTIVABLE EN VIDEO) -->
   <!-- ========================================== -->
   {#if gameUI.settings.showTelemetryCard === true}
-    <div class="hud-telemetry-corner" bind:this={telemetryEl} title={`Ruta ICE: ${gameUI.iceRoute} · Reconciliaciones: ${gameUI.reconciliationsPerSec}/s`}>
+    <div class="hud-telemetry-corner" bind:this={telemetryEl} title={`Ruta ICE: ${gameUI.iceRoute} · Corrección sync: ${gameUI.syncCorrectionAvgPx.toFixed(1)} px`}>
       <span class="tel-pulse-dot"></span>
       <span class="tel-label">Ping:</span>
       <span class="tel-val {pingColorClass}">{gameUI.pingMs} ms</span>
@@ -1080,6 +1109,43 @@
       <span class="tel-label">FPS:</span>
       <span class="tel-val text-cyan">{gameUI.fps}</span>
     </div>
+  {/if}
+
+  <!-- ========================================== -->
+  <!-- 2.3 PANEL /netdebug (4 Hz NO REACTIVO)     -->
+  <!-- ========================================== -->
+  {#if gameUI.showNetDebug}
+    <aside id="hud-netdebug-panel" class="netdebug-panel" aria-label="Telemetría de red Opción 3 (/netdebug)">
+      <div class="var-monitor-header">
+        <span class="var-live-badge">
+          <span class="var-pulse-dot" aria-hidden="true"></span>
+          <span>NETDEBUG (4 Hz)</span>
+        </span>
+        <button
+          type="button"
+          class="var-close-btn"
+          title="Cerrar panel /netdebug"
+          aria-label="Cerrar panel /netdebug"
+          tabindex="-1"
+          onkeydown={preventHudButtonKeyActivation}
+          onclick={(event) => {
+            gameUI.showNetDebug = false;
+            blurHudControl(event);
+          }}
+        >✕</button>
+      </div>
+      <div class="netdebug-grid">
+        <div class="netdebug-cell"><span class="nd-k">RTT</span><span class="nd-v">{dbgRttMs} ms</span></div>
+        <div class="netdebug-cell"><span class="nd-k">JIT</span><span class="nd-v">{dbgJitterMs} ms</span></div>
+        <div class="netdebug-cell"><span class="nd-k">LOSS</span><span class="nd-v">{dbgLossPct.toFixed(1)}%</span></div>
+        <div class="netdebug-cell"><span class="nd-k">ICE</span><span class="nd-v">{dbgIceRoute}</span></div>
+        <div class="netdebug-cell"><span class="nd-k">CORR AVG</span><span class="nd-v">{dbgCorrAvgPx.toFixed(2)} px</span></div>
+        <div class="netdebug-cell"><span class="nd-k">CORR MAX</span><span class="nd-v">{dbgCorrMaxPx.toFixed(2)} px</span></div>
+        <div class="netdebug-cell"><span class="nd-k">EXTRAP</span><span class="nd-v">{dbgExtrapMs} ms</span></div>
+        <div class="netdebug-cell"><span class="nd-k">STEPS</span><span class="nd-v">{dbgLocalSteps}</span></div>
+        <div class="netdebug-cell"><span class="nd-k">P99 FT</span><span class="nd-v">{dbgFrameTimeP99.toFixed(2)} ms</span></div>
+      </div>
+    </aside>
   {/if}
 
   <!-- ========================================== -->
@@ -1295,7 +1361,7 @@
           class="chat-text-input"
           placeholder={gameUI.isMobileLayout
             ? 'Escribe un mensaje (@usuario, @all)...'
-            : 'Presiona Enter para escribir (@usuario, @all, /netmode, /extrapolation)...'}
+            : 'Presiona Enter para escribir (@usuario, @all, /netdebug, /extrapolation)...'}
           bind:value={chatMessage}
           oninput={syncChatCursor}
           onclick={syncChatCursor}
@@ -2012,6 +2078,55 @@
     color: #3b494c;
     font-size: 0.75rem;
     margin: 0 0.1rem;
+  }
+
+  /* ========================================== */
+  /* PANEL /netdebug (4 Hz)                     */
+  /* ========================================== */
+  .netdebug-panel {
+    pointer-events: auto;
+    position: fixed;
+    bottom: 48px;
+    left: 16px;
+    z-index: 105;
+    width: 280px;
+    background: rgba(8, 13, 24, 0.92);
+    border: 1px solid rgba(0, 229, 255, 0.45);
+    border-radius: 0.5rem;
+    box-shadow: 0 10px 28px rgba(0, 0, 0, 0.78), 0 0 16px rgba(0, 229, 255, 0.14);
+    font-family: 'JetBrains Mono', monospace;
+    font-variant-numeric: tabular-nums;
+    box-sizing: border-box;
+    overflow: hidden;
+  }
+
+  .netdebug-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0.35rem 0.5rem;
+    padding: 0.45rem 0.65rem;
+  }
+
+  .netdebug-cell {
+    display: flex;
+    flex-direction: column;
+    gap: 0.08rem;
+  }
+
+  .nd-k {
+    font-size: 0.58rem;
+    font-weight: 700;
+    color: #64748b;
+    letter-spacing: 0.06em;
+  }
+
+  .nd-v {
+    font-size: 0.7rem;
+    font-weight: 800;
+    color: #00e5ff;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   /* ========================================== */

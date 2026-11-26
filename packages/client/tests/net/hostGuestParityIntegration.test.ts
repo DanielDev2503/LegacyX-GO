@@ -14,7 +14,7 @@ import { SignalingClient } from '../../src/net/SignalingClient.js';
 import { NetworkClient } from '../../src/net/NetworkClient.js';
 import { NetworkHost } from '../../src/net/NetworkHost.js';
 import { GameApp } from '../../src/net/GameApp.js';
-import { ClientPredictionReconciler } from '../../src/net/ClientPrediction.js';
+import { SharedSimSync } from '../../src/net/SharedSimSync.js';
 import { matchRecorder } from '../../src/recorder/MatchRecorder.svelte.js';
 import {
   gameUI,
@@ -272,11 +272,8 @@ describe('Task 6: Strict Host & Non-Host Parity Integration', () => {
     });
   });
 
-  describe('Items 9 & 26: BinaryProtocol -> NetworkClient -> Prediction & Banner parity', () => {
-    it('propagates isGoldenGoal, isNeutralKickoff, and kickoffPossessingTeam through NetworkClient interpolation & prediction', () => {
-      const signaling = new SignalingClient('ws://localhost:8080', false);
-      const netClient = new NetworkClient(signaling, 'GuestPlayer', 10);
-
+  describe('Items 9 & 26: BinaryProtocol -> NetworkClient -> SharedSimSync & Banner parity', () => {
+    it('propagates isGoldenGoal, isNeutralKickoff, and kickoffPossessingTeam through BinaryProtocol & SharedSimSync', () => {
       const s0: GameStateSnapshot = {
         tick: 600,
         phase: 1,
@@ -296,39 +293,23 @@ describe('Task 6: Strict Host & Non-Host Parity Integration', () => {
       };
       const s1: GameStateSnapshot = { ...s0, tick: 602, phase: 2 };
 
-      const buf0 = BinaryProtocol.encodeSnapshot(s0);
-      const buf1 = BinaryProtocol.encodeSnapshot(s1);
-      const dec0 = BinaryProtocol.decodeSnapshot(buf0)!;
-      const dec1 = BinaryProtocol.decodeSnapshot(buf1)!;
+      const dec0 = BinaryProtocol.decodeSnapshot(BinaryProtocol.encodeSnapshot(s0))!;
+      const dec1 = BinaryProtocol.decodeSnapshot(BinaryProtocol.encodeSnapshot(s1))!;
 
-      netClient.latestSnapshot = dec1;
-      netClient.jitterBuffer.push(dec0, 1000);
-      netClient.jitterBuffer.push(dec1, 1033);
-
-      const nowSpy = vi.spyOn(performance, 'now').mockReturnValue(1035);
-      const interp = netClient.jitterBuffer.getInterpolatedState(1015);
-      // Verify NetworkClient wrapper patches missing fields onto interpolated snapshots
-      const patchedInterp = (() => {
-        (netClient as any).jitterBuffer.interpolationDelayMs = 20;
-        return netClient.getInterpolatedState();
-      })();
-      nowSpy.mockRestore();
+      const sync = new SharedSimSync('mediano');
+      sync.onSnapshot(dec0, 1000);
+      sync.onSnapshot(dec1, 1033);
+      const rendered = sync.buildRenderSnapshot(0, 1035)!;
 
       expect(dec1.isGoldenGoal).toBe(true);
       expect(dec1.isNeutralKickoff).toBe(false);
       expect(dec1.kickoffPossessingTeam).toBe('blue');
-      expect(interp).not.toBeNull();
-      expect(patchedInterp).not.toBeNull();
-      expect(patchedInterp!.isGoldenGoal).toBe(true);
-      expect(patchedInterp!.isNeutralKickoff).toBe(false);
-      expect(patchedInterp!.kickoffPossessingTeam).toBe('blue');
-
-      const predEngine = new EngineInstance(createStadium('mediano'));
-      const reconciler = new ClientPredictionReconciler();
-      reconciler.reconcile(predEngine, dec1, 2);
-      expect(predEngine.fsm.isOvertime).toBe(true);
-      expect(predEngine.isNeutralKickoff).toBe(false);
-      expect(predEngine.kickoffPossessingTeam).toBe('blue');
+      expect(rendered.isGoldenGoal).toBe(true);
+      expect(rendered.isNeutralKickoff).toBe(false);
+      expect(rendered.kickoffPossessingTeam).toBe('blue');
+      expect(sync.simWorld.fsm.isOvertime).toBe(true);
+      expect(sync.simWorld.isNeutralKickoff).toBe(false);
+      expect(sync.simWorld.kickoffPossessingTeam).toBe('blue');
     });
 
     it('preserves speedKmh, isPower, isCurve, scorerName, assisterName & isOwnGoal in Host->Non-Host GOAL banner and SCORE_EVENT packets', () => {
@@ -415,11 +396,12 @@ describe('Task 6: Strict Host & Non-Host Parity Integration', () => {
       expect(appSrc).toContain('setChatBounds(');
       expect(appSrc).toContain('.hud-chat-container');
 
-      // Item 9: Golden Goal & kickoff flags synced on HUD & scratchRenderSnapshot
+      // Item 9: Golden Goal & kickoff flags synced on HUD & SharedSimSync
+      const sharedSimSrc = readClientFile('net/SharedSimSync.ts');
       expect(appSrc).toContain('gameUI.isGoldenGoal');
-      expect(appSrc).toContain('scratchRenderSnapshot.isGoldenGoal');
-      expect(appSrc).toContain('scratchRenderSnapshot.isNeutralKickoff');
-      expect(appSrc).toContain('scratchRenderSnapshot.kickoffPossessingTeam');
+      expect(sharedSimSrc).toContain('this.renderSnapshot.isGoldenGoal');
+      expect(sharedSimSrc).toContain('this.renderSnapshot.isNeutralKickoff');
+      expect(sharedSimSrc).toContain('this.renderSnapshot.kickoffPossessingTeam');
 
       // Items 16-23: Recorder metadata + recordChat + recordBanner
       expect(appSrc).toContain('cameraZoom');
@@ -937,25 +919,20 @@ describe('Task 6: Strict Host & Non-Host Parity Integration', () => {
       expect(squeezedSnapshot[0]!.x).toBe(18);
       expect(squeezedSnapshot[1]!.x).toBe(25);
 
-      const signaling = new SignalingClient('ws://localhost:8080', false);
-      const netClient = new NetworkClient(signaling, 'GuestExtrapolation', 2);
+      const sync = new SharedSimSync('mediano');
       gameUI.settings.autoExtrapolation = true;
       gameUI.pingMs = 120;
-      netClient.setAutoExtrapolationMs(gameUI.effectiveExtrapolationMs);
-      expect((netClient as any).autoExtrapolationMs).toBe(gameUI.effectiveExtrapolationMs);
+      sync.setExtrapolationMs(gameUI.effectiveExtrapolationMs);
+      expect(sync.extrapolationMs).toBe(gameUI.effectiveExtrapolationMs);
 
       const appSrc = readClientFile('App.svelte');
       expect(appSrc).not.toContain('applyPredictiveRenderSeparation(');
-      expect(appSrc).toContain('setExtrapolateAllDiscs(');
-      expect(appSrc).toContain('scratchDiscPool');
-      expect(appSrc).toContain('renderer.stadium.goalHalfHeight');
-      expect(appSrc).toContain('renderer.stadium.goalDepth');
-      expect(appSrc).toContain('gameApp.networkClient.setAutoExtrapolationMs(effExtrapMs)');
+      expect(appSrc).not.toContain('ClientPredictionReconciler');
+      expect(appSrc).not.toContain('jitterBuffer');
+      expect(appSrc).toContain('sharedSimSync.buildRenderSnapshot(effExtrapMs, now)');
       expect(appSrc).toContain('gameUI.effectiveBallSkin');
       expect(appSrc).toContain('gameUI.effectiveBallMode');
       expect(appSrc).toContain('gameUI.effectiveBallCustomColor');
-
-      netClient.disconnect();
     });
 
     it('wires full LXR3 HUD timeline metadata and events into MatchRecorder', () => {

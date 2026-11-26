@@ -1,7 +1,38 @@
-import { BinaryProtocol, PLAYER_POSITIONS, type PlayerInput, type PlayerPosition } from '@legacyx/core';
+import {
+  BinaryProtocol,
+  INPUT_FLAG_DASH,
+  INPUT_FLAG_KICK,
+  PLAYER_POSITIONS,
+  type PlayerInput,
+  type PlayerPosition
+} from '@legacyx/core';
 import { PeerConnection, SCTP_BACKPRESSURE_LIMIT_BYTES } from './PeerConnection';
 import { SignalingClient } from './SignalingClient';
-import { canChangeTeam } from './ClientPrediction';
+
+/** Valida si un peer está autorizado a cambiar de equipo a `targetPlayerId`. */
+export function canChangeTeam(
+  senderPeerId: string,
+  targetPlayerId: string,
+  teamsLocked: boolean,
+  isAdmin: boolean
+): boolean {
+  if (isAdmin) return true;
+  if (teamsLocked) return false;
+  return senderPeerId === targetPlayerId;
+}
+
+interface LatestRemoteInputSlot {
+  seq: number;
+  seenMask: number;
+  inputMask: number;
+  aimAngle: number | null;
+  aimThrottle: number;
+  latchedKick: boolean;
+  latchedDash: boolean;
+  prevKickBit: boolean;
+  prevDashBit: boolean;
+  hasReceived: boolean;
+}
 
 export interface PlayerInfo {
   id: number;
@@ -44,6 +75,8 @@ export class NetworkHost {
   private lastChatAtByPlayerId = new Map<number, number>();
   private readonly decodedInputScratch: PlayerInput[] = [{}, {}, {}, {}];
   private seenInputSeqByPlayer = new Map<number, { maxSeq: number; mask: number }>();
+  private latestRemoteInputs = new Map<number, LatestRemoteInputSlot>();
+  private reusableRemoteInputsMap = new Map<number, PlayerInput>();
   private snapshotTickCounter = 0;
   private pendingClosePeers = new Map<ReturnType<typeof setTimeout>, PeerConnection>();
   private nextPlayerId = 2; // 1 is reserved for Host local player
@@ -395,9 +428,11 @@ export class NetworkHost {
             if (seq > 0 && this.checkAndMarkSeenInputSeq(playerId, seq)) {
               continue;
             }
+            const mask = decoded.inputMask ?? 0;
+            this.recordLatestRemoteInput(playerId, mask, seq, decoded.aimAngle, decoded.aimThrottle);
             this.onPlayerInput?.(
               playerId,
-              decoded.inputMask ?? 0,
+              mask,
               seq,
               decoded.aimAngle,
               decoded.aimThrottle
@@ -993,6 +1028,8 @@ export class NetworkHost {
       this.players.delete(playerId);
       this.lastChatAtByPlayerId.delete(playerId);
       this.seenInputSeqByPlayer.delete(playerId);
+      this.latestRemoteInputs.delete(playerId);
+      this.reusableRemoteInputsMap.delete(playerId);
       if (!wasKickedOrBanned) {
         this.broadcastSystemNotice(`${pName} ha abandonado la sala`);
       }
@@ -1037,6 +1074,125 @@ export class NetworkHost {
     }
     win.mask |= bit;
     return false;
+  }
+
+  /**
+   * Almacena el input válido más reciente del jugador remoto (Zero-Queue, 0 ticks de retención artificial)
+   * preservando disparos de flanco ascendente (Kick/Dash) recibidos entre dos ticks de 60 Hz.
+   */
+  public recordLatestRemoteInput(
+    playerId: number,
+    inputMask: number,
+    seq: number,
+    aimAngle?: number | null,
+    aimThrottle: number = 0
+  ): void {
+    let slot = this.latestRemoteInputs.get(playerId);
+    if (!slot) {
+      slot = {
+        seq: 0,
+        seenMask: 1,
+        inputMask: 0,
+        aimAngle: null,
+        aimThrottle: 0,
+        latchedKick: false,
+        latchedDash: false,
+        prevKickBit: false,
+        prevDashBit: false,
+        hasReceived: false
+      };
+      this.latestRemoteInputs.set(playerId, slot);
+    }
+
+    const normalizedSeq = seq >>> 0;
+    const isSeqReset = slot.hasReceived && slot.seq >= 500 && slot.seq - normalizedSeq >= 500;
+    if (isSeqReset) {
+      slot.hasReceived = false;
+      slot.seenMask = 1;
+      slot.latchedKick = false;
+      slot.latchedDash = false;
+      slot.prevKickBit = false;
+      slot.prevDashBit = false;
+    }
+
+    const kickDown = (inputMask & INPUT_FLAG_KICK) !== 0;
+    const dashDown = (inputMask & INPUT_FLAG_DASH) !== 0;
+
+    if (slot.hasReceived && normalizedSeq > 0) {
+      const fwdDelta = (normalizedSeq - slot.seq) >>> 0;
+      if (fwdDelta === 0) {
+        // Mismo seq (e.g. flanco inmediato + tick): fusionar impulsos solo si agrega bits nuevos
+        const addedBits = inputMask & ~slot.inputMask;
+        if (addedBits === 0 && (aimAngle ?? null) === slot.aimAngle) {
+          return;
+        }
+        slot.inputMask |= inputMask;
+        if ((addedBits & INPUT_FLAG_KICK) !== 0) slot.latchedKick = true;
+        if ((addedBits & INPUT_FLAG_DASH) !== 0) slot.latchedDash = true;
+        slot.aimAngle = aimAngle ?? slot.aimAngle;
+        slot.aimThrottle = aimAngle !== null && aimAngle !== undefined ? aimThrottle : slot.aimThrottle;
+        return;
+      }
+      if (fwdDelta >= 0x80000000) {
+        // Paquete más viejo rescatado por redundancia 4x: ignorar duplicados ya procesados
+        const backDelta = (slot.seq - normalizedSeq) >>> 0;
+        if (backDelta >= 32) return;
+        const bit = 1 << backDelta;
+        if ((slot.seenMask & bit) !== 0) return;
+        slot.seenMask |= bit;
+        if (kickDown) slot.latchedKick = true;
+        if (dashDown) slot.latchedDash = true;
+        return;
+      }
+      slot.seenMask = fwdDelta >= 32 ? 1 : ((slot.seenMask << fwdDelta) | 1);
+    } else {
+      slot.seenMask = 1;
+    }
+
+    if (kickDown && !slot.prevKickBit) slot.latchedKick = true;
+    if (dashDown && !slot.prevDashBit) slot.latchedDash = true;
+    slot.prevKickBit = kickDown;
+    slot.prevDashBit = dashDown;
+
+    slot.hasReceived = true;
+    slot.seq = normalizedSeq;
+    slot.inputMask = inputMask;
+    slot.aimAngle = aimAngle ?? null;
+    slot.aimThrottle = aimAngle !== null && aimAngle !== undefined ? aimThrottle : 0;
+  }
+
+  /**
+   * Copia los últimos inputs remotos inmediatos en `outMap` (Zero-GC) y limpia los latches
+   * de flanco ascendente (Kick/Dash) ya consumidos por el tick de 60 Hz.
+   */
+  public consumePendingInputs(outMap: Map<number, PlayerInput>): void {
+    for (const [playerId, slot] of this.latestRemoteInputs.entries()) {
+      if (!slot.hasReceived) continue;
+      let target = outMap.get(playerId) ?? this.reusableRemoteInputsMap.get(playerId);
+      if (!target) {
+        target = { inputMask: 0, aimAngle: null, aimThrottle: 0, tick: 0, sequence: 0 };
+        this.reusableRemoteInputsMap.set(playerId, target);
+      }
+      const effectiveMask =
+        slot.inputMask |
+        (slot.latchedKick ? INPUT_FLAG_KICK : 0) |
+        (slot.latchedDash ? INPUT_FLAG_DASH : 0);
+      slot.latchedKick = false;
+      slot.latchedDash = false;
+
+      target.inputMask = effectiveMask;
+      target.aimAngle = slot.aimAngle;
+      target.aimThrottle = slot.aimThrottle;
+      target.tick = slot.seq;
+      target.sequence = slot.seq;
+      outMap.set(playerId, target);
+    }
+  }
+
+  public clearRemoteInputs(): void {
+    this.latestRemoteInputs.clear();
+    this.reusableRemoteInputsMap.clear();
+    this.seenInputSeqByPlayer.clear();
   }
 
   public broadcastSnapshot(
@@ -1228,5 +1384,7 @@ export class NetworkHost {
     this.welcomedPeers.clear();
     this.lastChatAtByPlayerId.clear();
     this.seenInputSeqByPlayer.clear();
+    this.latestRemoteInputs.clear();
+    this.reusableRemoteInputsMap.clear();
   }
 }

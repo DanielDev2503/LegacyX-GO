@@ -3,7 +3,8 @@ import { GameEngine } from '../../../core/src/game/GameEngine';
 import { MatchPhase } from '../../../core/src/game/GameFSM';
 import { Player } from '../../../core/src/game/Player';
 import { SnapshotPacket } from '../../../core/src/protocol/SnapshotPacket';
-import { JitterBuffer } from '../../src/net/JitterBuffer';
+import { MatchPhase as CoreMatchPhase } from '@legacyx/core';
+import { SharedSimSync } from '../../src/net/SharedSimSync';
 import { CanvasRenderer } from '../../src/renderer/CanvasRenderer';
 import { Stadium } from '../../../core/src/entities/Stadium';
 import { GameSnapshot } from '../../../core/src/game/GameState';
@@ -58,85 +59,52 @@ describe('Host-Client Parity: Overlays, Banners & Celebration Physics', () => {
     expect(clientSnapshot!.subStateTimer).toBeCloseTo(3.0, 1);
   });
 
-  it('keeps JitterBuffer kinematics and interpolation active during GOAL_CELEBRATION without freezing discs', () => {
-    const jitterBuffer = new JitterBuffer(50);
+  it('keeps SharedSimSync kinematics active during CELEBRATION without freezing discs', () => {
+    const sync = new SharedSimSync('mediano');
+    sync.onSnapshot(
+      {
+        tick: 100,
+        phase: CoreMatchPhase.CELEBRATION,
+        matchTimer: 150,
+        redScore: 1,
+        blueScore: 0,
+        soundMask: 0,
+        discs: [
+          { id: 0, team: 0, x: 10, y: 10, vx: 50, vy: 20, flags: 0 },
+          { id: 1001, team: 1, x: -50, y: 0, vx: 20, vy: -10, flags: 1, stamina: 100 }
+        ]
+      },
+      1000
+    );
 
-    const baseSnapshot: GameSnapshot = {
-      tick: 100,
-      matchPhase: MatchPhase.GOAL_CELEBRATION,
-      timerSeconds: 150,
-      subStateTimer: 2.8,
-      targetTeam: 1,
-      scoreRed: 1,
-      scoreBlue: 0,
-      matchState: MatchPhase.GOAL_CELEBRATION,
-      matchTimerSeconds: 150,
-      redScore: 1,
-      blueScore: 0,
-      discs: [
-        { id: 0, team: 0, x: 10, y: 10, vx: 50, vy: 20, radius: 10, kicking: false, avatar: '' },
-        { id: 1001, team: 1, x: -50, y: 0, vx: 20, vy: -10, radius: 15, kicking: true, avatar: 'R1' }
-      ]
-    };
-
-    const nextSnapshot: GameSnapshot = {
-      ...baseSnapshot,
-      tick: 101,
-      subStateTimer: 2.78,
-      discs: [
-        { id: 0, team: 0, x: 20, y: 15, vx: 50, vy: 20, radius: 10, kicking: false, avatar: '' },
-        { id: 1001, team: 1, x: -45, y: -2, vx: 20, vy: -10, radius: 15, kicking: true, avatar: 'R1' }
-      ]
-    };
-
-    const t0 = 1000;
-    const t1 = 1016;
-    jitterBuffer.push(baseSnapshot, t0);
-    jitterBuffer.push(nextSnapshot, t1);
-
-    // Interpolate in the middle of celebration
-    const interpolated = jitterBuffer.getInterpolatedSnapshot(t0 + 8 + 50); // renderTime = t0 + 8
-    expect(interpolated).not.toBeNull();
-    expect(interpolated!.matchPhase).toBe(MatchPhase.GOAL_CELEBRATION);
-    expect(interpolated!.targetTeam).toBe(1);
-
-    // Discs must NOT be frozen to vx: 0, vy: 0
-    expect(interpolated!.discs[0].vx).toBeCloseTo(50, 1);
-    expect(interpolated!.discs[0].x).toBeGreaterThan(10);
-    expect(interpolated!.discs[0].x).toBeLessThan(20);
-    expect(interpolated!.discs[1].x).toBeGreaterThan(-50);
-    expect(interpolated!.discs[1].x).toBeLessThan(-45);
+    sync.update(1 / 60, 1000 + 1000 / 60);
+    const snap = sync.buildRenderSnapshot(0, 1017)!;
+    expect(snap.phase).toBe(CoreMatchPhase.CELEBRATION);
+    expect(snap.discs[0]!.vx).toBeGreaterThan(45);
+    expect(snap.discs[0]!.x).toBeGreaterThan(10);
+    expect(snap.discs[1]!.x).toBeGreaterThan(-50);
   });
 
-  it('disables JitterBuffer predictive extrapolation only during PAUSED, COUNTDOWN and STOPPED', () => {
-    const jitterBuffer = new JitterBuffer(50);
-
-    const pausedSnapshot: GameSnapshot = {
-      tick: 50,
-      matchPhase: MatchPhase.PAUSED,
-      timerSeconds: 120,
-      subStateTimer: 0,
-      targetTeam: 0,
-      scoreRed: 0,
-      scoreBlue: 0,
-      matchState: MatchPhase.PAUSED,
-      matchTimerSeconds: 120,
-      redScore: 0,
-      blueScore: 0,
-      discs: [
-        { id: 0, team: 0, x: 10, y: 20, vx: 100, vy: 50, radius: 10, kicking: false, avatar: '' }
-      ]
-    };
-
-    jitterBuffer.push(pausedSnapshot, 1000);
-    // Query far into future (causing extrapolation branch !s0 || !s1)
-    const result = jitterBuffer.getInterpolatedSnapshot(2000);
+  it('disables SharedSimSync extrapolation during PAUSE and STOP phases', () => {
+    const sync = new SharedSimSync('mediano');
+    sync.onSnapshot(
+      {
+        tick: 50,
+        phase: CoreMatchPhase.PAUSE,
+        matchTimer: 120,
+        redScore: 0,
+        blueScore: 0,
+        soundMask: 0,
+        discs: [{ id: 0, team: 0, x: 10, y: 20, vx: 100, vy: 50, flags: 0 }]
+      },
+      1000
+    );
+    const result = sync.buildRenderSnapshot(150, 1050);
     expect(result).not.toBeNull();
-    // In PAUSED, discs must freeze without advancing position
-    expect(result!.discs[0].vx).toBe(0);
-    expect(result!.discs[0].vy).toBe(0);
-    expect(result!.discs[0].x).toBe(10);
-    expect(result!.discs[0].y).toBe(20);
+    expect(result!.discs[0]!.vx).toBe(0);
+    expect(result!.discs[0]!.vy).toBe(0);
+    expect(result!.discs[0]!.x).toBe(10);
+    expect(result!.discs[0]!.y).toBe(20);
   });
 
   it('renders overlays purely from the snapshot state without local timers', () => {
@@ -399,7 +367,7 @@ describe('Host-Client Parity: Overlays, Banners & Celebration Physics', () => {
     expect(nextSnapshot.soundMask).toBe(0);
   });
 
-  it('emits snapshots at 60Hz with monotonic ticks during MatchPhase.PAUSED so JitterBuffer receives them', () => {
+  it('emits snapshots at 60Hz with monotonic ticks during MatchPhase.PAUSED so SharedSimSync ingests them', () => {
     engine.startMatch();
     for (let i = 0; i < 180; i++) engine.tick(new Map());
     expect(engine.fsm.currentState).toBe(MatchPhase.PLAYING);
@@ -407,31 +375,35 @@ describe('Host-Client Parity: Overlays, Banners & Celebration Physics', () => {
     engine.pauseMatch();
     expect(engine.fsm.currentState).toBe(MatchPhase.PAUSED);
 
-    const jitterBuffer = new JitterBuffer(100);
-    jitterBuffer.setMatchState(MatchPhase.PAUSED);
-
+    const sync = new SharedSimSync('mediano');
     const receivedTicks: number[] = [];
 
-    // Simulate 10 ticks while game is paused
     for (let i = 0; i < 10; i++) {
       engine.tick(new Map());
       const snap = engine.getSnapshot();
       expect(snap.matchPhase).toBe(MatchPhase.PAUSED);
       receivedTicks.push(snap.tick);
 
-      // Encode and push to client JitterBuffer
       const buf = SnapshotPacket.encode(snap);
       const decoded = SnapshotPacket.decode(buf)!;
-      jitterBuffer.push(decoded);
+      sync.onSnapshot(
+        {
+          tick: decoded.tick,
+          phase: CoreMatchPhase.PAUSE,
+          matchTimer: decoded.timerSeconds,
+          redScore: decoded.scoreRed,
+          blueScore: decoded.scoreBlue,
+          soundMask: decoded.soundMask ?? 0,
+          discs: decoded.discs.map((d) => ({ ...d, flags: d.kicking ? 1 : 0 }))
+        },
+        1000 + i * 16.67
+      );
     }
 
-    // Ensure tickCount steadily advances monotonically
     for (let i = 1; i < receivedTicks.length; i++) {
       expect(receivedTicks[i]).toBeGreaterThan(receivedTicks[i - 1]);
     }
-
-    // JitterBuffer buffer length should have received the snapshots rather than dropping duplicates
-    expect(jitterBuffer.buffer.length).toBeGreaterThan(0);
+    expect(sync.getTelemetry().lastServerTick).toBe(receivedTicks[receivedTicks.length - 1]);
 
     // Verify CanvasRenderer renders PAUSA banner
     const mockCtx = {

@@ -1,4 +1,4 @@
-import { Disc, COLLISION_GROUP_BALL } from '../entities/Disc';
+import { Disc, COLLISION_GROUP_BALL, copyDiscPrimitives } from '../entities/Disc';
 import { Segment } from '../entities/Segment';
 import { GoalNet } from './GoalNet';
 import { Stadium } from '../stadiums/Stadium';
@@ -35,6 +35,11 @@ export class PhysicsWorld {
   public onSubstep?: (subDt: number) => void;
   public kickoffContext?: KickoffPhysicsContext | null = null;
   public isPracticeMode: boolean = false;
+  private readonly kickoffContextPool: KickoffPhysicsContext = {
+    active: false,
+    possessingTeam: null,
+    centerRadius: 80
+  };
 
   constructor(config: PhysicsWorldConfig = {}) {
     this.fixedDt = 1 / 60; // Invariable
@@ -283,6 +288,42 @@ export class PhysicsWorld {
   public stepNets(dt: number = 1 / 60): void {
     for (let i = 0; i < this.goalNets.length; i++) {
       this.goalNets[i].step(dt);
+    }
+  }
+
+  /** Actualiza `kickoffContext` reutilizando el objeto preasignado (0 alocaciones). */
+  public setKickoffContext(
+    active: boolean,
+    possessingTeam: 'red' | 'blue' | null = null,
+    centerRadius: number = 80
+  ): void {
+    if (!active) {
+      this.kickoffContext = null;
+      return;
+    }
+    this.kickoffContextPool.active = true;
+    this.kickoffContextPool.possessingTeam = possessingTeam;
+    this.kickoffContextPool.centerRadius = centerRadius;
+    this.kickoffContext = this.kickoffContextPool;
+  }
+
+  /** Copia estado físico dinámico hacia `target` en estructuras preasignadas (Zero-Allocation). */
+  public copyStateTo(target: PhysicsWorld): void {
+    target.isPracticeMode = this.isPracticeMode;
+    target.kickMargin = this.kickMargin;
+    target.magnusCoefficient = this.magnusCoefficient;
+    if (this.kickoffContext && this.kickoffContext.active) {
+      target.setKickoffContext(
+        true,
+        this.kickoffContext.possessingTeam ?? null,
+        this.kickoffContext.centerRadius ?? 80
+      );
+    } else {
+      target.kickoffContext = null;
+    }
+    const len = Math.min(this.discs.length, target.discs.length);
+    for (let i = 0; i < len; i++) {
+      copyDiscPrimitives(this.discs[i]!, target.discs[i]!);
     }
   }
 

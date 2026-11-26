@@ -24,7 +24,6 @@
     INPUT_FLAG_TYPING,
     INPUT_FLAG_MOUSE_AIM,
     INPUT_FLAG_MOUSE_ACTIVE,
-    lerp,
     DEFAULT_GAMEPLAY_CONFIG
   } from '@legacyx/core';
 
@@ -41,7 +40,7 @@
   import { musicPlayer } from './audio/MusicPlayer.svelte.js';
   import { gameApp } from './net/GameApp.js';
   import { SimulationTicker } from './net/SimulationTicker.js';
-  import { ClientPredictionReconciler } from './net/ClientPrediction.js';
+  import { SharedSimSync, type SharedSimSyncTelemetry } from './net/SharedSimSync.js';
   import { computeMouseMovementVector, mouseButtonToCode, pollGamepadInput } from './controllers/InputManager.js';
   import { matchRecorder } from './recorder/MatchRecorder.svelte.js';
   import { userProfile } from './ui/state/userProfile.svelte.js';
@@ -336,15 +335,11 @@
   function mountGame(canvasEl: HTMLCanvasElement): () => void {
     const isHostInitial = gameUI.isHost;
     let engine: EngineInstance | null = null;
-    let predEngine: EngineInstance | null = null;
-    const reconciler = new ClientPredictionReconciler();
-    let predStadiumId = gameUI.selectedStadiumId || 'mediano';
-    let prevPredLocalPos = { x: 0, y: 0 };
-    let currPredLocalPos = { x: 0, y: 0 };
-    let hasPredLocalPos = false;
-    let prevPredBallPos = { x: 0, y: 0 };
-    let currPredBallPos = { x: 0, y: 0 };
-    let hasPredBallPos = false;
+    let sharedSimSync: SharedSimSync | null = null;
+    let lastGuestSyncStadiumId = '';
+    let lastGuestSyncPracticeMode = false;
+    let lastGuestSyncScoreLimit = -1;
+    let lastGuestSyncTimeLimitMinutes = -1;
     let frozenMatchSnapshot: any = null;
     let goBannerTimer: ReturnType<typeof setTimeout> | null = null;
     let lastObservedGuestRedScore = 0;
@@ -352,7 +347,6 @@
     let lastRecordedBannerSig = '';
     let renderedStadiumId: string = gameUI.selectedStadiumId || 'mediano';
     let hostStadiumId: string = gameUI.selectedStadiumId || 'mediano';
-    let lastArenaBoundsSig = '';
     let releaseHostLock: (() => void) | null = null;
 
     if (isHostInitial) {
@@ -377,10 +371,17 @@
           .catch(() => {});
       }
     } else {
-      predEngine = new EngineInstance(predStadiumId);
-      predEngine.isPracticeMode = Boolean(gameUI.isPracticeMode);
-      predEngine.applyModifiers(gameUI.physicsModifiers);
-      syncEngineMatchLimits(predEngine);
+      sharedSimSync = new SharedSimSync(
+        gameUI.selectedStadiumId || 'mediano',
+        gameUI.physicsModifiers
+      );
+      sharedSimSync.configure(
+        gameUI.selectedStadiumId || 'mediano',
+        gameUI.physicsModifiers,
+        Boolean(gameUI.isPracticeMode)
+      );
+      syncEngineMatchLimits(sharedSimSync.simWorld);
+      syncEngineMatchLimits(sharedSimSync.extrapWorld);
     }
 
     let prevSnapshot: GameStateSnapshot = engine ? engine.getState() : ({} as any);
@@ -583,8 +584,12 @@
     // Conectar callbacks de estado UI
     gameUI.onModifiersChanged = (mods) => {
       applyModifiersToEngine(mods);
-      if (predEngine) {
-        predEngine.applyModifiers(mods);
+      if (sharedSimSync) {
+        sharedSimSync.configure(
+          gameUI.selectedStadiumId || 'mediano',
+          mods,
+          Boolean(gameUI.isPracticeMode)
+        );
       }
       syncRecordedModifierRadii();
     };
@@ -729,7 +734,12 @@
 
     gameUI.onStartPracticeMode = () => {
       gameApp.setupPracticeMode();
-      predEngine = null;
+      sharedSimSync?.reset();
+      sharedSimSync = null;
+      lastGuestSyncStadiumId = '';
+      lastGuestSyncPracticeMode = false;
+      lastGuestSyncScoreLimit = -1;
+      lastGuestSyncTimeLimitMinutes = -1;
       lastRecordedBannerSig = '';
       if (!engine) {
         engine = new EngineInstance('mediano');
@@ -764,23 +774,18 @@
         const nextStadium = createStadium(stadiumId);
         if (nextStadium.id !== rendererInstance.stadium.id) {
           rendererInstance.setStadium(nextStadium);
-          const s = rendererInstance.stadium;
-          lastArenaBoundsSig = `${s.halfWidth}:${s.halfHeight}:${s.runOff ?? 0}:${s.goalHalfHeight ?? 0}:${s.goalDepth ?? 0}:${gameUI.gameplayConfig.ballRadius}:${gameUI.gameplayConfig.playerRadius}`;
-          gameApp.networkClient?.jitterBuffer.setArenaBounds(
-            s.halfWidth,
-            s.halfHeight,
-            s.runOff ?? 0,
-            s.goalHalfHeight ?? 0,
-            s.goalDepth ?? 0,
-            gameUI.gameplayConfig.ballRadius,
-            gameUI.gameplayConfig.playerRadius
-          );
         }
         renderedStadiumId = stadiumId;
       }
-      if (predEngine && predStadiumId !== stadiumId) {
-        predStadiumId = stadiumId as any;
-        predEngine.loadStadium(stadiumId);
+      if (sharedSimSync) {
+        const isPractice = Boolean(gameUI.isPracticeMode);
+        sharedSimSync.configure(stadiumId, gameUI.physicsModifiers, isPractice);
+        syncEngineMatchLimits(sharedSimSync.simWorld);
+        syncEngineMatchLimits(sharedSimSync.extrapWorld);
+        lastGuestSyncStadiumId = stadiumId;
+        lastGuestSyncPracticeMode = isPractice;
+        lastGuestSyncScoreLimit = Number(gameUI.scoreLimit ?? 0);
+        lastGuestSyncTimeLimitMinutes = Number(gameUI.timeLimitMinutes ?? 0);
       }
       if (gameUI.isHost && engine) {
         if (hostStadiumId !== stadiumId) {
@@ -1103,13 +1108,6 @@
     renderer.isMobileLayout = gameUI.isMobileLayout;
     mobileTouchController.setMinimapRenderer(renderer.minimapRenderer);
     renderer.setTeamKits(gameUI.redCaptainKit, gameUI.blueCaptainKit);
-    gameApp.networkClient?.jitterBuffer.setArenaBounds(
-      renderer.stadium.halfWidth,
-      renderer.stadium.halfHeight,
-      renderer.stadium.runOff ?? 0,
-      renderer.stadium.goalHalfHeight ?? 0,
-      renderer.stadium.goalDepth ?? 0
-    );
 
     let measuredChatWidth = 0;
     let measuredChatHeight = gameUI.chatHeight;
@@ -1229,9 +1227,8 @@
         const p = engine.players.get(localId);
         if (p) return { x: p.pos.x, y: p.pos.y };
       } else {
-        if (hasPredLocalPos) {
-          return { x: currPredLocalPos.x, y: currPredLocalPos.y };
-        }
+        const simDisc = sharedSimSync?.simWorld.players.get(localId);
+        if (simDisc) return { x: simDisc.pos.x, y: simDisc.pos.y };
         const snapDisc = currSnapshot?.discs?.find((d) => d.id === localId);
         if (snapDisc) return { x: snapDisc.x, y: snapDisc.y };
       }
@@ -1414,17 +1411,20 @@
       return scratchLocalInput;
     }
 
-    /** Despacho inmediato en flanco ascendente de Kick/Dash sin esperar al siguiente tick de 60 Hz. */
-    function dispatchImmediateCriticalAction(criticalFlag: number): void {
+    /** Despacho inmediato en cada cambio de tecla/ratón sin esperar al siguiente tick de 60 Hz. */
+    function dispatchImmediateInputChange(criticalFlag: number = 0): void {
       if (gameUI.isHost || !gameApp.networkClient) return;
       if (gameUI.currentScreen !== 'IN_GAME' || gameUI.activeModal !== 'NONE' || gameUI.isHudEditorOpen) return;
-      const phase = predEngine ? predEngine.fsm.state : (currSnapshot?.phase ?? gameUI.matchPhase);
+      const phase = sharedSimSync ? sharedSimSync.simWorld.fsm.state : (currSnapshot?.phase ?? gameUI.matchPhase);
       if (!isMovablePhase(phase)) return;
       const pkt = computeLocalPlayerInput(false);
-      const nextSeq = (reconciler.lastRecordedSeq + 1) >>> 0;
-      gameApp.networkClient.sendInput(
-        (pkt.inputMask ?? 0) | criticalFlag,
-        nextSeq,
+      const nextMask = (pkt.inputMask ?? 0) | criticalFlag;
+      if (criticalFlag === 0 && nextMask === lastSentInputMask) return;
+      clientTick = (clientTick + 1) >>> 0;
+      lastSentInputMask = nextMask;
+      gameApp.networkClient.sendInputImmediate(
+        nextMask,
+        clientTick,
         pkt.aimAngle,
         pkt.aimThrottle
       );
@@ -1450,13 +1450,9 @@
       }
       const activeTag = typeof document !== 'undefined' ? document.activeElement?.tagName : '';
       if ((hadHeld || activeTag === 'INPUT' || activeTag === 'TEXTAREA') && !gameUI.isHost && gameApp.networkClient) {
-        const phase = predEngine ? predEngine.fsm.state : gameUI.matchPhase;
-        const seq =
-          isMovablePhase(phase) && predEngine && gameUI.localPlayerId > 0 && predEngine.players.has(gameUI.localPlayerId)
-            ? reconciler.recordInput(reconciler.allocateNextSeq(), 0, null, 0)
-            : reconciler.allocateNextSeq();
-        clientTick = seq;
-        gameApp.networkClient.sendInput(0, seq, null, 0);
+        clientTick = (clientTick + 1) >>> 0;
+        lastSentInputMask = 0;
+        gameApp.networkClient.sendInputImmediate(0, clientTick, null, 0);
       }
     }
 
@@ -1491,8 +1487,8 @@
       }
 
       keyState.set(code, true);
-      if (criticalFlag !== 0) {
-        dispatchImmediateCriticalAction(criticalFlag);
+      if (!wasPressed) {
+        dispatchImmediateInputChange(criticalFlag);
       }
     };
 
@@ -1501,6 +1497,7 @@
       if (!code) return;
       if (keyState.get(code)) {
         keyState.set(code, false);
+        dispatchImmediateInputChange(0);
       }
     };
 
@@ -1613,13 +1610,16 @@
       }
 
       keyState.set(e.code, true);
-      if (criticalFlag !== 0) {
-        dispatchImmediateCriticalAction(criticalFlag);
+      if (!e.repeat && !wasPressed) {
+        dispatchImmediateInputChange(criticalFlag);
       }
     };
 
     const onKeyUp = (e: KeyboardEvent) => {
-      keyState.set(e.code, false);
+      if (keyState.get(e.code)) {
+        keyState.set(e.code, false);
+        dispatchImmediateInputChange(0);
+      }
     };
 
     const onWindowBlur = () => {
@@ -1654,10 +1654,7 @@
     let animFrameId: number;
 
     let clientTick = 0;
-    let lastAppliedExtrapMs = Number.NaN;
-    let pendingReconcileSnapshot: GameStateSnapshot | null = null;
-    let ballPredWeight = 0;
-    let ballPredHoldTimer = 0;
+    let lastSentInputMask = -1;
     const hostSnapshotBuffers = new Map<number, ArrayBuffer>();
 
     function isMovablePhase(phase: number): boolean {
@@ -1718,93 +1715,42 @@
 
       currSnapshot = snap;
       syncHudTelemetryFromSnapshot(snap);
-      if (!gameUI.isHost && rendererInstance && gameApp.networkClient) {
-        const s = rendererInstance.stadium;
-        const boundsSig = `${s.halfWidth}:${s.halfHeight}:${s.runOff ?? 0}:${s.goalHalfHeight ?? 0}:${s.goalDepth ?? 0}:${gameUI.gameplayConfig.ballRadius}:${gameUI.gameplayConfig.playerRadius}`;
-        if (boundsSig !== lastArenaBoundsSig) {
-          lastArenaBoundsSig = boundsSig;
-          gameApp.networkClient.jitterBuffer.setArenaBounds(
-            s.halfWidth,
-            s.halfHeight,
-            s.runOff ?? 0,
-            s.goalHalfHeight ?? 0,
-            s.goalDepth ?? 0,
-            gameUI.gameplayConfig.ballRadius,
-            gameUI.gameplayConfig.playerRadius
-          );
-        }
-      }
-      pendingReconcileSnapshot = snap;
-    };
-
-    function flushPendingReconcile(): void {
-      if (gameUI.settings.netMode === 'classic') {
-        pendingReconcileSnapshot = null;
-        return;
-      }
-      const snap = pendingReconcileSnapshot;
-      if (!snap) return;
-      pendingReconcileSnapshot = null;
-
-      if (!predEngine && !gameUI.isHost) {
-        predStadiumId = gameUI.selectedStadiumId || 'mediano';
-        predEngine = new EngineInstance(predStadiumId);
-        predEngine.applyModifiers(gameUI.physicsModifiers);
-      } else if (predEngine && !gameUI.isHost && gameUI.selectedStadiumId && predStadiumId !== gameUI.selectedStadiumId) {
-        predStadiumId = gameUI.selectedStadiumId;
-        predEngine.loadStadium(predStadiumId);
-      }
-      if (predEngine && gameUI.localPlayerId > 0) {
-        syncEngineMatchLimits(predEngine);
-        const predDiscBefore = predEngine.players.get(gameUI.localPlayerId);
-        const beforeSnapX = predDiscBefore?.pos.x ?? 0;
-        const beforeSnapY = predDiscBefore?.pos.y ?? 0;
-        const hadLocalBefore = Boolean(predDiscBefore);
-        const beforeBallX = predEngine.ball.pos.x;
-        const beforeBallY = predEngine.ball.pos.y;
-        reconciler.reconcile(predEngine, snap, gameUI.localPlayerId);
-        const localDisc = predEngine.players.get(gameUI.localPlayerId);
-        if (localDisc) {
-          if (hasPredLocalPos && hadLocalBefore && !reconciler.didHardSnapLastReconcile) {
-            const dx = localDisc.pos.x - beforeSnapX;
-            const dy = localDisc.pos.y - beforeSnapY;
-            prevPredLocalPos.x += dx;
-            prevPredLocalPos.y += dy;
-          } else {
-            prevPredLocalPos.x = localDisc.pos.x;
-            prevPredLocalPos.y = localDisc.pos.y;
-          }
-          currPredLocalPos.x = localDisc.pos.x;
-          currPredLocalPos.y = localDisc.pos.y;
-          hasPredLocalPos = true;
+      if (!gameUI.isHost) {
+        const stadiumId = gameUI.selectedStadiumId || 'mediano';
+        const practiceMode = Boolean(gameUI.isPracticeMode);
+        const scoreLimit = Number(gameUI.scoreLimit ?? 0);
+        const timeLimitMinutes = Number(gameUI.timeLimitMinutes ?? 0);
+        if (!sharedSimSync) {
+          sharedSimSync = new SharedSimSync(stadiumId, gameUI.physicsModifiers);
+          sharedSimSync.configure(stadiumId, gameUI.physicsModifiers, practiceMode);
+          syncEngineMatchLimits(sharedSimSync.simWorld);
+          syncEngineMatchLimits(sharedSimSync.extrapWorld);
+          lastGuestSyncStadiumId = stadiumId;
+          lastGuestSyncPracticeMode = practiceMode;
+          lastGuestSyncScoreLimit = scoreLimit;
+          lastGuestSyncTimeLimitMinutes = timeLimitMinutes;
         } else {
-          hasPredLocalPos = false;
-        }
-        const predBall = predEngine.ball;
-        if (predBall) {
-          if (
-            hasPredBallPos &&
-            !reconciler.didBallHardSnapLastReconcile &&
-            !reconciler.didHardSnapLastReconcile
-          ) {
-            const bdx = predBall.pos.x - beforeBallX;
-            const bdy = predBall.pos.y - beforeBallY;
-            prevPredBallPos.x += bdx;
-            prevPredBallPos.y += bdy;
-          } else {
-            prevPredBallPos.x = predBall.pos.x;
-            prevPredBallPos.y = predBall.pos.y;
+          const configDirty =
+            stadiumId !== lastGuestSyncStadiumId || practiceMode !== lastGuestSyncPracticeMode;
+          const limitsDirty =
+            configDirty ||
+            scoreLimit !== lastGuestSyncScoreLimit ||
+            timeLimitMinutes !== lastGuestSyncTimeLimitMinutes;
+          if (configDirty) {
+            sharedSimSync.configure(stadiumId, gameUI.physicsModifiers, practiceMode);
+            lastGuestSyncStadiumId = stadiumId;
+            lastGuestSyncPracticeMode = practiceMode;
           }
-          currPredBallPos.x = predBall.pos.x;
-          currPredBallPos.y = predBall.pos.y;
-          hasPredBallPos = true;
+          if (limitsDirty) {
+            syncEngineMatchLimits(sharedSimSync.simWorld);
+            syncEngineMatchLimits(sharedSimSync.extrapWorld);
+            lastGuestSyncScoreLimit = scoreLimit;
+            lastGuestSyncTimeLimitMinutes = timeLimitMinutes;
+          }
         }
-        if (reconciler.didHardSnapLastReconcile || reconciler.didBallHardSnapLastReconcile) {
-          ballPredWeight = 0;
-          ballPredHoldTimer = 0;
-        }
+        sharedSimSync.onSnapshot(snap, performance.now());
       }
-    }
+    };
 
     if (!isHostInitial && gameApp.networkClient) {
       gameApp.networkClient.onSnapshotDecoded = handleAuthoritativeSnapshot;
@@ -1815,32 +1761,10 @@
       }
     }
 
-    const guestLocalInputMap = new Map<number, PlayerInput>();
     const hostSimulationInputs = new Map<number, PlayerInput>();
     let wasModalOpen = gameUI.activeModal !== 'NONE' || gameUI.isHudEditorOpen;
-    let prevNetMode = gameUI.settings.netMode;
-
-    function syncNetModeTransition(): void {
-      const currentMode = gameUI.settings.netMode;
-      if (currentMode === prevNetMode) return;
-      prevNetMode = currentMode;
-      pendingReconcileSnapshot = null;
-      hasPredLocalPos = false;
-      hasPredBallPos = false;
-      ballPredWeight = 0;
-      ballPredHoldTimer = 0;
-      reconciler.visualOffset.x = 0;
-      reconciler.visualOffset.y = 0;
-      reconciler.ballVisualOffset.x = 0;
-      reconciler.ballVisualOffset.y = 0;
-      reconciler.inputBuffer.length = 0;
-      if (currentMode === 'predicted' && predEngine && currSnapshot) {
-        predEngine.setState(currSnapshot);
-      }
-    }
 
     const simTicker = new SimulationTicker((now) => {
-      syncNetModeTransition();
       const isModalOpen = gameUI.activeModal !== 'NONE' || gameUI.isHudEditorOpen;
       if (!wasModalOpen && isModalOpen) {
         releaseAndFlushHeldInputs();
@@ -1849,88 +1773,21 @@
       const localPkt = computeLocalPlayerInput(true);
 
       if (!gameUI.isHost) {
-        // Guest: Modo classic (Haxball puro) o predicted (60 Hz local + reconciliación)
+        // Guest (Opción 3): Simulación Determinista Compartida + envío de inputs con redundancia 4x
         if (gameApp.networkClient) {
           gameApp.networkClient.flushImpairment(now);
           if (!gameApp.networkClient.onSnapshotDecoded) {
             gameApp.networkClient.onSnapshotDecoded = handleAuthoritativeSnapshot;
           }
-          if (gameUI.settings.netMode === 'classic') {
-            pendingReconcileSnapshot = null;
-            const seq = reconciler.allocateNextSeq();
-            clientTick = seq;
-            gameApp.networkClient.sendInput(
-              localPkt.inputMask ?? 0,
-              seq,
-              localPkt.aimAngle,
-              localPkt.aimThrottle
-            );
-            return;
-          }
-          flushPendingReconcile();
-          if (
-            predEngine &&
-            gameUI.localPlayerId > 0 &&
-            predEngine.players.has(gameUI.localPlayerId) &&
-            isMovablePhase(predEngine.fsm.state)
-          ) {
-            syncEngineMatchLimits(predEngine);
-            const localDiscBefore = predEngine.players.get(gameUI.localPlayerId)!;
-            prevPredLocalPos.x = localDiscBefore.pos.x;
-            prevPredLocalPos.y = localDiscBefore.pos.y;
-            prevPredBallPos.x = predEngine.ball.pos.x;
-            prevPredBallPos.y = predEngine.ball.pos.y;
-
-            const nextSeq = (reconciler.lastRecordedSeq + 1) >>> 0;
-            const localMask = localPkt.inputMask ?? 0;
-            const seq = reconciler.recordInput(nextSeq, localMask, localPkt.aimAngle, localPkt.aimThrottle);
-            gameApp.networkClient.sendInput(
-              localMask,
-              seq,
-              localPkt.aimAngle,
-              localPkt.aimThrottle
-            );
-
-            (localPkt as any).sequence = seq;
-            guestLocalInputMap.clear();
-            guestLocalInputMap.set(gameUI.localPlayerId, localPkt);
-            predEngine.step(guestLocalInputMap, true);
-
-            const localDiscAfter = predEngine.players.get(gameUI.localPlayerId);
-            if (localDiscAfter) {
-              currPredLocalPos.x = localDiscAfter.pos.x;
-              currPredLocalPos.y = localDiscAfter.pos.y;
-              hasPredLocalPos = true;
-            }
-            currPredBallPos.x = predEngine.ball.pos.x;
-            currPredBallPos.y = predEngine.ball.pos.y;
-            hasPredBallPos = true;
-            clientTick = seq;
-          } else {
-            const seq = reconciler.allocateNextSeq();
-            clientTick = seq;
-            gameApp.networkClient.sendInput(
-              localPkt.inputMask ?? 0,
-              seq,
-              localPkt.aimAngle,
-              localPkt.aimThrottle
-            );
-            if (predEngine && gameUI.localPlayerId > 0) {
-              const localDisc = predEngine.players.get(gameUI.localPlayerId);
-              if (localDisc) {
-                prevPredLocalPos.x = localDisc.pos.x;
-                prevPredLocalPos.y = localDisc.pos.y;
-                currPredLocalPos.x = localDisc.pos.x;
-                currPredLocalPos.y = localDisc.pos.y;
-                hasPredLocalPos = true;
-              }
-              prevPredBallPos.x = predEngine.ball.pos.x;
-              prevPredBallPos.y = predEngine.ball.pos.y;
-              currPredBallPos.x = predEngine.ball.pos.x;
-              currPredBallPos.y = predEngine.ball.pos.y;
-              hasPredBallPos = true;
-            }
-          }
+          clientTick = (clientTick + 1) >>> 0;
+          const mask = localPkt.inputMask ?? 0;
+          lastSentInputMask = mask;
+          gameApp.networkClient.sendInput(
+            mask,
+            clientTick,
+            localPkt.aimAngle,
+            localPkt.aimThrottle
+          );
         }
       } else if (engine) {
         // Host: Sincronizar jugadores, límites y procesar física autoritativa
@@ -1969,7 +1826,9 @@
 
     let frameCount = 0;
     let lastFpsCalculation = performance.now();
+    let lastNetDebugUpdateMs = performance.now();
     let lastRenderFrameTime = performance.now();
+    let prevRawFrameTimeMs = performance.now();
     let lastRenderedFrameTimeMs = 0;
     let wasRecordingPrevFrame = false;
     let prevVarBallX = 0;
@@ -1980,28 +1839,22 @@
     let hasPrevVarSample = false;
     let smoothedFallbackBallSpeedPx = 0;
     let smoothedFallbackPlayerSpeedPx = 0;
-    const scratchRenderSnapshot: GameStateSnapshot = {
-      tick: 0,
-      phase: 0,
-      matchTimer: 0,
-      redScore: 0,
-      blueScore: 0,
-      soundMask: 0,
-      discs: []
-    };
-    const scratchDiscs: CompactDiscState[] = [];
-    const scratchDiscPool: CompactDiscState[] = [];
-    const scratchExtrapInput = {
-      id: 0,
-      team: 0 as 0 | 1 | 2,
-      x: 0,
-      y: 0,
-      vx: 0,
-      vy: 0,
-      radius: 15,
-      kicking: false,
-      avatar: '',
-      isDashing: false
+    const frameTimeSamples = new Float32Array(120);
+    const frameTimeSortScratch = new Float32Array(120);
+    let frameTimeHead = 0;
+    let frameTimeCount = 0;
+    let currentFrameTimeP99 = 0;
+    const simTelemetryScratch: SharedSimSyncTelemetry = {
+      lastServerTick: 0,
+      lastPhase: 0,
+      jitterMs: 0,
+      syncCorrectionAvgPx: 0,
+      syncCorrectionMaxPx: 0,
+      lastCorrectionPx: 0,
+      localStepsSinceSnap: 0,
+      hardSnaps: 0,
+      extrapolationMs: 0,
+      networkStalled: false
     };
 
     function computeDiscTelemetrySpeed(
@@ -2090,6 +1943,14 @@
       }
       lastRenderedFrameTimeMs = now;
 
+      const rawFrameDtMs = prevRawFrameTimeMs > 0 ? Math.max(0, Math.min(200, now - prevRawFrameTimeMs)) : 16.67;
+      prevRawFrameTimeMs = now;
+      frameTimeSamples[frameTimeHead] = rawFrameDtMs;
+      frameTimeHead = (frameTimeHead + 1) % frameTimeSamples.length;
+      if (frameTimeCount < frameTimeSamples.length) {
+        frameTimeCount++;
+      }
+
       const frameDt = Math.max(0.001, Math.min(0.1, (now - lastRenderFrameTime) / 1000));
       lastRenderFrameTime = now;
 
@@ -2123,16 +1984,6 @@
       renderer.setChatBounds(measuredChatWidth, Math.max(measuredChatHeight, gameUI.chatHeight));
       renderer.screenShakeEnabled = gameUI.screenShake;
       const effExtrapMs = gameUI.effectiveExtrapolationMs;
-      const isClassicGuest = !gameUI.isHost && gameUI.settings.netMode === 'classic';
-      const renderExtrapMs = isClassicGuest
-        ? effExtrapMs
-        : (gameUI.settings.autoExtrapolation === false ? effExtrapMs : 0);
-      renderer.setExtrapolateAllDiscs(isClassicGuest);
-      renderer.setExtrapolation(renderExtrapMs);
-      if (!gameUI.isHost && gameApp.networkClient && lastAppliedExtrapMs !== effExtrapMs) {
-        lastAppliedExtrapMs = effExtrapMs;
-        gameApp.networkClient.setAutoExtrapolationMs(effExtrapMs);
-      }
       renderer.discRenderer.dampingBall = gameUI.modifiers.ballFriction ?? gameUI.modifiers.pitchFriction ?? 0.99;
       renderer.discRenderer.dampingPlayer = gameUI.modifiers.playerFriction ?? 0.96;
       renderer.setGoalNets(gameUI.isHost && engine ? engine.world.goalNets : null);
@@ -2206,203 +2057,16 @@
       }
 
       if (!gameUI.isHost && gameApp.networkClient) {
-        syncNetModeTransition();
         gameApp.networkClient.flushImpairment(now);
-        const isClassicMode = gameUI.settings.netMode === 'classic';
-        if (!isClassicMode) {
-          flushPendingReconcile();
-          reconciler.updateVisualSmoothing(frameDt);
+        let renderSnap: GameStateSnapshot | null = null;
+        if (sharedSimSync) {
+          sharedSimSync.update(frameDt, now);
+          renderSnap = sharedSimSync.buildRenderSnapshot(effExtrapMs, now);
         }
-        const interpSnap =
-          gameApp.networkClient.getInterpolatedState(now) ??
-          gameApp.networkClient.latestSnapshot;
-        if (interpSnap && interpSnap.discs) {
-          let renderSnap = interpSnap;
-          const localId = gameUI.localPlayerId;
-          const predDisc = !isClassicMode && predEngine && localId > 0 ? predEngine.players.get(localId) : undefined;
-          if (isClassicMode || !isMovablePhase(interpSnap.phase)) {
-            ballPredWeight = 0;
-            ballPredHoldTimer = 0;
-          }
-          if (!isClassicMode && predDisc && hasPredLocalPos && isMovablePhase(interpSnap.phase)) {
-            const predX = lerp(prevPredLocalPos.x, currPredLocalPos.x, alpha) + reconciler.visualOffset.x;
-            const predY = lerp(prevPredLocalPos.y, currPredLocalPos.y, alpha) + reconciler.visualOffset.y;
-            let predFlags = 0;
-            if (predDisc.kicking) predFlags |= 1 << 0;
-            if (predDisc.isDashing) predFlags |= 1 << 1;
-            if (predDisc.isTurbo) predFlags |= 1 << 4;
-            if (predDisc.isTyping) predFlags |= 1 << 5;
-
-            scratchDiscs.length = 0;
-            const inDiscs = interpSnap.discs;
-            const ballRad = renderer.discRenderer.ballRadius || DEFAULT_GAMEPLAY_CONFIG.ballRadius;
-            const playerRad = renderer.discRenderer.playerRadius || DEFAULT_GAMEPLAY_CONFIG.playerRadius;
-            const kickMargin = renderer.discRenderer.kickMargin ?? DEFAULT_GAMEPLAY_CONFIG.kickMargin;
-
-            const predBallX =
-              hasPredBallPos && predEngine
-                ? lerp(prevPredBallPos.x, currPredBallPos.x, alpha) + reconciler.ballVisualOffset.x
-                : 0;
-            const predBallY =
-              hasPredBallPos && predEngine
-                ? lerp(prevPredBallPos.y, currPredBallPos.y, alpha) + reconciler.ballVisualOffset.y
-                : 0;
-
-            let rawBallDisc: CompactDiscState | undefined;
-            for (let i = 0; i < inDiscs.length; i++) {
-              const d = inDiscs[i]!;
-              if (d.id === 0 || d.team === 0) {
-                rawBallDisc = d;
-                break;
-              }
-            }
-
-            if (rawBallDisc && hasPredBallPos && predEngine) {
-              scratchExtrapInput.id = rawBallDisc.id;
-              scratchExtrapInput.team = 0;
-              scratchExtrapInput.x = rawBallDisc.x;
-              scratchExtrapInput.y = rawBallDisc.y;
-              scratchExtrapInput.vx = rawBallDisc.vx;
-              scratchExtrapInput.vy = rawBallDisc.vy;
-              scratchExtrapInput.radius = ballRad;
-              scratchExtrapInput.isDashing = false;
-              const extrapBall = renderer.discRenderer.getRenderDisc(scratchExtrapInput, true);
-              const interpBallX = extrapBall.x;
-              const interpBallY = extrapBall.y;
-
-              let minRemoteToBall = Number.POSITIVE_INFINITY;
-              for (let i = 0; i < inDiscs.length; i++) {
-                const d = inDiscs[i]!;
-                if (d.id !== localId && d.id !== 0 && d.team !== 0) {
-                  const rDist = Math.hypot(d.x - interpBallX, d.y - interpBallY);
-                  if (rDist < minRemoteToBall) minRemoteToBall = rDist;
-                }
-              }
-
-              const localToPredBall = Math.hypot(predBallX - predX, predBallY - predY);
-              const localToInterpBall = Math.hypot(interpBallX - predX, interpBallY - predY);
-              const touchRadius = playerRad + ballRad + kickMargin + 12;
-              const engageRadius = playerRad + ballRad + kickMargin + 40;
-              const divergence = Math.hypot(predBallX - interpBallX, predBallY - interpBallY);
-              const isOpponentCloser =
-                minRemoteToBall < playerRad + ballRad + 28 &&
-                minRemoteToBall + 4 < localToInterpBall;
-
-              if (!isOpponentCloser && divergence <= 110) {
-                if (localToPredBall <= touchRadius || (predDisc.kicking && localToPredBall <= engageRadius)) {
-                  ballPredHoldTimer = 0.25;
-                }
-                if (localToPredBall <= engageRadius || localToInterpBall <= engageRadius || ballPredHoldTimer > 0) {
-                  ballPredWeight = Math.min(1, ballPredWeight + frameDt * 18);
-                  ballPredHoldTimer = Math.max(0, ballPredHoldTimer - frameDt);
-                } else {
-                  ballPredWeight *= Math.exp(-8 * frameDt);
-                }
-              } else {
-                ballPredHoldTimer = 0;
-                ballPredWeight *= Math.exp(-16 * frameDt);
-              }
-              if (ballPredWeight < 0.01) {
-                ballPredWeight = 0;
-              }
-            } else {
-              ballPredHoldTimer = 0;
-              ballPredWeight = 0;
-            }
-
-            renderer.discRenderer.isPaused = false;
-            for (let i = 0; i < inDiscs.length; i++) {
-              const d = inDiscs[i]!;
-              let outDisc = scratchDiscPool[i];
-              if (!outDisc) {
-                outDisc = {
-                  id: 0,
-                  team: 0,
-                  x: 0,
-                  y: 0,
-                  vx: 0,
-                  vy: 0,
-                  flags: 0,
-                  spin: 0,
-                  stamina: 100,
-                  dashTimer: 0,
-                  dashCooldown: 0,
-                  lastAckedInputSeq: 0
-                };
-                scratchDiscPool.push(outDisc);
-              }
-              if (d.id === localId) {
-                const predRt = (predEngine as any).getRuntime?.(localId);
-                outDisc.id = d.id;
-                outDisc.team = d.team;
-                outDisc.x = predX;
-                outDisc.y = predY;
-                outDisc.vx = predDisc.vel.x;
-                outDisc.vy = predDisc.vel.y;
-                outDisc.flags = predFlags || d.flags;
-                outDisc.stamina = predDisc.stamina;
-                outDisc.spin = d.spin;
-                outDisc.dashTimer = predRt?.ticksRemaining ?? 0;
-                outDisc.dashCooldown = predRt?.cooldownTimer ?? 0;
-                outDisc.lastAckedInputSeq = d.lastAckedInputSeq;
-              } else {
-                const isBallDisc = d.id === 0 || d.team === 0;
-                const discRadius = isBallDisc ? ballRad : playerRad;
-                scratchExtrapInput.id = d.id;
-                scratchExtrapInput.team = (d.team === 1 || d.team === 2 ? d.team : 0) as 0 | 1 | 2;
-                scratchExtrapInput.x = d.x;
-                scratchExtrapInput.y = d.y;
-                scratchExtrapInput.vx = d.vx;
-                scratchExtrapInput.vy = d.vy;
-                scratchExtrapInput.radius = discRadius;
-                scratchExtrapInput.isDashing = Boolean((d.flags ?? 0) & (1 << 1));
-                const extrapD = renderer.discRenderer.getRenderDisc(scratchExtrapInput, true);
-
-                const usePredBallMeta =
-                  isBallDisc && ballPredWeight > 0.5 && hasPredBallPos && Boolean(predEngine);
-                outDisc.id = d.id;
-                outDisc.team = d.team;
-                if (isBallDisc && ballPredWeight > 0 && hasPredBallPos && predEngine) {
-                  outDisc.x = lerp(extrapD.x, predBallX, ballPredWeight);
-                  outDisc.y = lerp(extrapD.y, predBallY, ballPredWeight);
-                } else {
-                  outDisc.x = extrapD.x;
-                  outDisc.y = extrapD.y;
-                }
-                outDisc.vx = usePredBallMeta && predEngine ? predEngine.ball.vel.x : d.vx;
-                outDisc.vy = usePredBallMeta && predEngine ? predEngine.ball.vel.y : d.vy;
-                if (usePredBallMeta && predEngine) {
-                  let bFlags = d.flags ?? 0;
-                  if (predEngine.ball.isCurving || Math.abs(predEngine.ball.spin) > 0.01) bFlags |= 1 << 2;
-                  if (predEngine.ball.isPowerShot) bFlags |= 1 << 3;
-                  outDisc.flags = bFlags;
-                  outDisc.spin = predEngine.ball.spin || d.spin;
-                } else {
-                  outDisc.flags = d.flags;
-                  outDisc.spin = d.spin;
-                }
-                outDisc.stamina = d.stamina;
-                outDisc.dashTimer = d.dashTimer;
-                outDisc.dashCooldown = d.dashCooldown;
-                outDisc.lastAckedInputSeq = d.lastAckedInputSeq;
-              }
-              scratchDiscs.push(outDisc);
-            }
-
-            scratchRenderSnapshot.tick = interpSnap.tick;
-            scratchRenderSnapshot.phase = interpSnap.phase;
-            scratchRenderSnapshot.matchTimer = interpSnap.matchTimer;
-            scratchRenderSnapshot.redScore = interpSnap.redScore;
-            scratchRenderSnapshot.blueScore = interpSnap.blueScore;
-            scratchRenderSnapshot.soundMask = interpSnap.soundMask ?? 0;
-            scratchRenderSnapshot.kickoffActive = interpSnap.kickoffActive;
-            scratchRenderSnapshot.isGoldenGoal = interpSnap.isGoldenGoal;
-            scratchRenderSnapshot.isNeutralKickoff = interpSnap.isNeutralKickoff;
-            scratchRenderSnapshot.kickoffPossessingTeam = interpSnap.kickoffPossessingTeam;
-            scratchRenderSnapshot.discs = scratchDiscs;
-            renderSnap = scratchRenderSnapshot;
-            renderer.discRenderer.skipNextFrameExtrapolation = true;
-          }
+        if (!renderSnap) {
+          renderSnap = gameApp.networkClient.latestSnapshot;
+        }
+        if (renderSnap && renderSnap.discs) {
           currSnapshot = renderSnap;
           prevSnapshot = renderSnap;
           if (matchRecorder.isRecording && !wasRecordingPrevFrame) {
@@ -2544,6 +2208,43 @@
         smoothedFallbackPlayerSpeedPx = 0;
       }
 
+      // Actualizar liveNetDebug no reactivo a 4 Hz (cero mutaciones $state en bucle de 60–240 Hz)
+      if (now - lastNetDebugUpdateMs >= 250) {
+        lastNetDebugUpdateMs = now;
+        if (frameTimeCount > 0) {
+          frameTimeSortScratch.set(frameTimeSamples.subarray(0, frameTimeCount));
+          frameTimeSortScratch.subarray(0, frameTimeCount).sort();
+          const p99Idx = Math.min(frameTimeCount - 1, Math.floor(frameTimeCount * 0.99));
+          currentFrameTimeP99 = frameTimeSortScratch[p99Idx] ?? 0;
+        }
+        if (gameUI.isHost) {
+          gameUI.updateLiveNetDebug({
+            rttMs: 0,
+            jitterMs: 0,
+            lossPct: 0,
+            iceRoute: gameApp.networkHost?.getPrimaryIceRoute() ?? 'Host Local',
+            syncCorrectionAvgPx: 0,
+            syncCorrectionMaxPx: 0,
+            extrapolationMs: 0,
+            localStepsSinceSnap: 0,
+            frameTimeP99: currentFrameTimeP99
+          });
+        } else {
+          const tel = sharedSimSync?.getTelemetry(simTelemetryScratch, now) ?? simTelemetryScratch;
+          gameUI.updateLiveNetDebug({
+            rttMs: gameUI.pingMs,
+            jitterMs: tel.jitterMs,
+            lossPct: gameApp.networkClient?.packetLossPct ?? 0,
+            iceRoute: gameApp.networkClient?.iceRoute ?? 'Local',
+            syncCorrectionAvgPx: tel.syncCorrectionAvgPx,
+            syncCorrectionMaxPx: tel.syncCorrectionMaxPx,
+            extrapolationMs: effExtrapMs,
+            localStepsSinceSnap: tel.localStepsSinceSnap,
+            frameTimeP99: currentFrameTimeP99
+          });
+        }
+      }
+
       // Actualizar telemetría reactiva en UI (throttled cada 500 ms)
       frameCount++;
       if (now - lastFpsCalculation >= 500) {
@@ -2554,15 +2255,23 @@
             jitterMs: 0,
             packetLossPct: 0,
             iceRoute: gameApp.networkHost?.getPrimaryIceRoute() ?? 'Host Local',
-            reconciliationsPerSec: 0
+            syncCorrectionAvgPx: 0,
+            syncCorrectionMaxPx: 0,
+            extrapolationMs: 0,
+            localStepsSinceSnap: 0,
+            frameTimeP99: currentFrameTimeP99
           });
         } else if (gameApp.networkClient) {
+          const tel = sharedSimSync?.getTelemetry(simTelemetryScratch, now) ?? simTelemetryScratch;
           gameUI.updateNetworkDiagnostics({
-            jitterMs: gameApp.networkClient.jitterBuffer.meanJitter,
+            jitterMs: tel.jitterMs,
             packetLossPct: gameApp.networkClient.packetLossPct,
             iceRoute: gameApp.networkClient.iceRoute,
-            reconciliationsPerSec:
-              gameUI.settings.netMode === 'classic' ? 0 : reconciler.reconciliationsPerSec
+            syncCorrectionAvgPx: tel.syncCorrectionAvgPx,
+            syncCorrectionMaxPx: tel.syncCorrectionMaxPx,
+            extrapolationMs: effExtrapMs,
+            localStepsSinceSnap: tel.localStepsSinceSnap,
+            frameTimeP99: currentFrameTimeP99
           });
         }
         frameCount = 0;
@@ -2645,7 +2354,11 @@
       if (gameApp.networkClient) {
         gameApp.networkClient.onSnapshotDecoded = undefined;
       }
-      pendingReconcileSnapshot = null;
+      sharedSimSync?.reset();
+      sharedSimSync = null;
+      lastGuestSyncStadiumId = '';
+      lastGuestSyncScoreLimit = -1;
+      lastGuestSyncTimeLimitMinutes = -1;
       gameApp.onScoreEventReceived = null;
       gameUI.onTriggerShake = null;
       gameUI.onSkipGoalReplay = null;

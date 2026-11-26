@@ -10,7 +10,8 @@ import {
   COLLISION_GROUP_RED_GOAL,
   COLLISION_GROUP_BLUE_GOAL,
   COLLISION_GROUP_ALL,
-  POWER_SHOT_SPEED_THRESHOLD
+  POWER_SHOT_SPEED_THRESHOLD,
+  copyDiscPrimitives
 } from './entities/Disc';
 import { Segment, SegmentOptions } from './entities/Segment';
 import { Plane, PlaneOptions } from './entities/Plane';
@@ -57,7 +58,13 @@ import {
   DEFAULT_STADIUM_ID,
   createStadium
 } from './stadiums/StadiumRegistry';
-import { GameFSM, MatchPhase, MatchState } from './fsm/GameFSM';
+import {
+  GameFSM,
+  MatchPhase,
+  MatchState,
+  isFrozenMatchPhase,
+  isPausedOrStoppedPhase
+} from './fsm/GameFSM';
 import {
   GameFSM as GameMatchFSM,
   MatchPhase as GameMatchPhase,
@@ -115,6 +122,7 @@ import {
   EventType,
   SoundEvent,
   OP_INPUT,
+  OP_INPUT_BUNDLE,
   OP_SNAPSHOT,
   OP_CHAT,
   OP_EVENT,
@@ -140,7 +148,10 @@ import {
   INPUT_FLAG_MAGNUS_RIGHT,
   INPUT_FLAG_TYPING,
   INPUT_FLAG_MOUSE_AIM,
-  INPUT_FLAG_MOUSE_ACTIVE
+  INPUT_FLAG_MOUSE_ACTIVE,
+  AIM_ANGLE_BYTE_NONE,
+  encodeAimAngleByte,
+  decodeAimAngleByte
 } from './protocol/BinaryProtocol';
 import { InputPacket, InputData } from './protocol/InputPacket';
 import { SnapshotPacket, ActiveRadiusConfig } from './protocol/SnapshotPacket';
@@ -236,6 +247,8 @@ interface EngineDashState {
   lastTouchTick: number;
   lastSaveTick: number;
   lastProcessedInputSeq: number;
+  activeInputMask: number;
+  activeAimAngleByte: number;
 }
 
 export class EngineInstance {
@@ -297,6 +310,7 @@ export class EngineInstance {
   public kickoffPossessingTeam: 'red' | 'blue' = 'red';
   public isNeutralKickoff: boolean = true;
   public isPracticeMode: boolean = false;
+  private silentStepActive: boolean = false;
 
   private eventListeners: Map<string, Array<(payload: any) => void>> = new Map();
 
@@ -353,25 +367,33 @@ export class EngineInstance {
             this.ball.resetCurve();
           }
           if (other?.isPost) {
-            this.pendingShot = null;
-            this.soundMask |= SOUND_POST_HIT;
-            this.emit('post_hit', { ball: this.ball, post: other });
+            if (!this.silentStepActive) {
+              this.pendingShot = null;
+              this.soundMask |= SOUND_POST_HIT;
+              this.emit('post_hit', { ball: this.ball, post: other });
+            }
           } else if (other && !other.isBall) {
             if (this.fsm.state === MatchPhase.KICKOFF) {
-              this.fsm.startPlaying();
+              if (this.silentStepActive) {
+                this.fsm.currentState = MatchPhase.PLAYING;
+              } else {
+                this.fsm.startPlaying();
+              }
             }
-            if (isCompetitivePhase) {
+            if (!this.silentStepActive && isCompetitivePhase) {
               this.recordTouch(other.id, false, e.preBallVx, e.preBallVy);
             }
           }
         }
       } else if (e.type === 'disc-segment' && e.discA.isBall) {
-        this.pendingShot = null;
         this.ball.resetCurve();
-        const bSpeed = Math.hypot(this.ball.vel.x, this.ball.vel.y);
-        if (bSpeed > 25 && this.currentTick - this.lastWallSoundTick >= 4) {
-          this.lastWallSoundTick = this.currentTick;
-          this.emit('wall_hit', { ball: this.ball, speed: bSpeed });
+        if (!this.silentStepActive) {
+          this.pendingShot = null;
+          const bSpeed = Math.hypot(this.ball.vel.x, this.ball.vel.y);
+          if (bSpeed > 25 && this.currentTick - this.lastWallSoundTick >= 4) {
+            this.lastWallSoundTick = this.currentTick;
+            this.emit('wall_hit', { ball: this.ball, speed: bSpeed });
+          }
         }
       }
     };
@@ -596,6 +618,10 @@ export class EngineInstance {
     return this.fsm.state === MatchPhase.PLAYING;
   }
 
+  public getPlayerRuntime(id: number): Readonly<EngineDashState> | undefined {
+    return this.playerRuntime.get(id);
+  }
+
   private getRuntime(id: number): EngineDashState {
     let rt = this.playerRuntime.get(id);
     if (!rt) {
@@ -613,7 +639,9 @@ export class EngineInstance {
         lastPassTick: -9999,
         lastTouchTick: -9999,
         lastSaveTick: -9999,
-        lastProcessedInputSeq: 0
+        lastProcessedInputSeq: 0,
+        activeInputMask: 0,
+        activeAimAngleByte: AIM_ANGLE_BYTE_NONE
       };
       this.playerRuntime.set(id, rt);
     }
@@ -962,26 +990,35 @@ export class EngineInstance {
   }
 
   public step(inputs: Map<number, PlayerInput>, isReplay: boolean = false): void {
-    this.soundMask = 0;
-    this.world.isPracticeMode = this.isPracticeMode;
-    const isCelebration =
-      this.fsm.state === MatchPhase.GOAL || this.fsm.state === MatchPhase.CELEBRATION;
-    const isGameActive =
-      this.fsm.state === MatchPhase.PLAYING ||
-      this.fsm.state === MatchPhase.KICKOFF ||
-      isCelebration;
-
-    for (const [id] of this.players.entries()) {
-      const input = inputs.get(id);
-      if (input) {
-        const seq = (input as any).sequence ?? (input as any).seq ?? (input as any).tick;
-        if (typeof seq === 'number') {
-          this.getRuntime(id).lastProcessedInputSeq = seq >>> 0;
-        }
-      }
+    if (isReplay && isFrozenMatchPhase(this.fsm.state)) {
+      return;
     }
 
-    if (isGameActive) {
+    const prevSilent = this.silentStepActive;
+    this.silentStepActive = isReplay;
+    try {
+      if (!isReplay) {
+        this.soundMask = 0;
+      }
+      this.world.isPracticeMode = this.isPracticeMode;
+      const isCelebration =
+        this.fsm.state === MatchPhase.GOAL || this.fsm.state === MatchPhase.CELEBRATION;
+      const isGameActive =
+        this.fsm.state === MatchPhase.PLAYING ||
+        this.fsm.state === MatchPhase.KICKOFF ||
+        isCelebration;
+
+      for (const [id] of this.players.entries()) {
+        const input = inputs.get(id);
+        if (input) {
+          const seq = (input as any).sequence ?? (input as any).seq ?? (input as any).tick;
+          if (typeof seq === 'number') {
+            this.getRuntime(id).lastProcessedInputSeq = seq >>> 0;
+          }
+        }
+      }
+
+      if (isGameActive) {
       if (!isReplay && this.botConfigs.size > 0 && !isCelebration) {
         const botWorldPlayers: BotWorldPlayer[] = [];
         for (const [pid, pDisc] of this.players.entries()) {
@@ -1031,6 +1068,10 @@ export class EngineInstance {
         const input = inputs.get(id);
 
         const mask = input ? (input.inputMask ?? 0) : 0;
+        const aimAngle = input ? input.aimAngle : null;
+        const aimThrottle = input ? input.aimThrottle : 0;
+        rt.activeInputMask = mask & 0xffff;
+        rt.activeAimAngleByte = encodeAimAngleByte(aimAngle, aimThrottle);
         player.isTyping = Boolean(mask & INPUT_FLAG_TYPING);
 
         const pState = this.scratchKinematicsState;
@@ -1054,8 +1095,8 @@ export class EngineInstance {
 
         const kInput = this.scratchKinematicsInput;
         kInput.inputMask = mask;
-        kInput.aimAngle = input ? input.aimAngle : null;
-        kInput.aimThrottle = input ? input.aimThrottle : 0;
+        kInput.aimAngle = aimAngle;
+        kInput.aimThrottle = aimThrottle;
 
         stepPlayerKinematics(
           pState,
@@ -1134,19 +1175,25 @@ export class EngineInstance {
             this.ball.curvePerp = 0;
             this.ball.spin = 0;
 
-            this.soundMask |= SOUND_KICK;
-            if (this.fsm.state === MatchPhase.KICKOFF) {
-              this.fsm.startPlaying();
+            if (isReplay) {
+              if (this.fsm.state === MatchPhase.KICKOFF) {
+                this.fsm.currentState = MatchPhase.PLAYING;
+              }
+            } else {
+              this.soundMask |= SOUND_KICK;
+              if (this.fsm.state === MatchPhase.KICKOFF) {
+                this.fsm.startPlaying();
+              }
+              if (!isCelebration) {
+                this.recordTouch(player.id, true);
+              }
+              this.emit('kick', {
+                player,
+                ball: this.ball,
+                isPowerShot: this.ball.isPowerShot,
+                strength: this.ball.isPowerShot ? 1.8 : 1.0
+              });
             }
-            if (!isCelebration) {
-              this.recordTouch(player.id, true);
-            }
-            this.emit('kick', {
-              player,
-              ball: this.ball,
-              isPowerShot: this.ball.isPowerShot,
-              strength: this.ball.isPowerShot ? 1.8 : 1.0
-            });
           }
 
         if (this.fsm.state === MatchPhase.KICKOFF) {
@@ -1155,7 +1202,11 @@ export class EngineInstance {
           const bdx = this.ball.pos.x - player.pos.x;
           const bdy = this.ball.pos.y - player.pos.y;
           if (ballVelSq > 0.0225 || (bdx * bdx + bdy * bdy <= touchDist * touchDist + 1.0)) {
-            this.fsm.startPlaying();
+            if (isReplay) {
+              this.fsm.currentState = MatchPhase.PLAYING;
+            } else {
+              this.fsm.startPlaying();
+            }
           }
         }
 
@@ -1211,21 +1262,25 @@ export class EngineInstance {
 
         if (desiredDir === -1 && this.ball.magnusTimer > 0 && this.ball.isCurvingAllowed) {
           this.ball.applyMagnusCurve(true, false, kMagnus);
-          if (this.lastTouchPlayer && this.lastTouchPlayer.id === controllerIdNum) {
-            this.lastTouchPlayer.wasCurve = true;
-          }
-          const lastEntry = this.touchHistory.length > 0 ? this.touchHistory[this.touchHistory.length - 1] : null;
-          if (lastEntry && lastEntry.playerId === controllerIdNum) {
-            lastEntry.wasCurve = true;
+          if (!isReplay) {
+            if (this.lastTouchPlayer && this.lastTouchPlayer.id === controllerIdNum) {
+              this.lastTouchPlayer.wasCurve = true;
+            }
+            const lastEntry = this.touchHistory.length > 0 ? this.touchHistory[this.touchHistory.length - 1] : null;
+            if (lastEntry && lastEntry.playerId === controllerIdNum) {
+              lastEntry.wasCurve = true;
+            }
           }
         } else if (desiredDir === 1 && this.ball.magnusTimer > 0 && this.ball.isCurvingAllowed) {
           this.ball.applyMagnusCurve(false, true, kMagnus);
-          if (this.lastTouchPlayer && this.lastTouchPlayer.id === controllerIdNum) {
-            this.lastTouchPlayer.wasCurve = true;
-          }
-          const lastEntry = this.touchHistory.length > 0 ? this.touchHistory[this.touchHistory.length - 1] : null;
-          if (lastEntry && lastEntry.playerId === controllerIdNum) {
-            lastEntry.wasCurve = true;
+          if (!isReplay) {
+            if (this.lastTouchPlayer && this.lastTouchPlayer.id === controllerIdNum) {
+              this.lastTouchPlayer.wasCurve = true;
+            }
+            const lastEntry = this.touchHistory.length > 0 ? this.touchHistory[this.touchHistory.length - 1] : null;
+            if (lastEntry && lastEntry.playerId === controllerIdNum) {
+              lastEntry.wasCurve = true;
+            }
           }
         } else {
           this.ball.isCurving = false;
@@ -1264,7 +1319,11 @@ export class EngineInstance {
       if (this.fsm.state === MatchPhase.KICKOFF) {
         const ballVelSq = this.ball.vel.x * this.ball.vel.x + this.ball.vel.y * this.ball.vel.y;
         if (ballVelSq > 0.0225 || preStepSpeed > 0.15) {
-          this.fsm.startPlaying();
+          if (isReplay) {
+            this.fsm.currentState = MatchPhase.PLAYING;
+          } else {
+            this.fsm.startPlaying();
+          }
         }
       }
 
@@ -1305,6 +1364,9 @@ export class EngineInstance {
         this.goalReplayClip.push(this.getState());
         this.goalReplayPostTicksRemaining--;
       }
+    }
+    } finally {
+      this.silentStepActive = prevSilent;
     }
   }
 
@@ -1842,7 +1904,9 @@ export class EngineInstance {
           rt.kickConsumed = false;
         }
         if (d.lastAckedInputSeq !== undefined) rt.lastProcessedInputSeq = d.lastAckedInputSeq;
-        rt.prevDashDown = Boolean(p.isDashing);
+        rt.activeInputMask = d.inputMask ?? 0;
+        rt.activeAimAngleByte = d.aimAngleByte ?? AIM_ANGLE_BYTE_NONE;
+        rt.prevDashDown = Boolean(p.isDashing || (rt.activeInputMask & INPUT_FLAG_DASH) !== 0);
         if (p.isDashing) {
           const spd = Math.hypot(d.vx, d.vy);
           if (spd > 1e-3) {
@@ -1882,7 +1946,9 @@ export class EngineInstance {
       vx: this.ball.vel.x,
       vy: this.ball.vel.y,
       flags: ballFlags,
-      spin: this.ball.spin
+      spin: this.ball.spin,
+      inputMask: 0,
+      aimAngleByte: AIM_ANGLE_BYTE_NONE
     });
 
     for (const [id, p] of this.players.entries()) {
@@ -1905,7 +1971,9 @@ export class EngineInstance {
         stamina: p.stamina,
         dashTimer: rt ? rt.ticksRemaining : (p.isDashing ? 1 : 0),
         dashCooldown: rt ? rt.cooldownTimer : 0,
-        lastAckedInputSeq: rt ? rt.lastProcessedInputSeq : 0
+        lastAckedInputSeq: rt ? rt.lastProcessedInputSeq : 0,
+        inputMask: rt ? rt.activeInputMask : 0,
+        aimAngleByte: rt ? rt.activeAimAngleByte : AIM_ANGLE_BYTE_NONE
       });
     }
 
@@ -1962,6 +2030,83 @@ export class EngineInstance {
     }
   }
 
+  /**
+   * Copia todo el estado dinámico hacia otro `EngineInstance` preasignado sin alocar
+   * objetos en estado estacionario (Zero-Allocation para extrapolación física real).
+   */
+  public copyStateTo(target: EngineInstance): void {
+    target.currentTick = this.currentTick;
+    target.isPracticeMode = this.isPracticeMode;
+    target.isNeutralKickoff = this.isNeutralKickoff;
+    target.kickoffPossessingTeam = this.kickoffPossessingTeam;
+    target.soundMask = 0;
+
+    target.fsm.currentState = this.fsm.currentState;
+    target.fsm.stateTicksRemaining = this.fsm.stateTicksRemaining;
+    target.fsm.isOvertime = this.fsm.isOvertime;
+    target.fsm.redScore = this.fsm.redScore;
+    target.fsm.blueScore = this.fsm.blueScore;
+    target.fsm.matchTicksElapsed = this.fsm.matchTicksElapsed;
+    target.fsm.winningTeam = this.fsm.winningTeam;
+    target.fsm.lastScoringTeam = this.fsm.lastScoringTeam;
+
+    copyDiscPrimitives(this.ball, target.ball);
+
+    this.stalePlayerIds.length = 0;
+    for (const existingId of target.players.keys()) {
+      if (!this.players.has(existingId)) {
+        this.stalePlayerIds.push(existingId);
+      }
+    }
+    for (let i = 0; i < this.stalePlayerIds.length; i++) {
+      target.removePlayer(this.stalePlayerIds[i]!);
+    }
+
+    for (const [id, srcDisc] of this.players.entries()) {
+      const srcTeam = this.playerTeams.get(id) ?? 'spec';
+      let dstDisc = target.players.get(id);
+      if (!dstDisc) {
+        dstDisc = target.addPlayer(id, srcTeam);
+      }
+      target.playerTeams.set(id, srcTeam);
+      copyDiscPrimitives(srcDisc, dstDisc);
+
+      const srcRt = this.playerRuntime.get(id);
+      if (srcRt) {
+        const dstRt = target.getRuntime(id);
+        dstRt.ticksRemaining = srcRt.ticksRemaining;
+        dstRt.cooldownTimer = srcRt.cooldownTimer;
+        dstRt.slowdownTimer = srcRt.slowdownTimer;
+        dstRt.dirX = srcRt.dirX;
+        dstRt.dirY = srcRt.dirY;
+        dstRt.prevDashDown = srcRt.prevDashDown;
+        dstRt.staminaIdleTimer = srcRt.staminaIdleTimer;
+        dstRt.staminaRegenUnlocked = srcRt.staminaRegenUnlocked;
+        dstRt.kickConsumed = srcRt.kickConsumed;
+        dstRt.lastShotTick = srcRt.lastShotTick;
+        dstRt.lastPassTick = srcRt.lastPassTick;
+        dstRt.lastTouchTick = srcRt.lastTouchTick;
+        dstRt.lastSaveTick = srcRt.lastSaveTick;
+        dstRt.lastProcessedInputSeq = srcRt.lastProcessedInputSeq;
+        dstRt.activeInputMask = srcRt.activeInputMask;
+        dstRt.activeAimAngleByte = srcRt.activeAimAngleByte;
+      }
+    }
+
+    target.world.isPracticeMode = this.world.isPracticeMode;
+    target.world.kickMargin = this.world.kickMargin;
+    target.world.magnusCoefficient = this.world.magnusCoefficient;
+    if (this.world.kickoffContext?.active) {
+      target.world.setKickoffContext(
+        true,
+        this.world.kickoffContext.possessingTeam ?? null,
+        this.world.kickoffContext.centerRadius ?? (target.stadium.centerRadius || 80)
+      );
+    } else {
+      target.world.kickoffContext = null;
+    }
+  }
+
   public loadStadium(stadiumId: string): void {
     this.stadium = createStadium(stadiumId);
     this.world.loadStadium(this.stadium);
@@ -1986,6 +2131,7 @@ export {
   COLLISION_GROUP_BLUE_GOAL,
   COLLISION_GROUP_ALL,
   POWER_SHOT_SPEED_THRESHOLD,
+  copyDiscPrimitives,
   Segment,
   Plane,
   PhysicsWorld,
@@ -2006,6 +2152,8 @@ export {
   createStadium,
   GameFSM,
   MatchPhase,
+  isFrozenMatchPhase,
+  isPausedOrStoppedPhase,
   GameMatchFSM,
   GameMatchPhase,
   GameMatchState,
@@ -2044,6 +2192,7 @@ export {
   InputPacket,
   SnapshotPacket,
   OP_INPUT,
+  OP_INPUT_BUNDLE,
   OP_SNAPSHOT,
   OP_CHAT,
   OP_EVENT,
@@ -2070,6 +2219,9 @@ export {
   INPUT_FLAG_TYPING,
   INPUT_FLAG_MOUSE_AIM,
   INPUT_FLAG_MOUSE_ACTIVE,
+  AIM_ANGLE_BYTE_NONE,
+  encodeAimAngleByte,
+  decodeAimAngleByte,
   DEFAULT_PHYSICS_MODIFIERS,
   DEFAULT_GAME_CONFIG,
   DEFAULT_GAMEPLAY_CONFIG,

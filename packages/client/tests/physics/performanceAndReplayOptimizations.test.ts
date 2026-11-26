@@ -8,7 +8,7 @@ import { DiscRenderer } from '../../src/renderer/DiscRenderer';
 import { StatsMonitor } from '../../src/controllers/components/StatsMonitor';
 import { GameEngine } from '../../../core/src/game/GameEngine';
 import { Player } from '../../../core/src/game/Player';
-import { JitterBuffer, hermite } from '../../src/net/JitterBuffer';
+import { JitterBuffer, hermite } from '@legacyx/core';
 
 describe('Performance and FPS Optimizations (Non-Host, Physics Replay & Canvas 2D)', () => {
   describe('A. GoalNet Bypass during Physics Replay', () => {

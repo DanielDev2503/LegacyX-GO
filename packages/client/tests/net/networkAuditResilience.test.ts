@@ -2,12 +2,10 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   BinaryProtocol,
   EngineInstance,
-  JitterBuffer,
   MatchPhase,
   INPUT_FLAG_RIGHT,
   INPUT_FLAG_KICK,
   INPUT_FLAG_DASH,
-  type GameStateSnapshot,
   type PlayerInput
 } from '@legacyx/core';
 import {
@@ -19,7 +17,7 @@ import {
 import { SignalingClient } from '../../src/net/SignalingClient';
 import { NetworkClient } from '../../src/net/NetworkClient';
 import { GameApp } from '../../src/net/GameApp';
-import { ClientPredictionReconciler } from '../../src/net/ClientPrediction';
+import { SharedSimSync } from '../../src/net/SharedSimSync';
 import { NetworkImpairmentSimulator } from '../../src/net/NetworkImpairmentSimulator';
 
 function createRichMockPc() {
@@ -329,6 +327,7 @@ describe('Phase 5 Audit Suite — WebRTC Resilience, 3x Input Redundancy & Adver
       let hostAppliedDashCount = 0;
       let prevAppliedSeq = -1;
       let prevAppliedKick = false;
+      let prevAppliedDash = false;
 
       const sentKickSeqs = new Set<number>();
       const sentDashSeqs = new Set<number>();
@@ -346,11 +345,12 @@ describe('Phase 5 Audit Suite — WebRTC Resilience, 3x Input Redundancy & Adver
           if (hasKick && (seq !== prevAppliedSeq || !prevAppliedKick)) {
             hostAppliedKickCount++;
           }
-          if (hasDash) {
+          if (hasDash && (seq !== prevAppliedSeq || !prevAppliedDash)) {
             hostAppliedDashCount++;
           }
           prevAppliedSeq = seq;
           prevAppliedKick = hasKick;
+          prevAppliedDash = hasDash;
         }
         app.consumeRemoteImpulses();
       };
@@ -406,8 +406,8 @@ describe('Phase 5 Audit Suite — WebRTC Resilience, 3x Input Redundancy & Adver
     });
   });
 
-  describe('Suite 3: Non-Host Fluidity & Reconciliation under 180 ms RTT + 40 ms Jitter', () => {
-    it('maintains smooth prediction, bounded replay (<= 5), adaptive jitter delay [25-100ms], and zero hard snaps at 180ms RTT + 40ms jitter', () => {
+  describe('Suite 3: SharedSimSync Fluidity under 180 ms RTT + 40 ms Jitter + 5% Loss', () => {
+    it('maintains smooth SharedSimSync stepping, bounded correction, and zero hard snaps at 180ms RTT + 40ms jitter', () => {
       const sig = new SignalingClient('ws://localhost:8080', false);
       const app = new GameApp(sig);
       (app as any).setupHostState('AdverseArena', 'mediano', 8, true, 'R-ADV');
@@ -421,16 +421,9 @@ describe('Phase 5 Audit Suite — WebRTC Resilience, 3x Input Redundancy & Adver
       hostPlayer.pos.set(-180, 0);
       hostEngine.ball.pos.set(120, 0);
 
-      const predEngine = new EngineInstance('mediano');
-      predEngine.isPracticeMode = true;
-      predEngine.startMatch(false);
-      predEngine.fsm.startPlaying();
-      predEngine.setState(hostEngine.getState());
+      const sync = new SharedSimSync('mediano');
+      sync.configure('mediano', hostEngine.modifiers, true);
 
-      const reconciler = new ClientPredictionReconciler();
-      const jitterBuffer = new JitterBuffer<GameStateSnapshot>(32, 30, true);
-
-      // 180 ms RTT (90 ms each direction), 40 ms peak-to-peak jitter, 5% packet loss, 10% reordering
       const upLink = new NetworkImpairmentSimulator<ArrayBuffer>({
         latencyMs: 90,
         jitterMs: 40,
@@ -448,11 +441,8 @@ describe('Phase 5 Audit Suite — WebRTC Resilience, 3x Input Redundancy & Adver
 
       const guestNet = new NetworkClient(sig, 'LagGuest', 10);
       const hostInputs = new Map<number, PlayerInput>();
-      const guestLocalMap = new Map<number, PlayerInput>();
       const decodeScratch: PlayerInput[] = [{}, {}, {}, {}];
       const TICK_MS = 1000 / 60;
-      let highestSnapTick = -1;
-      let hardSnapCount = 0;
       let maxObservedVisualJump = 0;
       let prevRenderX: number | null = null;
       let lastBundle: ArrayBuffer | null = null;
@@ -468,14 +458,8 @@ describe('Phase 5 Audit Suite — WebRTC Resilience, 3x Input Redundancy & Adver
         const nowMs = tick * TICK_MS;
         const mask = tick <= 120 ? INPUT_FLAG_RIGHT : 0;
 
-        // Guest records & predicts at strict 60 Hz
-        const seq = reconciler.recordInput(tick, mask, null, 0);
-        guestLocalMap.clear();
-        guestLocalMap.set(2, { inputMask: mask, sequence: seq } as any);
-        predEngine.step(guestLocalMap, true);
-
         lastBundle = null;
-        guestNet.sendInput(mask, seq, null, 0);
+        guestNet.sendInput(mask, tick, null, 0);
         if (lastBundle) {
           upLink.send(lastBundle, nowMs, (arrived) => {
             const n = BinaryProtocol.decodeInputBundleInto(arrived, decodeScratch);
@@ -486,7 +470,6 @@ describe('Phase 5 Audit Suite — WebRTC Resilience, 3x Input Redundancy & Adver
           });
         }
 
-        // Host flushes arrived uplink packets and steps authoritative 60 Hz world
         upLink.flushDue(nowMs);
         hostInputs.clear();
         app.popRemoteInputsForTick(hostInputs);
@@ -496,42 +479,30 @@ describe('Phase 5 Audit Suite — WebRTC Resilience, 3x Input Redundancy & Adver
         const encodedSnap = BinaryProtocol.encodeSnapshot(hostEngine.getState());
         downLink.send(encodedSnap, nowMs, (arrivedSnapBuf, arrivedAt) => {
           const decoded = BinaryProtocol.decodeSnapshot(arrivedSnapBuf);
-          if (!decoded) return;
-          jitterBuffer.push(decoded, arrivedAt);
-          if (decoded.tick >= highestSnapTick) {
-            highestSnapTick = decoded.tick;
-            const res = reconciler.reconcile(predEngine, decoded, 2);
-            expect(reconciler.lastReplayedFullSteps).toBeLessThanOrEqual(ClientPredictionReconciler.MAX_REPLAY_TICKS);
-            if (res.hardSnapped) hardSnapCount++;
+          if (decoded) {
+            sync.onSnapshot(decoded, arrivedAt);
           }
         });
 
-        // Guest processes arrived snapshots & decays visual error smoothly
         downLink.flushDue(nowMs);
-        reconciler.updateVisualSmoothing(1 / 60);
+        sync.update(1 / 60, nowMs);
 
-        const localDisc = predEngine.players.get(2)!;
-        const renderX = localDisc.pos.x + reconciler.visualOffset.x;
-        expect(Number.isFinite(renderX)).toBe(true);
-        if (prevRenderX !== null) {
-          const jump = Math.abs(renderX - prevRenderX);
-          if (jump > maxObservedVisualJump) maxObservedVisualJump = jump;
-        }
-        prevRenderX = renderX;
-
-        const interp = jitterBuffer.getInterpolatedState(nowMs);
-        if (interp) {
-          expect(Number.isFinite(interp.discs[0]!.x)).toBe(true);
+        const renderSnap = sync.buildRenderSnapshot(45, nowMs);
+        if (renderSnap) {
+          const localDisc = renderSnap.discs.find((d) => d.id === 2)!;
+          expect(Number.isFinite(localDisc.x)).toBe(true);
+          if (prevRenderX !== null) {
+            const jump = Math.abs(localDisc.x - prevRenderX);
+            if (jump > maxObservedVisualJump) maxObservedVisualJump = jump;
+          }
+          prevRenderX = localDisc.x;
         }
       }
 
-      // Assertions under adverse 180ms RTT + 40ms jitter + 5% loss:
-      expect(ClientPredictionReconciler.MAX_REPLAY_TICKS).toBe(30);
-      expect(hardSnapCount).toBe(0);
+      const tel = sync.getTelemetry(undefined, 180 * TICK_MS);
+      expect(tel.hardSnaps).toBe(0);
       expect(maxObservedVisualJump).toBeLessThan(18);
-      expect(jitterBuffer.targetDelay).toBeGreaterThanOrEqual(30);
-      expect(jitterBuffer.targetDelay).toBeLessThanOrEqual(140);
-      expect(jitterBuffer.meanJitter).toBeGreaterThan(2);
+      expect(tel.jitterMs).toBeGreaterThan(2);
 
       guestNet.disconnect();
       app.teardownNetworkSession();

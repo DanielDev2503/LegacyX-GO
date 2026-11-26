@@ -23,6 +23,8 @@ export interface DiscSnapshot {
   lastAckedInputSeq?: number | undefined;
   dashTimer?: number | undefined;
   dashCooldown?: number | undefined;
+  inputMask?: number | undefined;
+  aimAngleByte?: number | undefined;
 }
 
 export interface TouchHistoryEntry {

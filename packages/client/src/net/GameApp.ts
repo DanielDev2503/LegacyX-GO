@@ -7,15 +7,9 @@ import { soundFX } from '../audio/SoundFX.js';
 import { triggerPitchEmote } from '../renderer/DiscRenderer.js';
 import {
   INPUT_FLAG_DASH,
-  INPUT_FLAG_KICK,
-  INPUT_FLAG_MAGNUS_LEFT,
-  INPUT_FLAG_MAGNUS_RIGHT,
   type PlayerInput,
   type PlayerPosition
 } from '@legacyx/core';
-
-const REMOTE_IMPULSE_FLAGS =
-  INPUT_FLAG_DASH | INPUT_FLAG_KICK | INPUT_FLAG_MAGNUS_LEFT | INPUT_FLAG_MAGNUS_RIGHT;
 
 export interface CreateRoomParams {
   name: string;
@@ -103,7 +97,6 @@ export function mapPlayersToRoster(players: PlayerInfo[]): RosterPlayer[] {
 }
 
 export class GameApp {
-  private static readonly MAX_REMOTE_INPUT_QUEUE = 6;
   public signaling: SignalingClient;
   public networkHost: NetworkHost | null = null;
   public networkClient: NetworkClient | null = null;
@@ -112,12 +105,6 @@ export class GameApp {
   public currentRoomConfig: CreateRoomParams | null = null;
   /** Inputs de jugadores remotos recibidos por el Host (playerId → máscara). */
   public remoteInputs = new Map<number, PlayerInput>();
-  private remoteInputQueues = new Map<number, PlayerInput[]>();
-  private lastConsumedRemoteSeq = new Map<number, number>();
-  private seenRemoteSeqWindow = new Map<number, { maxSeq: number; mask: number }>();
-  private pendingImpulseMasks = new Map<number, number>();
-  private rawRemoteMasks = new Map<number, number>();
-  private lastRemoteInputSeq = new Map<number, number>();
   private recentLocalEmotes = new Map<string, number>();
   public activeMatchToken: string | null = null;
   private activeRankedRoster = new Map<number, { userId: string; team: 'red' | 'blue'; elo?: number }>();
@@ -337,83 +324,25 @@ export class GameApp {
   }
 
   public popRemoteInputsForTick(out: Map<number, PlayerInput>): void {
-    for (const [playerId, queue] of this.remoteInputQueues.entries()) {
-      if (queue.length === 0) continue;
-      const next = queue.shift()!;
-      const latched = this.pendingImpulseMasks.get(playerId) ?? 0;
-      if (latched !== 0) {
-        next.inputMask = (next.inputMask ?? 0) | latched;
-        this.pendingImpulseMasks.delete(playerId);
-      }
-      const consumedSeq = ((next as any).seq ?? next.tick ?? 0) >>> 0;
-      this.lastConsumedRemoteSeq.set(playerId, consumedSeq);
-      this.remoteInputs.set(playerId, next);
-      this.rawRemoteMasks.set(playerId, next.inputMask ?? 0);
-      out.set(playerId, next);
+    if (this.networkHost) {
+      this.networkHost.consumePendingInputs(out);
+      return;
     }
-
     for (const [playerId, last] of this.remoteInputs.entries()) {
-      if (out.has(playerId)) continue;
-      const latched = this.pendingImpulseMasks.get(playerId) ?? 0;
-      if (latched !== 0) {
-        this.pendingImpulseMasks.delete(playerId);
-      }
-      const baseMask = this.rawRemoteMasks.get(playerId) ?? last.inputMask ?? 0;
-      last.inputMask = (baseMask & ~INPUT_FLAG_DASH) | latched;
       out.set(playerId, last);
     }
   }
 
   public consumeRemoteImpulses(): void {
-    this.pendingImpulseMasks.clear();
-    for (const [playerId, entry] of this.remoteInputs.entries()) {
-      const rawMask = this.rawRemoteMasks.get(playerId);
-      if (rawMask !== undefined) {
-        entry.inputMask = rawMask & ~INPUT_FLAG_DASH;
-      } else {
-        entry.inputMask = (entry.inputMask ?? 0) & ~INPUT_FLAG_DASH;
-      }
+    for (const [, entry] of this.remoteInputs.entries()) {
+      entry.inputMask = (entry.inputMask ?? 0) & ~INPUT_FLAG_DASH;
     }
   }
 
   private clearRemoteInputTracking(): void {
     this.remoteInputs.clear();
-    this.remoteInputQueues.clear();
-    this.lastConsumedRemoteSeq.clear();
-    this.seenRemoteSeqWindow.clear();
-    this.pendingImpulseMasks.clear();
-    this.rawRemoteMasks.clear();
-    this.lastRemoteInputSeq.clear();
     this.recentLocalEmotes.clear();
-  }
-
-  /**
-   * Ventana deslizante de 32 bits (Zero-GC) para deduplicación exacta de paquetes redundantes 3x.
-   * Devuelve `true` si `seq` ya fue visto/procesado; si era nuevo, lo marca como visto y devuelve `false`.
-   */
-  private checkAndMarkSeenRemoteSeq(playerId: number, seq: number): boolean {
-    let win = this.seenRemoteSeqWindow.get(playerId);
-    if (!win) {
-      win = { maxSeq: seq, mask: 1 };
-      this.seenRemoteSeqWindow.set(playerId, win);
-      return false;
-    }
-    if (seq > win.maxSeq) {
-      const shift = seq - win.maxSeq;
-      win.mask = shift >= 32 ? 1 : ((win.mask << shift) | 1);
-      win.maxSeq = seq;
-      return false;
-    }
-    const delta = win.maxSeq - seq;
-    if (delta >= 32) {
-      return true;
-    }
-    const bit = 1 << delta;
-    if ((win.mask & bit) !== 0) {
-      return true;
-    }
-    win.mask |= bit;
-    return false;
+    this.networkHost?.clearRemoteInputs();
   }
 
   public playAndApplyGameFx(fx: string, intensity?: number, countdownValue?: number): void {
@@ -886,18 +815,6 @@ export class GameApp {
       for (const id of this.remoteInputs.keys()) {
         if (!activeIds.has(id)) {
           this.remoteInputs.delete(id);
-          this.remoteInputQueues.delete(id);
-          this.lastConsumedRemoteSeq.delete(id);
-          this.seenRemoteSeqWindow.delete(id);
-          this.pendingImpulseMasks.delete(id);
-          this.rawRemoteMasks.delete(id);
-          this.lastRemoteInputSeq.delete(id);
-        }
-      }
-      for (const id of this.remoteInputQueues.keys()) {
-        if (!activeIds.has(id)) {
-          this.remoteInputQueues.delete(id);
-          this.lastConsumedRemoteSeq.delete(id);
         }
       }
       if (this.currentRoomId) {
@@ -907,91 +824,17 @@ export class GameApp {
 
     host.onPlayerInput = (playerId, inputMask, tick, aimAngle, aimThrottle) => {
       const seq = tick >>> 0;
-      const lastConsumed = this.lastConsumedRemoteSeq.get(playerId);
-      const lastSeq = this.lastRemoteInputSeq.get(playerId);
-      const seqReset =
-        (lastConsumed !== undefined && lastConsumed >= 500 && lastConsumed - seq >= 500) ||
-        (lastSeq !== undefined && lastSeq >= 500 && lastSeq - seq >= 500);
-      if (seqReset) {
-        this.remoteInputQueues.delete(playerId);
-        this.lastConsumedRemoteSeq.delete(playerId);
-        this.seenRemoteSeqWindow.delete(playerId);
-        this.lastRemoteInputSeq.delete(playerId);
-        this.pendingImpulseMasks.delete(playerId);
-      }
-
-      const alreadySeen = this.checkAndMarkSeenRemoteSeq(playerId, seq);
-
-      const activeConsumed = this.lastConsumedRemoteSeq.get(playerId);
-      if (activeConsumed !== undefined) {
-        if (seq === activeConsumed) {
-          return;
-        }
-        if (seq < activeConsumed && activeConsumed - seq < 500) {
-          // Solo rescatar impulsos de paquetes genuinamente perdidos (nunca duplicados redundantes 3x ya consumidos)
-          if (!alreadySeen) {
-            const impulseBits = inputMask & REMOTE_IMPULSE_FLAGS;
-            if (impulseBits !== 0) {
-              this.pendingImpulseMasks.set(
-                playerId,
-                (this.pendingImpulseMasks.get(playerId) ?? 0) | impulseBits
-              );
-            }
-          }
-          return;
-        }
-      }
-
-      let queue = this.remoteInputQueues.get(playerId);
-      if (!queue) {
-        queue = [];
-        this.remoteInputQueues.set(playerId, queue);
-      }
-
-      for (let i = 0; i < queue.length; i++) {
-        const queuedSeq = ((queue[i] as any).seq ?? queue[i]!.tick ?? 0) >>> 0;
-        if (queuedSeq === seq) {
-          queue[i]!.inputMask = (queue[i]!.inputMask ?? 0) | (inputMask & REMOTE_IMPULSE_FLAGS);
-          return;
-        }
-      }
-
-      const entry: PlayerInput = {
-        inputMask,
-        aimAngle,
-        aimThrottle,
-        tick: seq,
-        sequence: seq,
-        seq
-      } as any;
-
-      let inserted = false;
-      for (let i = queue.length - 1; i >= 0; i--) {
-        const queuedSeq = ((queue[i] as any).seq ?? queue[i]!.tick ?? 0) >>> 0;
-        if (seq > queuedSeq) {
-          queue.splice(i + 1, 0, entry);
-          inserted = true;
-          break;
-        }
-      }
-      if (!inserted) {
-        queue.unshift(entry);
-      }
-
-      while (queue.length > GameApp.MAX_REMOTE_INPUT_QUEUE) {
-        const dropped = queue.shift()!;
-        const droppedImpulses = (dropped.inputMask ?? 0) & REMOTE_IMPULSE_FLAGS;
-        if (droppedImpulses !== 0 && queue.length > 0) {
-          queue[0]!.inputMask = (queue[0]!.inputMask ?? 0) | droppedImpulses;
-        }
-      }
-
-      const prevLast = this.lastRemoteInputSeq.get(playerId) ?? 0;
-      if (seq >= prevLast) {
-        this.lastRemoteInputSeq.set(playerId, seq);
-        this.rawRemoteMasks.set(playerId, inputMask);
+      host.recordLatestRemoteInput(playerId, inputMask, seq, aimAngle, aimThrottle);
+      let entry = this.remoteInputs.get(playerId);
+      if (!entry) {
+        entry = { inputMask: 0, aimAngle: null, aimThrottle: 0, tick: 0, sequence: 0 };
         this.remoteInputs.set(playerId, entry);
       }
+      entry.inputMask = inputMask;
+      entry.aimAngle = aimAngle ?? null;
+      entry.aimThrottle = aimAngle !== null && aimAngle !== undefined ? aimThrottle : 0;
+      entry.tick = seq;
+      entry.sequence = seq;
     };
 
     host.onChatMessage = (sender, text, team, id) => {

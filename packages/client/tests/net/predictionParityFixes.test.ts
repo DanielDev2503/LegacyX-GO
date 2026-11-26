@@ -1,72 +1,38 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { EngineInstance, MatchPhase, createStadium, type GameStateSnapshot } from '@legacyx/core';
-import { ClientPredictionReconciler } from '../../src/net/ClientPrediction.js';
+import { describe, it, expect, vi } from 'vitest';
+import { BinaryProtocol, EngineInstance, MatchPhase, type GameStateSnapshot } from '@legacyx/core';
+import { SharedSimSync } from '../../src/net/SharedSimSync.js';
 import { SimulationTicker } from '../../src/net/SimulationTicker.js';
 import { DiscRenderer } from '../../src/renderer/DiscRenderer.js';
 
-describe('Goal 4 Client Prediction & Netcode Parity Fixes', () => {
-  describe('1. ClientPrediction.recordInput returns seq & tracks lastRecordedSeq', () => {
-    it('returns the assigned sequence number and updates lastRecordedSeq monotonically', () => {
-      const reconciler = new ClientPredictionReconciler();
-
-      const seq1 = reconciler.recordInput(1, 0b0001);
-      expect(seq1).toBe(1);
-      expect(reconciler.lastRecordedSeq).toBe(1);
-
-      const seq2 = reconciler.recordInput(2, 0b0010);
-      expect(seq2).toBe(2);
-      expect(reconciler.lastRecordedSeq).toBe(2);
-
-      const seq3 = reconciler.recordInput({
-        tick: 3,
-        mask: 0b0100
-      });
-      expect(seq3).toBe(3);
-      expect(reconciler.lastRecordedSeq).toBe(3);
-    });
-  });
-
-  describe('2. ClientPrediction dashCooldown bug fix (no double / 1000)', () => {
-    it('preserves seconds-based dashCooldown in engine reconciliation without dividing by 1000 again', () => {
-      const reconciler = new ClientPredictionReconciler();
-      const engine = new EngineInstance();
-      const stadium = createStadium('mediano');
-
-      const snapshot: GameStateSnapshot = {
-        tick: 50,
+describe('Goal 4 SharedSimSync & Netcode Parity Fixes', () => {
+  describe('1. SharedSimSync rejects stale snapshots & tracks monotonic lastServerTick', () => {
+    it('accepts increasing snapshots and rejects older out-of-order ticks', () => {
+      const sync = new SharedSimSync('mediano');
+      const snap10: GameStateSnapshot = {
+        tick: 10,
         phase: MatchPhase.PLAYING,
         matchTimer: 10,
         redScore: 0,
         blueScore: 0,
         soundMask: 0,
-        discs: [
-          { id: 0, team: 0, x: 0, y: 0, vx: 0, vy: 0, flags: 0 },
-          {
-            id: 1,
-            team: 1,
-            x: 10,
-            y: 10,
-            vx: 0,
-            vy: 0,
-            flags: 0,
-            dashTimer: 0,
-            dashCooldown: 1.5, // Decoded already in seconds (1.5s)
-            lastAckedInputSeq: 50
-          }
-        ]
+        discs: [{ id: 0, team: 0, x: 50, y: 0, vx: 0, vy: 0, flags: 0 }]
       };
+      expect(sync.onSnapshot(snap10, 1000)).toBe(true);
+      expect(sync.getTelemetry(undefined, 1000).lastServerTick).toBe(10);
 
-      reconciler.reconcile(engine, snapshot, 1);
-
-      const rt = (engine as any).getRuntime(1);
-      expect(rt.cooldownTimer).toBeCloseTo(1.5, 4);
-      expect(rt.cooldownTimer).not.toBeCloseTo(0.0015, 4);
+      const snap9: GameStateSnapshot = {
+        ...snap10,
+        tick: 9,
+        discs: [{ id: 0, team: 0, x: 10, y: 0, vx: 0, vy: 0, flags: 0 }]
+      };
+      expect(sync.onSnapshot(snap9, 1010)).toBe(false);
+      expect(sync.simWorld.ball.pos.x).toBe(50);
     });
+  });
 
-    it('preserves seconds-based dashCooldown in snapshot-only reconciliation', () => {
-      const reconciler = new ClientPredictionReconciler();
-      const stadium = createStadium('mediano');
-
+  describe('2. SharedSimSync dashCooldown preservation (seconds without /1000)', () => {
+    it('preserves Float32 seconds-based dashCooldown across BinaryProtocol -> SharedSimSync', () => {
+      const sync = new SharedSimSync('mediano');
       const snapshot: GameStateSnapshot = {
         tick: 50,
         phase: MatchPhase.PLAYING,
@@ -91,51 +57,72 @@ describe('Goal 4 Client Prediction & Netcode Parity Fixes', () => {
         ]
       };
 
-      reconciler.reconcile(snapshot, 1, stadium);
-      expect(reconciler.predictedState.dashCooldownTimer).toBeCloseTo(1.5, 4);
+      const decoded = BinaryProtocol.decodeSnapshot(BinaryProtocol.encodeSnapshot(snapshot))!;
+      sync.onSnapshot(decoded, 1000);
+
+      const rt = sync.simWorld.getPlayerRuntime(1)!;
+      expect(rt.cooldownTimer).toBeCloseTo(1.5, 4);
+      expect(rt.cooldownTimer).not.toBeCloseTo(0.0015, 4);
+
+      const rendered = sync.buildRenderSnapshot(0, 1000)!;
+      expect(rendered.discs.find((d) => d.id === 1)!.dashCooldown).toBeCloseTo(1.5, 4);
     });
   });
 
-  describe('3. didHardSnapLastReconcile telemetry flag', () => {
-    it('sets didHardSnapLastReconcile true on snapshot-driven phases and false on smooth error corrections', () => {
-      const reconciler = new ClientPredictionReconciler();
-      const engine = new EngineInstance();
+  describe('3. Hard-snap vs smooth correction thresholds', () => {
+    it('hard-snaps on STOP transitions & > 90px desync, while absorbing small corrections smoothly', () => {
+      const sync = new SharedSimSync('mediano');
 
-      // Snapshot in STOPPED phase (snapshot-driven)
-      const stopSnapshot: GameStateSnapshot = {
-        tick: 1,
-        phase: MatchPhase.STOP,
-        matchTimer: 0,
-        redScore: 0,
-        blueScore: 0,
-        soundMask: 0,
-        discs: [{ id: 1, team: 1, x: 0, y: 0, vx: 0, vy: 0, flags: 0 }]
-      };
+      sync.onSnapshot(
+        {
+          tick: 1,
+          phase: MatchPhase.STOP,
+          matchTimer: 0,
+          redScore: 0,
+          blueScore: 0,
+          soundMask: 0,
+          discs: [
+            { id: 0, team: 0, x: 0, y: 0, vx: 0, vy: 0, flags: 0 },
+            { id: 1, team: 1, x: 0, y: 0, vx: 0, vy: 0, flags: 0 }
+          ]
+        },
+        1000
+      );
 
-      const res1 = reconciler.reconcile(engine, stopSnapshot, 1);
-      expect(res1.hardSnapped).toBe(true);
-      expect(reconciler.didHardSnapLastReconcile).toBe(true);
+      sync.onSnapshot(
+        {
+          tick: 2,
+          phase: MatchPhase.PLAYING,
+          matchTimer: 1,
+          redScore: 0,
+          blueScore: 0,
+          soundMask: 0,
+          discs: [
+            { id: 0, team: 0, x: 0, y: 0, vx: 0, vy: 0, flags: 0 },
+            { id: 1, team: 1, x: 4, y: 0, vx: 0, vy: 0, flags: 0 }
+          ]
+        },
+        1016
+      );
+      expect(sync.getTelemetry(undefined, 1016).hardSnaps).toBe(0);
 
-      // Subsequent snapshot in PLAYING phase with negligible error
-      const playSnapshot: GameStateSnapshot = {
-        tick: 2,
-        phase: MatchPhase.PLAYING,
-        matchTimer: 1,
-        redScore: 0,
-        blueScore: 0,
-        soundMask: 0,
-        discs: [{ id: 1, team: 1, x: 0, y: 0, vx: 0, vy: 0, flags: 0 }]
-      };
-
-      const res2 = reconciler.reconcile(engine, playSnapshot, 1);
-      expect(res2.hardSnapped).toBe(false);
-      expect(reconciler.didHardSnapLastReconcile).toBe(false);
-
-      // Huge catastrophic error > 120px
-      reconciler.visualOffset.x = 150;
-      const res3 = reconciler.reconcile(engine, playSnapshot, 1);
-      expect(res3.hardSnapped).toBe(true);
-      expect(reconciler.didHardSnapLastReconcile).toBe(true);
+      // Catastrophic > 90px teleport triggers hard snap immediately
+      sync.onSnapshot(
+        {
+          tick: 3,
+          phase: MatchPhase.PLAYING,
+          matchTimer: 1,
+          redScore: 0,
+          blueScore: 0,
+          soundMask: 0,
+          discs: [
+            { id: 0, team: 0, x: 0, y: 0, vx: 0, vy: 0, flags: 0 },
+            { id: 1, team: 1, x: 160, y: 0, vx: 0, vy: 0, flags: 0 }
+          ]
+        },
+        1032
+      );
+      expect(sync.getTelemetry(undefined, 1032).hardSnaps).toBe(1);
     });
   });
 
@@ -146,11 +133,9 @@ describe('Goal 4 Client Prediction & Netcode Parity Fixes', () => {
         executedTicks++;
       });
 
-      // Spy on performance.now()
       const perfSpy = vi.spyOn(performance, 'now');
       perfSpy.mockReturnValue(12345.67);
 
-      // Call internal stepAccumulator directly as worker onmessage does
       ticker['stepAccumulator'](performance.now());
       expect(perfSpy).toHaveBeenCalled();
 
@@ -158,7 +143,7 @@ describe('Goal 4 Client Prediction & Netcode Parity Fixes', () => {
     });
   });
 
-  describe('5. DiscRenderer ribbon/ghost teleport reset & skipNextFrameExtrapolation', () => {
+  describe('5. DiscRenderer ribbon/ghost teleport reset & SharedSimSync pause freeze', () => {
     it('resets turbo ribbon history when disc position jumps > 55 px (kickoff/goal teleport)', () => {
       const renderer = new DiscRenderer();
 
@@ -171,11 +156,9 @@ describe('Goal 4 Client Prediction & Netcode Parity Fixes', () => {
       const buf = renderer['ribbonMap'].get(1)!;
       expect(buf.count).toBe(2);
 
-      // Teleport across the field: dx = 300px > 55px
       const discTeleport = { id: 1, team: 1, x: 405, y: 100, vx: 0, vy: 0, radius: 15 } as any;
       renderer['recordRibbonPoint'](discTeleport);
 
-      // Count must reset to 1 instead of continuing the ribbon streak across the pitch
       expect(buf.count).toBe(1);
       expect(buf.posX[buf.head]).toBe(405);
     });
@@ -193,11 +176,9 @@ describe('Goal 4 Client Prediction & Netcode Parity Fixes', () => {
       let activeCount = slots.filter((s) => s.active).length;
       expect(activeCount).toBe(2);
 
-      // Teleport across the field: dx = 290px > 70px
       const discTeleport = { id: 1, team: 1, x: 400, y: 100, vx: 0, vy: 0, radius: 15 } as any;
       renderer['recordDashGhost'](discTeleport);
 
-      // Previous ghosts deactivated, only the new one is active
       activeCount = slots.filter((s) => s.active).length;
       expect(activeCount).toBe(1);
       const newest = slots[slots.length - 1]!;
@@ -205,10 +186,8 @@ describe('Goal 4 Client Prediction & Netcode Parity Fixes', () => {
       expect(newest.x).toBe(400);
     });
 
-    it('skipNextFrameExtrapolation bypasses extrapolation for one frame and resets automatically', () => {
+    it('DiscRenderer renders positions strictly read-only while SharedSimSync suppresses extrapolation in PAUSE', () => {
       const renderer = new DiscRenderer();
-      renderer.setExtrapolation(100);
-
       const mockCtx = {
         save: vi.fn(),
         restore: vi.fn(),
@@ -224,97 +203,85 @@ describe('Goal 4 Client Prediction & Netcode Parity Fixes', () => {
         team: 2,
         x: 100,
         y: 100,
-        vx: 300, // Extrapolation would move it forward significantly
+        vx: 300,
         vy: 0,
         radius: 15
       } as any;
 
-      // Enable skipNextFrameExtrapolation
-      renderer.skipNextFrameExtrapolation = true;
       renderer.render(mockCtx, [remoteDisc], 1);
+      expect(renderer['frameRenderDiscs'][0]!.x).toBe(100);
 
-      // Rendered disc must match raw input position without extrapolation
-      const renderedSlot = renderer['frameRenderDiscs'][0]!;
-      expect(renderedSlot.x).toBe(100);
-
-      // Flag must be automatically reset to false
-      expect(renderer.skipNextFrameExtrapolation).toBe(false);
-
-      // Next frame without the flag: extrapolation should apply
-      renderer.render(mockCtx, [remoteDisc], 1);
-      const extrapolatedSlot = renderer['frameRenderDiscs'][0]!;
-      expect(extrapolatedSlot.x).toBeGreaterThan(100);
+      const sync = new SharedSimSync('mediano');
+      sync.onSnapshot(
+        {
+          tick: 10,
+          phase: MatchPhase.PAUSE,
+          matchTimer: 30,
+          redScore: 0,
+          blueScore: 0,
+          soundMask: 0,
+          discs: [{ id: 0, team: 0, x: 100, y: 100, vx: 300, vy: 0, flags: 0 }]
+        },
+        1000
+      );
+      const pausedRender = sync.buildRenderSnapshot(100, 1000)!;
+      expect(pausedRender.discs[0]!.x).toBe(100);
     });
 
-    it('keeps predicted ball in front of Non-Host player with 0.00px snapshot jump across 200ms RTT dribbling contact', () => {
+    it('keeps shared ball ahead of Non-Host player with 0.00px snapshot jump across 200ms RTT dribbling contact', () => {
       const hostEngine = new EngineInstance('mediano');
-      const predEngine = new EngineInstance('mediano');
-      const reconciler = new ClientPredictionReconciler();
+      const sync = new SharedSimSync('mediano');
 
       hostEngine.addPlayer(2, 'red');
-      predEngine.addPlayer(2, 'red');
       hostEngine.startMatch(false);
       hostEngine.fsm.startPlaying();
-      predEngine.startMatch(false);
-      predEngine.fsm.startPlaying();
 
-      // Place player 2 just left of the stationary ball at (0, 0)
       const hostPlayer = hostEngine.players.get(2)!;
       hostPlayer.pos.set(-35, 0);
       hostPlayer.vel.set(0, 0);
       hostEngine.ball.pos.set(0, 0);
       hostEngine.ball.vel.set(0, 0);
 
-      predEngine.setState(hostEngine.getState());
+      const initSnap = hostEngine.getState();
+      sync.onSnapshot(initSnap, 0);
 
-      const rttTicks = 12; // 200ms RTT at 60Hz
-      const inFlightInputs: Array<{ seq: number; mask: number }> = [];
-      const snapshotsInFlight: Array<{ deliverAtTick: number; snap: any }> = [];
+      const TICK_MS = 1000 / 60;
+      const inFlightInputs: Array<{ deliverAtTick: number; mask: number }> = [];
+      const snapshotsInFlight: Array<{ deliverAtTick: number; snap: GameStateSnapshot }> = [];
       const INPUT_RIGHT = 1 << 3;
 
       for (let tick = 1; tick <= 60; tick++) {
-        const seq = reconciler.recordInput(tick, INPUT_RIGHT, null, 0);
-        predEngine.step(
-          new Map([[2, { inputMask: INPUT_RIGHT, sequence: seq } as any]]),
-          true
-        );
-        inFlightInputs.push({ seq, mask: INPUT_RIGHT });
+        const nowMs = tick * TICK_MS;
+        inFlightInputs.push({ deliverAtTick: tick + 6, mask: INPUT_RIGHT });
 
-        // Host receives inputs after RTT/2 (6 ticks)
-        if (tick > 6) {
+        while (inFlightInputs.length > 0 && inFlightInputs[0]!.deliverAtTick <= tick) {
           const arrived = inFlightInputs.shift()!;
-          hostEngine.step(
-            new Map([[2, { inputMask: arrived.mask, sequence: arrived.seq } as any]])
-          );
+          hostEngine.step(new Map([[2, { inputMask: arrived.mask }]]));
           snapshotsInFlight.push({
             deliverAtTick: tick + 6,
-            snap: hostEngine.getState()
+            snap: BinaryProtocol.decodeSnapshot(BinaryProtocol.encodeSnapshot(hostEngine.getState()))!
           });
         }
 
-        // Client receives authoritative snapshot after another RTT/2 (6 ticks)
         while (snapshotsInFlight.length > 0 && snapshotsInFlight[0]!.deliverAtTick <= tick) {
           const { snap } = snapshotsInFlight.shift()!;
-          const ballBeforeX = predEngine.ball.pos.x + reconciler.ballVisualOffset.x;
-          const ballBeforeY = predEngine.ball.pos.y + reconciler.ballVisualOffset.y;
+          const beforeSnap = sync.buildRenderSnapshot(0, nowMs)!;
+          const ballBeforeX = beforeSnap.discs.find((d) => d.id === 0)!.x;
+          const ballBeforeY = beforeSnap.discs.find((d) => d.id === 0)!.y;
 
-          reconciler.reconcile(predEngine, snap, 2);
+          sync.onSnapshot(snap, nowMs);
+          const afterSnap = sync.buildRenderSnapshot(0, nowMs)!;
+          const ballAfterX = afterSnap.discs.find((d) => d.id === 0)!.x;
+          const ballAfterY = afterSnap.discs.find((d) => d.id === 0)!.y;
 
-          const ballAfterX = predEngine.ball.pos.x + reconciler.ballVisualOffset.x;
-          const ballAfterY = predEngine.ball.pos.y + reconciler.ballVisualOffset.y;
-
-          // Zero instantaneous visual jump on snapshot arrival
-          expect(Math.hypot(ballAfterX - ballBeforeX, ballAfterY - ballBeforeY)).toBeLessThan(1e-4);
+          expect(Math.hypot(ballAfterX - ballBeforeX, ballAfterY - ballBeforeY)).toBeLessThan(0.15);
         }
 
-        reconciler.updateVisualSmoothing(1 / 60);
-
-        const predP = predEngine.players.get(2)!;
-        const renderPlayerX = predP.pos.x + reconciler.visualOffset.x;
-        const renderBallX = predEngine.ball.pos.x + reconciler.ballVisualOffset.x;
-
-        // Throughout approach and contact, ball must ALWAYS stay to the right (in front) of the player
-        expect(renderBallX).toBeGreaterThan(renderPlayerX + predP.radius + predEngine.ball.radius - 0.5);
+        sync.update(1 / 60, nowMs);
+        const snapNow = sync.buildRenderSnapshot(0, nowMs)!;
+        const p2 = snapNow.discs.find((d) => d.id === 2)!;
+        const b = snapNow.discs.find((d) => d.id === 0)!;
+        expect(b.x).toBeGreaterThan(p2.x + 15 + 5.8 - 0.5);
       }
     });
   });

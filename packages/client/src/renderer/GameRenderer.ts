@@ -62,7 +62,6 @@ export class GameRenderer {
   public floatingScores: FloatingScoreText[] = [];
   public goalNets: GoalNet[] | null = null;
   private localGoalNets: GoalNet[] = [];
-  public extrapolationMs: number = 0;
 
   public scale: number = 1.0;
   public offsetX: number = 0;
@@ -228,15 +227,6 @@ export class GameRenderer {
 
   public setGoalNets(nets: GoalNet[] | null): void {
     this.goalNets = nets;
-  }
-
-  public setExtrapolation(ms: number): void {
-    this.extrapolationMs = Math.max(0, Math.min(250, ms));
-    this.discRenderer.setExtrapolation(this.extrapolationMs);
-  }
-
-  public setExtrapolateAllDiscs(enabled: boolean): void {
-    this.discRenderer.extrapolateAllDiscs = enabled;
   }
 
   public setChatHeight(height: number): void {
@@ -1284,10 +1274,6 @@ export class GameRenderer {
     ctx.fillText(subtitle, 0, yOffset + 24);
 
     ctx.restore();
-  }
-
-  private resolveGeometricNonPenetration(_discs: DiscSnapshot[]): void {
-    // No-op: zero physical/geometric mutation allowed in the renderer
   }
 
   public destroy(): void {

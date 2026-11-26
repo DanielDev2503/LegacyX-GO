@@ -215,6 +215,7 @@ export class InputManager {
   private keyStates: Record<string, boolean> = Object.create(null);
   public currentMask: number = 0;
   public onInputChanged?: (mask: number) => void;
+  public onInputMaskChange?: (mask: number) => void;
   public onImmediateInput?: (mask: number) => void;
   public onKickImmediate?: () => void;
   public keyBinds: KeyBinds;
@@ -484,9 +485,8 @@ export class InputManager {
     this.dashTriggered = false;
     if (this.currentMask !== 0) {
       this.currentMask = 0;
-      if (this.onInputChanged) {
-        this.onInputChanged(0);
-      }
+      this.onInputChanged?.(0);
+      this.onInputMaskChange?.(0);
     }
   }
 
@@ -518,9 +518,8 @@ export class InputManager {
 
     if (mask !== this.currentMask) {
       this.currentMask = mask;
-      if (this.onInputChanged) {
-        this.onInputChanged(mask);
-      }
+      this.onInputChanged?.(mask);
+      this.onInputMaskChange?.(mask);
     }
   }
 

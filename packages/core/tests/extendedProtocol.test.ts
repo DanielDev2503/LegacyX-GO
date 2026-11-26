@@ -51,7 +51,7 @@ describe('Extended Binary Protocol Serialization (Magnus, Stamina, Turbo, Dash)'
     expect(decoded!.triggerDash).toBe(false);
   });
 
-  it('encodes and decodes 20-byte disc SnapshotPacket with spin and stamina flags', () => {
+  it('encodes and decodes 34-byte disc SnapshotPacket with Float32 velocities, inputMask, aimAngleByte, spin and stamina flags', () => {
     const snapshot: GameSnapshot = {
       tick: 100,
       matchPhase: MatchPhase.PLAYING,
@@ -91,7 +91,9 @@ describe('Extended Binary Protocol Serialization (Magnus, Stamina, Turbo, Dash)'
           avatar: '7',
           stamina: 65,
           isDashing: true,
-          isTurbo: false
+          isTurbo: false,
+          inputMask: INPUT_UP | INPUT_KICK | INPUT_DASH,
+          aimAngleByte: 42
         },
         {
           id: 1002,
@@ -105,14 +107,16 @@ describe('Extended Binary Protocol Serialization (Magnus, Stamina, Turbo, Dash)'
           avatar: '10',
           stamina: 100,
           isDashing: false,
-          isTurbo: true
+          isTurbo: true,
+          inputMask: INPUT_TURBO,
+          aimAngleByte: 0xff
         }
       ]
     };
 
     const buffer = SnapshotPacket.encode(snapshot);
     const expectedBytes = SnapshotPacket.HEADER_LENGTH + 3 * SnapshotPacket.DISC_LENGTH;
-    expect(SnapshotPacket.DISC_LENGTH).toBe(20);
+    expect(SnapshotPacket.DISC_LENGTH).toBe(34);
     expect(buffer.byteLength).toBe(expectedBytes);
 
     const decoded = SnapshotPacket.decode(buffer);
@@ -125,19 +129,23 @@ describe('Extended Binary Protocol Serialization (Magnus, Stamina, Turbo, Dash)'
     expect(ball.isSpinActive).toBe(true);
     expect(ball.curveFactor).toBe(-7);
 
-    // Disc 1: Red Player (Dashing, stamina 65)
+    // Disc 1: Red Player (Dashing, stamina 65, inputMask + aimAngleByte)
     const p1 = decoded!.discs[1];
     expect(p1.id).toBe(1001);
     expect(p1.stamina).toBe(65);
     expect(p1.isDashing).toBe(true);
     expect(p1.isTurbo).toBe(false);
+    expect(p1.inputMask).toBe(INPUT_UP | INPUT_KICK | INPUT_DASH);
+    expect(p1.aimAngleByte).toBe(42);
 
-    // Disc 2: Blue Player (Turbo, stamina 100)
+    // Disc 2: Blue Player (Turbo, stamina 100, keyboard aim 0xff)
     const p2 = decoded!.discs[2];
     expect(p2.id).toBe(1002);
     expect(p2.stamina).toBe(100);
     expect(p2.isDashing).toBe(false);
     expect(p2.isTurbo).toBe(true);
+    expect(p2.inputMask).toBe(INPUT_TURBO);
+    expect(p2.aimAngleByte).toBe(0xff);
   });
 
   it('gracefully decodes legacy 18-byte disc SnapshotPacket', () => {

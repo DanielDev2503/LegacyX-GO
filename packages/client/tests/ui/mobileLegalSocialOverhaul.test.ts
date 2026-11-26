@@ -5,7 +5,7 @@ import { render } from 'svelte/server';
 import { GAMEPLAY_PRESETS } from '@legacyx/core';
 import { gameUI } from '../../src/ui/state/gameUI.svelte.js';
 import { userProfile } from '../../src/ui/state/userProfile.svelte.js';
-import { ClientPredictionReconciler } from '../../src/net/ClientPrediction.js';
+import { SharedSimSync } from '../../src/net/SharedSimSync.js';
 import { PeerConnection } from '../../src/net/PeerConnection.js';
 import { parseLegalDocFromLocation, LEGAL_OPERATOR } from '../../src/legal/legalContent.js';
 import PhysicsModal from '../../src/ui/modals/PhysicsModal.svelte';
@@ -115,21 +115,38 @@ describe('Overhaul Client Suite: Mobile Carousel, Modifiers Presets, Legal, Disc
     expect(modalHtml).toContain('IP pública');
   });
 
-  it('ClientPredictionReconciler keeps sequence strictly monotonic across non-movable phases (kickoff freeze fix)', () => {
-    const rec = new ClientPredictionReconciler();
-    const s1 = rec.recordInput(1, 0b0010);
-    expect(s1).toBe(1);
+  it('SharedSimSync resets local step counter strictly on snapshot transitions across GOAL_REPLAY and KICKOFF', () => {
+    const sync = new SharedSimSync('mediano');
+    sync.onSnapshot(
+      {
+        tick: 10,
+        phase: 2,
+        matchTimer: 10,
+        redScore: 0,
+        blueScore: 0,
+        soundMask: 0,
+        discs: [{ id: 0, team: 0, x: 0, y: 0, vx: 0, vy: 0, flags: 0 }]
+      },
+      1000
+    );
+    sync.update(0.05, 1050);
+    expect(sync.getTelemetry(undefined, 1050).localStepsSinceSnap).toBeGreaterThan(0);
 
-    // 240 ticks of GOAL_REPLAY calling allocateNextSeq()
-    let lastReplaySeq = s1;
-    for (let i = 0; i < 240; i++) {
-      lastReplaySeq = rec.allocateNextSeq();
-    }
-    expect(lastReplaySeq).toBe(241);
-
-    // Transitioning back to KICKOFF continues monotonically without jumping backward
-    const kickoffSeq = rec.recordInput((rec.lastRecordedSeq + 1) >>> 0, 0b0100);
-    expect(kickoffSeq).toBe(242);
+    // Transition to GOAL_REPLAY resets localStepsSinceSnap and freezes local sim steps
+    sync.onSnapshot(
+      {
+        tick: 11,
+        phase: 3.5,
+        matchTimer: 10,
+        redScore: 1,
+        blueScore: 0,
+        soundMask: 0,
+        discs: [{ id: 0, team: 0, x: 200, y: 0, vx: 0, vy: 0, flags: 0 }]
+      },
+      1066
+    );
+    sync.update(0.05, 1116);
+    expect(sync.getTelemetry(undefined, 1116).localStepsSinceSnap).toBe(0);
   });
 
   it('PeerConnection.sendReliable queues critical packets instead of dropping onto unreliable channel', () => {

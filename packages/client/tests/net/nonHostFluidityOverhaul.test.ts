@@ -13,7 +13,7 @@ import { PeerConnection } from '../../src/net/PeerConnection.js';
 import { NetworkClient } from '../../src/net/NetworkClient.js';
 import { GameApp } from '../../src/net/GameApp.js';
 import { SignalingClient } from '../../src/net/SignalingClient.js';
-import { ClientPredictionReconciler } from '../../src/net/ClientPrediction.js';
+import { SharedSimSync } from '../../src/net/SharedSimSync.js';
 import { Camera } from '../../src/renderer/Camera.js';
 import { gameUI } from '../../src/ui/state/gameUI.svelte.js';
 
@@ -261,7 +261,7 @@ describe('Non-Host Fluidity, Netcode & Rendering Overhaul', () => {
     client.disconnect();
   });
 
-  it('GameApp ordered remote input queue executes burst/reordered inputs sequentially and prevents duplicate dash impulses', () => {
+  it('GameApp Zero-Queue remote input handler applies latest seq immediately, preserves rising-edge Dash/Kick, and deduplicates duplicates', () => {
     const sig = new SignalingClient('ws://localhost:8080', false);
     const app = new GameApp(sig);
     const host = (app as any).setupHostState
@@ -272,7 +272,7 @@ describe('Non-Host Fluidity, Netcode & Rendering Overhaul', () => {
       : null;
     expect(host).not.toBeNull();
 
-    // Deliver seq 10 (dash + right), then out-of-order seq 12, then seq 11 inside one Host frame burst
+    // Deliver seq 10 (dash + right), then out-of-order seq 12, then rescued seq 11 inside one Host tick burst
     host!.onPlayerInput?.(2, INPUT_FLAG_RIGHT | INPUT_FLAG_DASH, 10, null, 0);
     host!.onPlayerInput?.(2, INPUT_FLAG_RIGHT | INPUT_FLAG_DASH, 10, null, 0); // Redundant dash duplicate
     host!.onPlayerInput?.(2, INPUT_FLAG_RIGHT, 12, null, 0);
@@ -280,26 +280,17 @@ describe('Non-Host Fluidity, Netcode & Rendering Overhaul', () => {
 
     const tickMap = new Map<number, PlayerInput>();
 
+    // Zero artificial queue: applies highest seq 12 immediately while keeping rising-edge DASH latched from seq 10
     app.popRemoteInputsForTick(tickMap);
-    expect((tickMap.get(2) as any)?.sequence).toBe(10);
+    expect((tickMap.get(2) as any)?.sequence).toBe(12);
+    expect((tickMap.get(2)!.inputMask & INPUT_FLAG_RIGHT) !== 0).toBe(true);
     expect((tickMap.get(2)!.inputMask & INPUT_FLAG_DASH) !== 0).toBe(true);
     app.consumeRemoteImpulses();
 
-    // Late duplicate of already-consumed seq 10 must be ignored
+    // Late duplicate of already-consumed seq 10 must NOT re-trigger dash
     host!.onPlayerInput?.(2, INPUT_FLAG_RIGHT | INPUT_FLAG_DASH, 10, null, 0);
 
-    tickMap.clear();
-    app.popRemoteInputsForTick(tickMap);
-    expect((tickMap.get(2) as any)?.sequence).toBe(11);
-    expect((tickMap.get(2)!.inputMask & INPUT_FLAG_DASH) !== 0).toBe(false);
-    app.consumeRemoteImpulses();
-
-    tickMap.clear();
-    app.popRemoteInputsForTick(tickMap);
-    expect((tickMap.get(2) as any)?.sequence).toBe(12);
-    app.consumeRemoteImpulses();
-
-    // Queue empty on jitter gap: holds movement direction without repeating dash and without faking seq 13
+    // Next tick holds movement direction cleanly without repeating dash
     tickMap.clear();
     app.popRemoteInputsForTick(tickMap);
     expect((tickMap.get(2) as any)?.sequence).toBe(12);
@@ -309,7 +300,7 @@ describe('Non-Host Fluidity, Netcode & Rendering Overhaul', () => {
     app.teardownNetworkSession();
   });
 
-  it('integrated Host + Non-Host dribble simulation keeps predicted ball in front of dribbling player without hard snaps at 40ms and 160ms RTT', () => {
+  it('integrated Host + SharedSimSync dribble simulation keeps ball ahead of player without hard snaps at 40ms and 160ms RTT', () => {
     for (const rttMs of [40, 160]) {
       const halfTicks = Math.max(1, Math.round((rttMs / 2) / (1000 / 60)));
       const sig = new SignalingClient('ws://localhost:8080', false);
@@ -325,31 +316,25 @@ describe('Non-Host Fluidity, Netcode & Rendering Overhaul', () => {
       hostP.pos.set(-55, 0);
       hostEngine.ball.pos.set(0, 0);
 
-      const predEngine = new EngineInstance('mediano');
-      predEngine.isPracticeMode = true;
-      predEngine.startMatch(false);
-      predEngine.fsm.startPlaying();
-      predEngine.setState(hostEngine.getState());
+      const sync = new SharedSimSync('mediano');
+      sync.configure('mediano', hostEngine.modifiers, true);
+      sync.onSnapshot(BinaryProtocol.decodeSnapshot(BinaryProtocol.encodeSnapshot(hostEngine.getState()))!, 0);
 
-      const reconciler = new ClientPredictionReconciler();
       const inFlightInputs: Array<{ deliverTick: number; seq: number; mask: number }> = [];
       const inFlightSnaps: Array<{ deliverTick: number; snap: GameStateSnapshot }> = [];
       const hostInputs = new Map<number, PlayerInput>();
       let highestSnapTick = -1;
+      const TICK_MS = 1000 / 60;
 
       for (let tick = 1; tick <= 120; tick++) {
-        // Guest steps fixed 60Hz prediction and enqueues input with jitter
-        const seq = reconciler.recordInput(tick, INPUT_FLAG_RIGHT, null, 0);
-        predEngine.step(new Map([[2, { inputMask: INPUT_FLAG_RIGHT, sequence: seq } as any]]), true);
-
+        const nowMs = tick * TICK_MS;
         const inputJitter = tick % 2 === 0 ? 1 : 0;
         inFlightInputs.push({
           deliverTick: tick + halfTicks + inputJitter,
-          seq,
+          seq: tick,
           mask: INPUT_FLAG_RIGHT
         });
 
-        // Host receives arrived inputs into ordered queue, steps one tick
         for (let i = inFlightInputs.length - 1; i >= 0; i--) {
           if (inFlightInputs[i]!.deliverTick <= tick) {
             const item = inFlightInputs.splice(i, 1)[0]!;
@@ -368,7 +353,6 @@ describe('Non-Host Fluidity, Netcode & Rendering Overhaul', () => {
           snap: BinaryProtocol.decodeSnapshot(BinaryProtocol.encodeSnapshot(hostEngine.getState()))!
         });
 
-        // Guest delivers latest monotonic snapshot
         let newestArrived: GameStateSnapshot | null = null;
         for (let i = inFlightSnaps.length - 1; i >= 0; i--) {
           if (inFlightSnaps[i]!.deliverTick <= tick) {
@@ -380,20 +364,19 @@ describe('Non-Host Fluidity, Netcode & Rendering Overhaul', () => {
           }
         }
         if (newestArrived) {
-          reconciler.reconcile(predEngine, newestArrived, 2);
-          expect(reconciler.didHardSnapLastReconcile).toBe(false);
-          expect(reconciler.didBallHardSnapLastReconcile).toBe(false);
+          sync.onSnapshot(newestArrived, nowMs);
         }
 
-        reconciler.updateVisualSmoothing(1 / 60);
-        const predPlayer = predEngine.players.get(2)!;
-        const renderPlayerX = predPlayer.pos.x + reconciler.visualOffset.x;
-        const renderBallX = predEngine.ball.pos.x + reconciler.ballVisualOffset.x;
+        sync.update(1 / 60, nowMs);
+        const renderSnap = sync.buildRenderSnapshot(Math.round(rttMs / 2), nowMs)!;
+        const renderPlayer = renderSnap.discs.find((d) => d.id === 2)!;
+        const renderBall = renderSnap.discs.find((d) => d.id === 0)!;
 
         // Ball NEVER clips behind the dribbling Non-Host player!
-        expect(renderBallX).toBeGreaterThan(renderPlayerX + predPlayer.radius + predEngine.ball.radius - 1.0);
+        expect(renderBall.x).toBeGreaterThan(renderPlayer.x + 15 + 5.8 - 1.0);
       }
 
+      expect(sync.getTelemetry(undefined, 120 * TICK_MS).hardSnaps).toBe(0);
       app.teardownNetworkSession();
     }
   });

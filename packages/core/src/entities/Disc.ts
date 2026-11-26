@@ -148,3 +148,54 @@ export class Disc {
     }
   }
 }
+
+/** Copia únicamente primitivos numéricos/escalares de un `Disc` a otro sin alocar memoria en caliente. */
+export function copyDiscPrimitives(src: Disc, dst: Disc): void {
+  dst.id = src.id;
+  dst.pos.x = src.pos.x;
+  dst.pos.y = src.pos.y;
+  dst.prevPos.x = src.prevPos.x;
+  dst.prevPos.y = src.prevPos.y;
+  dst.vel.x = src.vel.x;
+  dst.vel.y = src.vel.y;
+  dst.radius = src.radius;
+  dst.mass = src.mass;
+  dst.invMass = src.invMass;
+  dst.damping = src.damping;
+  dst.bounciness = src.bounciness;
+  dst.cGroup = src.cGroup;
+  dst.cMask = src.cMask;
+  dst.isBall = src.isBall;
+  dst.isPost = src.isPost;
+  dst.color = src.color;
+  dst.kicking = src.kicking;
+
+  dst.isCurving = src.isCurving;
+  dst.isCurvingAllowed = src.isCurvingAllowed;
+  dst.curvePerp = src.curvePerp;
+  dst.curveBrake = src.curveBrake;
+  dst.spin = src.spin;
+  dst.lastKickerId = src.lastKickerId;
+  dst.lastKickerDiscId = src.lastKickerDiscId;
+  if (src.kickerHeading) {
+    if (dst.kickerHeading) {
+      dst.kickerHeading.x = src.kickerHeading.x;
+      dst.kickerHeading.y = src.kickerHeading.y;
+    } else {
+      dst.kickerHeading = new Vec2(src.kickerHeading.x, src.kickerHeading.y);
+    }
+  } else {
+    dst.kickerHeading = null;
+  }
+  dst.magnusControllerId = src.magnusControllerId;
+  dst.magnusPressesRemaining = src.magnusPressesRemaining;
+  dst.magnusTimer = src.magnusTimer;
+  dst.lastCurveDir = src.lastCurveDir;
+  dst.isPowerShot = src.isPowerShot;
+
+  dst.stamina = src.stamina;
+  dst.isDashing = src.isDashing;
+  dst.isTurbo = src.isTurbo;
+  dst.isTyping = src.isTyping;
+}
+

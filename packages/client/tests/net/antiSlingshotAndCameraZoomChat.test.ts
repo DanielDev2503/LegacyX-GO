@@ -1,119 +1,85 @@
 import { describe, it, expect, vi } from 'vitest';
-import { ClientPredictionReconciler } from '../../src/net/ClientPrediction';
+import { SharedSimSync } from '../../src/net/SharedSimSync';
 import { Camera } from '../../src/renderer/Camera';
-import { EngineInstance, MatchPhase, type GameStateSnapshot } from '@legacyx/core';
+import { EngineInstance, INPUT_FLAG_RIGHT, MatchPhase, type GameStateSnapshot } from '@legacyx/core';
 
-describe('Anti-Slingshot Reconciler, Camera Zoom Expansion & Chat Enter Activation', () => {
-  describe('ClientPredictionReconciler Anti-Slingshot & Deadband', () => {
-    it('absorbs post-replay discrepancies continuously into visualOffset without deadband jumps (0.00 px instant screen shift)', () => {
-      const reconciler = new ClientPredictionReconciler();
-      const engine = new EngineInstance('AF 3v3');
-      const p = engine.addPlayer(1, 'red');
+describe('SharedSimSync Smooth Correction, Camera Zoom Expansion & Chat Enter Activation', () => {
+  describe('SharedSimSync Visual Offset & Smooth Exponential Decay', () => {
+    it('absorbs small snapshot discrepancies into visualOffset without 0.00px pop and decays continuously', () => {
+      const sync = new SharedSimSync('AF 3v3');
+      const host = new EngineInstance('AF 3v3');
+      host.addPlayer(1, 'red');
+      host.startMatch(false);
+      host.fsm.startPlaying();
 
-      // Record 5 pending inputs
-      for (let t = 1; t <= 5; t++) {
-        reconciler.recordInput(t, 8); // moving right
+      const snap0 = host.getState();
+      sync.onSnapshot(snap0, 1000);
+
+      // Step host 1 tick with RIGHT input and simulate minor divergence (-2 px)
+      const rightMap = new Map([[1, { inputMask: INPUT_FLAG_RIGHT }]]);
+      host.step(rightMap);
+      const snap1 = host.getState();
+      const beforeRender = sync.buildRenderSnapshot(0, 1000)!;
+      const visualBeforeX = beforeRender.discs.find((d) => d.id === 1)!.x;
+
+      snap1.discs.find((d) => d.id === 1)!.x = visualBeforeX - 2.0;
+      sync.onSnapshot(snap1, 1016.67);
+      const afterRender = sync.buildRenderSnapshot(0, 1016.67)!;
+      const visualAfterX = afterRender.discs.find((d) => d.id === 1)!.x;
+
+      expect(Math.abs(visualAfterX - visualBeforeX)).toBeLessThan(0.05);
+
+      const initialOffset = Math.abs(sync.getTelemetry(undefined, 1016.67).lastCorrectionPx);
+      expect(initialOffset).toBeCloseTo(2.0, 2);
+
+      // Exponential smoothing exp(-20 * dt) decays visualOffset monotonically over frames
+      for (let f = 0; f < 12; f++) {
+        sync.update(1 / 60, 1016.67 + (f + 1) * (1000 / 60));
       }
-
-      // Snapshot matching player start position
-      const snap: GameStateSnapshot = {
-        tick: 0,
-        phase: MatchPhase.PLAYING,
-        discs: [
-          {
-            id: 1,
-            team: 1,
-            x: p.pos.x,
-            y: p.pos.y,
-            vx: 0,
-            vy: 0,
-            radius: 15,
-            flags: 0,
-            stamina: 100
-          }
-        ]
-      };
-
-      const result = reconciler.reconcile(engine, snap, 1);
-      expect(result.replayed).toBe(true);
-      expect(result.hardSnapped).toBe(false);
-
-      // Verify that after simulation where client was slightly off from replay position,
-      // visualOffset continuously absorbs the discrepancy so screen position has 0.00 px instantaneous pop
-      p.pos.x = p.pos.x - 2.0;
-      const visualBefore = p.pos.x + reconciler.visualOffset.x;
-      reconciler.recordInput(6, 0); // keys released
-      const snap2: GameStateSnapshot = {
-        tick: 5,
-        phase: MatchPhase.PLAYING,
-        discs: [
-          {
-            id: 1,
-            team: 1,
-            x: p.pos.x,
-            y: p.pos.y,
-            vx: 0,
-            vy: 0,
-            radius: 15,
-            flags: 0,
-            stamina: 100
-          }
-        ]
-      };
-      reconciler.reconcile(engine, snap2, 1);
-      const visualAfter = p.pos.x + reconciler.visualOffset.x;
-      expect(visualAfter).toBeCloseTo(visualBefore, 4);
-
-      // And continuous exponential smoothing decays it towards 0
-      const initialOffset = reconciler.visualOffset.x;
-      reconciler.updateVisualSmoothing(1 / 60);
-      expect(Math.abs(reconciler.visualOffset.x)).toBeLessThan(Math.abs(initialOffset) + 0.0001);
+      const decayedSnap = sync.buildRenderSnapshot(0, 1216.67)!;
+      const authX = sync.simWorld.players.get(1)!.pos.x;
+      expect(Math.abs(decayedSnap.discs.find((d) => d.id === 1)!.x - authX)).toBeLessThan(8);
     });
 
-    it('smoothly reconciles movement release without accumulated slingshot pop', () => {
-      const reconciler = new ClientPredictionReconciler();
-      const engine = new EngineInstance('AF 3v3');
-      const p = engine.addPlayer(1, 'red');
-
-      // Player in active PLAYING phase moving right (+x)
-      p.pos.set(-50, 0);
-      p.vel.set(200, 0); // moving right along +x
-
-      // Last input has mask 0 (movement keys released)
-      reconciler.recordInput(10, 0);
-
-      const visualBefore = p.pos.x + reconciler.visualOffset.x;
-
-      // Snapshot arrived slightly ahead at -42px
-      const snap: GameStateSnapshot = {
-        tick: 9,
+    it('smoothly converges movement release discrepancy without accumulated slingshot pop', () => {
+      const sync = new SharedSimSync('AF 3v3');
+      const snap0: GameStateSnapshot = {
+        tick: 1,
         phase: MatchPhase.PLAYING,
+        matchTimer: 10,
+        redScore: 0,
+        blueScore: 0,
+        soundMask: 0,
         discs: [
-          {
-            id: 1,
-            team: 1,
-            x: -42,
-            y: 0,
-            vx: 0,
-            vy: 0,
-            radius: 15,
-            flags: 0,
-            stamina: 100
-          }
+          { id: 0, team: 0, x: 0, y: 0, vx: 0, vy: 0, flags: 0 },
+          { id: 1, team: 1, x: -50, y: 0, vx: 0, vy: 0, flags: 0, stamina: 100 }
         ]
       };
+      sync.onSnapshot(snap0, 1000);
 
-      reconciler.reconcile(engine, snap, 1);
+      const snap1: GameStateSnapshot = {
+        tick: 9,
+        phase: MatchPhase.PLAYING,
+        matchTimer: 10,
+        redScore: 0,
+        blueScore: 0,
+        soundMask: 0,
+        discs: [
+          { id: 0, team: 0, x: 0, y: 0, vx: 0, vy: 0, flags: 0 },
+          { id: 1, team: 1, x: -42, y: 0, vx: 0, vy: 0, flags: 0, stamina: 100 }
+        ]
+      };
+      sync.onSnapshot(snap1, 1016);
+      const immediate = sync.buildRenderSnapshot(0, 1016)!;
+      // 0.00 px instant jump from -50 upon snapshot arrival
+      expect(immediate.discs.find((d) => d.id === 1)!.x).toBeCloseTo(-50, 3);
 
-      // Instantaneous visual position is preserved without teleport (0.00 px jump)
-      const visualAfter = p.pos.x + reconciler.visualOffset.x;
-      expect(visualAfter).toBeCloseTo(visualBefore, 4);
-
-      // Over ~200 ms (12 frames), visualOffset smoothly decays towards 0
-      for (let f = 0; f < 12; f++) {
-        reconciler.updateVisualSmoothing(1 / 60);
+      // Over ~200 ms (12 frames), visualOffset decays toward authoritative -42
+      for (let f = 1; f <= 12; f++) {
+        sync.update(1 / 60, 1016 + f * (1000 / 60));
       }
-      expect(Math.abs(reconciler.visualOffset.x)).toBeLessThan(1.0);
+      const settled = sync.buildRenderSnapshot(0, 1216)!;
+      expect(Math.abs(settled.discs.find((d) => d.id === 1)!.x - -42)).toBeLessThan(0.5);
     });
   });
 

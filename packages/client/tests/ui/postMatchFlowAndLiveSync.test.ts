@@ -64,9 +64,9 @@ describe('Post-Match Flow, Practice Mode, Live Kit/Stadium Sync, Auto Balance & 
     });
   });
 
-  describe('3. BinaryProtocol 32-byte Disc Serialization for Stamina & Spin', () => {
+  describe('3. BinaryProtocol 35-byte Disc Serialization for Stamina, Spin & Option 3 InputMask', () => {
     it('encodes and decodes stamina and spin preserving precision for non-host players', () => {
-      expect(BinaryProtocol.DISC_RECORD_SIZE).toBe(32);
+      expect(BinaryProtocol.DISC_RECORD_SIZE).toBe(35);
 
       const snapshot: GameStateSnapshot = {
         tick: 120,
